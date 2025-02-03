@@ -410,18 +410,18 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
         auto ids = co_await module->get_task_manager().get_virtual_task_children(parent_id);
         co_return ids | std::views::transform([&tm = module->get_task_manager()] (auto id) {
             return task_identity{
-                .node = tm.get_broadcast_address(),
+                .host_id = tm.get_host_id(),
                 .task_id = id
             };
         }) | std::ranges::to<std::vector<task_identity>>();
     }
 
     auto nodes = module->get_nodes();
-    co_return co_await map_reduce(nodes, [ms, parent_id] (auto addr) -> future<std::vector<task_identity>> {
-        return ser::tasks_rpc_verbs::send_tasks_get_children(ms, netw::msg_addr{addr}, parent_id).then([addr] (auto resp) {
-            return resp | std::views::transform([addr] (auto id) {
+    co_return co_await map_reduce(nodes, [ms, parent_id] (auto host_id) -> future<std::vector<task_identity>> {
+        return ser::tasks_rpc_verbs::send_tasks_get_children(ms, host_id, parent_id).then([host_id] (auto resp) {
+            return resp | std::views::transform([host_id] (auto id) {
                 return task_identity{
-                    .node = addr,
+                    .host_id = host_id,
                     .task_id = id
                 };
             }) | std::ranges::to<std::vector<task_identity>>();
@@ -533,8 +533,8 @@ const task_manager::tasks_collection& task_manager::module::get_tasks_collection
     return _tasks;
 }
 
-std::set<gms::inet_address> task_manager::module::get_nodes() const {
-    return {_tm.get_broadcast_address()};
+std::set<locator::host_id> task_manager::module::get_nodes() const {
+    return {_tm.get_host_id()};
 }
 
 future<utils::chunked_vector<task_stats>> task_manager::module::get_stats(is_internal internal, std::function<bool(std::string& keyspace, std::string& table)> filter) const {
@@ -698,15 +698,15 @@ const task_manager::tasks_collection& task_manager::get_tasks_collection() const
     return _tasks;
 }
 
-std::set<gms::inet_address> task_manager::get_nodes(service::storage_service& ss) const {
+std::set<locator::host_id> task_manager::get_nodes(service::storage_service& ss) const {
     return std::ranges::join_view(std::to_array({
             std::views::all(ss._topology_state_machine._topology.normal_nodes),
             std::views::all(ss._topology_state_machine._topology.transition_nodes)})
-        ) | std::views::transform([&ss] (auto& node) {
-            return ss.host2ip(locator::host_id{node.first.uuid()});
-        }) | std::views::filter([&ss] (gms::inet_address ip) {
-            return ss._gossiper.is_alive(ip);
-        }) | std::ranges::to<std::set<gms::inet_address>>();
+        ) | std::views::transform([] (auto& node) {
+            return locator::host_id{node.first.uuid()};
+        }) | std::views::filter([&ss] (locator::host_id host_id) {
+            return ss._gossiper.is_alive(host_id);
+        }) | std::ranges::to<std::set<locator::host_id>>();
 }
 
 future<std::vector<task_id>> task_manager::get_virtual_task_children(task_id parent_id) {
