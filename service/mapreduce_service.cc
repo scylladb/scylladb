@@ -21,6 +21,7 @@
 #include "gms/gossiper.hh"
 #include "idl/mapreduce_request.dist.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "message/messaging_service.hh"
 #include "query-request.hh"
@@ -283,7 +284,7 @@ public:
         // Try to send this mapreduce_request to another node.
         try {
             co_return co_await ser::mapreduce_request_rpc_verbs::send_mapreduce_request(
-                &_mapreducer._messaging, id, req, _tr_info
+                &_mapreducer._messaging, id, _mapreducer._abort_outgoing_tasks, req, _tr_info
             );
         } catch (rpc::closed_error& e) {
             if (_mapreducer._shutdown) {
@@ -364,6 +365,8 @@ future<query::mapreduce_result> mapreduce_service::dispatch_to_shards(
     query::mapreduce_request req,
     std::optional<tracing::trace_info> tr_info
 ) {
+    co_await utils::get_local_injector().inject("mapreduce_pause_dispatch_to_shards", utils::wait_for_message(5min));
+
     _stats.requests_dispatched_to_own_shards += 1;
     std::optional<query::mapreduce_result> result;
     std::vector<future<query::mapreduce_result>> futures;
