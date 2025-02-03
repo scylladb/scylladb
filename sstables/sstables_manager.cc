@@ -154,7 +154,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
 
 void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst) {
     _total_reclaimable_memory += sst->total_reclaimable_memory_size();
-    maybe_reclaim_components();
+    _components_memory_change_event.signal();
 }
 
 void sstables_manager::maybe_reclaim_components() {
@@ -195,7 +195,13 @@ future<> sstables_manager::components_reclaim_reload_fiber() {
             co_return;
         }
 
-        co_await maybe_reload_components();
+        if (_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
+            // reclaim memory to bring total memory usage under threshold
+            maybe_reclaim_components();
+        } else {
+            // memory available for reloading components of previously reclaimed SSTables
+            co_await maybe_reload_components();
+        }
     }
 }
 
