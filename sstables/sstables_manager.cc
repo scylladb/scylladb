@@ -157,7 +157,7 @@ void sstables_manager::increment_total_reclaimable_memory(sstable* sst) {
     _components_memory_change_event.signal();
 }
 
-void sstables_manager::maybe_reclaim_components() {
+future<> sstables_manager::maybe_reclaim_components() {
     while(_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
         // Memory consumption is above threshold. Reclaim from the SSTable that
         // has the most reclaimable memory to get the total consumption under limit.
@@ -174,6 +174,7 @@ void sstables_manager::maybe_reclaim_components() {
         smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
                 memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
         }
+        co_await coroutine::maybe_yield();
 }
 
 size_t sstables_manager::get_components_memory_reclaim_threshold() const {
@@ -197,7 +198,7 @@ future<> sstables_manager::components_reclaim_reload_fiber() {
 
         if (_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
             // reclaim memory to bring total memory usage under threshold
-            maybe_reclaim_components();
+            co_await maybe_reclaim_components();
         } else {
             // memory available for reloading components of previously reclaimed SSTables
             co_await maybe_reload_components();
