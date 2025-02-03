@@ -2,7 +2,7 @@ keyspace: sec_index
 
 keyspace_definition: |
 
-  CREATE KEYSPACE IF NOT EXISTS sec_index WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
+  CREATE KEYSPACE IF NOT EXISTS sec_index WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND TABLETS = {'enabled': false};
 
 table: users
 
