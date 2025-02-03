@@ -96,9 +96,9 @@ SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) 
         // Test auto reload - disposing sst3 should trigger reload of the
         // smallest filter in the reclaimed list, which is sst1's bloom filter.
         dispose_and_stop_tracking_bf_memory(std::move(sst3), sst_mgr);
-        REQUIRE_EVENTUALLY_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst1->filter_memory_size(); }, sst1_bf_memory);
         // only sst4's bloom filter memory should be reported as reclaimed
-        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst4_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, sst4_bf_memory);
         // sst2 and sst4 remain the same
         BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
         BOOST_REQUIRE_EQUAL(sst4->filter_memory_size(), 0);
@@ -162,7 +162,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
         // dispose sst2 to trigger reload of sst1's bloom filter
         dispose_and_stop_tracking_bf_memory(std::move(sst2), sst_mgr);
         // _total_reclaimable_memory will be updated when the reload begins; wait for it.
-        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_reclaimable_memory(); }, sst1_bf_memory);
 
         // now that the reload is midway and paused, create new sst to verify that its
         // filter gets evicted immediately as the memory that became available is reserved
@@ -175,8 +175,8 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
 
         // resume reloading sst1 filter
         utils::get_local_injector().receive_message("reload_reclaimed_components/pause");
-        REQUIRE_EVENTUALLY_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
-        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst3_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst1->filter_memory_size(); }, sst1_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, sst3_bf_memory);
         BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory);
 
         utils::get_local_injector().disable("reload_reclaimed_components/pause");
@@ -275,7 +275,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         utils::get_local_injector().receive_message("test_bloom_filter_reload_after_unlink");
         async_sst_holder.get();
 
-        REQUIRE_EVENTUALLY_EQUAL(sst_mgr.get_active_list().size(), 0);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_active_list().size(); }, 0);
     }, {
         // set available memory = 0 to force reclaim the bloom filter
         .available_memory = 0
@@ -340,7 +340,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         utils::get_local_injector().receive_message("test_bloom_filter_reload_after_unlink");
         async_sst_holder.get();
 
-        REQUIRE_EVENTUALLY_EQUAL(active_list.size(), 0);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return active_list.size(); }, 0);
     }, {
         // set available memory = 0 to force reclaim the bloom filter
         .available_memory = 100
