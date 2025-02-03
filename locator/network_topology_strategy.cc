@@ -316,7 +316,7 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, token_m
 
         for (const auto& ep : dc.second) {
             const auto* node = tm->get_topology().find_node(ep);
-            if (node != nullptr) {
+            if (node != nullptr && node->is_normal()) {
                 shards_in_dc += node->get_shard_count();
             }
         }
