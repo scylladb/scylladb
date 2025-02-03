@@ -662,6 +662,153 @@ maintenance_socket: ignore
 # maximum_replication_factor_warn_threshold: -1
 # maximum_replication_factor_fail_threshold: -1
 
+#
+# System information encryption settings
+#
+# If enabled, system tables that may contain sensitive information (system.batchlog,
+# system.paxos), hints files and commit logs are encrypted with the
+# encryption settings below.
+#
+# When enabling system table encryption on a node with existing data, run
+# `nodetool upgradesstables -a` on the listed tables to encrypt existing data.
+#
+# When tracing is enabled, sensitive info will be written into the tables in the
+# system_traces keyspace. Those tables should be configured to encrypt their data
+# on disk.
+#
+# It is recommended to use remote encryption keys from a KMIP server/KMS when using
+# Transparent Data Encryption (TDE) features.
+# Local key support is provided when a KMIP server/KMS is not available.
+#
+# See the scylla documentation for more info on available key providers and 
+# their properties.
+#
+# system_info_encryption:
+#   enabled: true
+#   cipher_algorithm: AES
+#   secret_key_strength: 128  
+#   key_provider: LocalFileSystemKeyProviderFactory
+#   secret_key_file: <key file>
+#
+# system_info_encryption:
+#   enabled: true
+#   cipher_algorithm: AES
+#   secret_key_strength: 128  
+#   key_provider: KmipKeyProviderFactory
+#   kmip_host: <kmip host group>
+#   template_name: <kmip key template name> (optional)
+#   key_namespace: <kmip key namespace> (optional)
+#
+
+#
+# The directory where system keys are kept
+# This directory should have 700 permissions and belong to the scylla user
+#
+# system_key_directory: /etc/scylla/conf/resources/system_keys
+#
+
+#
+# KMIP host(s).
+#
+# The unique name of kmip host/cluster that can be referenced in table schema.
+#
+# host.yourdomain.com={ hosts=[<host1>, <host2>...], keyfile=/path/to/keyfile, truststore=/path/to/truststore.pem, key_cache_millis=<cache ms>, timeout=<timeout ms> }:...
+#
+# The KMIP connection management only supports failover, so all requests will go through a
+# single KMIP server. There is no load balancing, as no KMIP servers (at the time of this writing)
+# support read replication, or other strategies for availability.
+#
+# Hosts are tried in the order they appear here. Add them in the same sequence they'll fail over in.
+# 
+# KMIP requests will fail over/retry 'max_command_retries' times (default 3)
+#
+# kmip_hosts:
+#   <name>:
+#       hosts: <address1[:port]> [, <address2[:port]>...]
+#       certificate: <identifying certificate> (optional)
+#       keyfile: <identifying key> (optional)
+#       truststore: <truststore for SSL connection> (optional)
+#       priority_string: <kmip tls priority string> (optional)
+#       username: <login> (optional>
+#       password: <password> (optional)
+#       max_command_retries: <int> (optional; default 3)
+#       key_cache_expiry: <key cache expiry period>
+#       key_cache_refresh: <key cache refresh/prune period>
+#   <name>:
+#       ...
+#
+
+#
+# KMS host(s).
+#
+# The unique name of kms host/account config that can be referenced in table schema.
+#
+# host.yourdomain.com={ endpoint=<http(s)://host[:port]>, aws_access_key_id=<AWS access id>, aws_secret_access_key=<AWS secret key>, aws_region=<AWS region>, master_key=<alias or id>, keyfile=/path/to/keyfile, truststore=/path/to/truststore.pem, key_cache_millis=<cache ms>, timeout=<timeout ms> }:...
+#
+# Actual connection can be either an explicit endpoint (<host>:<port>), or selected automatic via aws_region.
+# 
+# Authentication can be explicit with aws_access_key_id and aws_secret_access_key. Either secret or both can be ommitted
+# in which case the provider will try to read them from AWS credentials in ~/.aws/credentials. If aws_profile is set, the
+# credentials in this section is used.
+#
+# master_key is an AWS KMS key id or alias from which all keys used for actual encryption of scylla data will be derived.
+# This key must be pre-created with access policy allowing the above AWS id Encrypt, Decrypt and GenerateDataKey operations.
+#
+# kms_hosts:
+#   <name>:
+#       endpoint: http(s)://<host>(:port) (optional)
+#       aws_region: <aws region> (optional)
+#       aws_access_key_id: <aws access key id> (optional)
+#       aws_secret_access_key: <aws secret access key> (optional)
+#       aws_profile: <aws credentials profile> (optional)
+#       aws_use_ec2_credentials: <bool> (default false) If true, KMS queries will use the credentials provided by ec2 instance role metadata as initial access key. 
+#       aws_use_ec2_region: <bool> (default false) If true, KMS queries will use the AWS region indicated by ec2 instance metadata
+#       aws_assume_role_arn: <aws role arn> (optional) If set, any KMS query will first attempt to assume this role. 
+#       master_key: <named KMS key for encrypting data keys> (required)
+#       certificate: <identifying certificate> (optional)
+#       keyfile: <identifying key> (optional)
+#       truststore: <truststore for SSL connection> (optional)
+#       priority_string: <kmip tls priority string> (optional)
+#       key_cache_expiry: <key cache expiry period>
+#       key_cache_refresh: <key cache refresh/prune period>
+#   <name>:
+#       ...
+#
+
+#
+# Server-global user information encryption settings
+#
+# If enabled, all user tables are encrypted with the
+# encryption settings below, unless the table has local scylla_encryption_options
+# specified.
+#
+# When enabling user table encryption on a node with existing data, run
+# `nodetool upgradesstables -a` on all user tables to encrypt existing data.
+#
+# It is recommended to use remote encryption keys from a KMIP server or KMS when using
+# Transparent Data Encryption (TDE) features.
+# Local key support is provided when a KMIP server/KMS is not available.
+#
+# See the scylla documentation for more info on available key providers and 
+# their properties.
+#
+# user_info_encryption:
+#   enabled: true
+#   cipher_algorithm: AES
+#   secret_key_strength: 128  
+#   key_provider: LocalFileSystemKeyProviderFactory
+#   secret_key_file: <key file>
+#
+# user_info_encryption:
+#   enabled: true
+#   cipher_algorithm: AES
+#   secret_key_strength: 128  
+#   key_provider: KmipKeyProviderFactory
+#   kmip_host: <kmip host group>
+#   template_name: <kmip key template name> (optional)
+#   key_namespace: <kmip key namespace> (optional)
+#
+
 # Guardrails to warn about or disallow creating a keyspace with specific replication strategy.
 # Each of these 2 settings is a list storing replication strategies considered harmful.
 # The replication strategies to choose from are:
