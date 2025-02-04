@@ -25,7 +25,7 @@ extern logging::logger sslog;
 
 stream_manager::stream_manager(db::config& cfg,
             sharded<replica::database>& db,
-            sharded<db::view::view_builder>& view_builder,
+            db::view::view_builder& view_builder,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
             gms::gossiper& gossiper, scheduling_group sg)

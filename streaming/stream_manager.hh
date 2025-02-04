@@ -83,7 +83,7 @@ class stream_manager : public gms::i_endpoint_state_change_subscriber, public en
      */
 private:
     sharded<replica::database>& _db;
-    sharded<db::view::view_builder>& _view_builder;
+    db::view::view_builder& _view_builder;
     sharded<netw::messaging_service>& _ms;
     sharded<service::migration_manager>& _mm;
     gms::gossiper& _gossiper;
@@ -104,7 +104,7 @@ private:
 
 public:
     stream_manager(db::config& cfg, sharded<replica::database>& db,
-            sharded<db::view::view_builder>& view_builder,
+            db::view::view_builder& view_builder,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
             gms::gossiper& gossiper, scheduling_group sg);
