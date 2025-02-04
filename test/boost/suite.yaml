@@ -1,4 +1,6 @@
 type: boost
+extra_scylla_cmdline_options:
+    - '--reactor-backend linux-aio'
 # A list of long tests, which should be started early
 run_first:
     - index_with_paging_test
