@@ -13,6 +13,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
 
+#include "db/config.hh"
 #include "readers/from_mutations_v2.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/error_injection.hh"
@@ -347,3 +348,60 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         .available_memory = 100
     });
 };
+
+SEASTAR_TEST_CASE(test_components_memory_reclaim_threshold_liveupdateness) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto schema_ptr = ss.schema();
+        auto& sst_mgr = env.manager();
+        BOOST_REQUIRE_EQUAL(env.db_config().components_memory_reclaim_threshold(), 0.2);
+
+        // create a few sstables and verify their bloom filters are still in memory
+        auto [sst1, sst1_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 70);
+        auto [sst2, sst2_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 50);
+        auto [sst3, sst3_bf_memory] = create_sstable_with_bloom_filter(env, sst_mgr, schema_ptr, 20);
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), sst3_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory + sst2_bf_memory + sst3_bf_memory);
+
+        // reduce the threshold to 0.1 and verify that sst1's bloom filter, which occupies most memory, gets evicted
+        env.db_config().components_memory_reclaim_threshold.set(0.1);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst1->filter_memory_size(); }, 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), sst1_bf_memory);
+        // the other two ssts are untouched
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), sst3_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst2_bf_memory + sst3_bf_memory);
+
+        // reduce the threshold to 0 and verify that no bloom filter is in memory
+        env.db_config().components_memory_reclaim_threshold.set(0);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, sst1_bf_memory + sst2_bf_memory + sst3_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), 0);
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), 0);
+        BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), 0);
+
+        // increase threshold back 0.1 and expect sst2 and sst3's bloom filter to be reloaded
+        env.db_config().components_memory_reclaim_threshold.set(0.1);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst3->filter_memory_size(); }, sst3_bf_memory);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst2->filter_memory_size(); }, sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst2_bf_memory + sst3_bf_memory);
+        // sst1's bloom filter is not reloaded yet due to lack of available memory
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), 0);
+
+        // increase threshold back to 0.2 and expect sst1 to be reloaded
+        env.db_config().components_memory_reclaim_threshold.set(0.2);
+        REQUIRE_EVENTUALLY_EQUAL<size_t>([&] { return sst_mgr.get_total_memory_reclaimed(); }, 0);
+        BOOST_REQUIRE_EQUAL(sst1->filter_memory_size(), sst1_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst2->filter_memory_size(), sst2_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst3->filter_memory_size(), sst3_bf_memory);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), sst1_bf_memory + sst2_bf_memory + sst3_bf_memory);
+    }, {
+        // limit available memory to the sstables_manager to test reclaiming.
+        // this will set the reclaim threshold to 200 bytes.
+        .available_memory = 1000
+    });
+}
