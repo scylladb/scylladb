@@ -205,9 +205,8 @@ void utils::config_file::named_value<T>::add_command_line_option(boost::program_
 }
 
 template<typename T>
-void utils::config_file::named_value<T>::set_value(const YAML::Node& node) {
-    if (_source == config_source::SettingsFile && _liveness != liveness::LiveUpdate) {
-        // FIXME: warn if different?
+void utils::config_file::named_value<T>::set_value(const YAML::Node& node, config_source previous_src) {
+    if (previous_src == config_source::SettingsFile && _liveness != liveness::LiveUpdate) {
         return;
     }
     (*this)(node.as<T>());
