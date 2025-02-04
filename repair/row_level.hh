@@ -42,6 +42,10 @@ namespace gms {
     class gossiper;
 }
 
+struct small_table_optimization_params {
+    locator::effective_replication_map_ptr erm;
+};
+
 class repair_meta;
 
 using repair_meta_ptr = shared_ptr<repair_meta>;
@@ -279,4 +283,4 @@ future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
-void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm = {}, bool small_table_optimization = false, repair_meta* rm = nullptr);
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization = std::nullopt, repair_meta* rm = nullptr);
