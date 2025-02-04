@@ -4100,8 +4100,6 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
             throw std::runtime_error("Removenode failed. Concurrent request for removal already in progress");
         }
         try {
-            // Make non voter during request submission for better HA
-            co_await _group0->set_voters_status(ignored_ids, can_vote::no, _group0_as, raft_timeout{});
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
             rtlogger.info("removenode: concurrent operation is detected, retrying.");
@@ -6918,8 +6916,6 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
         co_await utils::get_local_injector().inject("join-node-before-add-entry", utils::wait_for_message(5min));
 
         try {
-            // Make replaced node and ignored nodes non voters earlier for better HA
-            co_await _group0->set_voters_status(ignored_nodes_from_join_params(params), can_vote::no, _group0_as, raft_timeout{});
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
             break;
         } catch (group0_concurrent_modification&) {
