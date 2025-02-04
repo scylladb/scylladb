@@ -758,7 +758,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     auto p11_modules_str = p11_modules.string<char>();
     ::p11_kit_override_system_files(NULL, NULL, p11_modules_str.c_str(), NULL, NULL);
 
-    sharded<locator::shared_token_metadata> token_metadata;
+sharded<locator::shared_token_metadata> token_metadata;
     sharded<locator::effective_replication_map_factory> erm_factory;
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
@@ -1576,8 +1576,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 utils::configure_tls_creds_builder(*creds, seo).get();
             }
 
+            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
+
             // Delay listening messaging_service until gossip message handlers are registered
-            messaging.start(mscfg, scfg, creds, std::ref(feature_service), std::ref(gossip_address_map), std::ref(compressor_tracker), std::ref(sl_controller)).get();
+            messaging.start(mscfg, scfg, creds, std::ref(feature_service), std::ref(gossip_address_map), generation_number, std::ref(compressor_tracker), std::ref(sl_controller)).get();
             auto stop_ms = defer_verbose_shutdown("messaging service", [&messaging] {
                 messaging.invoke_on_all(&netw::messaging_service::stop).get();
             });
@@ -2164,8 +2166,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         });
                     });
             }).get();
-
-            const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);

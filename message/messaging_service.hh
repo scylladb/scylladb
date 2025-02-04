@@ -357,6 +357,7 @@ private:
     std::unordered_multimap<locator::host_id, connection_ref> _host_connections;
     std::unordered_set<locator::host_id> _banned_hosts;
     gms::gossip_address_map& _address_map;
+    gms::generation_type _current_generation;
 
     future<> shutdown_tls_server();
     future<> shutdown_nontls_server();
@@ -368,9 +369,9 @@ public:
     using clock_type = lowres_clock;
 
     messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port,
-                      gms::feature_service&, gms::gossip_address_map&, utils::walltime_compressor_tracker&, qos::service_level_controller&);
+                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, utils::walltime_compressor_tracker&, qos::service_level_controller&);
     messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>,
-                      gms::feature_service&, gms::gossip_address_map&, utils::walltime_compressor_tracker&, qos::service_level_controller&);
+                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, utils::walltime_compressor_tracker&, qos::service_level_controller&);
     ~messaging_service();
 
     future<> start();
