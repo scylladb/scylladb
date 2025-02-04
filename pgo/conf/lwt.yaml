@@ -3,7 +3,7 @@ keyspace: ks
 
 # The CQL for creating a keyspace (optional if it already exists)
 keyspace_definition: |
-  CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};
+  CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND TABLETS = {'enabled': false};
 
 # Table name
 table: targettable
