@@ -62,6 +62,7 @@
 #include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
+#include "db/view/view_builder.hh"
 
 extern logging::logger rlogger;
 
@@ -401,7 +402,7 @@ class repair_writer_impl : public repair_writer::impl {
     std::optional<future<>> _writer_done;
     mutation_fragment_queue _mq;
     sharded<replica::database>& _db;
-    sharded<db::view::view_builder>& _view_builder;
+    db::view::view_builder& _view_builder;
     streaming::stream_reason _reason;
     mutation_reader _queue_reader;
 public:
@@ -409,7 +410,7 @@ public:
         schema_ptr schema,
         reader_permit permit,
         sharded<replica::database>& db,
-        sharded<db::view::view_builder>& view_builder,
+        db::view::view_builder& view_builder,
         streaming::stream_reason reason,
         mutation_fragment_queue queue,
         mutation_reader queue_reader)
@@ -494,7 +495,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     auto erm = t.get_effective_replication_map();
     auto& sharder = erm->get_sharder(*(w->schema()));
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder, std::move(_queue_reader),
-            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard),
+            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder.container(), w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard),
     t.stream_in_progress()).then([w, erm] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
@@ -511,7 +512,7 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             reader_permit permit,
             streaming::stream_reason reason,
             sharded<replica::database>& db,
-            sharded<db::view::view_builder>& view_builder) {
+            db::view::view_builder& view_builder) {
     auto [queue_reader, queue_handle] = make_queue_reader_v2(schema, permit);
     auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
     auto i = std::make_unique<repair_writer_impl>(schema, permit, db, view_builder, reason, std::move(queue), std::move(queue_reader));
@@ -3245,7 +3246,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         sharded<service::storage_proxy>& sp,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_keyspace>& sys_ks,
-        sharded<db::view::view_builder>& vb,
+        db::view::view_builder& vb,
         tasks::task_manager& tm,
         service::migration_manager& mm,
         size_t max_repair_memory)
