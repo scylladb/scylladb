@@ -390,6 +390,7 @@ class UnitTestSuite(TestSuite):
         super().__init__(path, cfg, options, mode)
         # Map of custom test command line arguments, if configured
         self.custom_args = cfg.get("custom_args", {})
+        self.extra_cmdline_options = cfg.get("extra_scylla_cmdline_options", [])
         # Map of tests that cannot run with compaction groups
         self.all_can_run_compaction_groups_except = cfg.get("all_can_run_compaction_groups_except")
 
@@ -400,6 +401,10 @@ class UnitTestSuite(TestSuite):
             return
         test = UnitTest(self.next_id((shortname, self.suite_key)), shortname, suite, args)
         self.tests.append(test)
+
+    def prepare_arg(self, arg):
+        extra_cmdline_options = ' '.join(self.extra_cmdline_options)
+        return f'{arg} {extra_cmdline_options}'
 
     async def add_test(self, shortname, casename) -> None:
         """Create a UnitTest class with possibly custom command line
@@ -413,7 +418,7 @@ class UnitTestSuite(TestSuite):
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         args = merge_cmdline_options(args, self.options.extra_scylla_cmdline_options)
         for a in args:
-            await self.create_test(shortname, casename, self, a)
+            await self.create_test(shortname, casename, self, self.prepare_arg(a))
 
     @property
     def pattern(self) -> str:
@@ -531,13 +536,12 @@ class BoostTestSuite(UnitTestSuite):
         # Skip tests which are not configured, and hence are not built
         if os.path.join("test", self.name, execname if combined_test else shortname) not in self.options.tests:
                 return
-
         # Default seastar arguments, if not provided in custom test options,
         # are two cores and 2G of RAM
         args = self.custom_args.get(shortname, ["-c2 -m2G"])
         args = merge_cmdline_options(args, self.options.extra_scylla_cmdline_options)
         for a in args:
-            await self.create_test(shortname, casename, self, a)
+            await self.create_test(shortname, casename, self, self.prepare_arg(a))
 
     def junit_tests(self) -> Iterable['Test']:
         """Boost tests produce an own XML output, so are not included in a junit report"""
