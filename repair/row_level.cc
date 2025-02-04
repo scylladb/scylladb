@@ -1859,7 +1859,7 @@ public:
             repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
             locator::host_id remote_node, unsigned node_idx,
-            const locator::effective_replication_map& erm, bool small_table_optimization,
+            locator::effective_replication_map_ptr erm, bool small_table_optimization,
             shard_id dst_cpu_id) {
         if (set_diff.empty()) {
             co_return;
@@ -1874,9 +1874,9 @@ public:
             rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
                     _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
         }
-        if (small_table_optimization) {
-            auto& strat = erm.get_replication_strategy();
-            const auto* tm = &erm.get_token_metadata();
+        if (small_table_optimization && erm) {
+            auto& strat = erm->get_replication_strategy();
+            const auto* tm = &erm->get_token_metadata();
             const auto* tmptr = co_await get_tm_for_small_table_optimization_check(tm);
             if (tmptr) {
                 tm = tmptr;
@@ -2950,7 +2950,7 @@ private:
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::put_row_diff_with_rpc_stream_started;
                 try {
-                    co_await master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, *get_erm(), _small_table_optimization, dst_cpu_id);
+                    co_await master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, _small_table_optimization ? get_erm() : nullptr, _small_table_optimization, dst_cpu_id);
                     ns.state = repair_state::put_row_diff_with_rpc_stream_finished;
                 } catch (...) {
                     std::exception_ptr ep = std::current_exception();
