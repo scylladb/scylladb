@@ -153,7 +153,9 @@ public:
     seastar::sharded<netw::messaging_service>& messaging;
     service::migration_manager& mm;
     gms::gossiper& gossiper;
+private:
     locator::effective_replication_map_ptr erm;
+public:
     dht::token_range_vector ranges;
     std::vector<sstring> cfs;
     std::vector<table_id> table_ids;
@@ -221,6 +223,8 @@ public:
     bool hints_batchlog_flushed() const {
         return _hints_batchlog_flushed;
     }
+
+    locator::effective_replication_map_ptr get_erm();
 
     future<> repair_range(const dht::token_range& range, table_info table);
 

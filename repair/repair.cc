@@ -685,12 +685,16 @@ void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
 
 repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
     return neighbors.empty() ?
-        repair_neighbors(get_neighbors(gossiper, *erm, _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
+        repair_neighbors(get_neighbors(gossiper, *get_erm(), _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
         neighbors[range];
 }
 
 size_t repair::shard_repair_task_impl::ranges_size() const noexcept {
     return ranges.size() * table_ids.size();
+}
+
+locator::effective_replication_map_ptr repair::shard_repair_task_impl::get_erm() {
+    return erm;
 }
 
 // Repair a single local range, multiple column families.
