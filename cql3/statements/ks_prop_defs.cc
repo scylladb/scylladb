@@ -70,6 +70,16 @@ static std::map<sstring, sstring> prepare_options(
         }
     }
 
+    // #22688 / #20039 - check for illegal, empty options (after above expand)
+    // moved to here. We want to be able to remove dc:s once rf=0, 
+    // in which case, the options actually serialized in result mutations
+    // will in extreme cases in fact be empty -> cannot do this check in 
+    // verify_options. We only want to apply this constraint on the input
+    // provided by the user
+    if (options.empty() && !tm.get_topology().get_datacenters().empty()) {
+        throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
+    }
+
     return options;
 }
 
