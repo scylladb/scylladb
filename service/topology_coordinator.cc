@@ -2354,6 +2354,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     // and then a coordinator again, it's fine - we'll just repeat this step.
                     // (If we're in `left` state when we try to restart we won't
                     // be able to become a voter - we'll be banned from the cluster.)
+                } else {
+                    co_await _group0.set_voter_status(node.id, can_vote::no, _as);
                 }
 
                 bool barrier_failed = false;
