@@ -225,18 +225,6 @@ bool utils::config_file::named_value<T>::set_value(sstring value, config_source 
 }
 
 template<typename T>
-future<> utils::config_file::named_value<T>::set_value_on_all_shards(const YAML::Node& node) {
-    if (_source == config_source::SettingsFile && _liveness != liveness::LiveUpdate) {
-        // FIXME: warn if different?
-        co_return;
-    }
-    co_await smp::invoke_on_all([this, value = node.as<T>()] () {
-        (*this)(value);
-    });
-    _source = config_source::SettingsFile;
-}
-
-template<typename T>
 future<bool> utils::config_file::named_value<T>::set_value_on_all_shards(sstring value, config_source src) {
     if ((_liveness != liveness::LiveUpdate) || (src == config_source::CQL && !_cf->are_live_updatable_config_params_changeable_via_cql())) {
         co_return false;
