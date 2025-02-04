@@ -1,7 +1,7 @@
 DROP KEYSPACE IF EXISTS counters;
 
 CREATE KEYSPACE IF NOT EXISTS counters
-WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': '3'};
+WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': '3'} AND TABLETS = {'enabled': false};
 
 CREATE TABLE IF NOT EXISTS counters.counter1 (
                 key blob PRIMARY KEY,
