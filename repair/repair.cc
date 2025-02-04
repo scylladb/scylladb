@@ -693,7 +693,10 @@ size_t repair::shard_repair_task_impl::ranges_size() const noexcept {
 }
 
 locator::effective_replication_map_ptr repair::shard_repair_task_impl::get_erm() {
-    return erm;
+    if (!erm && table_ids.size() != 1) {
+        on_internal_error(rlogger, "shard_repair_task_impl::erm must be non-null when the task repairs more than one table.");
+    }
+    return erm ? erm : db.local().find_column_family(table_ids[0]).get_effective_replication_map();
 }
 
 // Repair a single local range, multiple column families.
@@ -2588,7 +2591,6 @@ future<> repair::tablet_repair_task_impl::run() {
                     rlogger.debug("repair[{}] Table {}.{} does not exist anymore", id.uuid(), m.keyspace_name, m.table_name);
                     continue;
                 }
-                auto erm = t->get_effective_replication_map();
                 if (co_await rs.get_repair_module().is_aborted(id.uuid(), parent_shard)) {
                     throw abort_requested_exception();
                 }
@@ -2607,7 +2609,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 bool small_table_optimization = false;
 
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
-                        m.keyspace_name, rs, erm, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
+                        m.keyspace_name, rs, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
                         std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, topo_guard, sched_by_scheduler);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
