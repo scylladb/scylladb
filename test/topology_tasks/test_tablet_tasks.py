@@ -26,6 +26,10 @@ async def disable_injection(manager: ManagerClient, servers: list[ServerInfo], i
     for server in servers:
         await manager.api.disable_injection(server.ip_addr, injection)
 
+async def message_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
+    for server in servers:
+        await manager.api.message_injection(server.ip_addr, injection)
+
 async def wait_tasks_created(tm: TaskManagerClient, server: ServerInfo, module_name: str, expected_number: int, type: str, table: Optional[str] = None):
     async def get_tasks():
         tasks = [task for task in await tm.list_tasks(server.ip_addr, module_name) if task.kind == "cluster" and task.type == type and task.keyspace == "test"]
@@ -144,6 +148,43 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
     await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
 
     await asyncio.gather(run_repair(0, "test"), run_repair(1, "test2"), run_repair(2, "test3"), check_repair_task_list(tm, servers, module_name))
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_task_children(manager: ManagerClient):
+    module_name = "tablets"
+    tm = TaskManagerClient(manager.api)
+    injection = "repair_tablet_repair_task_impl_run"
+
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    for server in servers:
+        tm.set_task_ttl(server.ip_addr, 3600)
+    assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    async def repair_task():
+        token = -1
+        # Keep retring tablet repair.
+        await inject_error_on(manager, injection, servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+
+    async def resume_repair():
+        await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)
+        await message_injection(manager, servers, injection)
+
+    async def check_children():
+        # Wait until user repair task is created.
+        repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair")
+        status = await tm.wait_for_task(servers[0].ip_addr, repair_tasks[0].task_id)
+
+        assert len(status.children_ids) == 1
+        child = status.children_ids[0]
+        child_status = await tm.get_task_status(child["node"], child["task_id"])
+        assert child_status.parent_id == repair_tasks[0].task_id
+
+    await asyncio.gather(repair_task(), resume_repair(), check_children())
 
 async def prepare_migration_test(manager: ManagerClient):
     servers = []
