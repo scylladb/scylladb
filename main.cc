@@ -1699,6 +1699,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
             };
 
+            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
+            });
+
+            supervisor::notify("starting view update generator");
+            view_update_generator.start(std::ref(db), std::ref(proxy), std::ref(stop_signal.as_sharded_abort_source())).get();
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
+                view_update_generator.stop().get();
+            });
+
+            supervisor::notify("starting the view builder");
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
+                view_builder.stop().get();
+            });
+
             supervisor::notify("starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
             repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
@@ -1816,23 +1833,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             supervisor::notify("loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
-
-            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
-            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
-                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
-            });
-
-            supervisor::notify("starting view update generator");
-            view_update_generator.start(std::ref(db), std::ref(proxy), std::ref(stop_signal.as_sharded_abort_source())).get();
-            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
-                view_update_generator.stop().get();
-            });
-
-            supervisor::notify("starting the view builder");
-            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
-            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
-                view_builder.stop().get();
-            });
 
             supervisor::notify("starting commit log");
             auto cl = db.local().commitlog();
