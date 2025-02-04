@@ -2519,10 +2519,6 @@ future<> repair_service::init_ms_handlers() {
         auto from_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return container().invoke_on(shard, [from_id, src_cpu_id, repair_meta_id, ks_name, cf_name,
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this] (repair_service& local_repair) mutable {
-            if (!local_repair._view_builder.local_is_initialized()) {
-                return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
-                        local_repair.my_host_id())));
-            }
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             const gc_clock::time_point ct = compaction_time ? *compaction_time : gc_clock::now();
             return repair_meta::repair_row_level_start_handler(local_repair, from_id, src_cpu_id, repair_meta_id, std::move(ks_name),
@@ -2676,9 +2672,6 @@ public:
         , _start_time(start_time)
         , _is_tablet(_shard_task.db.local().find_column_family(_table_id).uses_tablets())
     {
-        if (!_shard_task.rs.get_view_builder().local_is_initialized()) {
-            throw std::runtime_error(format("Node {} is not fully initialized for repair, try again later", shard_task.rs.my_host_id()));
-        }
         repair_neighbors r_neighbors = _shard_task.get_repair_neighbors(_range);
         auto& map = r_neighbors.shard_map;
         for (auto& n : _all_live_peer_nodes) {
