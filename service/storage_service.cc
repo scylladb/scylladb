@@ -4114,19 +4114,13 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
     // Wait until request completes
     auto error = co_await wait_for_topology_request_completion(request_id);
 
-    if (error.empty()) {
-        rtlogger.info("removenode: successfully removed from topology (request ID: {}), removing from group 0 configuration", request_id);
-        try {
-            co_await _group0->remove_from_raft_config(id);
-        } catch (raft::not_a_member&) {
-            rtlogger.info("removenode: already removed from the raft config by the topology coordinator");
-        }
-        rtlogger.info("Removenode succeeded. Request ID: {}", request_id);
-    } else {
+    if (!error.empty()) {
         auto err = fmt::format("Removenode failed. See earlier errors ({}). Request ID: {}", error, request_id);
         rtlogger.error("{}", err);
         throw std::runtime_error(err);
     }
+
+    rtlogger.info("Removenode succeeded. Request ID: {}", request_id);
 }
 
 future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
