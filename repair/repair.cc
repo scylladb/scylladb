@@ -636,7 +636,6 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , data_centers(data_centers_)
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
-    , total_rf(erm->get_replication_factor())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , _small_table_optimization(small_table_optimization)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
