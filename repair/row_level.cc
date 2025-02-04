@@ -2989,7 +2989,7 @@ private:
 
 private:
     locator::effective_replication_map_ptr get_erm() {
-        return _shard_task.erm;
+        return _shard_task.get_erm();
     }
 
 private:
