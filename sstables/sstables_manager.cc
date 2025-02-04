@@ -186,9 +186,15 @@ size_t sstables_manager::get_memory_available_for_reclaimable_components() const
 }
 
 future<> sstables_manager::components_reclaim_reload_fiber() {
+    auto components_memory_reclaim_threshold_observer = _db_config.components_memory_reclaim_threshold.observe([&] (double) {
+        // any change to the components_memory_reclaim_threshold config should trigger reload/reclaim
+        _components_memory_change_event.signal();
+    });
+
     co_await coroutine::switch_to(_maintenance_sg);
 
     sstlog.trace("components_reloader_fiber start");
+
     while (true) {
         co_await _components_memory_change_event.when();
 
