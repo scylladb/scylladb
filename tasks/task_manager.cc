@@ -654,10 +654,6 @@ task_manager::task_manager() noexcept
     , _user_task_ttl(0)
 {}
 
-gms::inet_address task_manager::get_broadcast_address() const noexcept {
-    return _cfg.broadcast_address;
-}
-
 locator::host_id task_manager::get_host_id() const noexcept {
     return _host_id;
 }

@@ -18,7 +18,6 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
 #include "utils/log.hh"
-#include "gms/inet_address.hh"
 #include "locator/host_id.hh"
 #include "schema/schema_fwd.hh"
 #include "tasks/types.hh"
@@ -65,7 +64,6 @@ public:
     struct config {
         utils::updateable_value<uint32_t> task_ttl;
         utils::updateable_value<uint32_t> user_task_ttl;
-        gms::inet_address broadcast_address;
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
@@ -382,7 +380,6 @@ public:
     task_manager(config cfg, seastar::abort_source& as) noexcept;
     task_manager() noexcept;
 
-    gms::inet_address get_broadcast_address() const noexcept;
     // Returns empty host_id if local info isn't resolved yet.
     locator::host_id get_host_id() const noexcept;
     void set_host_id(locator::host_id host_id) noexcept;
