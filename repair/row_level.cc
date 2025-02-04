@@ -1382,7 +1382,11 @@ public:
         } else {
             return;
         }
-        flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization, this);
+        if (small_table_optimization) {
+            flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization, this);
+        } else {
+            flush_rows(_schema, _working_row_buf, _repair_writer);
+        }
     }
 
 private:
@@ -2921,7 +2925,7 @@ private:
             throw;
           }
         }
-        master.flush_rows_in_working_row_buf(get_erm(), _small_table_optimization);
+        master.flush_rows_in_working_row_buf(_small_table_optimization ? get_erm() : nullptr, _small_table_optimization);
         return op_status::next_step;
     }
 
