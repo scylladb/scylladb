@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "seastar/core/abort_source.hh"
 #include "utils/assert.hh"
 #include "utils/from_chars_exactly.hh"
 #include <seastar/core/future.hh>
@@ -388,6 +389,16 @@ public:
         return seastar::sleep(duration);
     }
 
+    // \brief Inject an abortable sleep for milliseconds
+    [[gnu::always_inline]]
+    future<> inject(const std::string_view& name, const std::chrono::milliseconds duration, abort_source& as) {
+        if (!enter(name)) {
+            return make_ready_future<>();
+        }
+        errinj_logger.debug("Triggering abortable sleep injection \"{}\" ({}ms)", name, duration.count());
+        return seastar::sleep_abortable(duration, as);
+    }    
+
     // \brief Inject a sleep to deadline (timeout)
     template <typename Clock, typename Duration>
     [[gnu::always_inline]]
@@ -574,6 +585,13 @@ public:
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name,
             const std::chrono::milliseconds duration) {
+        return make_ready_future<>();
+    }
+
+    // Inject abortable sleep
+    [[gnu::always_inline]]
+    future<> inject(const std::string_view& name,
+            const std::chrono::milliseconds duration, abort_source& as) {
         return make_ready_future<>();
     }
 
