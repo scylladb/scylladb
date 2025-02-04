@@ -62,7 +62,6 @@
 #include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
-#include "db/view/view_builder.hh"
 
 extern logging::logger rlogger;
 
@@ -495,7 +494,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     auto erm = t.get_effective_replication_map();
     auto& sharder = erm->get_sharder(*(w->schema()));
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder, std::move(_queue_reader),
-            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder.container(), w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard),
+            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard),
     t.stream_in_progress()).then([w, erm] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);

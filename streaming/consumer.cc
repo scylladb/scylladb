@@ -20,12 +20,12 @@ namespace streaming {
 
 reader_consumer_v2 make_streaming_consumer(sstring origin,
         sharded<replica::database>& db,
-        sharded<db::view::view_builder>& vb,
+        db::view::view_builder& vb,
         uint64_t estimated_partitions,
         stream_reason reason,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard) {
-    return [&db, &vb, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (mutation_reader reader) -> future<> {
+    return [&db, &vb = vb.container(), estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
