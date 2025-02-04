@@ -164,7 +164,6 @@ public:
     std::vector<sstring> hosts;
     std::unordered_set<locator::host_id> ignore_nodes;
     std::unordered_map<dht::token_range, repair_neighbors> neighbors;
-    size_t total_rf;
     uint64_t nr_ranges_finished = 0;
     size_t nr_failed_ranges = 0;
     int ranges_index = 0;
@@ -225,6 +224,10 @@ public:
     }
 
     locator::effective_replication_map_ptr get_erm();
+
+    size_t get_total_rf() {
+        return get_erm()->get_replication_factor();
+    }
 
     future<> repair_range(const dht::token_range& range, table_info table);
 
