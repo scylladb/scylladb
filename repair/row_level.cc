@@ -2990,9 +2990,9 @@ private:
         auto my_address = get_erm()->get_topology().my_host_id();
         // Update repair_history table only if all replicas have been repaired
         size_t repaired_replicas = _all_live_peer_nodes.size() + 1;
-        if (_shard_task.total_rf != repaired_replicas){
+        if (_shard_task.get_total_rf() != repaired_replicas){
             rlogger.debug("repair[{}]: Skipped to update system.repair_history total_rf={}, repaired_replicas={}, local={}, peers={}",
-                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, my_address, _all_live_peer_nodes);
+                    _shard_task.global_repair_id.uuid(), _shard_task.get_total_rf(), repaired_replicas, my_address, _all_live_peer_nodes);
             co_return;
         }
         // Update repair_history table only if both hints and batchlog have been flushed.
@@ -3004,7 +3004,7 @@ private:
         // system.tablet.repair_time is updated.
         if (_is_tablet && _shard_task.sched_by_scheduler) {
             rlogger.debug("repair[{}]: Skipped to update system.repair_history for tablet repair scheduled by scheduler total_rf={} repaired_replicas={} local={} peers={}",
-                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, my_address, _all_live_peer_nodes);
+                    _shard_task.global_repair_id.uuid(), _shard_task.get_total_rf(), repaired_replicas, my_address, _all_live_peer_nodes);
             co_return;
         }
 
