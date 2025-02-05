@@ -57,8 +57,16 @@ uint32_t alter_table_statement::get_bound_terms() const {
 
 future<> alter_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
     using cdt = auth::command_desc::type;
-    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER,
-                                          _type == type::opts ? cdt::ALTER_WITH_OPTS : cdt::OTHER);
+    auto type = cdt::OTHER;
+    if (_type == type::opts) {
+        // can modify only KW_MEMTABLE_FLUSH_PERIOD property for system tables (see issue #21223)
+        if (is_system_keyspace(keyspace()) && _properties->count() == 1 && _properties->has_property(cf_prop_defs::KW_MEMTABLE_FLUSH_PERIOD)) {
+            type = cdt::ALTER_SYSTEM_WITH_ALLOWED_OPTS;
+        } else {
+            type = cdt::ALTER_WITH_OPTS;
+        }
+    }
+    return state.has_column_family_access(keyspace(), column_family(), auth::permission::ALTER, type);
 }
 
 static data_type validate_alter(const schema& schema, const column_definition& def, const cql3_type& validator)

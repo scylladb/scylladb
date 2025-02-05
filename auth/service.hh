@@ -224,6 +224,7 @@ struct command_desc {
     const ::auth::resource& resource; ///< Resource impacted by this command.
     enum class type {
         ALTER_WITH_OPTS, ///< Command is ALTER ... WITH ...
+        ALTER_SYSTEM_WITH_ALLOWED_OPTS,
         OTHER
     } type_ = type::OTHER;
 };
