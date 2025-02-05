@@ -94,6 +94,19 @@ def test_create_keyspace_double_with(cql):
     with pytest.raises(SyntaxException):
         cql.execute('CREATE KEYSPACE ks WITH WITH DURABLE_WRITES = true')
 
+# Scylla accepts 'replication_factor' in CREATE KEYSPACE statement,
+# but while CQL syntax is case-insensitive, tags within json are case-sensitive,
+# hence anything else than the lowercase 'replication_factor' should be rejected.
+# Reproduces #15336
+def test_create_keyspace_with_case_sensitive_replication_factor_tag(cql):
+    ks = unique_name()
+    # lowercase 'replication_factor' should be accepted
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }"):
+        pass
+    # 'replication_factor' in any other case than the lowercase should be rejected
+    with pytest.raises(ConfigurationException):
+        cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'Replication_factor' : 3 }}")
+
 # Test trying a non-existent keyspace - with or without the IF EXISTS flag.
 # This test demonstrates a change of the exception produced between Cassandra 4.0
 # and earlier versions (with Scylla behaving like the earlier versions).

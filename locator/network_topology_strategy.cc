@@ -58,9 +58,12 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
         }
 
         if (boost::iequals(key, "replication_factor")) {
-            throw exceptions::configuration_exception(
-                "replication_factor is an option for SimpleStrategy, not "
-                "NetworkTopologyStrategy");
+            if (boost::equals(key, "replication_factor")) {
+                on_internal_error(rslogger, "replication_factor should have been replaced with a DC:RF mapping by now");
+            } else {
+                throw exceptions::configuration_exception(format(
+                "'{}' is not a valid option, did you mean (lowercase) 'replication_factor'?", key));
+            }
         }
 
         auto rf = parse_replication_factor(val);
@@ -267,30 +270,23 @@ network_topology_strategy::calculate_natural_endpoints(
     co_return std::move(tracker.replicas());
 }
 
-void network_topology_strategy::validate_options(const gms::feature_service& fs) const {
+void network_topology_strategy::validate_options(const gms::feature_service& fs, const locator::topology& topology) const {
     if(_config_options.empty()) {
         throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
     }
+    auto dcs = topology.get_datacenters();
     validate_tablet_options(*this, fs, _config_options);
-    auto tablet_opts = recognized_tablet_options();
     for (auto& c : _config_options) {
-        if (tablet_opts.contains(c.first)) {
-            continue;
-        }
         if (c.first == sstring("replication_factor")) {
-            throw exceptions::configuration_exception(
-                "replication_factor is an option for simple_strategy, not "
-                "network_topology_strategy");
+            on_internal_error(rslogger, fmt::format("'replication_factor' tag should be unrolled into a list of DC:RF by now."
+                                                    "_config_options:{}", _config_options));
+        }
+        if (!dcs.contains(c.first)) {
+            throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} "
+                "passed to NetworkTopologyStrategy", this->to_qualified_class_name(c.first)));
         }
         parse_replication_factor(c.second);
     }
-}
-
-std::optional<std::unordered_set<sstring>> network_topology_strategy::recognized_options(const topology& topology) const {
-    // We only allow datacenter names as options
-    auto opts = topology.get_datacenters();
-    opts.merge(recognized_tablet_options());
-    return opts;
 }
 
 effective_replication_map_ptr network_topology_strategy::make_replication_map(table_id table, token_metadata_ptr tm) const {

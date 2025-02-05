@@ -64,7 +64,7 @@ size_t simple_strategy::get_replication_factor(const token_metadata&) const {
     return _replication_factor;
 }
 
-void simple_strategy::validate_options(const gms::feature_service&) const {
+void simple_strategy::validate_options(const gms::feature_service&, const locator::topology&) const {
     auto it = _config_options.find("replication_factor");
     if (it == _config_options.end()) {
         throw exceptions::configuration_exception("SimpleStrategy requires a replication_factor strategy option.");
@@ -73,10 +73,6 @@ void simple_strategy::validate_options(const gms::feature_service&) const {
     if (_uses_tablets) {
         throw exceptions::configuration_exception("SimpleStrategy doesn't support tablet replication");
     }
-}
-
-std::optional<std::unordered_set<sstring>>simple_strategy::recognized_options(const topology&) const {
-    return {{ "replication_factor" }};
 }
 
 sstring simple_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const {
