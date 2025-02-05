@@ -63,7 +63,7 @@ async def test_topology_upgrade_basic(request, build_mode: str, manager: Manager
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
 
     logging.info("Booting new node")
-    await manager.server_add(config=cfg)
+    servers.append(await manager.server_add(config=cfg))
 
     logging.info("Waiting until driver connects to every server")
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)

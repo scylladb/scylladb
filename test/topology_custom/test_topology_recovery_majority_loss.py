@@ -9,12 +9,15 @@ import logging
 import pytest
 import time
 
+from cassandra.policies import WhiteListRoundRobinPolicy
+
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
         wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
+from test.topology.conftest import cluster_con
 
 
 @pytest.mark.asyncio
@@ -28,6 +31,16 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
     # Currently python driver ignores zero-token nodes, so we skip them here.
     logging.info("Waiting until driver connects to every server")
     hosts = await wait_for_cql_and_get_hosts(cql, servers[:-2], time.time() + 60)
+
+    def host_for_zero_token_node(server):
+        # In order to get the Host instance of a zero-token node, connect to it directly.
+        # We cannot use the ManagerClient's session because it is connected to non-zero-token
+        # nodes and, in that case, the zero-token nodes are ignored.
+        zero_token_node_session = cluster_con([server.ip_addr], 9042, False, load_balancing_policy=
+                                          WhiteListRoundRobinPolicy([server.ip_addr])).connect()
+        return zero_token_node_session.hosts[0]
+
+    zero_token_hosts = [host_for_zero_token_node(s) for s in [servers[3], servers[4]]]
 
     srv1, *others = servers
 
@@ -48,6 +61,8 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
         ignore_dead_ips = [srv.ip_addr for srv in others[i+1:]]
         logging.info(f"Removing {to_remove} using {srv1} with ignore_dead: {ignore_dead_ips}")
         await manager.remove_node(srv1.server_id, to_remove.server_id, ignore_dead_ips)
+
+    removed_hosts = hosts[1:] + zero_token_hosts
 
     logging.info(f"Deleting old Raft data and upgrade state on {host1} and restarting")
     await delete_raft_topology_state(cql, host1)
@@ -71,14 +86,14 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
     await wait_for_cdc_generations_publishing(cql, [host1], time.time() + 60)
 
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
-    await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1])
+    await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1], ignored_hosts=removed_hosts)
 
     logging.info("Add two more nodes")
     servers = [srv1] + await manager.servers_add(2)
-    hosts = await wait_for_cql_and_get_hosts(cql, servers[:-2], time.time() + 60)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logging.info("Waiting for the new CDC generations publishing")
     await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)
 
     logging.info("Checking consistency of data in system.topology and system.cdc_generations_v3")
-    await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts)
+    await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts, ignored_hosts=removed_hosts)
