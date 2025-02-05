@@ -170,7 +170,7 @@ future<> server::shutdown() {
 future<>
 server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, std::function<server&()> get_shard_instance) {
     // Note: We are making the assumption that if builder is provided it will be the same for each
-    // invokation, regardless of address etc. In general, only CQL server will call this multiple times,
+    // invocation, regardless of address etc. In general, only CQL server will call this multiple times,
     // and if TLS, it will use the same cert set.
     // Could hold certs in a map<addr, certs> and ensure separation, but then we will for all
     // current uses of this class create duplicate reloadable certs for shard 0, which is
