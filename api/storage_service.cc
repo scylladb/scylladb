@@ -56,6 +56,7 @@
 #include "db/view/view_builder.hh"
 #include "utils/rjson.hh"
 #include "utils/user_provided_param.hh"
+#include <seastar/util/log-cli.hh>
 
 using namespace seastar::httpd;
 using namespace std::chrono_literals;
@@ -996,11 +997,28 @@ rest_force_remove_completion(sharded<service::storage_service>& ss, std::unique_
 static
 future<json::json_return_type>
 rest_set_logging_level(std::unique_ptr<http::request> req) {
-        //TBD
-        unimplemented();
-        auto class_qualifier = req->get_query_param("class_qualifier");
-        auto level = req->get_query_param("level");
-        return make_ready_future<json::json_return_type>(json_void());
+    if (req->query_parameters.size() > 2) {
+        throw httpd::bad_param_exception("Invalid parameter found");
+    }
+
+    auto class_qualifier = req->get_query_param("class_qualifier");
+    auto level = req->get_query_param("level");
+
+    log_level ll;
+
+    try {
+        ll = log_cli::parse_log_level(level);
+    } catch (...) {
+       throw httpd::bad_param_exception("Invalid log level");
+    }
+
+    try {
+        logging::logger_registry().set_logger_level(class_qualifier, ll);
+    } catch (...) {
+        throw httpd::bad_param_exception("Invalid logger name");
+    }
+
+    co_return json::json_return_type(json_void());
 }
 
 static

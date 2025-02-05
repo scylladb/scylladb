@@ -718,3 +718,79 @@ def test_move_tablets_invalid_table(rest_api, skip_without_tablets):
                          })
     assert resp.status_code == requests.codes.bad_request
     assert "Can't find a column family" in resp.json()["message"]
+
+def test_set_logging_level(rest_api):
+    """
+    This test verifies that the API responsible for setting a log level of a specific logger
+    does change the log level and handles invalid requests correctly.
+    """
+
+    def change_and_check_log_level(logger: str, level: str):
+        logger = logger.lower()
+        level = level.lower()
+
+        resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": logger, "level": level})
+        assert resp.status_code == requests.codes.ok
+
+        resp = rest_api.send("GET", "storage_service/logging_level")
+        assert resp.status_code == requests.codes.ok
+
+        log_info = next(info for info in resp.json() if info["key"].lower() == logger)
+        assert log_info["value"].lower() == level
+
+    change_and_check_log_level("forward_service", "trace")
+    change_and_check_log_level("forward_service", "debug")
+    change_and_check_log_level("forward_service", "info")
+    change_and_check_log_level("forward_service", "warn")
+    change_and_check_log_level("forward_service", "error")
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": "forward_service"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Missing mandatory parameter 'level'"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"level": "debug"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Missing mandatory parameter 'class_qualifier'"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={
+        "class_qualifier": "storage_proxy",
+        "level": "debug",
+        "unknown_param": "debug"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Invalid parameter found"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={
+        "class_qualifier": "storage_proxy",
+        "unknown_param": "debug"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Missing mandatory parameter 'level'"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={
+        "level": "debug",
+        "unknown_param": "debug"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Missing mandatory parameter 'class_qualifier'"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": "", "level": "debug"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Missing mandatory parameter 'class_qualifier'"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": "hints_manager", "level": ""})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Missing mandatory parameter 'level'"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": "", "level": ""})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] in {"Missing mandatory parameter 'level'", "Missing mandatory parameter 'class_qualifier'"}
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": "hints_manager", "level": "unknown"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Invalid log level"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": "unknown_logger", "level": "debug"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] == "Invalid logger name"
+
+    resp = rest_api.send("POST", "storage_service/logging_level", params={"class_qualifier": "unknown_logger", "level": "unknown_level"})
+    assert resp.status_code == requests.codes.bad_request
+    assert resp.json()["message"] in {"Invalid log level", "Invalid logger name"}

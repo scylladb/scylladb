@@ -123,6 +123,7 @@ class mapreduce_service : public seastar::peering_sharded_service<mapreduce_serv
     service::storage_proxy& _proxy;
     distributed<replica::database>& _db;
     const locator::shared_token_metadata& _shared_token_metadata;
+    abort_source _abort_outgoing_tasks;
 
     struct stats {
         uint64_t requests_dispatched_to_other_nodes = 0;
@@ -141,7 +142,10 @@ public:
         , _proxy(p)
         , _db(db)
         , _shared_token_metadata(stm)
-        , _early_abort_subscription(as.subscribe([this] () noexcept { _shutdown = true; }))
+        , _early_abort_subscription(as.subscribe([this] () noexcept {
+            _shutdown = true;
+            _abort_outgoing_tasks.request_abort();
+        }))
     {
         register_metrics();
         init_messaging_service();
