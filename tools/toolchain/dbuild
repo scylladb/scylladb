@@ -16,9 +16,13 @@ EOF
     exit 1
 }
 
-if which podman >/dev/null 2>&1 ; then
+command_exists() {
+    type -p "$1" > /dev/null
+}
+
+if command_exists podman ; then
   tool=${DBUILD_TOOL-podman}
-elif which docker >/dev/null 2>&1 ; then
+elif command_exists docker ; then
   tool=${DBUILD_TOOL-docker}
 else
   die "Please make sure you install either podman or docker on this machine to run dbuild"
