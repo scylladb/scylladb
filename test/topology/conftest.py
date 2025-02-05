@@ -265,9 +265,3 @@ def skip_mode_fixture(request, build_mode):
     for reason, platform_key in skipped_funcs.get((request.function, build_mode), []):
         if platform_key is None or platform_key in platform.platform():
             pytest.skip(f'{request.node.name} skipped, reason: {reason}')
-
-
-def pytest_collection_modifyitems(items, config):
-    run_id = config.getoption('run_id')
-    for item in items:
-        item.name = f"{item.name}.{run_id}"
