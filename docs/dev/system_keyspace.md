@@ -177,13 +177,13 @@ The "ownership" table for non-local sstables
 Schema:
 ~~~
 CREATE TABLE system.sstables (
-    location text,
+    owner uuid,
     generation timeuuid,
     format text,
     status text,
     uuid uuid,
     version text,
-    PRIMARY KEY (location, generation)
+    PRIMARY KEY (owner, generation)
 )
 ~~~
 
