@@ -174,7 +174,7 @@ public:
 
     // If the read was aborted, throw the exception the read was aborted with.
     // Otherwise no-op.
-    void check_abort();
+    void check_abort() const;
 
     query::max_result_size max_result_size() const;
     void set_max_result_size(query::max_result_size);
