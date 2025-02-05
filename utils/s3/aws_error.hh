@@ -74,6 +74,15 @@ enum class aws_error_type : uint8_t {
     NO_SUCH_UPLOAD = 134,
     OBJECT_ALREADY_IN_ACTIVE_TIER = 135,
     OBJECT_NOT_IN_ACTIVE_TIER = 136,
+    // STS specific
+    EXPIRED_TOKEN = 137,
+    INVALID_AUTHORIZATION_MESSAGE = 138,
+    INVALID_IDENTITY_TOKEN = 139,
+    I_D_P_COMMUNICATION_ERROR = 140,
+    I_D_P_REJECTED_CLAIM = 141,
+    MALFORMED_POLICY_DOCUMENT = 142,
+    PACKED_POLICY_TOO_LARGE = 143,
+    REGION_DISABLED = 144,
     // No error set
     OK = 255
 };
@@ -96,6 +105,7 @@ public:
     [[nodiscard]] retryable is_retryable() const { return _is_retryable; }
     static std::optional<aws_error> parse(seastar::sstring&& body);
     static aws_error from_http_code(seastar::http::reply::status_type http_code);
+    static aws_error from_system_error(const std::system_error& system_error);
     static const aws_errors& get_errors();
 };
 
