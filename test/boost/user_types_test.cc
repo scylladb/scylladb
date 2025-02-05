@@ -18,6 +18,7 @@
 #include "types/list.hh"
 #include "test/lib/exception_utils.hh"
 #include "db/config.hh"
+#include "types/vector.hh"
 
 #include <fmt/ranges.h>
 
@@ -625,6 +626,52 @@ SEASTAR_TEST_CASE(test_nonfrozen_user_types_prepared) {
             execute_prepared("insert into cf (a, b) values (?, ?)", {mk_int(4), mk_longer_tuple({4, "text4", int64_t(4), 5})}),
             exceptions::invalid_request_exception,
             exception_predicate::message_contains("contained too many fields (expected 3, got 4)"));
+    });
+}
+
+// This test is a boost version of sandwichBetweenUDTs test from Apache Cassandra.
+SEASTAR_TEST_CASE(test_vector_between_user_types) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto b = user_type_impl::get_instance("ks", to_bytes("b"),
+                    {to_bytes("y")},
+                    {int32_type}, true);
+                    
+        auto v = vector_type_impl::get_instance(b, 2);
+
+        auto a = user_type_impl::get_instance("ks", to_bytes("a"),
+                    {to_bytes("z")},
+                    {v}, true);
+
+        auto execute_prepared = [&] (const sstring& cql, const std::vector<cql3::raw_value>& vs) {
+            auto id = e.prepare(cql).get();
+            e.execute_prepared(id, vs).discard_result().get();
+        };
+
+        auto mk_b = [&] (int x) {
+            return make_user_value(b, {x});
+        };
+
+        auto mk_ut = [&] (const std::vector<data_value>& vs) {
+            return cql3::raw_value::make_value(a->decompose(make_user_value(a, vs)));
+        };
+
+        auto mk_vector = [&] (const std::vector<data_value>& vs) {
+            return make_vector_value(v, vs);
+        };
+
+        auto mk_row = [&] (int k, const std::vector<data_value>& vs) -> std::vector<bytes_opt> {
+            return {int32_type->decompose(k), a->decompose(make_user_value(a, user_type_impl::native_type(vs)))};
+        };
+
+        e.execute_cql("create type b (y int)").discard_result().get();
+        e.execute_cql("create type a (z vector<frozen<b>, 2>)").discard_result().get();
+        e.execute_cql("create table cf (pk int primary key, value a)").discard_result().get();
+
+        execute_prepared("insert into cf (pk, value) values (0, ?)", {mk_ut({mk_vector({mk_b(1), mk_b(2)})})});
+
+        assert_that(e.execute_cql("select * from cf").get()).is_rows().with_rows({
+            mk_row(0, {make_vector_value(v, {mk_b(1), mk_b(2)})}),
+        });
     });
 }
 

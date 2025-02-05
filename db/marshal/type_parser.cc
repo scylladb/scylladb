@@ -14,11 +14,13 @@
 
 #include <stdexcept>
 #include <string>
+#include <tuple>
 
 #include "types/user.hh"
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "types/vector.hh"
 
 class parse_exception : public exceptions::syntax_exception {
 public:
@@ -108,6 +110,46 @@ std::vector<data_type> type_parser::get_type_parameters(bool multicell)
 
         list.emplace_back(do_parse(multicell));
     }
+    throw parse_exception(_str, _idx, "unexpected end of string");
+}
+
+std::tuple<data_type, size_t> type_parser::get_vector_parameters()
+{
+    if (is_eos() || _str[_idx] != '(') {
+        throw std::logic_error("internal error");
+    }
+
+    ++_idx; // skipping '('
+
+    skip_blank_and_comma();
+    if (_str[_idx] == ')') {
+        ++_idx;
+        return std::make_tuple(nullptr, 0);
+    }
+
+    data_type type = do_parse(true);
+    size_t size = 0;
+    if (_str[_idx] == ',') {
+        ++_idx;
+        skip_blank();
+
+        size_t i = _idx;
+        while (!is_eos() && _str[_idx] >= '0' && _str[_idx] <= '9') {
+            ++_idx;
+        }
+
+        if (is_eos() || _str[_idx] != ')') {
+            throw parse_exception(_str, _idx, "expected digit or ')'");
+        }
+
+        size = std::stoul(_str.substr(i, _idx - i));
+
+        ++_idx; // skipping ')'
+        return std::make_tuple(type, size);
+    } else if (!is_eos()) {
+        throw parse_exception(_str, _idx, "expected size parameter");
+    }
+
     throw parse_exception(_str, _idx, "unexpected end of string");
 }
 
@@ -201,6 +243,12 @@ data_type type_parser::get_abstract_type(const sstring& compare_with, type_parse
             throw exceptions::configuration_exception("TupleType takes at least 1 type parameter");
         }
         return tuple_type_impl::get_instance(l);
+    } else if (class_name == "org.apache.cassandra.db.marshal.VectorType") {
+        auto [type, size] = parser.get_vector_parameters();
+        if (!type) {
+            throw exceptions::configuration_exception("VectorType takes exactly 1 type parameter and 1 size parameter");
+        }
+        return vector_type_impl::get_instance(type, size);
     } else if (class_name == "org.apache.cassandra.db.marshal.UserType") {
         auto [keyspace, name, field_names, field_types] = parser.get_user_type_parameters();
         return user_type_impl::get_instance(

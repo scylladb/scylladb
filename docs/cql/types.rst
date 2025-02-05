@@ -13,7 +13,7 @@ CQL is a typed language and supports a rich set of data types, including :ref:`n
 
 .. code-block::
    
-   cql_type: `native_type` | `collection_type` | `user_defined_type` | `tuple_type` 
+   cql_type: `native_type` | `collection_type` | `user_defined_type` | `tuple_type` | `vector_type`
 
 
 
@@ -252,7 +252,7 @@ and their values can be input using collection literals:
 
 .. code-block:: cql
 
-   collection_literal: `map_literal` | `set_literal` | `list_literal`
+   collection_literal: `map_literal` | `set_literal` | `list_or_vector_literal`
 
    map_literal: '{' [ `term` ':' `term` (',' `term` : `term`)* ] '}'
 
@@ -640,6 +640,40 @@ Unlike other "composed" types (collections and UDT), a tuple is always ``frozen<
 `frozen` keyword), and it is not possible to update only some elements of a tuple (without updating the whole tuple).
 Also, a tuple literal should always provide values for all the components of the tuple type (some of
 those values can be null, but they need to be explicitly declared as so).
+
+.. _vectors:
+
+Vectors
+^^^^^^^
+
+A ``vector`` is an array of a given number of elements of a given type.
+For example, a ``vector<float, 3>`` holds vectors of 3 floats
+(in mathematical terms, these are 3-dimensional float vectors).
+None of the elements stored in a vector can be null.
+The vector type and it's respective literal are defined by:
+
+.. code-block::
+
+   vector_type: VECTOR '<' `cql_type` ',' `integer` '>'
+   list_literal: '[' [ `term` (',' `term`)* ] ']'
+
+Note that list_literal is used for both :ref:`lists` and :ref:`vectors` as their syntax is the same.
+In the case of vectors, the number of elements in the list_literal must match the number of elements in the vector type.
+
+Vectors can be used as in the example below::
+
+    CREATE TABLE vectors (
+        id int PRIMARY KEY,
+        gene_expr vector<float, 3>,
+    )
+
+    INSERT INTO vectors (id, gene_expr) VALUES (180503, [0.2228, 0.2112, 0.2024]);
+
+Similar to tuple type, a vector is always ``frozen<vector>`` (without the need of the `frozen` keyword), and
+it is not possible to update only some elements of a vector (without updating the whole vector).
+
+Types stored in a vector are not implicitly frozen, so if you want to store a frozen collection or
+frozen UDT in a vector, you need to explicitly wrap them using `frozen` keyword.
 
 .. .. _custom-types:
 

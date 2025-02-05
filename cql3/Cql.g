@@ -1621,7 +1621,7 @@ collectionLiteral returns [uexpression value]
 	@init{ std::vector<expression> l; }
     : '['
           ( t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* )?
-      ']' { $value = collection_constructor{collection_constructor::style_type::list, std::move(l)}; }
+      ']' { $value = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(l)}; }
     | '{' t=term v=setOrMapLiteral[t] { $value = std::move(v); } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
@@ -1765,7 +1765,7 @@ subscriptExpr returns [uexpression e]
     ;
 
 singleColumnInValuesOrMarkerExpr returns [uexpression e]
-    : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list, std::move(values)}; }
+    : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(values)}; }
     | m=marker { e = std::move(m); }
     ;
 
@@ -1843,7 +1843,7 @@ relation returns [uexpression e]
     | name=cident K_IN in_values=singleColumnInValues
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
         collection_constructor {
-            .style = collection_constructor::style_type::list,
+            .style = collection_constructor::style_type::list_or_vector,
             .elements = std::move(in_values)
         }); }
     | name=cident K_NOT K_IN marker1=marker
@@ -1851,7 +1851,7 @@ relation returns [uexpression e]
     | name=cident K_NOT K_IN in_values=singleColumnInValues
         { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN,
         collection_constructor {
-            .style = collection_constructor::style_type::list,
+            .style = collection_constructor::style_type::list_or_vector,
             .elements = std::move(in_values)
         }); }
     | name=cident K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
@@ -1865,7 +1865,7 @@ relation returns [uexpression e]
                     ids,
                     oper_t::IN,
                     collection_constructor {
-                      .style = collection_constructor::style_type::list,
+                      .style = collection_constructor::style_type::list_or_vector,
                       .elements = std::vector<expression>()
                     }
                   );
@@ -1884,7 +1884,7 @@ relation returns [uexpression e]
                     ids,
                     oper_t::IN,
                     collection_constructor {
-                      .style = collection_constructor::style_type::list,
+                      .style = collection_constructor::style_type::list_or_vector,
                       .elements = std::move(literals)
                     }
                   );
@@ -1895,7 +1895,7 @@ relation returns [uexpression e]
                     ids,
                     oper_t::IN,
                     collection_constructor {
-                      .style = collection_constructor::style_type::list,
+                      .style = collection_constructor::style_type::list_or_vector,
                       .elements = std::move(markers)
                     }
                   );
@@ -1951,6 +1951,7 @@ comparator_type [bool internal] returns [shared_ptr<cql3_type::raw> t]
     : n=native_or_internal_type[internal]     { $t = cql3_type::raw::from(n); }
     | c=collection_type[internal]   { $t = c; }
     | tt=tuple_type[internal]       { $t = tt; }
+    | vt=vector_type                { $t = vt; }
     | id=userTypeName   { $t = cql3::cql3_type::raw::user_type(std::move(id)); }
     | K_FROZEN '<' f=comparator_type[internal] '>'
       {
@@ -2035,6 +2036,15 @@ tuple_type [bool internal] returns [shared_ptr<cql3::cql3_type::raw> t]
       '>' { $t = cql3::cql3_type::raw::tuple(std::move(types)); }
     ;
 
+vector_type returns [shared_ptr<cql3::cql3_type::raw> pt]
+    : K_VECTOR '<' t=comparator_type[false] ',' d=INTEGER '>'
+        {
+            if ($d.text[0] == '-')
+                throw exceptions::invalid_request_exception("Vectors must have a dimension greater than 0");
+            $pt = cql3::cql3_type::raw::vector(t, std::stoul($d.text));
+        }
+    ;
+
 username returns [sstring str]
     : t=IDENT { $str = $t.text; }
     | t=STRING_LITERAL { $str = $t.text; }
@@ -2100,6 +2110,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_STATIC
         | K_FROZEN
         | K_TUPLE
+        | K_VECTOR
         | K_FUNCTION
         | K_FUNCTIONS
         | K_AGGREGATE
@@ -2292,6 +2303,7 @@ K_LIST:        L I S T;
 K_NAN:         N A N;
 K_INFINITY:    I N F I N I T Y;
 K_TUPLE:       T U P L E;
+K_VECTOR:      V E C T O R;
 
 K_TRIGGER:     T R I G G E R;
 K_STATIC:      S T A T I C;

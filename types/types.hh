@@ -37,6 +37,7 @@
 #include "tasks/types.hh"
 
 class tuple_type_impl;
+class vector_type_impl;
 class big_decimal;
 
 namespace utils {
@@ -278,6 +279,7 @@ public:
     friend class empty_type_impl;
     template <typename T> friend const T& value_cast(const data_value&);
     template <typename T> friend T&& value_cast(data_value&&);
+    friend data_value make_vector_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_tuple_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_set_value(data_type, maybe_empty<std::vector<data_value>>);
     friend data_value make_list_value(data_type, maybe_empty<std::vector<data_value>>);
@@ -333,7 +335,8 @@ public:
         utf8,
         uuid,
         varint,
-        last = varint,
+        vector,
+        last = vector,
     };
 private:
     kind _kind;
@@ -449,6 +452,7 @@ public:
     bool is_atomic() const { return !is_multi_cell(); }
     bool is_reversed() const { return _kind == kind::reversed; }
     bool is_tuple() const;
+    bool is_vector() const;
     bool is_user_type() const { return _kind == kind::user; }
     bool is_native() const;
     cql3::cql3_type as_cql3_type() const;
@@ -970,6 +974,7 @@ std::optional<View> read_nth_user_type_field(View serialized_user_type, std::siz
 
 using user_type = shared_ptr<const user_type_impl>;
 using tuple_type = shared_ptr<const tuple_type_impl>;
+using vector_type = shared_ptr<const vector_type_impl>;
 
 inline
 data_value::data_value(std::optional<bytes> v)

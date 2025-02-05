@@ -26,6 +26,7 @@
 | map       | map_type_impl          | n/a                         | org.apache.cassandra.db.marshal.MapType            |
 | set       | set_type_impl          | n/a                         | org.apache.cassandra.db.marshal.SetType            |
 | tuple     | tuple_type_impl        | n/a                         | org.apache.cassandra.db.marshal.TupleType          |
+| vector    | vector_type_impl       | n/a                         | org.apache.cassandra.db.marshal.VectorType         |
 | UDT       | user_type_impl         | n/a                         | org.apache.cassandra.db.marshal.UserType           |
 | frozen    | n/a                    | n/a                         | org.apache.cassandra.db.marshal.FrozenType         |
 | n/a       | empty_type_impl        | empty_type                  | org.apache.cassandra.db.marshal.EmptyType          |

@@ -27,6 +27,7 @@
 #include "types/set.hh"
 #include "types/list.hh"
 #include "types/map.hh"
+#include "types/vector.hh"
 
 BOOST_AUTO_TEST_SUITE(view_schema_test)
 
@@ -238,6 +239,7 @@ SEASTAR_TEST_CASE(test_all_types) {
                     "mapval map<ascii, int>,"
                     "frozenmapval frozen<map<ascii, int>>,"
                     "tupleval frozen<tuple<int, ascii, uuid>>,"
+                    "vectorval vector<int, 3>,"
                     "udtval frozen<myType>)").get();
         auto s = e.local_db().find_schema(sstring("ks"), sstring("cf"));
         BOOST_REQUIRE(s);
@@ -657,6 +659,24 @@ SEASTAR_TEST_CASE(test_all_types) {
                 .with_row({ {int32_type->decompose(0)}, make_tuple_value(tuple_type, tuple_type_impl::native_type({
                     1, data_value::make_null(ascii_type),
                     utils::UUID("6bddc89a-5644-11e4-97fc-56847afe9799")})).serialize(), {ascii_type->decompose("ascii text")} });
+        });
+
+        // ================ vectors ================
+        auto vector_type = s->get_column_definition(bytes("vectorval"))->type;
+        e.execute_cql("insert into cf (k, vectorval) values (0, [1, 2, 3]);").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select k, vectorval, asciival from mv_vectorval where vectorval = [1, 2, 3]").get();
+        assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({ {int32_type->decompose(0)}, make_vector_value(vector_type, vector_type_impl::native_type({1, 2, 3})).serialize(), {ascii_type->decompose("ascii text")} });
+        });
+
+        e.execute_cql("insert into cf (k, vectorval) values (0, [3, 2, 1]);").get();
+        eventually([&] {
+        auto msg = e.execute_cql("select k, vectorval, asciival from mv_vectorval where vectorval = [3, 2, 1]").get();
+        assert_that(msg).is_rows()
+                .with_size(1)
+                .with_row({ {int32_type->decompose(0)}, make_vector_value(vector_type, vector_type_impl::native_type({3, 2, 1})).serialize(), {ascii_type->decompose("ascii text")} });
         });
 
         // ================ UDTs ================
@@ -1528,6 +1548,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
             "frozensetval",
             "frozenmapval",
             "tupleval",
+            "vectorval",
             "udtval"};
         e.execute_cql(fmt::format("create table cf ("
                     "asciival ascii, "
@@ -1551,6 +1572,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                     "frozensetval frozen<set<uuid>>, "
                     "frozenmapval frozen<map<ascii, int>>,"
                     "tupleval frozen<tuple<int, ascii, uuid>>,"
+                    "vectorval vector<int, 3>, "
                     "udtval frozen<myType>, primary key ({}))", fmt::join(column_names, ", "))).get();
 
         e.execute_cql(fmt::format("create materialized view vcf as select * from cf where "
@@ -1575,6 +1597,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                 "frozensetval = {{6BDDC89A-5644-11E4-97FC-56847AFE9799}} AND "
                 "frozenmapval = {{'a': 1, 'b': 2}} AND "
                 "tupleval = (1, 'foobar', 6BDDC89A-5644-11E4-97FC-56847AFE9799) AND "
+                "vectorval = [1, 2, 3] AND "
                 "udtval = {{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {{'foo', 'bar'}}}} "
                 "PRIMARY KEY ({})", fmt::join(column_names, ", "))).get();
 
@@ -1600,6 +1623,7 @@ SEASTAR_TEST_CASE(test_restrictions_on_all_types) {
                 "{{6BDDC89A-5644-11E4-97FC-56847AFE9799}},"
                 "{{'a': 1, 'b': 2}},"
                 "(1, 'foobar', 6BDDC89A-5644-11E4-97FC-56847AFE9799),"
+                "[1, 2, 3],"
                 "{{a: 1, b: 6BDDC89A-5644-11E4-97FC-56847AFE9799, c: {{'foo', 'bar'}}}})", fmt::join(column_names, ", "))).get();
 
         eventually([&] {

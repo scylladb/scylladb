@@ -127,3 +127,8 @@ return the values are checked to be true.
 
 Note that, like every other Lua table, the set is underscored. It is
 sorted when converting back to CQL.
+
+## VECTOR
+
+A vector is represented the same way as list, but on return we check
+the number of elements.

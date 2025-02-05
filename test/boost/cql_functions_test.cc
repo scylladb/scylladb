@@ -23,6 +23,7 @@
 
 #include <seastar/core/future-util.hh>
 #include "transport/messages/result_message.hh"
+#include "types/vector.hh"
 #include "utils/assert.hh"
 #include "utils/big_decimal.hh"
 #include "utils/unique_view.hh"
@@ -408,6 +409,17 @@ SEASTAR_TEST_CASE(test_aggregate_functions_map_type) {
             make_map_value(map_type_int_text, {std::make_pair(data_value(1), data_value("asdf"))}),
             make_map_value(map_type_int_text, {std::make_pair(data_value(2), data_value("asdf"))}),
             make_map_value(map_type_int_text, {std::make_pair(data_value(2), data_value("bsdf"))})
+        ).test_min_max_count();
+    });
+}
+
+SEASTAR_TEST_CASE(test_aggregate_functions_vector_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto vector_type_int = vector_type_impl::get_instance(int32_type, 3);
+        aggregate_function_test(e, vector_type_int,
+            make_list_value(vector_type_int, {1, 2, 3}),
+            make_list_value(vector_type_int, {1, 2, 4}),
+            make_list_value(vector_type_int, {2, 2, 3})
         ).test_min_max_count();
     });
 }

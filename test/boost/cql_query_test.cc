@@ -34,6 +34,7 @@
 #include "types/map.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "types/vector.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "cql3/cql_config.hh"
@@ -494,6 +495,40 @@ SEASTAR_TEST_CASE(test_tuple_elements_validation) {
             std::vector<cql3::raw_value> raw_values;
             raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
             auto values = my_tuple_type->decompose(make_tuple_value(my_tuple_type, tuple_type_impl::native_type({int32_t{2}, value})));
+            raw_values.emplace_back(cql3::raw_value::make_value(values));
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(
+                    e.execute_prepared(id, raw_values).get(),
+                    exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_prepared(id, raw_values).get());
+            }
+        };
+        test_bind(sstring(1, '\255'), true);
+        test_bind("proper utf8 string", false);
+    });
+}
+
+SEASTAR_TEST_CASE(test_vector_elements_validation) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        auto test_inline = [&] (sstring value, bool should_throw) {
+            auto cql = fmt::format("INSERT INTO tbl (a, b) VALUES(1, ['{}'])", value);
+            if (should_throw) {
+                BOOST_REQUIRE_THROW(e.execute_cql(cql).get(), exceptions::invalid_request_exception);
+            } else {
+                BOOST_REQUIRE_NO_THROW(e.execute_cql(cql).get());
+            }
+        };
+        e.execute_cql("CREATE TABLE tbl (a int, b vector<date, 1>, PRIMARY KEY (a))").get();
+        test_inline("definitely not a date value", true);
+        test_inline("2015-05-03", false);
+        e.execute_cql("CREATE TABLE tbl2 (a int, b vector<text, 1>, PRIMARY KEY (a))").get();
+        auto id = e.prepare("INSERT INTO tbl2 (a, b) VALUES(?, ?)").get();
+        auto test_bind = [&] (sstring value, bool should_throw) {
+            auto my_vector_type = vector_type_impl::get_instance(utf8_type, 1);
+            std::vector<cql3::raw_value> raw_values;
+            raw_values.emplace_back(cql3::raw_value::make_value(int32_type->decompose(int32_t{1})));
+            auto values = my_vector_type->decompose(make_vector_value(my_vector_type, {value}));
             raw_values.emplace_back(cql3::raw_value::make_value(values));
             if (should_throw) {
                 BOOST_REQUIRE_THROW(
@@ -1661,6 +1696,99 @@ SEASTAR_TEST_CASE(test_tuples) {
                 { int32_type->decompose(int32_t(1)), tt->decompose(make_tuple_value(tt, tuple_type_impl::native_type({int32_t(1), int64_t(2), sstring("abc")}))) }
             });
         });
+    });
+}
+
+SEASTAR_TEST_CASE(test_vectors) {
+    auto make_vt = [] { return vector_type_impl::get_instance(int32_type, 3); };
+    auto vt = make_vt();
+    return do_with_cql_env([vt, make_vt] (cql_test_env& e) {
+        return e.create_table([make_vt] (std::string_view ks_name) {
+            // this runs on all cores, so create a local vt for each core:
+            auto vt = make_vt();
+            // CQL: "create table cf (id int primary key, v vector<int, 3>);
+            return *schema_builder(ks_name, "cf")
+                    .with_column("id", int32_type, column_kind::partition_key)
+                    .with_column("v", vt)
+                    .build();
+        }).then([&e] {
+            return e.execute_cql("insert into cf (id, v) values (1, [1001, 2001, 3001]);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select v from cf where id = 1;");
+        }).then([&e, vt] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows()
+                .with_rows({{
+                     {vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(1001), int32_t(2001), int32_t(3001)})))},
+                }});
+            return e.execute_cql("create table cf2 (p1 int PRIMARY KEY, r1 vector<int, 3>)").discard_result();
+        }).then([&e] {
+            return e.execute_cql("insert into cf2 (p1, r1) values (1, [1, 2, 3]);").discard_result();
+        }).then([&e] {
+            return e.execute_cql("select * from cf2 where p1 = 1;");
+        }).then([vt] (shared_ptr<cql_transport::messages::result_message> msg) {
+            assert_that(msg).is_rows().with_rows({
+                { int32_type->decompose(int32_t(1)), vt->decompose(make_vector_value(vt, vector_type_impl::native_type({int32_t(1), int32_t(2), int32_t(3)}))) }
+            });
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_vectors_variable_length_elements) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE t1 (id int PRIMARY KEY, v vector<text, 2>);").get();
+        e.execute_cql("INSERT INTO t1 (id, v) VALUES (1, ['abc', '']);").get();
+
+        auto msg = e.execute_cql("SELECT * FROM t1;").get();
+        auto vt = vector_type_impl::get_instance(utf8_type, 2);
+
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), vt->decompose(
+                make_vector_value(
+                    vt,
+                    vector_type_impl::native_type({
+                        sstring("abc"),
+                        sstring("")
+                    })
+                )
+            )}
+        });
+
+        e.execute_cql("CREATE TABLE t2 (id int PRIMARY KEY, v vector<list<int>, 2>);").get();
+        e.execute_cql("INSERT INTO t2 (id, v) VALUES (1, [[1, 2], [3, 4, 5]]);").get();
+
+        msg = e.execute_cql("SELECT * FROM t2;").get();
+        vt = vector_type_impl::get_instance(list_type_impl::get_instance(int32_type, true), 2);
+
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), vt->decompose(
+                make_vector_value(
+                    vt,
+                    vector_type_impl::native_type({
+                        make_list_value(list_type_impl::get_instance(int32_type, true), list_type_impl::native_type({1, 2})),
+                        make_list_value(list_type_impl::get_instance(int32_type, true), list_type_impl::native_type({3, 4, 5}))
+                    })
+                )
+            )}
+        });
+
+        e.execute_cql("CREATE TABLE t3 (id int PRIMARY KEY, v vector<tuple<int, text>, 2>);").get();
+        e.execute_cql("INSERT INTO t3 (id, v) VALUES (1, [(123, 'abc'), (456, '')]);").get();
+
+        msg = e.execute_cql("SELECT * FROM t3;").get();
+        vt = vector_type_impl::get_instance(tuple_type_impl::get_instance({int32_type, utf8_type}), 2);
+
+        assert_that(msg).is_rows().with_rows({
+            { int32_type->decompose(1), vt->decompose(
+                make_vector_value(
+                    vt,
+                    vector_type_impl::native_type({
+                        make_tuple_value(tuple_type_impl::get_instance({int32_type, utf8_type}), tuple_type_impl::native_type({123, sstring("abc")})),
+                        make_tuple_value(tuple_type_impl::get_instance({int32_type, utf8_type}), tuple_type_impl::native_type({456, sstring("")}))
+                    })
+                )
+            )}
+        });
+
     });
 }
 

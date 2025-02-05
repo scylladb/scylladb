@@ -145,8 +145,8 @@ CQL has the notion of a *term*, which denotes the kind of values that CQL suppor
 A term is thus one of:
 
 - A :ref:`constant <constants>`.
-- A literal for either :ref:`a collection <collections>`, a user-defined type or a tuple
-  (see the linked sections for details).
+- A literal for either :ref:`a collection <collections>` (including usage of list_or_vector_literal 
+  for :ref:`a vector <vectors>`), a user-defined type or a tuple (see the linked sections for details).
 - An arithmetic operation between terms. 
 - A *type hint*
 - A bind marker, which denotes a variable to be bound at execution time. See the section on :ref:`prepared-statements`

@@ -735,6 +735,43 @@ struct from_lua_visitor {
         return make_tuple_value(t.shared_from_this(), std::move(elements));
     }
 
+    data_value operator()(const vector_type_impl& t) {
+        if (!lua_istable(l, -1)) {
+            throw exceptions::invalid_request_exception("value is not a table");
+        }
+
+        const data_type& elements_type = t.get_elements_type();
+        size_t num_elements = t.get_dimension();
+
+        using table_pair = std::pair<utils::multiprecision_int, data_value>;
+        std::vector<table_pair> pairs;
+        lua_pushnil(l);
+        while (lua_next(l, -2) != 0) {
+            auto v = convert_from_lua(l, elements_type);
+            lua_pop(l, 1);
+            auto k = get_varint(l, -1);
+            if (k > num_elements || k < 1) {
+                throw exceptions::invalid_request_exception(
+                        seastar::format("key {} is not valid for a sequence of size {}", k.str(), num_elements));
+            }
+            pairs.push_back({k, v});
+        }
+
+        std::sort(pairs.begin(), pairs.end(), [] (const table_pair& a, const table_pair& b) {
+            return a.first < b.first;
+        });
+
+        std::vector<data_value> elements;
+        for (size_t i = 0; i < num_elements; ++i) {
+            if (utils::multiprecision_int(i + 1) != pairs[i].first) {
+                throw exceptions::invalid_request_exception(
+                        format("key {} missing in sequence of size {}", i + 1, num_elements));
+            }
+            elements.push_back(pairs[i].second);
+        }
+        return make_vector_value(t.shared_from_this(), std::move(elements));
+    }
+
     data_value operator()(const user_type_impl& t) {
         size_t num_fields = t.field_types().size();
 

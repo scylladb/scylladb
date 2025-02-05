@@ -24,6 +24,7 @@
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
+#include "types/vector.hh"
 #include "utils/like_matcher.hh"
 #include "query-result-reader.hh"
 #include "types/user.hh"
@@ -785,7 +786,7 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
             },
             [&] (const collection_constructor& cc) {
                 switch (cc.style) {
-                case collection_constructor::style_type::list: {
+                case collection_constructor::style_type::list_or_vector: {
                     out = fmt::format_to(out, "[{}]", fmt::join(cc.elements | std::views::transform(to_printer), ", "));
                     return;
                 }
@@ -808,6 +809,10 @@ auto fmt::formatter<cql3::expr::expression::printer>::format(const cql3::expr::e
                         out = fmt::format_to(out, "{}:{}", to_printer(tuple.elements[0]), to_printer(tuple.elements[1]));
                     }
                     out = fmt::format_to(out, "}}");
+                    return;
+                }
+                case collection_constructor::style_type::vector: {
+                    out = fmt::format_to(out, "[{}]", fmt::join(cc.elements | std::views::transform(to_printer), ", "));
                     return;
                 }
                 }
@@ -1382,6 +1387,20 @@ static managed_bytes reserialize_value(View value_bytes,
         return tuple_type_impl::build_value_fragmented(std::move(elements));
     }
 
+    if (type.is_vector()) {
+        const vector_type_impl& vtype = dynamic_cast<const vector_type_impl&>(type);
+        std::vector<managed_bytes> elements = vtype.split_fragmented(value_bytes);
+
+        auto elements_type = vtype.get_elements_type()->without_reversed();
+
+        if (elements_type.bound_value_needs_to_be_reserialized()) {
+            for (size_t i = 0; i < elements.size(); i++) {
+                elements[i] = reserialize_value(managed_bytes_view(elements[i]), elements_type);
+            }
+        }
+
+        return vector_type_impl::build_value_fragmented(std::move(elements), elements_type.value_length_if_fixed());
+    }
     on_internal_error(expr_logger,
         fmt::format("Reserializing type that shouldn't need reserialization: {}", type.name()));
 }
@@ -1480,6 +1499,22 @@ static cql3::raw_value evaluate_list(const collection_constructor& collection,
     return raw_value::make_value(std::move(collection_bytes));
 }
 
+static cql3::raw_value evaluate_vector(const collection_constructor& vector, const evaluation_inputs& inputs) {
+    std::vector<managed_bytes> vector_elements;
+    vector_elements.reserve(vector.elements.size());
+
+    for (const expression& element : vector.elements) {
+        cql3::raw_value elem_val = evaluate(element, inputs);
+        if (elem_val.is_null()) {
+            throw exceptions::invalid_request_exception("null is not supported inside vectors");
+        }
+        vector_elements.emplace_back(std::move(elem_val).to_managed_bytes());
+    }
+
+    managed_bytes vector_bytes = vector_type_impl::build_value_fragmented(std::move(vector_elements), vector.type->value_length_if_fixed());
+    return raw_value::make_value(std::move(vector_bytes));
+}
+
 static cql3::raw_value evaluate_set(const collection_constructor& collection, const evaluation_inputs& inputs) {
     const set_type_impl& stype = dynamic_cast<const set_type_impl&>(collection.type->without_reversed());
     std::set<managed_bytes, serialized_compare> evaluated_elements(stype.get_elements_type()->as_less_comparator());
@@ -1556,7 +1591,7 @@ static cql3::raw_value do_evaluate(const collection_constructor& collection, con
     }
 
     switch (collection.style) {
-        case collection_constructor::style_type::list:
+        case collection_constructor::style_type::list_or_vector:
             return evaluate_list(collection, inputs);
 
         case collection_constructor::style_type::set:
@@ -1564,6 +1599,9 @@ static cql3::raw_value do_evaluate(const collection_constructor& collection, con
 
         case collection_constructor::style_type::map:
             return evaluate_map(collection, inputs);
+
+        case collection_constructor::style_type::vector:
+            return evaluate_vector(collection, inputs);
     }
     std::abort();
 }
@@ -1694,6 +1732,16 @@ std::vector<managed_bytes_opt> get_tuple_elements(const cql3::raw_value& val, co
     });
 }
 
+std::vector<managed_bytes> get_vector_elements(const cql3::raw_value& val, const abstract_type& type) {
+    ensure_can_get_value_elements(val, "expr::get_vector_elements");
+
+    return val.view().with_value([&](const FragmentedView auto& value_bytes) {
+        const vector_type_impl& vtype = static_cast<const vector_type_impl&>(type.without_reversed());
+        return vtype.split_fragmented(value_bytes);
+    });
+
+}
+
 std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value& val, const abstract_type& type) {
     ensure_can_get_value_elements(val, "expr::get_user_type_elements");
 
@@ -1704,6 +1752,11 @@ std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value& val
 }
 
 static std::vector<managed_bytes_opt> convert_listlike(utils::chunked_vector<managed_bytes_opt>&& elements) {
+    return std::vector<managed_bytes_opt>(std::make_move_iterator(elements.begin()),
+                                          std::make_move_iterator(elements.end()));
+}
+
+static std::vector<managed_bytes_opt> convert_vector(std::vector<managed_bytes>&& elements) {
     return std::vector<managed_bytes_opt>(std::make_move_iterator(elements.begin()),
                                           std::make_move_iterator(elements.end()));
 }
@@ -1723,6 +1776,9 @@ std::vector<managed_bytes_opt> get_elements(const cql3::raw_value& val, const ab
 
         case abstract_type::kind::user:
             return get_user_type_elements(val, type);
+
+        case abstract_type::kind::vector:
+            return convert_vector(get_vector_elements(val, type));
 
         default:
             on_internal_error(expr_logger, fmt::format("expr::get_elements called on bad type: {}", type.name()));
