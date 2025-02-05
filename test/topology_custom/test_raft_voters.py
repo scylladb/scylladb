@@ -16,7 +16,6 @@ from test.topology.conftest import cluster_con
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason='issue #18793')
 # Make sure the algorithm works with different number of nodes.
 # Here with the "num_nodes == 1" we test that we'll only have one voter per DC, despite DC having two nodes
 # (the DC1 must not have 2 voters otherwise losing it would result in the raft majority loss).
@@ -80,7 +79,7 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
     # Act: Kill all nodes in dc1
 
     logging.info('Killing all nodes in dc1')
-    await asyncio.gather(*(manager.server_stop_gracefully(srv.server_id) for srv in dc_servers[0]))
+    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in dc_servers[0]))
 
     # Assert: Verify that the majority has not been lost (we can change the topology)
 
