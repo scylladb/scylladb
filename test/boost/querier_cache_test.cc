@@ -337,9 +337,10 @@ public:
     test_querier_cache& assert_cache_lookup_mutation_querier(unsigned lookup_key,
             const schema& lookup_schema,
             const dht::partition_range& lookup_range,
-            const query::partition_slice& lookup_slice) {
+            const query::partition_slice& lookup_slice,
+            db::timeout_clock::time_point timeout = db::no_timeout) {
 
-        auto querier_opt = _cache.lookup_mutation_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, get_semaphore(), nullptr, db::no_timeout);
+        auto querier_opt = _cache.lookup_mutation_querier(make_cache_key(lookup_key), lookup_schema, lookup_range, lookup_slice, get_semaphore(), nullptr, timeout);
         if (querier_opt) {
             querier_opt->close().get();
         }
@@ -838,6 +839,53 @@ SEASTAR_THREAD_TEST_CASE(test_semaphore_mismatch) {
             .drops()
             .no_evictions();
     }
+}
+
+#if SEASTAR_DEBUG
+static const std::chrono::seconds ttl_timeout_test_timeout = 8s;
+#else
+static const std::chrono::seconds ttl_timeout_test_timeout = 2s;
+#endif
+
+SEASTAR_THREAD_TEST_CASE(test_timeout_not_sticky_on_insert) {
+    test_querier_cache t;
+
+    auto& sem = t.get_semaphore();
+    auto permit1 = sem.obtain_permit(t.get_schema(), get_name(), 1024, db::no_timeout, {}).get();
+
+    permit1.set_timeout(db::timeout_clock::now() + ttl_timeout_test_timeout);
+
+    const auto entry = t.produce_first_page_and_save_mutation_querier();
+
+    sleep(ttl_timeout_test_timeout * 2).get();
+
+    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice)
+        .no_misses()
+        .no_drops()
+        .no_evictions();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_ttl_not_sticky_on_lookup) {
+    test_querier_cache t(ttl_timeout_test_timeout);
+
+    auto& sem = t.get_semaphore();
+    auto permit1 = sem.obtain_permit(t.get_schema(), get_name(), 1024, db::no_timeout, {}).get();
+
+    const auto entry = t.produce_first_page_and_save_mutation_querier();
+
+    const auto new_timeout = db::timeout_clock::now() + 900s;
+
+    t.assert_cache_lookup_mutation_querier(entry.key, *t.get_schema(), entry.expected_range, entry.expected_slice, new_timeout)
+        .no_misses()
+        .no_drops()
+        .no_evictions();
+
+    BOOST_REQUIRE(entry.permit.timeout() == new_timeout);
+
+    sleep(ttl_timeout_test_timeout * 2).get();
+
+    // check_abort() will throw if the permit timed out due to sticky TTL during the above sleep.
+    BOOST_REQUIRE_NO_THROW(entry.permit.check_abort());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
