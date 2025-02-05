@@ -79,6 +79,7 @@
 #include <csignal>
 
 #include "db/view/view_update_generator.hh"
+#include "db/view/view_building_worker.hh"
 #include "service/cache_hitrate_calculator.hh"
 #include "compaction/compaction_manager.hh"
 #include "sstables/sstables.hh"
@@ -1402,6 +1403,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<db::view::view_builder> view_builder;
             static sharded<cdc::generation_service> cdc_generation_service;
+            static sharded<db::view::view_building_worker> view_building_worker;
 
             db::sstables_format_selector sst_format_selector(db);
 
@@ -1855,6 +1857,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 view_builder.stop().get();
+            });
+
+            supervisor::notify("starting view building worker");
+            view_building_worker.start(std::ref(db), std::ref(view_update_generator), std::ref(messaging)).get();
+            auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [] {
+                view_building_worker.stop().get();
             });
 
             supervisor::notify("starting commit log");
