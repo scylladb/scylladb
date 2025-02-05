@@ -47,13 +47,13 @@ def check_task_status(status: TaskStatus, states: list[str], type: str, scope: s
     assert len(status.children_ids) in possible_child_num
     assert status.state in states
 
-async def check_and_abort_repair_task(manager: ManagerClient, tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str = "test"):
+async def check_and_abort_repair_task(manager: ManagerClient, tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str):
     # Wait until user repair task is created.
     repair_tasks = await wait_tasks_created(tm, servers[0], module_name, 1, "user_repair", keyspace=keyspace)
 
     task = repair_tasks[0]
     assert task.scope == "table"
-    assert task.keyspace == "test"
+    assert task.keyspace == keyspace
     assert task.table == "test"
     assert task.state in ["created", "running"]
 
@@ -80,19 +80,18 @@ async def test_tablet_repair_task(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
 
-    # FIXME: use unique_name for keyspace
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
 
     async def repair_task():
         token = -1
         # Keep retring tablet repair.
         await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
-        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
 
-    await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name))
+    await asyncio.gather(repair_task(), check_and_abort_repair_task(manager, tm, servers, module_name, ks))
 
-async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str = "test"):
+async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo], module_name: str, keyspace: str):
     def get_task_with_id(repair_tasks, task_id):
         tasks_with_id1 = [task for task in repair_tasks if task.task_id == task_id]
         assert len(tasks_with_id1) == 1
@@ -119,7 +118,7 @@ async def check_repair_task_list(tm: TaskManagerClient, servers: list[ServerInfo
             assert task.type == "user_repair"
             assert task.kind == "cluster"
             assert task.scope == "table"
-            assert task.keyspace == "test"
+            assert task.keyspace == keyspace
 
         await tm.abort_task(servers[0].ip_addr, task0.task_id)
 
@@ -129,23 +128,23 @@ async def test_tablet_repair_task_list(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
 
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
 
     # Create other tables.
-    await cql.run_async("CREATE TABLE test.test2 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {'mode':'repair'};")
-    await cql.run_async("CREATE TABLE test.test3 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {'mode':'repair'};")
+    await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    await cql.run_async(f"CREATE TABLE {ks}.test3 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
     keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test2 (pk, c) VALUES ({k}, {k});") for k in keys])
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test3 (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test2 (pk, c) VALUES ({k}, {k});") for k in keys])
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test3 (pk, c) VALUES ({k}, {k});") for k in keys])
 
     async def run_repair(server_id, table_name):
         token = -1
-        await manager.api.tablet_repair(servers[server_id].ip_addr, "test", table_name, token)
+        await manager.api.tablet_repair(servers[server_id].ip_addr, ks, table_name, token)
 
     await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
 
-    await asyncio.gather(run_repair(0, "test"), run_repair(1, "test2"), run_repair(2, "test3"), check_repair_task_list(tm, servers, module_name))
+    await asyncio.gather(run_repair(0, "test"), run_repair(1, "test2"), run_repair(2, "test3"), check_repair_task_list(tm, servers, module_name, ks))
 
 async def prepare_migration_test(manager: ManagerClient):
     servers = []
@@ -297,8 +296,7 @@ async def test_repair_task_info_is_none_when_no_running_repair(manager: ManagerC
     tm = TaskManagerClient(manager.api)
     token = -1
 
-    # FIXME: use unique_name for keyspace
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     assert module_name in await tm.list_modules(servers[0].ip_addr), "tablets module wasn't registered"
 
     async def check_none():
@@ -309,10 +307,10 @@ async def test_repair_task_info_is_none_when_no_running_repair(manager: ManagerC
 
     async def repair_task():
         await enable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
-        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
 
     async def wait_and_check_none():
-        task = (await wait_tasks_created(tm, servers[0], module_name, 1,"user_repair", keyspace="test"))[0]
+        task = (await wait_tasks_created(tm, servers[0], module_name, 1,"user_repair", keyspace=ks))[0]
         await disable_injection(manager, servers, "repair_tablet_fail_on_rpc_call")
         status = await tm.wait_for_task(servers[0].ip_addr, task.task_id)
         await check_none()
@@ -496,13 +494,13 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_task_sees_latest_state(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
     token = -1
     async def repair_task():
         await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
         # Check failed repair request can be deleted
-        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
 
     async def del_repair_task():
         tablet_task_id = None
