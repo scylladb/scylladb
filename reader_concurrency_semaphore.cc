@@ -1126,6 +1126,7 @@ void reader_concurrency_semaphore::set_notify_handler(inactive_read_handle& irh,
     auto& ir = *(*irh._permit)->aux_data().ir;
     ir.notify_handler = std::move(notify_handler);
     if (ttl_opt) {
+        irh._permit->set_timeout(db::no_timeout);
         ir.ttl_timer.set_callback([this, permit = *irh._permit] () mutable {
             evict(*permit, evict_reason::time);
         });
