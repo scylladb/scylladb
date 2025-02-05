@@ -101,13 +101,13 @@ private:
 
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
-    future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
-    future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
-    future<> handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg);
+    future<> handle_syn_msg(locator::host_id from, gossip_digest_syn syn_msg);
+    future<> handle_ack_msg(locator::host_id from, gossip_digest_ack ack_msg);
+    future<> handle_ack2_msg(locator::host_id from, gossip_digest_ack2 msg);
     future<> handle_echo_msg(inet_address from, const locator::host_id* id, seastar::rpc::opt_time_point, std::optional<int64_t> generation_number_opt, bool notify_up);
     future<> handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt);
-    future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
-    future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
+    future<> do_send_ack_msg(locator::host_id from, gossip_digest_syn syn_msg);
+    future<> do_send_ack2_msg(locator::host_id from, utils::chunked_vector<gossip_digest> ack_msg_digest);
     future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
     static constexpr uint32_t _default_cpuid = 0;
     msg_addr get_msg_addr(inet_address to) const noexcept;
@@ -117,8 +117,8 @@ private:
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
     seastar::gate _background_msg;
-    std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
-    std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
+    std::unordered_map<locator::host_id, syn_msg_pending> _syn_handlers;
+    std::unordered_map<locator::host_id, ack_msg_pending> _ack_handlers;
     // Map ip address and generation number
     generation_for_nodes _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;

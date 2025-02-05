@@ -172,7 +172,7 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) cons
 
 // Depends on
 // - no external dependency
-future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
+future<> gossiper::handle_syn_msg(locator::host_id from, gossip_digest_syn syn_msg) {
     logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},group0_id:peer={},local={},partitioner_name:peer={},local={}",
         from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.group0_id(), get_group0_id(), syn_msg.partioner(), get_partitioner_name());
     if (!is_enabled()) {
@@ -181,22 +181,22 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
 
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
-        logger.warn("ClusterName mismatch from {} {}!={}", from.addr, syn_msg.cluster_id(), get_cluster_name());
+        logger.warn("ClusterName mismatch from {} {}!={}", from, syn_msg.cluster_id(), get_cluster_name());
         co_return;
     }
 
     /* If the message is from a node with a different group0 id throw it away. */
     if (syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id()) {
-        logger.warn("Group0Id mismatch from {} {} != {}", from.addr, syn_msg.group0_id(), get_group0_id());
+        logger.warn("Group0Id mismatch from {} {} != {}", from, syn_msg.group0_id(), get_group0_id());
         co_return;
     }
 
     if (syn_msg.partioner() != "" && syn_msg.partioner() != get_partitioner_name()) {
-        logger.warn("Partitioner mismatch from {} {}!={}", from.addr, syn_msg.partioner(), get_partitioner_name());
+        logger.warn("Partitioner mismatch from {} {}!={}", from, syn_msg.partioner(), get_partitioner_name());
         co_return;
     }
 
-    syn_msg_pending& p = _syn_handlers[from.addr];
+    syn_msg_pending& p = _syn_handlers[from];
     if (p.pending) {
         // The latest syn message from peer has the latest information, so
         // it is safe to drop the previous syn message and keep the latest
@@ -212,10 +212,10 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     for (;;) {
         try {
             co_await do_send_ack_msg(from, std::move(syn_msg));
-            if (!_syn_handlers.contains(from.addr)) {
+            if (!_syn_handlers.contains(from)) {
                 co_return;
             }
-            syn_msg_pending& p = _syn_handlers[from.addr];
+            syn_msg_pending& p = _syn_handlers[from];
             if (p.syn_msg) {
                 // Process pending gossip syn msg and send ack msg back
                 logger.debug("Handle queued gossip syn msg from node {}, syn_msg={}, pending={}",
@@ -232,8 +232,8 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
             }
         } catch (...) {
             auto ep = std::current_exception();
-            if (_syn_handlers.contains(from.addr)) {
-                syn_msg_pending& p = _syn_handlers[from.addr];
+            if (_syn_handlers.contains(from)) {
+                syn_msg_pending& p = _syn_handlers[from];
                 p.pending = false;
                 p.syn_msg = {};
             }
@@ -243,7 +243,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     }
 }
 
-future<> gossiper::do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg) {
+future<> gossiper::do_send_ack_msg(locator::host_id from, gossip_digest_syn syn_msg) {
     auto g_digest_list = syn_msg.get_gossip_digests();
     do_sort(g_digest_list);
     utils::chunked_vector<gossip_digest> delta_gossip_digest_list;
@@ -290,7 +290,7 @@ static bool should_count_as_msg_processing(const std::map<inet_address, endpoint
 // - on_restart callbacks
 // - on_join callbacks
 // - on_alive
-future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
+future<> gossiper::handle_ack_msg(locator::host_id id, gossip_digest_ack ack_msg) {
     logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
 
     if (!is_enabled()) {
@@ -317,7 +317,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 
     auto from = id;
     auto ack_msg_digest = std::move(g_digest_list);
-    ack_msg_pending& p = _ack_handlers[from.addr];
+    ack_msg_pending& p = _ack_handlers[from];
     if (p.pending) {
         // The latest ack message digests from peer has the latest information, so
         // it is safe to drop the previous ack message digests and keep the latest
@@ -333,10 +333,10 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     for (;;) {
         try {
             co_await do_send_ack2_msg(from, std::move(ack_msg_digest));
-            if (!_ack_handlers.contains(from.addr)) {
+            if (!_ack_handlers.contains(from)) {
                 co_return;
             }
-            ack_msg_pending& p = _ack_handlers[from.addr];
+            ack_msg_pending& p = _ack_handlers[from];
             if (p.ack_msg_digest) {
                 // Process pending gossip ack msg digests and send ack2 msg back
                 logger.debug("Handle queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
@@ -353,8 +353,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
             }
         } catch (...) {
             auto ep = std::current_exception();
-            if (_ack_handlers.contains(from.addr)) {
-                ack_msg_pending& p = _ack_handlers[from.addr];
+            if (_ack_handlers.contains(from)) {
+                ack_msg_pending& p = _ack_handlers[from];
                 p.pending = false;
                 p.ack_msg_digest = {};
             }
@@ -364,7 +364,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     }
 }
 
-future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
+future<> gossiper::do_send_ack2_msg(locator::host_id from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
     /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
     std::map<inet_address, endpoint_state> delta_ep_state_map;
     for (auto g_digest : ack_msg_digest) {
@@ -397,7 +397,7 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
 // - on_restart callbacks
 // - on_join callbacks
 // - on_alive callbacks
-future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
+future<> gossiper::handle_ack2_msg(locator::host_id from, gossip_digest_ack2 msg) {
     logger.trace("handle_ack2_msg():msg={}", msg);
     if (!is_enabled()) {
         co_return;
@@ -521,19 +521,19 @@ future<rpc::no_wait_type> gossiper::background_msg(sstring type, noncopyable_fun
 
 void gossiper::init_messaging_service_handler() {
     ser::gossip_rpc_verbs::register_gossip_digest_syn(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
         });
     });
      ser::gossip_rpc_verbs::register_gossip_digest_ack(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_DIGEST_ACK", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack_msg(from, std::move(msg));
         });
     });
     ser::gossip_rpc_verbs::register_gossip_digest_ack2(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_DIGEST_ACK2", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack2_msg(from, std::move(msg));
         });
@@ -738,9 +738,9 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
             was_alive = data.live.erase(host_id);
             data.unreachable.erase(host_id);
         });
+        _syn_handlers.erase(host_id);
+        _ack_handlers.erase(host_id);
     }
-    _syn_handlers.erase(endpoint);
-    _ack_handlers.erase(endpoint);
     quarantine_endpoint(endpoint);
     logger.info("Removed endpoint {}", endpoint);
 
