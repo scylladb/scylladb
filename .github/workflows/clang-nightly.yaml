@@ -7,7 +7,7 @@ on:
 
 env:
   # use the development branch explicitly
-  CLANG_VERSION: 20
+  CLANG_VERSION: 21
   BUILD_DIR: build
 
 permissions: {}
