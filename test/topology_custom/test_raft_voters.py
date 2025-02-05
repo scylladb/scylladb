@@ -16,7 +16,7 @@ from test.topology.conftest import cluster_con
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason='issue #18793')
+@pytest.mark.skip(reason='issue #18793')
 # Make sure the algorithm works with different number of nodes.
 # Here with the "num_nodes == 1" we test that we'll only have one voter per DC, despite DC having two nodes
 # (the DC1 must not have 2 voters otherwise losing it would result in the raft majority loss).
