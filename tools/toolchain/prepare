@@ -191,5 +191,5 @@ echo "    podman manifest push --all $(<tools/toolchain/image) docker://$(<tools
 if [[ "${CLANG_BUILD}" = "INSTALL" ]]; then
     echo ""
     echo "Optimized clang archive saved at:"
-    echo "    ${CLANG_ARCHIVES[$current_arch_name}]}"
+    echo "    ${CLANG_ARCHIVES[${current_arch_uname}]}"
 fi
