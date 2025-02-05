@@ -59,9 +59,9 @@ table_id get_uuid(const sstring& ks, const sstring& cf, const replica::database&
     }
 }
 
-table_id get_uuid(const sstring& name, const replica::database& db) {
+table_info parse_table_info(const sstring& name, const replica::database& db) {
     auto [ks, cf] = parse_fully_qualified_cf_name(name);
-    return get_uuid(ks, cf, db);
+    return table_info{ .name = cf, .id = get_uuid(ks, cf, db) };
 }
 
 future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
@@ -78,15 +78,11 @@ future<json::json_return_type>  get_cf_stats(http_context& ctx,
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type> for_tables_on_all_shards(http_context& ctx, const sstring& keyspace, std::vector<sstring> tables, std::function<future<>(replica::table&)> set) {
-    if (tables.empty()) {
-        tables = map_keys(ctx.db.local().find_keyspace(keyspace).metadata().get()->cf_meta_data());
-    }
-
-    return do_with(keyspace, std::move(tables), [&ctx, set] (const sstring& keyspace, const std::vector<sstring>& tables) {
-        return ctx.db.invoke_on_all([&keyspace, &tables, set] (replica::database& db) {
-            return parallel_for_each(tables, [&db, &keyspace, set] (const sstring& table) {
-                replica::table& t = db.find_column_family(keyspace, table);
+static future<json::json_return_type> for_tables_on_all_shards(http_context& ctx, std::vector<table_info> tables, std::function<future<>(replica::table&)> set) {
+    return do_with(std::move(tables), [&ctx, set] (const std::vector<table_info>& tables) {
+        return ctx.db.invoke_on_all([&tables, set] (replica::database& db) {
+            return parallel_for_each(tables, [&db, set] (const table_info& table) {
+                replica::table& t = db.find_column_family(table.id);
                 return set(t);
             });
         });
@@ -113,12 +109,12 @@ public:
     }
 };
 
-static future<json::json_return_type> set_tables_autocompaction(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
-    apilog.info("set_tables_autocompaction: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
+static future<json::json_return_type> set_tables_autocompaction(http_context& ctx, std::vector<table_info> tables, bool enabled) {
+    apilog.info("set_tables_autocompaction: enabled={} tables={}", enabled, tables);
 
-    return ctx.db.invoke_on(0, [&ctx, keyspace, tables = std::move(tables), enabled] (replica::database& db) {
+    return ctx.db.invoke_on(0, [&ctx, tables = std::move(tables), enabled] (replica::database& db) {
         auto g = autocompaction_toggle_guard(db);
-        return for_tables_on_all_shards(ctx, keyspace, tables, [enabled] (replica::table& cf) {
+        return for_tables_on_all_shards(ctx, tables, [enabled] (replica::table& cf) {
             if (enabled) {
                 cf.enable_auto_compaction();
             } else {
@@ -129,9 +125,9 @@ static future<json::json_return_type> set_tables_autocompaction(http_context& ct
     });
 }
 
-static future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, const sstring &keyspace, std::vector<sstring> tables, bool enabled) {
-    apilog.info("set_tables_tombstone_gc: enabled={} keyspace={} tables={}", enabled, keyspace, tables);
-    return for_tables_on_all_shards(ctx, keyspace, std::move(tables), [enabled] (replica::table& t) {
+static future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, std::vector<table_info> tables, bool enabled) {
+    apilog.info("set_tables_tombstone_gc: enabled={} tables={}", enabled, tables);
+    return for_tables_on_all_shards(ctx, std::move(tables), [enabled] (replica::table& t) {
         t.set_tombstone_gc_enabled(enabled);
         return make_ready_future<>();
     });
@@ -146,7 +142,7 @@ static future<json::json_return_type>  get_cf_stats_count(http_context& ctx, con
 
 static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([uuid, f](replica::database& db) {
         // Histograms information is sample of the actual load
         // so to get an estimation of sum, we multiply the mean
@@ -169,7 +165,7 @@ static future<json::json_return_type>  get_cf_stats_count(http_context& ctx,
 
 static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).hist;},
             utils::ihistogram(),
@@ -181,7 +177,7 @@ static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const
 
 static future<json::json_return_type>  get_cf_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).hist;},
             utils::ihistogram(),
@@ -208,7 +204,7 @@ static future<json::json_return_type> get_cf_histogram(http_context& ctx, utils:
 
 static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& ctx, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).rate();},
             utils::rate_moving_average_and_histogram(),
@@ -280,7 +276,7 @@ static json::json_return_type sum_map(const std::unordered_map<sstring, uint64_t
 }
 
 static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstring name, bool total) {
-    auto uuid = get_uuid(name, ctx.db.local());
+    auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([uuid, total](replica::database& db) {
         std::unordered_map<sstring, uint64_t> m;
         auto sstables = (total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
@@ -918,75 +914,71 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_auto_compaction.set(r, [&ctx] (const_req req) {
-        auto uuid = get_uuid(req.get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req.get_path_param("name"), ctx.db.local()).id;
         replica::column_family& cf = ctx.db.local().find_column_family(uuid);
         return !cf.is_auto_compaction_disabled_by_user();
     });
 
     cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/enable_auto_compaction: name={}", req->get_path_param("name"));
-        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
-        return set_tables_autocompaction(ctx, ks, {std::move(cf)}, true);
+        auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
+        return set_tables_autocompaction(ctx, {std::move(ti)}, true);
     });
 
     cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/disable_auto_compaction: name={}", req->get_path_param("name"));
-        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
-        return set_tables_autocompaction(ctx, ks, {std::move(cf)}, false);
+        auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
+        return set_tables_autocompaction(ctx, {std::move(ti)}, false);
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, true);
+        return set_tables_autocompaction(ctx, std::move(tables), true);
     });
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, keyspace, tables, false);
+        return set_tables_autocompaction(ctx, std::move(tables), false);
     });
 
     cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
-        auto uuid = get_uuid(req.get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req.get_path_param("name"), ctx.db.local()).id;
         replica::table& t = ctx.db.local().find_column_family(uuid);
         return t.tombstone_gc_enabled();
     });
 
     cf::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/enable_tombstone_gc: name={}", req->get_path_param("name"));
-        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
-        return set_tables_tombstone_gc(ctx, ks, {std::move(cf)}, true);
+        auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
+        return set_tables_tombstone_gc(ctx, {std::move(ti)}, true);
     });
 
     cf::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/disable_tombstone_gc: name={}", req->get_path_param("name"));
-        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        validate_table(ctx, ks, cf);
-        return set_tables_tombstone_gc(ctx, ks, {std::move(cf)}, false);
+        auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
+        return set_tables_tombstone_gc(ctx, {std::move(ti)}, false);
     });
 
     ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, true);
+        return set_tables_tombstone_gc(ctx, std::move(tables), true);
     });
 
     ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_tables(keyspace, ctx, req->query_parameters, "cf");
+        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
 
         apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
-        return set_tables_tombstone_gc(ctx, keyspace, tables, false);
+        return set_tables_tombstone_gc(ctx, std::move(tables), false);
     });
 
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
@@ -1030,7 +1022,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_compression_ratio.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto uuid = get_uuid(req->get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req->get_path_param("name"), ctx.db.local()).id;
 
         return ctx.db.map_reduce(sum_ratio<double>(), [uuid](replica::database& db) {
             replica::column_family& cf = db.find_column_family(uuid);
@@ -1053,17 +1045,17 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::set_compaction_strategy_class.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
         sstring strategy = req->get_query_param("class_name");
         apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
-        return for_tables_on_all_shards(ctx, ks, {std::move(cf)}, [strategy] (replica::table& cf) {
+        return for_tables_on_all_shards(ctx, {std::move(ti)}, [strategy] (replica::table& cf) {
             cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
             return make_ready_future<>();
         });
     });
 
     cf::get_compaction_strategy_class.set(r, [&ctx](const_req req) {
-        return ctx.db.local().find_column_family(get_uuid(req.get_path_param("name"), ctx.db.local())).get_compaction_strategy().name();
+        return ctx.db.local().find_column_family(parse_table_info(req.get_path_param("name"), ctx.db.local()).id).get_compaction_strategy().name();
     });
 
     cf::set_compression_parameters.set(r, [](std::unique_ptr<http::request> req) {
@@ -1088,7 +1080,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
     cf::get_sstables_for_key.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto key = req->get_query_param("key");
-        auto uuid = get_uuid(req->get_path_param("name"), ctx.db.local());
+        auto uuid = parse_table_info(req->get_path_param("name"), ctx.db.local()).id;
 
         return ctx.db.map_reduce0([key, uuid] (replica::database& db) -> future<std::unordered_set<sstring>> {
             auto sstables = co_await db.find_column_family(uuid).get_sstables_by_partition_key(key);
