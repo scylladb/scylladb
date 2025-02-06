@@ -57,7 +57,7 @@ For example this will change it to 4 days:
 
 .. code-block:: shell
 
-    ALTER table <your table name> with compaction = { 'class' : 'SizeTieredCompactionStrategy', 'tombstone_compaction_interval' : 345600 };
+    ALTER table <your table name> with compaction = { 'class' : 'IncrementalCompactionStrategy', 'tombstone_compaction_interval' : 345600 };
 
 
 2. Make sure `unchecked_tombstone_compaction` is set to false. If it is set to true, `tombstone_threshold` will be ignored,
@@ -65,6 +65,6 @@ and compaction will be run whenever `tombstone_compaction_interval` has elapsed.
 
 .. code-block:: shell
 
-    ALTER table <your table name> with compaction = { 'class' : 'SizeTieredCompactionStrategy', 'unchecked_tombstone_compaction' : false };
+    ALTER table <your table name> with compaction = { 'class' : 'IncrementalCompactionStrategy', 'unchecked_tombstone_compaction' : false };
 
 .. include:: /troubleshooting/_common/ts-return.rst

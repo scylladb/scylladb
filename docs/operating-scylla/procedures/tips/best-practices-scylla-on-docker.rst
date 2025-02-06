@@ -50,10 +50,10 @@ To access ScyllaDB server logs, you can use the ``docker logs`` command:
 
  docker logs some-scylla  | tail
 
- INFO  2016-11-09 10:27:48,191 [shard 6] database - Setting compaction strategy of system_traces.node_slow_log to SizeTieredCompactionStrategy
- INFO  2016-11-09 10:27:48,191 [shard 4] database - Setting compaction strategy of system_traces.node_slow_log to SizeTieredCompactionStrategy
- INFO  2016-11-09 10:27:48,191 [shard 3] database - Setting compaction strategy of system_traces.node_slow_log to SizeTieredCompactionStrategy
- INFO  2016-11-09 10:27:48,191 [shard 1] database - Setting compaction strategy of system_traces.node_slow_log to SizeTieredCompactionStrategy
+ INFO  2016-11-09 10:27:48,191 [shard 6] database - Setting compaction strategy of system_traces.node_slow_log to IncrementalCompactionStrategy
+ INFO  2016-11-09 10:27:48,191 [shard 4] database - Setting compaction strategy of system_traces.node_slow_log to IncrementalCompactionStrategy
+ INFO  2016-11-09 10:27:48,191 [shard 3] database - Setting compaction strategy of system_traces.node_slow_log to IncrementalCompactionStrategy
+ INFO  2016-11-09 10:27:48,191 [shard 1] database - Setting compaction strategy of system_traces.node_slow_log to IncrementalCompactionStrategy
 
 Checking Server Status with Nodetool
 ++++++++++++++++++++++++++++++++++++

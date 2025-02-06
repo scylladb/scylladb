@@ -5,39 +5,13 @@ Choose a Compaction Strategy
 
 ScyllaDB implements the following compaction strategies in order to reduce :term:`read amplification<Read Amplification>`, :term:`write amplification<Write Amplification>`, and :term:`space amplification<Space Amplification>`, which causes bottlenecks and poor performance. These strategies include:
 
-* `Size-tiered compaction strategy (STCS)`_ - triggered when the system has enough (four by default) similarly sized SSTables.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables distributed across different levels.
-* `Incremental Compaction Strategy (ICS)`_ - shares the same read and write amplification factors as STCS, but it fixes its 2x temporary space amplification issue by breaking huge sstables into SSTable runs, which are comprised of a sorted set of smaller (1 GB by default), non-overlapping SSTables. 
+* `Incremental Compaction Strategy (ICS)`_ - triggered when the system has enough (four by default) similarly sized SSTables; breaks huge SStables into SSTable runs, which are comprised of a sorted set of smaller (1 GB by default), non-overlapping SSTables. 
 * `Time-window compaction strategy (TWCS)`_ - designed for time series data.
 
 This document covers how to choose a compaction strategy and presents the benefits and disadvantages of each one. If you want more information on compaction in general or on any of these strategies, refer to the :doc:`Compaction Overview </kb/compaction>`. If you want an explanation of the CQL commands used to create a compaction strategy, refer to :doc:`Compaction CQL Reference </cql/compaction>` .
 
 Learn more in the `Compaction Strategies lesson <https://university.scylladb.com/courses/scylla-operations/lessons/compaction-strategies/>`_ on ScyllaDB University
-
-.. _STCS1:
-
-Size-tiered Compaction Strategy (STCS)
-======================================
-
-The premise of :term:`Size-tiered Compaction Strategy (STCS)<Size-tiered Compaction Strategy>` is to merge SSTables of approximately the same size. 
-
-Size-tiered compaction benefits
--------------------------------
-This is a popular strategy for LSM workloads.  It results in a low and logarithmic (in size of data) number of SSTables, and the same data is copied during compaction a fairly low number of times. Use the table in `Which strategy is best`_ to determine if this is the right strategy for your needs. 
-
-Size-tiered compaction disadvantages
-------------------------------------
-This strategy has the following drawbacks (particularly with writes):
-
-* Continuously modifying existing rows results in each row being split across several SSTables, making reads slow, which doesn’t happen in :ref:`Leveled compaction <LCS1>`.
-
-* Obsolete data (overwritten or deleted columns) in a very large SSTable remains, wasting space, for a long time, until it is finally merged.  In overwrite-intensive loads for example, the overhead can be as much as 400%, as data will be duplicated 4X within a tier. On the other hand, the output SSTable will be the size of a single input SSTable. As a result, you will need 5X the amount of space (4 input SSTables plus one output SSTable), so 400% over the amount of data currently being stored. The allocated space will have to be checked and evaluated as your data set increases in size.
-
-* Compaction requires a lot of temporary space as the new larger SSTable is written before the duplicates are purged. In the worst case up to half the disk space needs to be empty to allow this to happen.
-
-**To implement this strategy**
-
-Set the parameters for :ref:`Size-tiered compaction <size-tiered-compaction-strategy-stcs>`.
 
 .. _LCS1:
 
@@ -70,16 +44,27 @@ Set the parameters for :ref:`Leveled Compaction <leveled-compaction-strategy-lcs
 Incremental Compaction Strategy (ICS)
 =====================================
 
-.. versionadded:: 2019.1.4 Scylla Enterprise
+With ICS, SSTables of approximately the same size are merged.
+Icreasingly larger SSTables are replaced in each tier by increasingly longer
+SSTable runs, modeled after LCS runs, but using larger fragment size of 1 GB
+(by default).
 
-ICS principles of operation are similar to those of STCS, merely replacing the increasingly larger SSTables in each tier, by increasingly longer SSTable runs, modeled after LCS runs, but using larger fragment size of 1 GB, by default.
-
-Compaction is triggered when there are two or more runs of roughly the same size. These runs are incrementally compacted with each other, producing a new SSTable run, while incrementally releasing space as soon as each SSTable in the input run is processed and compacted. This method eliminates the high temporary space amplification problem of STCS by limiting the overhead to twice the (constant) fragment size, per shard.
+Compaction is triggered when there are two or more runs of roughly the same
+size. These runs are incrementally compacted with each other, producing a new
+SSTable run, while incrementally releasing space as soon as each SSTable in
+the input run is processed and compacted. 
 
 Incremental Compaction Strategy benefits
 ----------------------------------------
-* Greatly reduces the temporary space amplification which is typical of STCS,  resulting in more disk space being available for storing user data.
-* The space requirement for a major compaction with ICS is almost non-existent given that the operation can release fragments at roughly same rate it produces new ones.
+
+* It's a popular strategy for LSM workloads.  It results in a low and
+  logarithmic (in size of data) number of SSTables, and the same data is copied
+  during compaction a fairly low number of times. Use the table in
+  `Which strategy is best`_ to determine if this is the right strategy for your
+  needs. 
+* The space requirement for a major compaction with ICS is almost non-existent
+  given that the operation can release fragments at roughly same rate it
+  produces new ones.
 
 If you look at the following screenshot the green line shows how disk usage behaves under ICS when major compaction is issued.
 
@@ -87,10 +72,6 @@ If you look at the following screenshot the green line shows how disk usage beha
 
 Incremental Compaction Strategy disadvantages
 ----------------------------------------------
-
-* Since ICS principles of operation are the same as STCS, its disadvantages are similar to STCS's, except for the temporary space amplification issue.
-
-Namely:
 
 * Continuously modifying existing rows results in each row being split across several SSTables, making reads slow, which doesn’t happen in Leveled compaction.
 * Obsolete data (overwritten or deleted columns) may accumulate across tiers, wasting space, for a long time, until it is finally merged. This can be mitigated by running major compaction from time to time.
@@ -106,7 +87,7 @@ For more information, see the :ref:`Compaction KB Article <incremental-compactio
 Time-window Compaction Strategy (TWCS)
 ======================================
 
-Time-Window Compaction Strategy compacts SSTables within each time window using `Size-tiered Compaction Strategy (STCS)`_.
+Time-Window Compaction Strategy compacts SSTables within each time window using `Incremental Compaction Strategy (ICS)`_.
 SSTables from different time windows are never compacted together. You set the :ref:`TimeWindowCompactionStrategy <time-window-compactionstrategy-twcs>` parameters when you create a table using a CQL command.
 
 .. include:: /rst_include/warning-ttl-twcs.rst
@@ -140,48 +121,42 @@ Every workload type may not work well with every compaction strategy. Unfortunat
 Compaction Strategy Matrix
 --------------------------
 
-The table presents which workload works best with which compaction strategy. In cases where you have the ability to use either STCS or ICS, always choose ICS.
+The table presents which workload works best with which compaction strategy.
 
 .. list-table::
-   :widths: 20 15 15 15 15 20
+   :widths: 20 20 20 20 20
    :header-rows: 1
 
-   * - Workload/Compaction Strategy
-     - Size-tiered 
+   * - Workload/Compaction Strategy 
      - Leveled
      - Incremental
      - Time-Window 
      - Comments
    * - Write-only
-     - |v|
      - |x|  
      - |v|
      - |x|
-     - [1]_ and [2]_
+     - [1]_
    * - :abbr:`Overwrite (Same data cells overwritten many times)`
-     - |v|
      - |x|
      - |v|
      - |x| 
-     - [3]_ and [4]_
+     - [2]_ and [3]_
    * - Read-mostly, with few updates
-     - |x| 
      - |v|
      - |x| 
      - |x|
-     - [5]_
+     - 
    * - Read-mostly, with many updates 
-     - |v|
      - |x|  
      - |v|
      - |x|
-     - [6]_ 
+     - [4]_ 
    * - Time Series 
      - |x|
      - |x|
-     - |x|
      - |v|
-     - [7]_ and [8]_
+     - [5]_ and [6]_
 
 
 The comments below describe the type of amplification each compaction strategy create on each use case, using the following abbreviations:
@@ -192,35 +167,27 @@ The comments below describe the type of amplification each compaction strategy 
 
 .. _1: 
 
-:sup:`1` When using Size-tiered with write-only loads it will use approximately 2x peak space - :abbr:`SA (Size Amplification)` with Incremental, the SA is much less
+:sup:`1` When using Leveled Compaction with write only loads you will experience high Write Amplification - :abbr:`WA (Write Amplification)`
 
 .. _2: 
 
-:sup:`2` When using Leveled Compaction with write only loads you will experience high Write Amplification - :abbr:`WA (Write Amplification)`
+:sup:`2` When Incremental with Overwrite loads, :abbr:`SA (Size Amplification)` occurs 
 
-.. _3: 
+.. _3:
 
-:sup:`3` When using Size-tired or Incremental with Overwrite loads, :abbr:`SA (Size Amplification)` occurs 
+:sup:`3` When using Leveled Compaction with overwrite loads, :abbr:`WA (Write Amplification)` occurs
 
 .. _4:
 
-:sup:`4` When using Leveled Compaction with overwrite loads, :abbr:`WA (Write Amplification)` occurs
+:sup:`4` When using Leveled with mostly read loads with many updates, :abbr:`WA (Write Amplification)` occurs in excess 
 
 .. _5:
 
-:sup:`5` When using Size-tiered with mostly read loads with little updates, :abbr:`SA (Size Amplification)` and :abbr:`RA (Read Amplification)` occurs
+:sup:`5` When using Incremental with Time Series workloads, :abbr:`SA (Size Amplification)`, :abbr:`RA (Read Amplification)`, and  :abbr:`WA (Write Amplification)` occurs.
 
 .. _6:
 
-:sup:`6` When using Leveled with mostly read loads with many updates, :abbr:`WA (Write Amplification)` occurs in excess 
-
-.. _7:
-
-:sup:`7` When using Size-tiered or Incremental with Time Series workloads, :abbr:`SA (Size Amplification)`, :abbr:`RA (Read Amplification)`, and  :abbr:`WA (Write Amplification)` occurs.
-
-.. _8:
-
-:sup:`8` When using Leveled with Time Series workloads, :abbr:`SA (Size Amplification)` and  :abbr:`WA (Write Amplification)` occurs.
+:sup:`6` When using Leveled with Time Series workloads, :abbr:`SA (Size Amplification)` and  :abbr:`WA (Write Amplification)` occurs.
 
 References
 ----------

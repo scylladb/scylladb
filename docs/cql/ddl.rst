@@ -751,13 +751,13 @@ Compaction options
 ##################
 
 The ``compaction`` options must at least define the ``'class'`` sub-option, which defines the compaction strategy class
-to use. The default supported class are ``'SizeTieredCompactionStrategy'``,
-``'LeveledCompactionStrategy'``, and ``'IncrementalCompactionStrategy'``.
+to use. The default supported class are 
+``'LeveledCompactionStrategy'`` and ``'IncrementalCompactionStrategy'``.
 Custom strategy can be provided by specifying the full class name as a :ref:`string constant
 <constants>`.
 
 All default strategies support a number of common options, as well as options specific to
-the strategy chosen (see the section corresponding to your strategy for details: :ref:`STCS <stcs-options>`, :ref:`LCS <lcs-options>`, :ref:`ICS <ics-options>`, and :ref:`TWCS <twcs-options>`).
+the strategy chosen (see the section corresponding to your strategy for details: :ref:`ICS <ics-options>`, :ref:`LCS <lcs-options>`, :ref:`ICS <ics-options>`, and :ref:`TWCS <twcs-options>`).
 
 .. _cql-compression-options:
 
