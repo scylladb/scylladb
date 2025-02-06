@@ -112,12 +112,12 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
 
     cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto ks_name = validate_keyspace(ctx, req);
-        auto table_names = parse_tables(ks_name, ctx, req->query_parameters, "tables");
+        auto tables = parse_table_infos(ks_name, ctx, req->query_parameters, "tables");
         auto type = req->get_query_param("type");
         co_await ctx.db.invoke_on_all([&] (replica::database& db) {
             auto& cm = db.get_compaction_manager();
-            return parallel_for_each(table_names, [&] (sstring& table_name) {
-                auto& t = db.find_column_family(ks_name, table_name);
+            return parallel_for_each(tables, [&] (const table_info& ti) {
+                auto& t = db.find_column_family(ti.id);
                 return t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
                     return cm.stop_compaction(type, &ts);
                 });
