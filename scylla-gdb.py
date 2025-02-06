@@ -5775,17 +5775,17 @@ class scylla_read_stats(gdb.Command):
         total = permit_stats()
 
         for permit in intrusive_list(permit_list):
+            schema_name = "*.*"
+            schema = permit['_schema']
             try:
-                schema = permit['_schema']['_p']
+                # schema is a schema_ptr in newer versions
+                if schema['_p']:
+                    schema_name = schema_ptr(schema).table_name()
             except:
                 # schema is already a raw pointer in older versions
-                schema = permit['_schema']
-
-            if schema:
-                raw_schema = schema.dereference()['_raw']
-                schema_name = "{}.{}".format(str(raw_schema['_ks_name']).replace('"', ''), str(raw_schema['_cf_name']).replace('"', ''))
-            else:
-                schema_name = "*.*"
+                if schema:
+                    raw_schema = schema.dereference()['_raw']
+                    schema_name = "{}.{}".format(str(raw_schema['_ks_name']).replace('"', ''), str(raw_schema['_cf_name']).replace('"', ''))
 
             description = str(permit['_op_name_view'])[1:-1]
             state = str(permit['_state'])[state_prefix_len:]
