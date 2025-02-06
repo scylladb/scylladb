@@ -514,6 +514,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
     co_await make_request(std::move(req), [&off, &ret, &object_name, start = s3_clock::now()] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
         auto in = std::move(in_);
         ret = temporary_buffer<char>(rep.content_length);
+        off = 0;
         s3l.trace("Consume {} bytes for {}", ret->size(), object_name);
         co_await in.consume([&off, &ret] (temporary_buffer<char> buf) mutable {
             if (buf.empty()) {
