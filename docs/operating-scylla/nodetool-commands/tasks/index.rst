@@ -5,6 +5,7 @@ Nodetool tasks
    :hidden:
 
    abort <abort>
+   drain <drain>
    user-ttl <user-ttl>
    list <list>
    modules <modules>
@@ -23,15 +24,12 @@ Task Status Retention
 
 * When a task completes, its status is temporarily stored on the executing node
 * Status information is retained for up to :confval:`task_ttl_in_seconds` seconds
-* The status information of a completed task is automatically removed after being queried with ``tasks status`` or ``tasks tree``
-* ``tasks wait`` returns the status, but it does not remove the task information of the queried task
-
-.. note:: Multiple status queries using ``tasks status`` and ``tasks tree`` for the same completed task will only receive a response for the first query, since the status is removed after being retrieved.
 
 Supported tasks suboperations
 -----------------------------
 
 * :doc:`abort </operating-scylla/nodetool-commands/tasks/abort>` - Aborts the task.
+* :doc:`drain </operating-scylla/nodetool-commands/tasks/drain>` - Unregisters all finished local tasks.
 * :doc:`user-ttl </operating-scylla/nodetool-commands/tasks/user-ttl>` - Gets or sets user_task_ttl value.
 * :doc:`list </operating-scylla/nodetool-commands/tasks/list>` - Lists tasks in the module.
 * :doc:`modules </operating-scylla/nodetool-commands/tasks/modules>` - Lists supported modules.

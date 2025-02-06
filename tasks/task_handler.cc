@@ -85,9 +85,6 @@ future<status_helper> task_handler::get_status_helper() {
             [id = _id] (task_manager::task_variant task_v, tasks::virtual_task_hint hint) -> future<status_helper> {
         return std::visit(overloaded_functor{
             [] (task_manager::task_ptr task) -> future<status_helper> {
-                if (task->is_complete()) {
-                    task->unregister_task();
-                }
                 co_return status_helper{
                     .status = co_await get_task_status(task),
                     .task = task
