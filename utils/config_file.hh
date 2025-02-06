@@ -152,9 +152,8 @@ public:
         }
         bool matches(std::string_view name) const;
         virtual void add_command_line_option(bpo::options_description_easy_init&) = 0;
-        virtual void set_value(const YAML::Node&) = 0;
+        virtual void set_value(const YAML::Node&, config_source) = 0;
         virtual bool set_value(sstring, config_source) = 0;
-        virtual future<> set_value_on_all_shards(const YAML::Node&) = 0;
         virtual future<bool> set_value_on_all_shards(sstring, config_source) = 0;
         virtual value_status status() const noexcept = 0;
         virtual config_source source() const noexcept = 0;
@@ -261,12 +260,12 @@ public:
         }
 
         void add_command_line_option(bpo::options_description_easy_init&) override;
-        void set_value(const YAML::Node&) override;
+        void set_value(const YAML::Node&, config_source) override;
         bool set_value(sstring, config_source) override;
         // For setting a single value on all shards,
         // without having to call broadcast_to_all_shards
         // that broadcasts all values to all shards.
-        future<> set_value_on_all_shards(const YAML::Node&) override;
+
         future<bool> set_value_on_all_shards(sstring, config_source) override;
     };
 
@@ -324,6 +323,7 @@ private:
 
     configs
         _cfgs;
+    bool _initialization_completed;
 };
 
 template <typename T>

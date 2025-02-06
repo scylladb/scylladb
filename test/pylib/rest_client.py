@@ -458,6 +458,9 @@ class ScyllaRESTAPIClient():
     async def abort_task(self, node_ip: str, task_id: str):
         await self.client.post(f'/task_manager/abort_task/{task_id}', host=node_ip)
 
+    async def get_config(self, node_ip: str, id: str):
+        return await self.client.get_json(f'/v2/config/{id}', host=node_ip)
+
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
         self.lines: list[str] = lines
