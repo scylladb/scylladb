@@ -218,10 +218,11 @@ std::optional<bool> get_bool_value(const constant&);
 utils::chunked_vector<managed_bytes_opt> get_list_elements(const cql3::raw_value&);
 utils::chunked_vector<managed_bytes_opt> get_set_elements(const cql3::raw_value&);
 std::vector<managed_bytes_opt> get_tuple_elements(const cql3::raw_value&, const abstract_type& type);
+std::vector<managed_bytes> get_vector_elements(const cql3::raw_value&, const abstract_type& type);
 std::vector<managed_bytes_opt> get_user_type_elements(const cql3::raw_value&, const abstract_type& type);
 std::vector<std::pair<managed_bytes, managed_bytes>> get_map_elements(const cql3::raw_value&);
 
-// Gets the elements of a constant which can be a list, set, tuple or user type
+// Gets the elements of a constant which can be a list, set, tuple, vector or user type
 std::vector<managed_bytes_opt> get_elements(const cql3::raw_value&, const abstract_type& type);
 
 // Get elements of list<tuple<>> as vector<vector<managed_bytes_opt>

@@ -7,6 +7,7 @@
 #include "types/types.hh"
 #include "types/list.hh"
 #include "types/map.hh"
+#include "types/vector.hh"
 #include <boost/test/tools/old/interface.hpp>
 #define BOOST_TEST_MODULE core
 
@@ -194,14 +195,14 @@ BOOST_AUTO_TEST_CASE(expr_printer_duration_test) {
 
 BOOST_AUTO_TEST_CASE(expr_printer_list_test) {
     collection_constructor int_list {
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = list_type_impl::get_instance(int32_type, true)
     };
     BOOST_REQUIRE_EQUAL(expr_print(int_list), "[13, 45, 90]");
 
     collection_constructor frozen_int_list {
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = list_type_impl::get_instance(int32_type, false)
     };
@@ -276,6 +277,18 @@ BOOST_AUTO_TEST_CASE(expr_printer_tuple_test) {
     BOOST_REQUIRE_EQUAL(value_print(int_int_tuple_const, int_int_tuple), "(456, 789)");
 }
 
+BOOST_AUTO_TEST_CASE(expr_printer_vector_test) {
+    collection_constructor int_vector {
+        .style = collection_constructor::style_type::vector,
+        .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
+        .type = vector_type_impl::get_instance(int32_type, 3)
+    };
+    BOOST_REQUIRE_EQUAL(expr_print(int_vector), "[13, 45, 90]");
+
+    cql3::raw_value int_vector_const = evaluate(int_vector, query_options::DEFAULT);
+    BOOST_REQUIRE_EQUAL(value_print(int_vector_const, int_vector), "[13, 45, 90]");
+}
+
 BOOST_AUTO_TEST_CASE(expr_printer_usertype_test) {
     column_identifier field_a("a", true);
     column_identifier field_b("b", true);
@@ -295,7 +308,7 @@ BOOST_AUTO_TEST_CASE(expr_printer_usertype_test) {
 // When a list is printed as RHS of an IN binary_operator it should be printed as a tuple.
 BOOST_AUTO_TEST_CASE(expr_printer_in_test) {
     collection_constructor int_list {
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {make_int_const(13), make_int_const(45), make_int_const(90)},
         .type = list_type_impl::get_instance(int32_type, true)
     };
@@ -739,6 +752,23 @@ BOOST_AUTO_TEST_CASE(evaluate_tuple_constructor_with_prefix_fields) {
     expression tuple = make_tuple_constructor({make_int_const(1), make_text_const("12")},
                                               {int32_type, utf8_type, int32_type, double_type});
     BOOST_REQUIRE_EQUAL(evaluate(tuple, evaluation_inputs{}), make_tuple_raw({make_int_raw(1), make_text_raw("12")}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_vector_collection_constructor) {
+    expression int_vector = make_vector_constructor({make_int_const(1), make_int_const(2), make_int_const(3)}, int32_type, 3);
+    BOOST_REQUIRE_EQUAL(evaluate(int_vector, evaluation_inputs{}), make_int_vector_raw({1, 2, 3}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_vector_collection_constructor_does_not_sort) {
+    expression int_vector =
+        make_vector_constructor({make_int_const(3), make_int_const(1), make_int_const(3), make_int_const(1)}, int32_type, 3);
+    BOOST_REQUIRE_EQUAL(evaluate(int_vector, evaluation_inputs{}), make_int_vector_raw({3, 1, 3, 1}));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_vector_collection_constructor_with_null) {
+    expression vector_with_null =
+        make_vector_constructor({make_int_const(1), constant::make_null(int32_type), make_int_const(3)}, int32_type, 3);
+    BOOST_REQUIRE_THROW(evaluate(vector_with_null, evaluation_inputs{}), exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(evaluate_usertype_constructor_empty) {
@@ -1736,12 +1766,12 @@ BOOST_AUTO_TEST_CASE(prepare_tuple_constructor_of_columns) {
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
 
-BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor) {
+BOOST_AUTO_TEST_CASE(prepare_list_or_vector_collection_constructor) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression constructor = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements =
             {
                 make_int_untyped("123"),
@@ -1752,11 +1782,19 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor) {
 
     data_type list_type = list_type_impl::get_instance(long_type, true);
 
-    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type));
-    expression expected =
+    expression prepared_list = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type));
+    expression expected_list =
         make_list_const({make_bigint_const(123), make_bigint_const(456), make_bigint_const(789)}, long_type);
 
-    BOOST_REQUIRE_EQUAL(prepared, expected);
+    BOOST_REQUIRE_EQUAL(prepared_list, expected_list);
+
+    data_type vector_type = vector_type_impl::get_instance(long_type, 3);
+
+    expression prepared_vector = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(vector_type));
+    expression expected_vector =
+        make_vector_const({make_bigint_const(123), make_bigint_const(456), make_bigint_const(789)}, long_type);
+
+    BOOST_REQUIRE_EQUAL(prepared_vector, expected_vector);
 }
 
 // preparing empty nonfrozen collections results in null
@@ -1765,7 +1803,7 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_empty_nonfrozen) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression constructor =
-        collection_constructor{.style = collection_constructor::style_type::list, .elements = {}, .type = nullptr};
+        collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}, .type = nullptr};
 
     data_type list_type = list_type_impl::get_instance(long_type, true);
 
@@ -1773,14 +1811,16 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_empty_nonfrozen) {
     expression expected = constant::make_null(list_type);
 
     BOOST_REQUIRE_EQUAL(prepared, expected);
+
+    // Vector type is not tested here because it is always frozen.
 }
 
-BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_empty_frozen) {
+BOOST_AUTO_TEST_CASE(prepare_list_or_vector_collection_constructor_empty_frozen) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression constructor =
-        collection_constructor{.style = collection_constructor::style_type::list, .elements = {}, .type = nullptr};
+        collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}, .type = nullptr};
 
     data_type list_type = list_type_impl::get_instance(long_type, false);
 
@@ -1788,14 +1828,20 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_empty_frozen) {
     expression expected = constant(make_list_raw({}), list_type);
 
     BOOST_REQUIRE_EQUAL(prepared, expected);
+
+    data_type vector_type = vector_type_impl::get_instance(long_type, 0);
+
+    // Should throw because we can't prepare an empty vector.
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(vector_type)),
+                        exceptions::invalid_request_exception);
 }
 
-BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_no_receiver) {
+BOOST_AUTO_TEST_CASE(prepare_list_or_vector_collection_constructor_no_receiver) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression constructor = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements =
             {
                 make_int_untyped("123"),
@@ -1815,7 +1861,7 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression constructor = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements =
             {
                 make_int_untyped("123"),
@@ -1842,7 +1888,7 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
     BOOST_REQUIRE(bind_var_receiver->type == long_type);
 
     expression expected = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {make_bigint_const(123), bind_variable{.bind_index = 1, .receiver = bind_var_receiver},
                      make_bigint_const(789)},
         .type = list_type};
@@ -1850,12 +1896,54 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_bind_var) {
     BOOST_REQUIRE_EQUAL(prepared, expected);
 }
 
-BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_null) {
+// As collection_constructor with vector style_type is not allowed in prepare_expression,
+// it is used with list_or_vector style instead.
+BOOST_AUTO_TEST_CASE(prepare_vector_collection_constructor_with_bind_var) {
     schema_ptr table_schema = make_simple_test_schema();
     auto [db, db_data] = make_data_dictionary_database(table_schema);
 
     expression constructor = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
+        .elements =
+            {
+                make_int_untyped("123"),
+                bind_variable{.bind_index = 1, .receiver = nullptr},
+                make_int_untyped("789"),
+            },
+        .type = nullptr};
+
+    data_type vector_type = vector_type_impl::get_instance(long_type, 3);
+
+    expression prepared = prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(vector_type));
+
+    // prepared bind_variable contains a receiver which we need to extract
+    // in order to prepare an equal expected value.
+    collection_constructor* prepared_constructor = as_if<collection_constructor>(&prepared);
+    BOOST_REQUIRE(prepared_constructor != nullptr);
+    BOOST_REQUIRE_EQUAL(prepared_constructor->elements.size(), 3);
+
+    bind_variable* prepared_bind_var = as_if<bind_variable>(&prepared_constructor->elements[1]);
+    BOOST_REQUIRE(prepared_bind_var != nullptr);
+
+    ::lw_shared_ptr<column_specification> bind_var_receiver = prepared_bind_var->receiver;
+    BOOST_REQUIRE(bind_var_receiver.get() != nullptr);
+    BOOST_REQUIRE(bind_var_receiver->type == long_type);
+
+    expression expected = collection_constructor{
+        .style = collection_constructor::style_type::vector,
+        .elements = {make_bigint_const(123), bind_variable{.bind_index = 1, .receiver = bind_var_receiver},
+                     make_bigint_const(789)},
+        .type = vector_type};
+
+    BOOST_REQUIRE_EQUAL(prepared, expected);
+}
+
+BOOST_AUTO_TEST_CASE(prepare_list_or_vector_collection_constructor_with_null) {
+    schema_ptr table_schema = make_simple_test_schema();
+    auto [db, db_data] = make_data_dictionary_database(table_schema);
+
+    expression constructor = collection_constructor{
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {make_int_untyped("123"),
                      make_int_untyped("456"),
                      make_untyped_null()},
@@ -1865,6 +1953,12 @@ BOOST_AUTO_TEST_CASE(prepare_list_collection_constructor_with_null) {
 
     BOOST_REQUIRE_EQUAL(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(list_type)),
                         make_int_list_const({123, 456, std::nullopt}));
+
+    data_type vector_type = vector_type_impl::get_instance(int32_type, 3);
+
+    // Should throw because we can't prepare a vector with null element.
+    BOOST_REQUIRE_THROW(prepare_expression(constructor, db, "test_ks", table_schema.get(), make_receiver(vector_type)),
+                        exceptions::invalid_request_exception);
 }
 
 BOOST_AUTO_TEST_CASE(prepare_set_collection_constructor) {
@@ -2650,12 +2744,12 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in_lwt_nulls) {
     auto two = make_int_const(2);
     auto null = constant::make_null(int32_type);
     auto list_with_null = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {one, null},
         .type = int32_list_type,
     };
     auto list_without_null = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {one},
         .type = int32_list_type,
     };
@@ -2855,7 +2949,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in_list_with_bind_variable) {
         schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
 
     expression in_list = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {make_int_const(123), bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type)},
                      make_int_const(789)},
         .type = list_type_impl::get_instance(int32_type, true)};
@@ -2878,7 +2972,7 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_not_in_list_with_bind_variable) {
         schema_builder("test_ks", "test_cf").with_column("pk", int32_type, column_kind::partition_key).build();
 
     expression in_list = collection_constructor{
-        .style = collection_constructor::style_type::list,
+        .style = collection_constructor::style_type::list_or_vector,
         .elements = {make_int_const(123), bind_variable{.bind_index = 0, .receiver = make_receiver(int32_type)},
                      make_int_const(789)},
         .type = list_type_impl::get_instance(int32_type, true)};
@@ -3647,6 +3741,7 @@ void test_prepare_good_binary_operator(expression good_binop_unprepared,
         tuple_type_impl::get_instance({boolean_type}),
         tuple_type_impl::get_instance({boolean_type, float_type}),
         tuple_type_impl::get_instance({utf8_type, float_type}),
+        vector_type_impl::get_instance(boolean_type, 1),
         user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2"}, {boolean_type, float_type}, false),
         user_type_impl::get_instance("test_ks", "test_ut", {"field1", "field2"}, {boolean_type, float_type}, true)};
 
@@ -3743,14 +3838,14 @@ std::vector<expression> get_invalid_rhs_values(expected_rhs_type expected_rhs) {
     if (expected_rhs != expected_rhs_type::float_in_list &&
         expected_rhs != expected_rhs_type::multi_column_tuple_in_list) {
         invalid_rhs_vals.push_back(collection_constructor{
-            .style = collection_constructor::style_type::list,
+            .style = collection_constructor::style_type::list_or_vector,
             .elements = {make_float_untyped("123.45"), make_float_untyped("732.2"), make_float_untyped("42.1")}});
         invalid_rhs_vals.push_back(collection_constructor{
-            .style = collection_constructor::style_type::list,
+            .style = collection_constructor::style_type::list_or_vector,
             .elements = {make_float_untyped("232"), make_float_untyped("121"), make_float_untyped("937")}});
     }
     if (expected_rhs != expected_rhs_type::multi_column_tuple_in_list) {
-        invalid_rhs_vals.push_back(collection_constructor{.style = collection_constructor::style_type::list,
+        invalid_rhs_vals.push_back(collection_constructor{.style = collection_constructor::style_type::list_or_vector,
                                                           .elements = {
                                                               tuple_constructor{.elements =
                                                                                     {
@@ -3772,7 +3867,7 @@ std::vector<expression> get_invalid_rhs_values(expected_rhs_type expected_rhs) {
     if (expected_rhs != expected_rhs_type::float_in_list &&
         expected_rhs != expected_rhs_type::multi_column_tuple_in_list) {
         invalid_rhs_vals.push_back(
-            collection_constructor{.style = collection_constructor::style_type::list, .elements = {}});
+            collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}});
     }
     return invalid_rhs_vals;
 }
@@ -4004,7 +4099,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_empty_list) {
     for (const comparison_order& comp_order : get_possible_comparison_orders()) {
         expression to_prepare = binary_operator(
             unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)}, oper_t::IN,
-            collection_constructor{.style = collection_constructor::style_type::list, .elements = {}}, comp_order);
+            collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}}, comp_order);
 
         expression expected =
             binary_operator(column_value(table_schema->get_column_definition("float_col")), oper_t::IN,
@@ -4028,7 +4123,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_dot_3) {
     for (const comparison_order& comp_order : get_possible_comparison_orders()) {
         expression to_prepare = binary_operator(
             unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)}, oper_t::IN,
-            collection_constructor{.style = collection_constructor::style_type::list,
+            collection_constructor{.style = collection_constructor::style_type::list_or_vector,
                                    .elements = {make_int_untyped("1"), make_float_untyped("2.3")}},
             comp_order);
 
@@ -4056,7 +4151,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_2_3_4) {
     for (const comparison_order& comp_order : get_possible_comparison_orders()) {
         expression to_prepare = binary_operator(
             unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("float_col", false)}, oper_t::IN,
-            collection_constructor{.style = collection_constructor::style_type::list,
+            collection_constructor{.style = collection_constructor::style_type::list_or_vector,
                                    .elements =
                                        {
                                            make_int_untyped("1"),
@@ -4091,7 +4186,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operato_reverse_float_col_in_empty_list) {
     for (const comparison_order& comp_order : get_possible_comparison_orders()) {
         expression to_prepare = binary_operator(
             unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("reverse_float_col", false)},
-            oper_t::IN, collection_constructor{.style = collection_constructor::style_type::list, .elements = {}},
+            oper_t::IN, collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}},
             comp_order);
 
         expression expected =
@@ -4118,7 +4213,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_float_col_in_1_dot_2_2_dot_3) {
         expression to_prepare = binary_operator(
             unresolved_identifier{.ident = ::make_shared<column_identifier_raw>("reverse_float_col", false)},
             oper_t::IN,
-            collection_constructor{.style = collection_constructor::style_type::list,
+            collection_constructor{.style = collection_constructor::style_type::list_or_vector,
                                    .elements = {make_float_untyped("1.2"), make_float_untyped("2.3")}},
             comp_order);
 
@@ -4166,7 +4261,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_empty_list) {
                           .type = tuple_type};
 
     expression unprepared_rhs =
-        collection_constructor{.style = collection_constructor::style_type::list, .elements = {}};
+        collection_constructor{.style = collection_constructor::style_type::list_or_vector, .elements = {}};
 
     // reversed is removed!
     expression prepared_rhs = constant(
@@ -4217,7 +4312,7 @@ BOOST_AUTO_TEST_CASE(prepare_binary_operator_multi_col_in_values) {
                           .type = tuple_type};
 
     expression unprepared_rhs =
-        collection_constructor{.style = collection_constructor::style_type::list,
+        collection_constructor{.style = collection_constructor::style_type::list_or_vector,
                                .elements = {tuple_constructor{.elements =
                                                                   {
                                                                       make_float_untyped("1.2"),
