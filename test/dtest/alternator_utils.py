@@ -132,14 +132,16 @@ class Gsi:
     )
 
 
-class StoppableThread:
-    """Thread class with a stop() method. it runs the given "target" function in a loop
-    until the 'stop-event' is set."""
+class StoppableThread[T, **P]:
+    """Thread class with a stop() method.
 
-    def __init__(self, target, kwargs=None):
+    Call `target` function in a loop with pause in `sleep_time` seconds between runs until the `_stop_event` is set.
+    """
+    def __init__(self, target: Callable[P, T], sleep_time: float = 0, kwargs: P.kwargs = None):
         self._stop_event = threading.Event()
         self.target = target
         self.target_name = target.__name__
+        self.sleep_time = sleep_time
         self.kwargs = kwargs or {}
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.future = None
@@ -147,7 +149,7 @@ class StoppableThread:
     def stop(self) -> None:
         self._stop_event.set()
 
-    def join(self):
+    def join(self) -> T:
         self.stop()
         return self.future.result()
 
@@ -156,10 +158,12 @@ class StoppableThread:
 
     def run(self) -> None:
         logger.debug(f"Running {self.target_name}...")
-        while not self._stop_event.is_set():
+        while True:
             logger.debug(f"Running {self.target_name}...")
             self.target(**self.kwargs)
             logger.debug(f"{self.target_name} is completed!")
+            if self._stop_event.wait(timeout=self.sleep_time):
+                break
         logger.debug(f"{self.target_name} is stopped!")
 
 
@@ -233,7 +237,7 @@ class BaseAlternator(Tester):
         start_time = time.time()
         nodes = probe(nodes)
         while nodes:
-            time.sleep(1)
+            time.sleep(0.1)
             last_try = (time.time() - start_time) >= timeout
             nodes = probe(nodes, allow_connection_error=not last_try)
 
@@ -564,7 +568,7 @@ class BaseAlternator(Tester):
         stress_thread.start()
         return stress_thread
 
-    def run_decommission_then_add_node(self):
+    def run_decommission_then_add_node(self) -> None:
         node_to_remove = self.cluster.nodelist()[-1]
         logger.info(f"Decommissioning {node_to_remove.name}..")
         try:
@@ -576,7 +580,6 @@ class BaseAlternator(Tester):
         node = new_node(self.cluster, bootstrap=True)
         node.start(wait_for_binary_proto=True, wait_other_notice=True)
         logger.info(f"Node successfully added!")
-        time.sleep(5)
 
     def run_create_table(self):
         try:
@@ -592,7 +595,7 @@ class BaseAlternator(Tester):
         return create_table_thread
 
     def run_decommission_add_node_thread(self) -> StoppableThread:
-        decommission_thread = StoppableThread(target=self.run_decommission_then_add_node)
+        decommission_thread = StoppableThread(target=self.run_decommission_then_add_node, sleep_time=5)
         self.clear_resources_methods.append(lambda: decommission_thread.join())
         logger.debug(f"Start decommission thread of {decommission_thread.target_name}..")
         decommission_thread.start()
