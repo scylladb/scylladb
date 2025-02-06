@@ -17,6 +17,6 @@ jobs:
         with:
           mode: minimum
           count: 1
-          labels: "backport/none\nbackport/\\d.\\d"
+          labels: "backport/none\nbackport/\\d{4}\\.\\d+\nbackport/\\d+\\.\\d+"
           use_regex: true
           add_comment: false
