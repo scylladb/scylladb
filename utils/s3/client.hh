@@ -17,6 +17,7 @@
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
+#include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "retry_strategy.hh"
 #include "utils/s3/client_fwd.hh"
 
@@ -55,6 +56,12 @@ class client : public enable_shared_from_this<client> {
     class readable_file;
     std::string _host;
     endpoint_config_ptr _cfg;
+    semaphore _creds_sem;
+    timer<seastar::lowres_clock> _creds_invalidation_timer;
+    timer<seastar::lowres_clock> _creds_update_timer;
+    aws_credentials _credentials;
+    aws::aws_credentials_provider_chain _creds_provider_chain;
+
     struct io_stats {
         uint64_t ops = 0;
         uint64_t bytes = 0;
@@ -84,7 +91,8 @@ class client : public enable_shared_from_this<client> {
 
     future<semaphore_units<>> claim_memory(size_t mem);
 
-    void authorize(http::request&);
+    future<> update_credentials_and_rearm();
+    future<> authorize(http::request&);
     group_client& find_or_create_client();
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
@@ -125,7 +133,7 @@ public:
                          upload_progress& up,
                          seastar::abort_source* = nullptr);
 
-    void update_config(endpoint_config_ptr);
+    future<> update_config(endpoint_config_ptr);
 
     struct handle {
         std::string _host;

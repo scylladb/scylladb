@@ -177,12 +177,7 @@ std::unordered_map<sstring, s3::endpoint_config> make_storage_options_config(con
             cfg[os.endpoint] = s3::endpoint_config {
                 .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
                 .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
-                .aws = {{
-                    .access_key_id = tests::getenv_safe("AWS_ACCESS_KEY_ID"),
-                    .secret_access_key = tests::getenv_safe("AWS_SECRET_ACCESS_KEY"),
-                    .session_token = ::getenv("AWS_SESSION_TOKEN") ? : "",
-                    .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
-                }},
+                .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
             };
         }
     }, so.value);
