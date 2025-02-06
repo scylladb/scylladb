@@ -420,21 +420,21 @@ future<> gossiper::handle_ack2_msg(locator::host_id from, gossip_digest_ack2 msg
     co_await apply_state_locally(std::move(remote_ep_state_map));
 }
 
-future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_id* from_hid, seastar::rpc::opt_time_point timeout, std::optional<int64_t> generation_number_opt, bool notify_up) {
+future<> gossiper::handle_echo_msg(locator::host_id from_hid, seastar::rpc::opt_time_point timeout, std::optional<int64_t> generation_number_opt, bool notify_up) {
     bool respond = true;
-    if (from_hid && !_advertise_to_nodes.empty()) {
-        auto it = _advertise_to_nodes.find(*from_hid);
+    if (!_advertise_to_nodes.empty()) {
+        auto it = _advertise_to_nodes.find(from_hid);
         if (it == _advertise_to_nodes.end()) {
             respond = false;
         } else {
-            auto es = get_endpoint_state_ptr(from);
+            auto es = get_endpoint_state_ptr(from_hid);
             if (es) {
                 auto saved_generation_number = it->second;
                 auto current_generation_number = generation_number_opt ?
                         generation_type(generation_number_opt.value()) : es->get_heart_beat_state().get_generation();
                 respond = saved_generation_number == current_generation_number;
                 logger.debug("handle_echo_msg: from={}, saved_generation_number={}, current_generation_number={}",
-                        from, saved_generation_number, current_generation_number);
+                        from_hid, saved_generation_number, current_generation_number);
             } else {
                 respond = false;
             }
@@ -444,21 +444,21 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_i
         throw std::runtime_error("Not ready to respond gossip echo message");
     }
     if (notify_up) {
-        if (!timeout || !from_hid) {
-            on_internal_error(logger, "UP notification should have a timeout and src host id");
+        if (!timeout) {
+            on_internal_error(logger, "UP notification should have a timeout");
         }
         auto normal = [] (gossiper& g, locator::host_id hid) {
             const auto& topo = g.get_token_metadata_ptr()->get_topology();
             return topo.has_node(hid) && topo.find_node(hid)->is_normal();
         };
-        co_await container().invoke_on(0, [from, from_hid, timeout, &normal] (gossiper& g) -> future<> {
+        co_await container().invoke_on(0, [from_hid, timeout, &normal] (gossiper& g) -> future<> {
             try {
                 // Wait to see the node as normal. It may node be the case if the node bootstraps
-                while (rpc::rpc_clock_type::now() < *timeout && !(normal(g, *from_hid) && g.is_alive(*from_hid))) {
+                while (rpc::rpc_clock_type::now() < *timeout && !(normal(g, from_hid) && g.is_alive(from_hid))) {
                     co_await sleep_abortable(std::chrono::milliseconds(100), g._abort_source);
                 }
             } catch(...) {
-                logger.warn("handle_echo_msg: UP notification from {} failed with {}", from, std::current_exception());
+                logger.warn("handle_echo_msg: UP notification from {} failed with {}", from_hid, std::current_exception());
             }
         });
     }
@@ -539,9 +539,8 @@ void gossiper::init_messaging_service_handler() {
         });
     });
     ser::gossip_rpc_verbs::register_gossip_echo(&_messaging, [this] (const rpc::client_info& cinfo, seastar::rpc::opt_time_point timeout, rpc::optional<int64_t> generation_number_opt, rpc::optional<bool> notify_up_opt) {
-        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        auto from_hid = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id");
-        return handle_echo_msg(from, from_hid, timeout, generation_number_opt, notify_up_opt.value_or(false));
+        auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return handle_echo_msg(from_hid, timeout, generation_number_opt, notify_up_opt.value_or(false));
     });
     ser::gossip_rpc_verbs::register_gossip_shutdown(&_messaging, [this] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
         return background_msg("GOSSIP_SHUTDOWN", [from, generation_number_opt] (gms::gossiper& gossiper) {
