@@ -12,8 +12,8 @@
 #include "db/row_cache.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
+#include <algorithm>
 #include <fmt/core.h>
-#include <ranges>
 
 class partition_snapshot_row_cursor;
 

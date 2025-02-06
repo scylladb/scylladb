@@ -8,24 +8,18 @@
 
 #pragma once
 
-#include <boost/intrusive/list.hpp>
-#include <boost/intrusive/set.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
 
-#include <seastar/core/memory.hh>
 #include <seastar/util/noncopyable_function.hh>
 
 #include "mutation/mutation_partition.hh"
 #include "utils/phased_barrier.hh"
 #include "utils/histogram.hh"
 #include "mutation/partition_version.hh"
-#include <seastar/core/metrics_registration.hh>
 #include "utils/double-decker.hh"
 #include "db/cache_tracker.hh"
 #include "readers/empty_v2.hh"
 #include "readers/mutation_source.hh"
-
-namespace bi = boost::intrusive;
 
 class row_cache;
 class cache_tracker;
