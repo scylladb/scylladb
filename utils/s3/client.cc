@@ -1086,7 +1086,11 @@ class client::do_upload_file : private multipart_upload {
         // a giant chunk of buffer if a certain part fails to upload, we prefer
         // small parts, let's make it a multiple of MiB.
         part_size = div_ceil(total_size / aws_maximum_parts_in_piece, 1_MiB);
-        part_size = std::max(part_size, aws_minimum_part_size);
+        // The default part size for multipart upload is set to 50MiB.
+        // This value was determined empirically by running `perf_s3_client` with various part sizes to find the optimal one.
+        static constexpr size_t default_part_size = 50_MiB;
+
+        part_size = std::max(part_size, default_part_size);
         return {div_ceil(total_size, part_size), part_size};
     }
 
