@@ -1,0 +1,31 @@
+
+"object_store_endpoint":{
+    "id":"object_store_endpoint",
+    "summary":"object store endpoint",
+    "properties":{
+       "provider":{
+          "type":"string",
+          "description":"The cloud provider"
+       },
+       "name":{
+          "type":"string",
+          "description":"The endpoint url"
+       },
+       "port":{
+          "type":"long",
+          "description":"The endpoint port"
+       },
+       "https":{
+          "type":"boolean",
+          "description":"True if the endpoint protocol is https"
+       },
+       "region":{
+          "type":"string",
+          "description":"The cloud region"
+       },
+       "is_default":{
+          "type":"boolean",
+          "description":"True if this is the default endpoint"
+       }
+    }
+ }

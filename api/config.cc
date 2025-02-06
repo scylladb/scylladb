@@ -205,6 +205,26 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
         cfg.stream_io_throughput_mb_per_sec(value.value, utils::config_file::config_source::API);
         return make_ready_future<json::json_return_type>(json::json_void());
     });
+
+    cs::get_object_store_endpoints.set(r, [&cfg](std::unique_ptr<http::request> req) -> future<json::json_return_type>  {
+        auto &obj_config = cfg.object_storage_config.get();
+        
+        std::vector<cs::object_store_endpoint> endpoints;
+        endpoints.reserve(obj_config.size());
+        for (auto &endpoint : obj_config) {
+            auto& e = endpoints.emplace_back();
+            e.name = endpoint.first;
+            e.port = endpoint.second.port;
+            e.https = endpoint.second.use_https;
+            e.is_default = endpoint.second.is_default;
+
+            if (endpoint.second.aws.has_value()) {
+                e.provider = "s3";
+                e.region = endpoint.second.aws->region;
+            }
+        }
+        co_return endpoints;
+    });
 }
 
 void unset_config(http_context& ctx, routes& r) {
@@ -227,6 +247,7 @@ void unset_config(http_context& ctx, routes& r) {
     ss::get_saved_caches_location.unset(r);
     ss::set_compaction_throughput_mb_per_sec.unset(r);
     ss::set_stream_throughput_mb_per_sec.unset(r);
+    cs::get_object_store_endpoints.unset(r);
 }
 
 }

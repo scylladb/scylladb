@@ -6,6 +6,7 @@ import requests
 import pytest
 import shutil
 import logging
+from pathlib import Path
 
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
@@ -243,3 +244,51 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     have_res = { x.name: x.value for x in res }
     assert have_res == dict(rows), f'Unexpected table content: {have_res}'
+
+@pytest.mark.asyncio
+async def test_object_storage_config(manager: ManagerClient, tmpdir, s3_server):
+    '''Check that Scylla refuses to start with a bad object-storage config'''
+
+    obj_cfg = tmpdir / 'object_storage.yaml'
+
+    cfg = {'object_storage_config_file': str(obj_cfg)}
+
+    print('Scylla fails to start with an empty object storage config')
+    Path(obj_cfg).touch()
+    server = await manager.server_add(config=cfg, expected_error='a minimum of one endpoint is required')
+
+    print('Scylla fails to start when multiple endpoints are specified, but none is marked default')
+    MinioServer.create_conf_file(s3_server.address, s3_server.port, 'bad_key', 'bad_secret', 'bad_region', obj_cfg)
+    MinioServer.append_endpoint_to_conf(s3_server.address, s3_server.port, 'worse_region', obj_cfg, default=False)
+    server = await manager.server_add(config=cfg, expected_error='no default endpoint found')
+
+    print('Scylla fails to start when multiple default endpoints are specified')
+    MinioServer.append_endpoint_to_conf(s3_server.address, s3_server.port, 'worse_region', obj_cfg, default=True)
+    MinioServer.append_endpoint_to_conf('localhost', s3_server.port, 'worse_region', obj_cfg, default=True)
+    server = await manager.server_add(config=cfg, expected_error='multiple default endpoints found')
+
+    print('Scylla assumes the only endpoint specified is the default one')
+    MinioServer.create_conf_file(s3_server.address, s3_server.port, 'bad_key', 'bad_secret', 'region', obj_cfg)
+    server = await manager.server_add(config=cfg)
+
+@pytest.mark.asyncio
+async def test_get_object_store_endpoints(manager: ManagerClient, tmpdir, s3_server):
+    obj_cfg = tmpdir / 'object_storage.yaml'
+    cfg = {'object_storage_config_file': str(obj_cfg)}
+
+    print('Scylla returns the object storage endpoints')
+    MinioServer.create_conf_file(s3_server.address, s3_server.port, 'bad_key', 'bad_secret', 'bad_region', obj_cfg)
+    MinioServer.append_endpoint_to_conf('localhost', s3_server.port, 'worse_region', obj_cfg, default=True)
+    server = await manager.server_add(config=cfg)
+
+    resp = await manager.api.get_object_store_endpoints(server.ip_addr)
+    endpoints = sorted(resp, key=lambda d: d['region'])
+    assert endpoints == [{'provider': 's3', 'name': s3_server.address, 'port': s3_server.port, 'https': False, 'region': 'bad_region', 'is_default': False},
+                         {'provider': 's3', 'name': 'localhost', 'port': s3_server.port, 'https': False, 'region': 'worse_region', 'is_default': True}]
+
+    print('Scylla assumes correcty the only endpoint as the default one')
+    MinioServer.create_conf_file(s3_server.address, s3_server.port, 'bad_key', 'bad_secret', 'bad_region', obj_cfg)
+    server = await manager.server_add(config=cfg)
+
+    resp = await manager.api.get_object_store_endpoints(server.ip_addr)
+    assert resp == [{'provider': 's3', 'name': s3_server.address, 'port': s3_server.port, 'https': False, 'region': 'bad_region', 'is_default': True}]

@@ -36,7 +36,13 @@ endpoints:
     aws_region: us-east-2
     aws_access_key_id: EXAMPLE_ACCESS_KEY_ID
     aws_secret_access_key: EXAMPLE_SECRET_ACCESS_KEY
+    is_default: true
 ```
+
+Please note that you need to specify at least one endpoint in `object_storage.yaml`.
+If you specify more than one endpoint, one of them needs to be marked `is_default: true`,
+if you specify only one, the default flag is optional, Scylla will assume that's the default
+anyway.
 
 and when creating the keyspace:
 

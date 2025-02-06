@@ -16,6 +16,7 @@ namespace s3 {
 struct endpoint_config {
     unsigned port;
     bool use_https;
+    bool is_default;
 
     struct aws_config {
         // the access key of the credentials

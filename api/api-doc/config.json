@@ -27,4 +27,33 @@
           }
         }
       }
+},
+"/v2/config/object_store_endpoints": {
+      "get": {
+        "description": "Returns the list of configured object storage endpoints",
+        "operationId": "get_object_store_endpoints",
+        "produces": [
+          "application/json"
+        ],
+        "tags": ["config"],
+        "parameters": [ ],
+        "responses": {
+          "200": {
+            "schema": {
+              "type":"array",
+              "items":{
+                  "$ref":"#/definitions/object_store_endpoint",
+                  "description":"object store endpoint"
+              }
+            },
+            "description": "the list of configured object storage endpoints"
+          },
+          "default": {
+            "description": "unexpected error",
+            "schema": {
+              "$ref": "#/definitions/ErrorModel"
+            }
+          }
+        }
+      }
 }
