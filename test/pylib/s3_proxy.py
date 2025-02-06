@@ -21,7 +21,7 @@ import uuid
 from functools import partial
 from collections import OrderedDict
 from requests import Response
-from typing_extensions import Optional
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(__file__))
 
