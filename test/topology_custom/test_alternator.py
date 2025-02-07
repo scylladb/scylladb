@@ -187,19 +187,22 @@ async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
        tested separately, in test/alternator/test_scylla.py.
        Reproduces issue #18711.
     """
-    # Run two Scylla nodes telling both their broadcast_rpc_address is 1.2.3.4
+    # Run two Scylla nodes telling both their broadcast_rpc_address is 127.0.0.0
     # (this is silly, but servers_add() doesn't let us use a different config
     # per server). We need to run two nodes to check that the node to which
     # we send the /localnodes request knows not only its own modified
     # address, but also the other node's (which it learnt by gossip).
     # This address isn't used for any communication, but it will be
     # produced by "/localnodes" and this is what we want to check
+    # The address "127.0.0.0" is a silly non-existing address which connecting
+    # to fails immediately (this is useful in the test shutdown - we don't want
+    # it to hang trying to reach this node, as happened in issue #22744).
     config = alternator_config | {
-        'broadcast_rpc_address': '1.2.3.4'
+        'broadcast_rpc_address': '127.0.0.0'
     }
     servers = await manager.servers_add(2, config=config)
     for server in servers:
-        # We expect /localnodes to return ["1.2.3.4", "1.2.3.4"]
+        # We expect /localnodes to return ["127.0.0.0", "127.0.0.0"]
         # (since we configured both nodes with the same broadcast_rpc_address).
         # We need the retry loop below because the second node might take a
         # bit of time to bootstrap after coming up, and only then will it
@@ -210,7 +213,7 @@ async def test_localnodes_broadcast_rpc_address(manager: ManagerClient):
             assert time.time() < timeout
             response = requests.get(url, verify=False)
             j = json.loads(response.content.decode('utf-8'))
-            if j == ['1.2.3.4', '1.2.3.4']:
+            if j == ['127.0.0.0', '127.0.0.0']:
                 break # done
             await asyncio.sleep(0.1)
 
