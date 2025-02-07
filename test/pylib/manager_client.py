@@ -219,13 +219,13 @@ class ManagerClient():
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            wait_others: int = 0, wait_interval: float = 45, seeds: Optional[List[IPAddress]] = None,
-                           timeout: Optional[float] = None) -> None:
+                           timeout: Optional[float] = None, connect_driver: bool = True) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient starting %s", server_id)
         data = {"expected_error": expected_error, "seeds": seeds}
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
-        if expected_error is None:
+        if expected_error is None and connect_driver:
             if self.cql:
                 self._driver_update()
             else:
@@ -327,7 +327,8 @@ class ManagerClient():
                          seeds: Optional[List[IPAddress]] = None,
                          timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
-                         expected_server_up_state: Optional[ServerUpState] = None) -> ServerInfo:
+                         expected_server_up_state: Optional[ServerUpState] = None,
+                         connect_driver: bool = True) -> ServerInfo:
         """Add a new server"""
         try:
             data = self._create_server_add_data(
@@ -364,7 +365,7 @@ class ManagerClient():
         except Exception as exc:
             raise RuntimeError(f"server_add got invalid server data {server_info}") from exc
         logger.debug("ManagerClient added %s", s_info)
-        if expected_error is None:
+        if expected_error is None and connect_driver:
             if self.cql:
                 self._driver_update()
             elif start:

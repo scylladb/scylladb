@@ -11,6 +11,7 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/shared_future.hh>
 
 #include "db/consistency_level_type.hh"
 #include "auth/authenticator.hh"
@@ -41,6 +42,7 @@ class password_authenticator : public authenticator {
     future<> _stopped;
     abort_source _as;
     std::string _superuser;
+    shared_promise<> _superuser_created_promise;
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
@@ -79,6 +81,8 @@ public:
     virtual const resource_set& protected_resources() const override;
 
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
+
+    virtual future<> ensure_superuser_is_created() const override;
 
 private:
     bool legacy_metadata_exists() const;

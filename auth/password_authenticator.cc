@@ -147,6 +147,9 @@ future<> password_authenticator::start() {
         _stopped = do_after_system_ready(_as, [this] {
             return async([this] {
                 if (legacy_mode(_qp)) {
+                    if (!_superuser_created_promise.available()) {
+                        _superuser_created_promise.set_value();
+                    }
                     _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
                     if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
@@ -162,7 +165,11 @@ future<> password_authenticator::start() {
                         return;
                     }
                 }
+                utils::get_local_injector().inject("password_authenticator_start_pause", utils::wait_for_message(5min)).get();
                 create_default_if_missing().get();
+                if (!legacy_mode(_qp)) {
+                    _superuser_created_promise.set_value();
+                }
             });
         });
 
@@ -359,6 +366,10 @@ const resource_set& password_authenticator::protected_resources() const {
         credentials[PASSWORD_KEY] = sstring(password);
         return authenticate(credentials);
     });
+}
+
+future<> password_authenticator::ensure_superuser_is_created() const {
+    return _superuser_created_promise.get_shared_future();
 }
 
 }
