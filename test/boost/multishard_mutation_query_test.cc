@@ -484,7 +484,7 @@ public:
             return false;
         }
         for (const auto& row : res.rows()) {
-            _rows.push_back(row);
+            _rows.emplace_back(row.copy());
             _last_ckey = extract_ckey(row);
             auto last_pkey = extract_pkey(row);
             if (_last_pkey && last_pkey.equal(*_s, *_last_pkey)) {
@@ -799,7 +799,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
             std::vector<query::result_set_row> expected_rows;
             for (const auto& mut : expected_results) {
                 auto rs = query::result_set(mut);
-                std::copy(rs.rows().begin(), rs.rows().end(), std::back_inserter(expected_rows));
+                std::ranges::copy(rs.rows() | std::views::transform([](const auto& row) { return row.copy(); }), std::back_inserter(expected_rows));
             }
             auto expected_data_results = query::result_set(s, std::move(expected_rows));
 

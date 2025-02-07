@@ -1298,7 +1298,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_from_schema_partition(d
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
         if (!scylla_specific_rs->empty()) {
-            auto row = scylla_specific_rs->row(0);
+            const auto& row = scylla_specific_rs->row(0);
             auto storage_type = row.get<sstring>("storage_type");
             auto options = row.get<map_type_impl::native_type>("storage_options");
             if (storage_type && options) {
@@ -2188,7 +2188,7 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
     slogger.trace("create_table_from_mutations: version={}, {}", version, sm);
 
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
-    query::result_set_row table_row = table_rs.row(0);
+    const query::result_set_row& table_row = table_rs.row(0);
 
     auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = table_row.get_nonnull<sstring>("table_name");
@@ -2459,7 +2459,7 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
 
 view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)  {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
-    query::result_set_row row = table_rs.row(0);
+    const query::result_set_row& row = table_rs.row(0);
 
     auto ks_name = row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = row.get_nonnull<sstring>("view_name");
@@ -2469,7 +2469,7 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     prepare_builder_from_table_row(ctxt, builder, row);
 
     if (sm.scylla_tables()) {
-        table_rs = query::result_set(*sm.scylla_tables());
+        auto table_rs = query::result_set(*sm.scylla_tables());
         if (!table_rs.empty()) {
             prepare_builder_from_scylla_tables_row(ctxt, builder, table_rs.row(0));
         }
