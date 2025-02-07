@@ -121,7 +121,7 @@ static std::optional<table_id> table_id_from_mutations(const schema_mutations& s
     if (table_rs.empty()) {
         return std::nullopt;
     }
-    query::result_set_row table_row = table_rs.row(0);
+    const query::result_set_row& table_row = table_rs.row(0);
     return table_id(table_row.get_nonnull<utils::UUID>("id"));
 }
 
