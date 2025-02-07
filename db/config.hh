@@ -404,9 +404,11 @@ public:
     named_value<uint32_t> reader_concurrency_semaphore_serialize_limit_multiplier;
     named_value<uint32_t> reader_concurrency_semaphore_kill_limit_multiplier;
     named_value<uint32_t> reader_concurrency_semaphore_cpu_concurrency;
+    named_value<float> reader_concurrency_semaphore_preemptive_abort_factor;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_serialize_limit_multiplier;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_kill_limit_multiplier;
     named_value<uint32_t> view_update_reader_concurrency_semaphore_cpu_concurrency;
+    named_value<float> view_update_reader_concurrency_semaphore_preemptive_abort_factor;
     named_value<int> maintenance_reader_concurrency_semaphore_count_limit;
     named_value<uint32_t> twcs_max_window_count;
     named_value<unsigned> initial_sstable_loading_concurrency;
