@@ -981,13 +981,13 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
     int n = 0;
 
     if (is_view()) {
-        if (helper.is_index(view_info()->base_id(), *this)) {
-            auto is_local = !helper.is_global_index(view_info()->base_id(), *this);
+        if (helper.type == schema_describe_helper::type::index) {
+            auto is_local = !helper.is_global_index;
 
             os << "INDEX " << cql3::util::maybe_quote(secondary_index::index_name_from_table_name(cf_name())) << " ON "
                     << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(view_info()->base_name());
 
-            describe_index_columns(os, is_local, *this, helper.find_schema(view_info()->base_id()));
+            describe_index_columns(os, is_local, *this, helper.base_schema);
             os << ";\n";
 
             return std::move(os).str();
@@ -1100,12 +1100,14 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
 
 cql3::description schema::describe(const schema_describe_helper& helper, cql3::describe_option desc_opt) const {
     const sstring type = std::invoke([&] {
-        if (is_view()) {
-            return helper.is_index(view_info()->base_id(), *this)
-                    ? "index"
-                    : "view";
+        switch (helper.type) {
+        case schema_describe_helper::type::view:
+            return "view";
+        case schema_describe_helper::type::index:
+            return "index";
+        case schema_describe_helper::type::table:
+            return "table";
         }
-        return "table";
     });
 
     return cql3::description {
@@ -1141,7 +1143,7 @@ std::ostream& schema::schema_properties(const schema_describe_helper& helper, st
     for (auto& [type, ext] : extensions()) {
         os << "\n    AND " << type << " = " << ext->options_to_string();
     }
-    if (is_view() && !helper.is_index(view_info()->base_id(), *this)) {
+    if (helper.type ==  schema_describe_helper::type::view) {
         auto is_sync_update = db::find_tag(*this, db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY);
         if (is_sync_update.has_value()) {
             os << "\n    AND synchronous_updates = " << *is_sync_update;
@@ -1152,14 +1154,16 @@ std::ostream& schema::schema_properties(const schema_describe_helper& helper, st
 
 std::ostream& schema::describe_alter_with_properties(const schema_describe_helper& helper, std::ostream& os) const {
     os << "ALTER "; 
-    if (is_view()) {
-        if (helper.is_index(view_info()->base_id(), *this)) {
-            on_internal_error(dblog, "ALTER statement is not supported for index");
-        }
-        
+    switch (helper.type) {
+    case schema_describe_helper::type::view:
         os << "MATERIALIZED VIEW ";
-    } else {
+        break;
+    case schema_describe_helper::type::index:
+        on_internal_error(dblog, "ALTER statement is not supported for index");
+        break;
+    case schema_describe_helper::type::table:
         os << "TABLE ";
+        break;
     }
     os << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " WITH ";
     schema_properties(helper, os);
