@@ -49,6 +49,7 @@
 #include "service/raft/group0_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"
+#include "service/view_building_coordinator.hh"
 #include "utils/assert.hh"
 #include "utils/UUID.hh"
 #include "utils/to_string.hh"
@@ -1144,6 +1145,9 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service);
+            if (_feature_service.view_building_coordinator) {
+                _view_building_coordinator = vbc::run_view_building_coordinator(*as, _db.local(), *_group0, _sys_ks.local(), _messaging.local(), _topology_state_machine);
+            }
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -1151,6 +1155,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
     if (as) {
         as->request_abort(); // abort current coordinator if running
         co_await std::move(_topology_change_coordinator);
+        co_await std::move(_view_building_coordinator);
     }
 }
 
@@ -7172,6 +7177,11 @@ void storage_service::init_messaging_service() {
             auto view_builder_version_mut = co_await ss._sys_ks.local().get_view_builder_version_mutation();
             if (view_builder_version_mut) {
                 mutations.emplace_back(*view_builder_version_mut);
+            }
+
+            auto vbc_processing_base_mut = co_await ss._sys_ks.local().get_vbc_processing_base_mutation();
+            if (vbc_processing_base_mut) {
+                mutations.emplace_back(*vbc_processing_base_mut);
             }
 
             co_return raft_snapshot{
