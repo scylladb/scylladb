@@ -83,9 +83,9 @@ sstring validate_keyspace(const http_context& ctx, const http::request& req) {
     return validate_keyspace(ctx, req.get_path_param("keyspace"));
 }
 
-static void validate_table(const replica::database& db, sstring ks_name, sstring table_name) {
+table_id validate_table(const replica::database& db, sstring ks_name, sstring table_name) {
     try {
-        db.find_column_family(ks_name, table_name);
+        return db.find_uuid(ks_name, table_name);
     } catch (replica::no_such_column_family& e) {
         throw bad_param_exception(e.what());
     }
