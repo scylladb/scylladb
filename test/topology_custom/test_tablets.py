@@ -377,6 +377,59 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
     assert len(list(rows)) == 1
 
 
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_drop_keyspace_while_split(manager: ManagerClient):
+
+    # Reproducer for: https://github.com/scylladb/scylladb/issues/22431
+    # This tests if the split ready compaction groups are correctly created
+    # on a shard with several storage groups for the same table
+
+    logger.info("Bootstrapping cluster")
+    cmdline = [ '--target-tablet-size-in-bytes', '8192',
+                '--smp', '2' ]
+    config = { 'error_injections_at_startup': ['short_tablet_stats_refresh_interval'],
+               'enable_tablets': True }
+    servers = [await manager.server_add(config=config, cmdline=cmdline)]
+
+    s0_log = await manager.server_open_log(servers[0].server_id)
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    # create a table so that it has at least 2 tablets (and storage groups) per shard
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+
+    await manager.api.disable_autocompaction(servers[0].ip_addr, 'test')
+
+    keys = range(2048)
+    await asyncio.gather(*[cql.run_async(f'INSERT INTO test.test (pk, c) VALUES ({k}, {k});') for k in keys])
+    await manager.api.flush_keyspace(servers[0].ip_addr, 'test')
+
+    await manager.api.enable_injection(servers[0].ip_addr, 'truncate_compaction_disabled_wait', one_shot=False)
+    await manager.api.enable_injection(servers[0].ip_addr, 'split_storage_groups_wait', one_shot=False)
+
+    # enable the load balancer which should emmit a tablet split
+    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    # wait for compaction groups to be created and split to begin
+    await s0_log.wait_for('split_storage_groups_wait: wait')
+
+    # start a DROP and wait for it to disable compaction
+    drop_ks_task = cql.run_async('DROP KEYSPACE test;')
+    await s0_log.wait_for('truncate_compaction_disabled_wait: wait')
+
+    # release split
+    await manager.api.message_injection(servers[0].ip_addr, "split_storage_groups_wait")
+
+    # release drop and wait for it to complete
+    await manager.api.message_injection(servers[0].ip_addr, "truncate_compaction_disabled_wait")
+    await drop_ks_task
+
+
 # This test checks that --enable-tablets option and the TABLETS parameters of the CQL CREATE KEYSPACE
 # statemement are mutually correct from the "the least surprising behavior" concept. See comments inside
 # the test code for more details.
