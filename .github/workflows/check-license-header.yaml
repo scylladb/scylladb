@@ -14,6 +14,8 @@ jobs:
   check-license-headers:
     name: Check License Headers
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -28,6 +30,7 @@ jobs:
           echo "files=$(git diff --name-only --diff-filter=A ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')" >> $GITHUB_OUTPUT
 
       - name: Check license headers
+        if: steps.changed-files.outputs.files != ''
         run: |
           .github/scripts/check-license.py \
             --files ${{ steps.changed-files.outputs.files }} \
