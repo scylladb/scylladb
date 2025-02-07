@@ -220,8 +220,7 @@ installconfig() {
 }
 
 check_usermode_support() {
-    user=$(systemctl --help|grep -e '--user')
-    [ -n "$user" ]
+    systemctl --help | grep -q -e '--user'
 }
 
 . /etc/os-release
