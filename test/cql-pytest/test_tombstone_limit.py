@@ -357,3 +357,60 @@ def test_unpaged_query(cql, table, lowered_tombstone_limit, driver_bug_1):
     statement = SimpleStatement(f"SELECT * FROM {table} WHERE pk = {pk}", fetch_size=None)
     rows = list(cql.execute(statement))
     assert len(rows) == 4
+
+
+def test_filtering_query_tombstone_suffix_last_position(cql, test_keyspace, lowered_tombstone_limit):
+    """
+    Check that when filtering drops rows in a short page due to tombstone suffix,
+    the tombstone-suffix is not re-requested on the next page.
+    """
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+        insert_row_id = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
+        delete_row_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ? AND ck = ?")
+
+        pk = 0
+
+        page1 = []
+        for ck in range(0, 10):
+            row = (pk, ck, ck % 2)
+            cql.execute(insert_row_id, row)
+            if row[2] == 0:
+                page1.append(row)
+
+        for ck in range(10, 25):
+            cql.execute(delete_row_id, (pk, ck))
+
+        page2 = []
+        for ck in range(25, 30):
+            row = (pk, ck, ck % 2)
+            cql.execute(insert_row_id, row)
+            if row[2] == 0:
+                page2.append(row)
+
+        statement = SimpleStatement(f"SELECT * FROM {table} WHERE pk = {pk} AND v = 0 ALLOW FILTERING", fetch_size=20)
+
+        res = cql.execute(statement, trace=True)
+
+        def to_list(current_rows):
+            return list(map(lambda r: tuple(r._asdict().values()), current_rows))
+
+        assert to_list(res.current_rows) == page1
+        assert res.has_more_pages
+
+        res.fetch_next_page()
+
+        assert to_list(res.current_rows)== page2
+        assert not res.has_more_pages
+
+        tracing = res.get_all_query_traces(max_wait_sec_per=900)
+
+        assert len(tracing) == 2
+
+        found_reuse = False
+        found_drop = False
+        for event in tracing[1].events:
+            found_reuse = found_reuse or "Reusing querier" == event.description
+            found_drop = found_drop or "Dropping querier because" in event.description
+
+        assert found_reuse
+        assert not found_drop
