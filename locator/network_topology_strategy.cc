@@ -313,8 +313,16 @@ static unsigned calculate_initial_tablets_from_topology(const schema& s, const t
         unsigned rf_in_dc = 1;
 
         for (const auto& ep : dc.second) {
+<<<<<<< HEAD
             const auto* node = topo.find_node(ep);
             if (node != nullptr) {
+||||||| parent of 3bb19e9ac9 (locator: network_topology_startegy: Ignore leaving nodes when computing capacity for new tables)
+            const auto* node = tm->get_topology().find_node(ep);
+            if (node != nullptr) {
+=======
+            const auto* node = tm->get_topology().find_node(ep);
+            if (node != nullptr && node->is_normal()) {
+>>>>>>> 3bb19e9ac9 (locator: network_topology_startegy: Ignore leaving nodes when computing capacity for new tables)
                 shards_in_dc += node->get_shard_count();
             }
         }
