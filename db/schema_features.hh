@@ -30,6 +30,9 @@ enum class schema_feature {
 
     // Unused.  Defined for backward compatibility only
     IN_MEMORY_TABLES,
+
+    // Per-table tablet options
+    TABLET_OPTIONS,
 };
 
 using schema_features = enum_set<super_enum<schema_feature,
@@ -39,7 +42,8 @@ using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::SCYLLA_AGGREGATES,
     schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY,
     schema_feature::GROUP0_SCHEMA_VERSIONING,
-    schema_feature::IN_MEMORY_TABLES
+    schema_feature::IN_MEMORY_TABLES,
+    schema_feature::TABLET_OPTIONS
     >>;
 
 }

@@ -8,6 +8,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
+#include "db/tablet_options.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "locator/host_id.hh"
@@ -518,7 +519,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                 "NetworkTopologyStrategy", params);
         auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(tab_awr_ptr);
-        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), 1).get();
+        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), service::default_target_tablet_size).get();
         full_ring_check(tmap, ars_ptr, stm.get());
 
         // Test reallocate_tablets after randomizing a different set of options

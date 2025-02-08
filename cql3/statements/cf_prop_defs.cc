@@ -9,6 +9,7 @@
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
+#include "cql3/statements/request_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
 #include "db/tags/extension.hh"
@@ -20,6 +21,7 @@
 #include "tombstone_gc.hh"
 #include "db/per_partition_rate_limit_extension.hh"
 #include "db/per_partition_rate_limit_options.hh"
+#include "db/tablet_options.hh"
 #include "utils/bloom_calculations.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -52,6 +54,8 @@ const sstring cf_prop_defs::COMPACTION_STRATEGY_CLASS_KEY = "class";
 
 const sstring cf_prop_defs::COMPACTION_ENABLED_KEY = "enabled";
 
+const sstring cf_prop_defs::KW_TABLETS = "tablets";
+
 schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions& exts) const {
     schema::extensions_map er;
     for (auto& p : exts.schema_extensions()) {
@@ -68,6 +72,14 @@ schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions
     return er;
 }
 
+data_dictionary::keyspace cf_prop_defs::find_keyspace(const data_dictionary::database db, std::string_view ks_name) {
+    try {
+        return db.find_keyspace(ks_name);
+    } catch (const data_dictionary::no_such_keyspace& e) {
+        throw request_validations::invalid_request("{}", e.what());
+    }
+}
+
 void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
     // Skip validation if the comapction strategy class is already set as it means we've already
     // prepared (and redoing it would set strategyClass back to null, which we don't want)
@@ -75,13 +87,15 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         return;
     }
 
+    const auto& ks = find_keyspace(db, ks_name);
+
     static std::set<sstring> keywords({
         KW_COMMENT,
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
         KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
         KW_COMPRESSION, KW_CRC_CHECK_CHANCE,  KW_ID, KW_PAXOSGRACESECONDS,
-        KW_SYNCHRONOUS_UPDATES
+        KW_SYNCHRONOUS_UPDATES, KW_TABLETS,
     });
     static std::set<sstring> obsolete_keywords({
         sstring("index_interval"),
@@ -162,6 +176,16 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     speculative_retry::from_sstring(get_string(KW_SPECULATIVE_RETRY, speculative_retry(speculative_retry::type::NONE, 0).to_sstring()));
+
+    if (auto tablet_options_map = get_tablet_options()) {
+        if (!ks.uses_tablets()) {
+            throw exceptions::configuration_exception("tablet options cannot be used when tablets are disabled for the keyspace");
+        }
+        if (!db.features().tablet_options) {
+            throw exceptions::configuration_exception("tablet options cannot be used until all nodes in the cluster enable this feature");
+        }
+        db::tablet_options::validate(*tablet_options_map);
+    }
 }
 
 std::map<sstring, sstring> cf_prop_defs::get_compaction_type_options() const {
@@ -250,6 +274,13 @@ const db::per_partition_rate_limit_options* cf_prop_defs::get_per_partition_rate
 
     auto ext = dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second);
     return &ext->get_options();
+}
+
+std::optional<db::tablet_options::map_type> cf_prop_defs::get_tablet_options() const {
+    if (auto tablet_options = get_map(KW_TABLETS)) {
+        return tablet_options.value();
+    }
+    return std::nullopt;
 }
 
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name) const {
@@ -350,6 +381,10 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
         };
 
         builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
+    }
+
+    if (auto tablet_options_opt = get_map(KW_TABLETS)) {
+        builder.set_tablet_options(std::move(*tablet_options_opt));
     }
 }
 

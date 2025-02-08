@@ -234,6 +234,31 @@ def test_desc_table(cql, test_keyspace, random_seed, has_tablets):
         finally:
             cql.execute(f"DROP TABLE {new_tbl}")
 
+# This test compares the content of `system_schema.tables` and `system_schema.columns` tables
+# when providing tablet options to CREATE TABLE.
+def test_desc_table_with_tablet_options(cql, test_keyspace, random_seed, has_tablets):
+    if has_tablets:  # issue #18180
+        global counter_table_chance
+        counter_table_chance = 0
+    tablet_options = {
+        'min_tablet_count': '100',
+        'min_per_shard_tablet_count': '0.8',   # Verify that a floating point value works for this hint
+        'expected_data_size_in_gb': '50',
+    }
+    with new_random_table(cql, test_keyspace, tablet_options=tablet_options) as tbl:
+        desc = cql.execute(f"DESC TABLE {tbl}")
+        desc_create_stmt = desc.one().create_statement
+
+        try:
+            new_tbl = f"{test_keyspace}.{unique_name()}"
+            new_create_stmt = desc_create_stmt.replace(tbl, new_tbl)
+            cql.execute(new_create_stmt)
+            new_desc_stmt = cql.execute(f"DESC TABLE {new_tbl}")
+            new_desc_create_stmt = new_desc_stmt.one().create_statement
+            assert new_desc_create_stmt == new_create_stmt
+        finally:
+            cql.execute(f"DROP TABLE {new_tbl}")
+
 # Test that `DESC TABLE {tbl}` contains appropriate create statement for table
 # This test compares the content of `system_schema.scylla_tables` tables, thus the test
 # is `scylla_only`.
@@ -1280,7 +1305,7 @@ def new_random_keyspace(cql):
 # UDTs that can be used to create the table. The function uses `new_test_table`
 # from util.py, so it can be used in a "with", as:
 #   with new_random_table(cql, test_keyspace) as table:
-def new_random_table(cql, keyspace, udts=[]):
+def new_random_table(cql, keyspace, udts=[], tablet_options={}):
     pk_n = random.randrange(1, max_pk)
     ck_n = random.randrange(max_ck)
     regular_n = random.randrange(1, max_regular)
@@ -1348,6 +1373,8 @@ def new_random_table(cql, keyspace, udts=[]):
         # Extra properties which ScyllaDB supports but Cassandra doesn't
         extras["paxos_grace_seconds"] = random.randrange(1000, 100000)
         extras["tombstone_gc"] = f"{{'mode': 'timeout', 'propagation_delay_in_seconds': '{random.randrange(100, 100000)}'}}"
+        if tablet_options:
+            extras["tablets"] = str(tablet_options)
 
     extra_options = [f"{k} = {v}" for (k, v) in extras.items()]
     extra_str = " AND ".join(extra_options)

@@ -298,9 +298,9 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         auto allocate = [&] (schema_ptr s, int rf, std::optional<int> initial_tablets) {
             replication_strategy_config_options opts;
             opts[rack1.dc] = format("{}", rf);
-            network_topology_strategy tablet_rs(replication_strategy_params(opts, initial_tablets.value_or(0)));
+            network_topology_strategy tablet_rs(replication_strategy_params(opts, initial_tablets));
             stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-                auto map = co_await tablet_rs.allocate_tablets_for_new_table(s, stm.get(), 1);
+                auto map = co_await tablet_rs.allocate_tablets_for_new_table(s, stm.get(), service::default_target_tablet_size);
                 tm.tablets().set_tablet_map(s->id(), std::move(map));
             }).get();
         };

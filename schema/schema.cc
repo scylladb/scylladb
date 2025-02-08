@@ -9,6 +9,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <map>
 #include "cql3/description.hh"
+#include "db/tablet_options.hh"
 #include "db/view/view.hh"
 #include "timestamp.hh"
 #include "utils/assert.hh"
@@ -588,6 +589,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._indices_by_name == y._raw._indices_by_name
         && x._raw._is_counter == y._raw._is_counter
         && x._raw._in_memory == y._raw._in_memory
+        && x._raw._tablet_options == y._raw._tablet_options
         ;
 }
 
@@ -675,6 +677,8 @@ table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
         feed_hash(h, name);
         feed_hash(h, ext->options_to_string());
     }
+
+    feed_hash(h, r._tablet_options);
 
     return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
@@ -844,6 +848,17 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, ",minIndexInterval={}", s._raw._min_index_interval);
     out = fmt::format_to(out, ",maxIndexInterval={}", s._raw._max_index_interval);
     out = fmt::format_to(out, ",speculativeRetry={}", s._raw._speculative_retry.to_sstring());
+    out = fmt::format_to(out, ",tablets={{");
+    if (s._raw._tablet_options) {
+        n = 0;
+        for (auto& [k, v] : *s._raw._tablet_options) {
+            if (n++) {
+                out = fmt::format_to(out, ", ");
+            }
+            out = fmt::format_to(out, "{}={}", k, v);
+        }
+    }
+    out = fmt::format_to(out, "}}");
     out = fmt::format_to(out, ",triggers=[]");
     out = fmt::format_to(out, ",isDense={}", s._raw._is_dense);
     out = fmt::format_to(out, ",in_memory={}", s._raw._in_memory);
@@ -1137,7 +1152,13 @@ std::ostream& schema::schema_properties(const schema_describe_helper& helper, st
     os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
     os << "\n    AND min_index_interval = " << min_index_interval();
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
-    
+
+    if (has_tablet_options()) {
+        os << "\n    AND tablets = {";
+        map_as_cql_param(os, tablet_options().to_map());
+        os << "}";
+    }
+
     for (auto& [type, ext] : extensions()) {
         os << "\n    AND " << type << " = " << ext->options_to_string();
     }
@@ -1622,6 +1643,22 @@ const ::tombstone_gc_options& schema::tombstone_gc_options() const {
     return default_tombstone_gc_options;
 }
 
+bool schema::has_tablet_options() const noexcept {
+    return _raw._tablet_options.has_value();
+}
+
+db::tablet_options schema::tablet_options() const {
+    return db::tablet_options(raw_tablet_options());
+}
+
+const db::tablet_options::map_type& schema::raw_tablet_options() const noexcept {
+    if (!_raw._tablet_options) {
+        static db::tablet_options::map_type no_options;
+        return no_options;
+    }
+    return *_raw._tablet_options;
+}
+
 schema_builder& schema_builder::with_cdc_options(const cdc::options& opts) {
     add_extension(cdc::cdc_extension::NAME, ::make_shared<cdc::cdc_extension>(opts));
     return *this;
@@ -1639,6 +1676,11 @@ schema_builder& schema_builder::with_per_partition_rate_limit_options(const db::
 
 schema_builder& schema_builder::set_paxos_grace_seconds(int32_t seconds) {
     add_extension(db::paxos_grace_seconds_extension::NAME, ::make_shared<db::paxos_grace_seconds_extension>(seconds));
+    return *this;
+}
+
+schema_builder& schema_builder::set_tablet_options(std::map<sstring, sstring>&& hints) {
+    _raw._tablet_options = std::move(hints);
     return *this;
 }
 

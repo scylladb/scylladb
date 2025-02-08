@@ -298,40 +298,55 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 
 //
 // Try to use as many tablets initially, so that all shards in the current topology
-// are covered with at least one tablet. In other words, the value is
+// are covered with at least `min_per_shard_tablet_count` tablets. In other words, the value is
 //
 //    initial_tablets = max(nr_shards_in(dc) / RF_in(dc) for dc in datacenters)
 //
 
-static unsigned calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf) {
+static unsigned calculate_initial_tablets_from_topology(const schema& s, token_metadata_ptr tm, const std::unordered_map<sstring, size_t>& rf, double min_per_shard_tablet_count = 0) {
     unsigned initial_tablets = std::numeric_limits<unsigned>::min();
-    for (const auto& dc : tm->get_datacenter_token_owners()) {
-        unsigned shards_in_dc = 0;
-        unsigned rf_in_dc = 1;
-
-        for (const auto& ep : dc.second) {
-            const auto* node = tm->get_topology().find_node(ep);
-            if (node != nullptr && node->is_normal()) {
-                shards_in_dc += node->get_shard_count();
-            }
+    std::unordered_map<sstring, unsigned> shards_per_dc_map;
+    tm->for_each_token_owner([&] (const node& node) {
+        if (node.is_normal()) {
+            shards_per_dc_map[node.dc_rack().dc] += node.get_shard_count();
         }
-
-        if (auto it = rf.find(dc.first); it != rf.end()) {
-            rf_in_dc = it->second;
+    });
+    for (const auto& [dc, rf_in_dc] : rf) {
+        if (!rf_in_dc) {
+            continue;
         }
-
-        unsigned tablets_in_dc = rf_in_dc > 0 ? (shards_in_dc + rf_in_dc - 1) / rf_in_dc : 0;
+        unsigned shards_in_dc = shards_per_dc_map[dc];
+        unsigned tablets_in_dc = (shards_in_dc + rf_in_dc - 1) / rf_in_dc;
+        if (min_per_shard_tablet_count) {
+            auto min_tablets_in_dc = std::ceil((double)(min_per_shard_tablet_count * shards_in_dc) / rf_in_dc);
+            tablets_in_dc = std::max<unsigned>(tablets_in_dc, min_tablets_in_dc);
+        }
         initial_tablets = std::max(initial_tablets, tablets_in_dc);
     }
     rslogger.debug("Estimated {} initial tablets for table {}.{}", initial_tablets, s.ks_name(), s.cf_name());
     return initial_tablets;
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, unsigned initial_scale) const {
-    auto tablet_count = get_initial_tablets();
-    if (tablet_count == 0) {
-        tablet_count = calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor) * initial_scale;
+size_t network_topology_strategy::calculate_min_tablet_count(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const {
+    size_t tablet_count = get_initial_tablets();
+    const auto& tablet_options = s->tablet_options();
+    if (tablet_options.min_tablet_count) {
+        tablet_count = std::max<size_t>(tablet_count, tablet_options.min_tablet_count.value());
     }
+    if (tablet_options.expected_data_size_in_gb) {
+        tablet_count = std::max<size_t>(tablet_count, (tablet_options.expected_data_size_in_gb.value() << 30) / target_tablet_size);
+    }
+    if (tablet_options.min_per_shard_tablet_count) {
+        tablet_count = std::max<size_t>(tablet_count, calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor, tablet_options.min_per_shard_tablet_count.value()));
+    }
+    if (tablet_count == 0) {
+        tablet_count = calculate_initial_tablets_from_topology(*s, tm, _dc_rep_factor) * initial_scale.value_or(1);
+    }
+    return tablet_count;
+}
+
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const {
+    size_t tablet_count = calculate_min_tablet_count(s, tm, target_tablet_size, initial_scale);
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
         rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
