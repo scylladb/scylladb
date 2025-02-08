@@ -1,5 +1,7 @@
 #!/bin/bash -ue
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 case "${CLANG_BUILD}" in
     "SKIP")
         echo "CLANG_BUILD: ${CLANG_BUILD}"

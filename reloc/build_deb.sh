@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 . /etc/os-release
 print_usage() {
     echo "build_deb.sh -target <codename> --dist --rebuild-dep --reloc-pkg build/release/scylla-package.tar.gz"

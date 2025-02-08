@@ -1,10 +1,12 @@
-#!/bin/bash
+#!/bin/bash -e
 #
 # Copyright (C) 2024-present ScyllaDB
 #
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
 
 SCRIPT_PATH=$(dirname $(realpath "$0"))
 

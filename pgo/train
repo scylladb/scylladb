@@ -1,2 +1,5 @@
 #!/bin/bash -xue
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 exec python3 -u "$(dirname "$(realpath "$0")")"/pgo.py train_full "$@"

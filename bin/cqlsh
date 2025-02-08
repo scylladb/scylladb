@@ -1,7 +1,9 @@
-#!/bin/bash
+#!/bin/bash -e
 
 # Copyright (C) 2023-present ScyllaDB
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
 
 here=$(dirname "$0")
 exec "$here/../tools/cqlsh/bin/cqlsh.py" "$@"

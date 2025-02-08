@@ -17,6 +17,8 @@
 # under the License.
 #
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 # os-release may be missing in container environment by default.
 if [ -f "/etc/os-release" ]; then
     . /etc/os-release

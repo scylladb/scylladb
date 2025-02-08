@@ -9,6 +9,8 @@
 
 set -e
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 if [ -z "$BASH_VERSION" ]; then
     echo "Unsupported shell, please run this script on bash."
     exit 1
