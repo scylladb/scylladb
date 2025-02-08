@@ -5,6 +5,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 if [ ! -e dist/offline_installer/debian/build_offline_installer.sh ]; then
     echo "run build_offline_installer.sh in top of scylla dir"
     exit 1

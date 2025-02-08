@@ -2,6 +2,8 @@
 
 set -o pipefail
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 orig="$1"
 stripped="$orig.stripped"
 debuginfo="$orig.debug"

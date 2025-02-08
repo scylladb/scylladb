@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 if ! command -v buildah > /dev/null; then
     echo install buildah 1.19.3 or later
     exit 1
