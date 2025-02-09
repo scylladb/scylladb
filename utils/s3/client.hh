@@ -20,6 +20,7 @@
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "retry_strategy.hh"
 #include "utils/exceptions.hh"
+#include "retryable_http_client.hh"
 #include "utils/s3/client_fwd.hh"
 
 using namespace seastar;
@@ -49,26 +50,6 @@ struct stats {
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 storage_io_error map_s3_client_exception(std::exception_ptr ex);
 
-class retryable_http_client {
-public:
-    retryable_http_client(std::unique_ptr<http::experimental::connection_factory>&& factory,
-                          unsigned max_conn,
-                          http::experimental::client::retry_requests should_retry,
-                          const aws::retry_strategy& retry_strategy);
-    future<> make_request(http::request req,
-                          http::experimental::client::reply_handler handle = ignore_reply,
-                          std::optional<http::reply::status_type> expected = std::nullopt,
-                          seastar::abort_source* = nullptr);
-    future<> close();
-    [[nodiscard]] const http::experimental::client& get_http_client() const { return http; };
-
-private:
-    future<> do_retryable_request(http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as = nullptr);
-
-    http::experimental::client http;
-    const aws::retry_strategy& _retry_strategy;
-};
-
 class client : public enable_shared_from_this<client> {
     class multipart_upload;
     class upload_sink_base;
@@ -96,7 +77,7 @@ class client : public enable_shared_from_this<client> {
         }
     };
     struct group_client {
-        retryable_http_client retryable_client;
+        aws::retryable_http_client retryable_client;
         io_stats read_stats;
         io_stats write_stats;
         seastar::metrics::metric_groups metrics;
