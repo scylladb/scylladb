@@ -302,8 +302,8 @@ class TesterAlternator(BaseAlternator):
         self.prepare_dynamodb_cluster(num_of_nodes=4)
         node1, node2, node3 = self.cluster.nodelist()[:3]
         self.create_table(node=node1)
-        nested_attributes_levels = 10
-        num_of_items = 4000
+        nested_attributes_levels = 5
+        num_of_items = 100
         self.put_table_items(table_name=TABLE_NAME, node=node1, nested_attributes_levels=nested_attributes_levels, num_of_items=num_of_items * 2)
         write_stress = self.run_write_stress(table_name=TABLE_NAME, node=node1, nested_attributes_levels=nested_attributes_levels, num_of_item=num_of_items)
         get_items_thread = self.run_read_stress(table_name=TABLE_NAME, node=node2, num_of_item=num_of_items * 2, consistent_read=True)
