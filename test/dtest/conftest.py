@@ -27,7 +27,7 @@ from test.topology.conftest import (
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from pytest import Config, Parser, FixtureRequest
+    from pytest import Config, Parser, FixtureRequest, Item
 
     from test.pylib.manager_client import ManagerClient
 
@@ -60,6 +60,19 @@ def pytest_configure(config: Config) -> None:
     if config.getoption("--tablets"):
         features.add("tablets")
     config.scylla_features = features
+
+
+def pytest_collection_modifyitems(config: Config, items: list[Item]) -> None:
+    for item in items:
+        item.add_marker(pytest.mark.dtest_full)
+
+    if not config.option.markexpr:
+        skip_if_not_next_gating = pytest.mark.skip(
+            "dtest: run next_gating tests only if nothing selected by markers explicitly"
+        )
+        for item in items:
+            if not item.get_closest_marker("next_gating"):
+                item.add_marker(skip_if_not_next_gating)
 
 
 @pytest.fixture(scope="function", autouse=True)
