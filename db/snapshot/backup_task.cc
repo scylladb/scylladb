@@ -18,7 +18,7 @@
 #include "db/snapshot-ctl.hh"
 #include "db/snapshot/backup_task.hh"
 #include "schema/schema_fwd.hh"
-#include "sstables/sstables.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/error_injection.hh"
 
 extern logging::logger snap_log;
@@ -27,7 +27,7 @@ namespace db::snapshot {
 
 backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
                                    snapshot_ctl& ctl,
-                                   shared_ptr<s3::client> client,
+                                   sstring endpoint,
                                    sstring bucket,
                                    sstring prefix,
                                    sstring ks,
@@ -35,7 +35,7 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
                                    bool move_files) noexcept
     : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
     , _snap_ctl(ctl)
-    , _client(std::move(client))
+    , _endpoint(std::move(endpoint))
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
     , _snapshot_dir(std::move(snapshot_dir))
@@ -66,7 +66,7 @@ tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
     return tasks::is_user_task::yes;
 }
 
-future<> backup_task_impl::upload_component(sstring name) {
+future<> backup_task_impl::upload_component(shared_ptr<s3::client> client, sstring name) {
     auto component_name = _snapshot_dir / name;
     auto destination = fmt::format("/{}/{}/{}", _bucket, _prefix, name);
     snap_log.trace("Upload {} to {}", component_name.native(), destination);
@@ -77,7 +77,7 @@ future<> backup_task_impl::upload_component(sstring name) {
     //  - s3::client::claim_memory semaphore
     //  - http::client::max_connections limitation
     try {
-        co_await _client->upload_file(component_name, destination, _progress, &_as);
+        co_await client->upload_file(component_name, destination, _progress, &_as);
     } catch (const abort_requested_exception&) {
         snap_log.info("Upload aborted per requested: {}", component_name.native());
         throw;
@@ -111,6 +111,7 @@ future<> backup_task_impl::do_backup() {
     std::exception_ptr ex;
     gate uploads;
     auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    auto cln = _snap_ctl.storage_manager().container().local().get_endpoint_client(_endpoint);
 
     for (;;) {
         std::optional<directory_entry> component_ent;
@@ -130,7 +131,7 @@ future<> backup_task_impl::do_backup() {
         // Pre-upload break point. For testing abort in actual s3 client usage.
         co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
-        std::ignore = upload_component(component_ent->name).handle_exception([&ex] (std::exception_ptr e) {
+        std::ignore = upload_component(cln, component_ent->name).handle_exception([&ex] (std::exception_ptr e) {
             // keep the first exception
             if (!ex) {
                 ex = std::move(e);
