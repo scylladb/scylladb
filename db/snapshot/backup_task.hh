@@ -20,7 +20,7 @@ namespace snapshot {
 
 class backup_task_impl : public tasks::task_manager::task::impl {
     snapshot_ctl& _snap_ctl;
-    shared_ptr<s3::client> _client;
+    sstring _endpoint;
     sstring _bucket;
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
@@ -28,7 +28,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     s3::upload_progress _progress = {};
 
     future<> do_backup();
-    future<> upload_component(sstring name);
+    future<> upload_component(shared_ptr<s3::client> client, sstring name);
 
 protected:
     virtual future<> run() override;
@@ -36,7 +36,7 @@ protected:
 public:
     backup_task_impl(tasks::task_manager::module_ptr module,
                      snapshot_ctl& ctl,
-                     shared_ptr<s3::client> cln,
+                     sstring endpoint,
                      sstring bucket,
                      sstring prefix,
                      sstring ks,
