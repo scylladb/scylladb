@@ -1104,12 +1104,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             //    token_metadata.stop().get();
             //});
 
-            api::set_server_token_metadata(ctx, token_metadata, gossiper).get();
-            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
-                api::unset_server_token_metadata(ctx).get();
-            });
-
-
             supervisor::notify("starting effective_replication_map factory");
             erm_factory.start().get();
             auto stop_erm_factory = deferred_stop(erm_factory);
@@ -1640,6 +1634,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gossiper.invoke_on_all(&gms::gossiper::stop).get();
             });
             gossiper.invoke_on_all(&gms::gossiper::start).get();
+
+            api::set_server_token_metadata(ctx, token_metadata, gossiper).get();
+            auto stop_tokens_api = defer_verbose_shutdown("token metadata API", [&ctx] {
+                api::unset_server_token_metadata(ctx).get();
+            });
 
             utils::get_local_injector().inject("stop_after_starting_gossiper",
                 [] { std::raise(SIGSTOP); });
