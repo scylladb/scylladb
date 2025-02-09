@@ -1089,7 +1089,8 @@ class TesterAlternator(BaseAlternator):
             if not self.is_found_in_slow_queries_log(name=table, log_result=create_table_results):
                 raise SlowQueriesLoggingError(f"Table {table} not found in slow-query-log full-scan")
 
-    @pytest.mark.next_gating
+    # Removed from next_gating because of https://github.com/scylladb/scylladb/issues/13152
+    # @pytest.mark.next_gating
     def test_slow_query_logging(self):
         """
         Test slow query logging for alternator queries.
