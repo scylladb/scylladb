@@ -276,6 +276,35 @@ struct fmt::formatter<service::migration_candidate> : fmt::formatter<std::string
     }
 };
 
+using table_group = utils::small_vector<table_id, 2>;
+
+struct table_grouping {
+
+    std::vector<table_group> _groups;
+    std::unordered_map<table_id, size_t> _table_to_group;
+
+    table_grouping(std::vector<std::vector<table_id>> colocated_tables) {
+        // assuming the groups are disjoint
+        _groups.reserve(colocated_tables.size());
+        for (size_t i = 0; i < colocated_tables.size(); i++) {
+            _groups.emplace_back(colocated_tables[i].begin(), colocated_tables[i].end());
+            for (auto table : _groups[i]) {
+                _table_to_group[table] = i;
+            }
+        }
+    }
+
+    const std::vector<table_group>& groups() const { return _groups; }
+
+    bool is_in_group(table_id table) {
+        return _table_to_group.contains(table);
+    }
+
+    const table_group& get_group_for_table(table_id table) {
+        return _groups.at(_table_to_group.at(table));
+    }
+};
+
 namespace std {
 
 using namespace service;
@@ -642,6 +671,7 @@ class load_balancer {
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
+    table_grouping _table_grouping;
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
 private:
@@ -723,6 +753,7 @@ public:
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
         , _skiplist(std::move(skiplist))
+        , _table_grouping({})
     { }
 
     future<migration_plan> make_plan() {
@@ -2700,6 +2731,18 @@ public:
             return std::make_pair(*_current_t2++, tablet_ids{_t2->tid});
         }
     };
+
+    void for_each_table_group(seastar::noncopyable_function<void(const table_group&)> func) {
+        for (const auto& table_ids : _table_grouping.groups()) {
+            func(table_ids);
+        }
+        for (auto&& [table, _tmap] : _tm->tablets().all_tables()) {
+            if (!_table_grouping.is_in_group(table)) {
+                table_group table_ids = { table };
+                func(table_ids);
+            }
+        }
+    }
 
     future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
