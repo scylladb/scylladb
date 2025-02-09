@@ -86,13 +86,6 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-retryable_http_client::retryable_http_client(std::unique_ptr<http::experimental::connection_factory>&& factory,
-                                             unsigned max_conn,
-                                             http::experimental::client::retry_requests should_retry,
-                                             const aws::retry_strategy& retry_strategy)
-    : http(std::move(factory), max_conn, should_retry), _retry_strategy(retry_strategy) {
-}
-
 client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
@@ -291,72 +284,6 @@ storage_io_error map_s3_client_exception(std::exception_ptr ex) {
         auto e = std::current_exception();
         return {EIO, format("S3 error ({})", e)};
     }
-}
-
-future<> retryable_http_client::do_retryable_request(http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
-    // TODO: the http client does not check abort status on entry, and if
-    // we're already aborted when we get here we will paradoxally not be
-    // interrupted, because no registration etc will be done. So do a quick
-    // preemptive check already.
-    if (as && as->abort_requested()) {
-        co_await coroutine::return_exception_ptr(as->abort_requested_exception_ptr());
-    }
-    uint32_t retries = 0;
-    std::exception_ptr e;
-    aws::aws_exception request_ex{aws::aws_error{aws::aws_error_type::OK, aws::retryable::yes}};
-    while (true) {
-        try {
-            // We need to be able to simulate a retry in s3 tests
-            if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
-                throw aws::aws_exception(aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED,
-                    "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
-            }
-
-            e = {};
-            co_return co_await (as ? http.make_request(req, handler, *as, std::nullopt) : http.make_request(req, handler, std::nullopt));
-        } catch (const aws::aws_exception& ex) {
-            e = std::current_exception();
-            request_ex = ex;
-        }
-
-        if (!_retry_strategy.should_retry(request_ex.error(), retries)) {
-            break;
-        }
-        co_await seastar::sleep(_retry_strategy.delay_before_retry(request_ex.error(), retries));
-        ++retries;
-    }
-
-    if (e) {
-        throw map_s3_client_exception(e);
-    }
-}
-
-future<> retryable_http_client::make_request(http::request req,
-                                             http::experimental::client::reply_handler handle,
-                                             std::optional<http::reply::status_type> expected,
-                                             seastar::abort_source* as) {
-    co_await do_retryable_request(
-        std::move(req), [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
-            auto payload = std::move(in);
-            auto status_class = http::reply::classify_status(rep._status);
-
-            if (status_class != http::reply::status_class::informational && status_class != http::reply::status_class::success) {
-                std::optional<aws::aws_error> possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload));
-                if (possible_error) {
-                    co_await coroutine::return_exception(aws::aws_exception(std::move(possible_error.value())));
-                }
-                co_await coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
-            }
-
-            if (rep._status != expected) {
-                co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
-            }
-            co_await handler(rep, std::move(payload));
-        }, as);
-}
-
-future<> retryable_http_client::close() {
-    return http.close();
 }
 
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
