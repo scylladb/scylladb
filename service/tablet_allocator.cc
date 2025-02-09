@@ -3095,16 +3095,43 @@ public:
             auto& tmap = *tmap_;
             uint64_t total_load = 0;
 
+            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
+                tablet_desc tdesc {tid, &ti, tmap.get_tablet_transition_info(tid)};
+
+                if (is_streaming(tdesc.transition)) {
+                    apply_load(nodes, get_migration_streaming_info(topo, ti, *tdesc.transition));
+                }
+
+                auto replicas = sorted_replicas_for_tablet_load(ti, tdesc.transition);
+
+                for (auto& replica : replicas) {
+                    if (!nodes.contains(replica.host)) {
+                        continue;
+                    }
+                    auto& node_load_info = nodes[replica.host];
+                    shard_load& shard_load_info = node_load_info.shards[replica.shard];
+                    if (shard_load_info.tablet_count == 0) {
+                        node_load_info.shards_by_load.push_back(replica.shard);
+                    }
+                    shard_load_info.tablet_count++;
+                    shard_load_info.tablet_count_per_table[table]++;
+                    node_load_info.tablet_count_per_table[table]++;
+                    total_load++;
+                }
+
+                return make_ready_future<>();
+            });
+            _tablet_count_per_table[table] = total_load;
+        }
+
+        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            auto& tmap = *tmap_;
+
             auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
                 return t ? sorted_replicas_for_tablet_load(*t->info, t->transition) : tablet_replica_set{};
             };
             auto migrating = [] (std::optional<tablet_desc> t) {
                 return t && bool(t->transition);
-            };
-            auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
-                if (t && is_streaming(t->transition)) {
-                    apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition));
-                }
             };
 
             // If a table is undergoing merge, co-located replicas of sibling tablets will be treated as a single migration candidate,
@@ -3112,9 +3139,6 @@ public:
             // sibling if either haven't finished migration yet. That's to prevent load balancer from incorrectly considering that
             // they're not co-located if only one of them completed migration.
             co_await tmap.for_each_sibling_tablets([&, table = table] (tablet_desc t1, std::optional<tablet_desc> t2) -> future<> {
-                maybe_apply_load(t1);
-                maybe_apply_load(t2);
-
                 auto t1_replicas = get_replicas(t1);
                 // If t2 is disengaged, when tablet_count == 1, t2_replicas is empty and so will have no effect
                 // when adding t1 replicas as candidates.
@@ -3133,13 +3157,6 @@ public:
                     }
                     auto& node_load_info = nodes[replica.host];
                     shard_load& shard_load_info = node_load_info.shards[replica.shard];
-                    if (shard_load_info.tablet_count == 0) {
-                        node_load_info.shards_by_load.push_back(replica.shard);
-                    }
-                    shard_load_info.tablet_count += tids.size();
-                    shard_load_info.tablet_count_per_table[table] += tids.size();
-                    node_load_info.tablet_count_per_table[table] += tids.size();
-                    total_load += tids.size();
                     if (tmap.needs_merge() && tids.size() == 2) {
                         // Exclude both sibling tablets if either haven't finished migration yet. That's to prevent balancer from
                         // un-doing the colocation.
@@ -3158,7 +3175,6 @@ public:
 
                 return make_ready_future<>();
             });
-            _tablet_count_per_table[table] = total_load;
         }
 
         if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
