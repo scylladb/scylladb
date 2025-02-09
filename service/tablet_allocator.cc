@@ -2681,6 +2681,115 @@ public:
         co_return std::move(plan);
     }
 
+    // given a vector of tablets and the sorted replicas of each tablet, and
+    // each tablet marked either as LEFT or RIGHT, groups the tablets by
+    // replica and for each replica returns two vectors - first vector of LEFT
+    // tablets and second vector of RIGHT tablets.
+    //
+    // For example:
+    //  (T,L) [A, B, F]
+    //  (T,R) [B, D, E]
+    //  (V,L) [A, C, F]
+    //  (V,R) [B, D, E]
+    //
+    // each invocation of next() returns the next replica and its LEFT and
+    // RIGHT tablets:
+    //  A [T,V] []
+    //  B [T] [T,V]
+    //  C [V] []
+    //  D [] [T,V]
+    //  E [] [T,V]
+    class tablets_by_replica_processor {
+    public:
+        enum side { LEFT, RIGHT };
+
+        struct global_tablet_id_and_side {
+            global_tablet_id tablet;
+            side sd;
+        };
+
+        using elem = std::pair<global_tablet_id_and_side, tablet_replica_set>;
+        using elem_container = std::vector<elem>;
+        using output = std::tuple<tablet_replica, std::vector<global_tablet_id>, std::vector<global_tablet_id>>;
+
+    private:
+        // iterator of the tablet replica set for a specific tablet.
+        // we have one iterator per each element of _replicas.
+        struct iter {
+            size_t replicas_idx; // index in _replicas
+            tablet_replica_set::iterator replica_it;
+        };
+
+        elem_container _replicas; // sorted
+        std::vector<iter> _current;
+
+        // order by tablet replica
+        auto cmp() {
+            return [this] (iter& it1, iter& it2) {
+                if (it1.replica_it == _replicas[it1.replicas_idx].second.end()) {
+                    return true;
+                }
+                if (it2.replica_it == _replicas[it2.replicas_idx].second.end()) {
+                    return false;
+                }
+                return *it1.replica_it > *it2.replica_it;
+            };
+        }
+
+    public:
+        tablets_by_replica_processor(elem_container replicas) : _replicas(std::move(replicas)) {
+            // initialize an iterator for each element of _replicas
+            _current.reserve(_replicas.size());
+            size_t i = 0;
+            for (auto& [_, s] : _replicas) {
+                _current.emplace_back(iter {i++, s.begin()});
+            }
+            std::make_heap(_current.begin(), _current.end(), cmp());
+        }
+
+        std::optional<output> next_replica() {
+            if (_current.empty()) {
+                return std::nullopt;
+            }
+
+            // get the next replica
+            std::pop_heap(_current.begin(), _current.end(), cmp());
+            auto cur_it = _current.back();
+            if (cur_it.replica_it == _replicas[cur_it.replicas_idx].second.end()) {
+                return std::nullopt;
+            }
+
+            tablet_replica current_replica = *cur_it.replica_it;
+            size_t cur_replica_size = 1;
+
+            // get all tablets of the current replica.
+            // invariant: (_current.begin(), _current.end() - cur_replica_size) is a valid heap.
+            while (_current.size() > cur_replica_size) {
+                std::pop_heap(_current.begin(), _current.end() - cur_replica_size, cmp());
+                auto& next_it = _current[_current.size() - cur_replica_size - 1];
+                if (next_it.replica_it == _replicas[next_it.replicas_idx].second.end()
+                        || *next_it.replica_it != current_replica) {
+                    std::push_heap(_current.begin(), _current.end() - cur_replica_size, cmp());
+                    break;
+                }
+                cur_replica_size++;
+            }
+
+            // collect all tablets of the current replica, advance the
+            // iterators to the next replica and push them back to the heap.
+            std::array<std::vector<global_tablet_id>, 2> tablets;
+            while (cur_replica_size > 0) {
+                auto& it = _current[_current.size() - cur_replica_size];
+                auto& e = _replicas[it.replicas_idx].first;
+                tablets[e.sd == LEFT ? 0 : 1].push_back(e.tablet);
+                it.replica_it++;
+                std::push_heap(_current.begin(), _current.end() - cur_replica_size + 1, cmp());
+                cur_replica_size--;
+            }
+            return std::make_tuple(current_replica, std::move(tablets[0]), std::move(tablets[1]));
+        }
+    };
+
     class sibling_tablets_replicas_processor {
         const tablet_desc _t1;
         const std::optional<tablet_desc> _t2;
