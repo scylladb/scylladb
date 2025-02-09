@@ -14,7 +14,7 @@ If you are experiencing any of the above, search to see if you have large partit
 
 Note that large partitions are detected only when they are stored in a single SSTable.
 ScyllaDB does not account for data belonging to the same logical partition, but spread across multiple SSTables, as long as any single partition in each SSTable does not cross the large partitions warning threshold.
-However, note that over time, compaction, and Size-Tiered Compaction Strategy in particular, may collect the dispersed partition data from several SSTables and store it in a single SSTable, thus crossing the large partitions threshold.
+However, note that over time, compaction may collect the dispersed partition data from several SSTables and store it in a single SSTable, thus crossing the large partitions threshold.
 
 Viewing - Find Large Partitions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

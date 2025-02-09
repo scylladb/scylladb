@@ -90,8 +90,6 @@ Use the following table as a guidelines for the minimum disk space requirements 
 ======================================  ===========  ============  
 Compaction Strategy                     Recommended  Minimum
 ======================================  ===========  ============  
-Size Tiered Compaction Strategy (STCS)  50%          70% 
---------------------------------------  -----------  ------------  
 Leveled Compaction Strategy (LCS)       50%          80% 
 --------------------------------------  -----------  ------------  
 Time-window Compaction Strategy (TWCS)  50%          70%

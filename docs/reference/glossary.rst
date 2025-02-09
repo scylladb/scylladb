@@ -8,7 +8,7 @@ Glossary
     :sorted:
 
     Bootstrap 
-      When a new node is added to a cluster, the bootstrap process ensures that the data in the cluster is automatically redistributed to the new node. A new node in this case is an empty node without system tables or data. See :ref:`bootstrap <temporary-fallback-to-stcs>`.
+      When a new node is added to a cluster, the bootstrap process ensures that the data in the cluster is automatically redistributed to the new node. A new node in this case is an empty node without system tables or data.
 
     Anti-entropy
       A state where data is in order and organized. ScyllaDB has processes in place to make sure that data is antientropic where all replicas contain the most recent data and that data is consistent between replicas. See :doc:`ScyllaDB Anti-Entropy </architecture/anti-entropy/index>`.
@@ -131,9 +131,6 @@ Glossary
       Each ScyllaDB node is internally split into *shards*, an independent thread bound to a dedicated core.
       Each shard of data is allotted CPU, RAM, persistent storage, and networking resources which it uses as efficiently as possible.
       See `ScyllaDB Shard per Core Architecture <https://www.scylladb.com/product/technology/shard-per-core-architecture/>`_ for more information.
-
-    Size-tiered compaction strategy
-      Triggers when the system has enough (four by default) similarly sized SSTables.  See :doc:`Compaction Strategies</architecture/compaction/compaction-strategies/>`.
 
     Snapshot
       Snapshots in ScyllaDB are an essential part of the backup and restore mechanism. Whereas in other databases a backup starts with creating a copy of a data file (cold backup, hot backup, shadow copy backup), in ScyllaDB the process starts with creating a table or keyspace snapshot.  See :doc:`ScyllaDB Snapshots </kb/snapshots>`.

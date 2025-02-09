@@ -41,10 +41,9 @@ Compaction strategy
 
 A compaction strategy is what determines which of the SSTables will be compacted, and when. The following compaction strategies are available and are described in greater detail below. For a matrix which compares each strategy to its workload, refer to :doc:`Compaction Strategy Matrix </architecture/compaction/compaction-strategies>`
 
-* `Size-tiered compaction strategy (STCS)`_ - (default setting) triggered when the system has enough similarly sized SSTables.
 * `Leveled compaction strategy (LCS)`_ - the system uses small, fixed-size (by default 160 MB) SSTables divided into different levels and  lowers both Read and Space Amplification. 
-* :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>` - Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers, similar to STCS size-tiers. ICS is an updated strategy meant to replace STCS. It has the same read and write amplification, but has lower space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level.
-* `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. TWCS uses STCS to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.
+* :ref:`Incremental compaction strategy (ICS) <incremental-compaction-strategy-ics>` - Uses runs of sorted, fixed size (by default 1 GB) SSTables in a similar way that LCS does, organized into size-tiers.  It has low space amplification due to the reduction of temporary space overhead is reduced to a constant manageable level.
+* `Time-window compaction strategy (TWCS)`_ - designed for time series data and puts data in time order. TWCS uses ICS to prevent accumulating  SSTables in a window not yet closed. When the window closes, TWCS works towards reducing the SSTables in a time window to one.
 
 How to Set a Compaction Strategy
 ................................
@@ -53,21 +52,6 @@ Compaction strategies are set as part of the ``CREATE`` or ``ALTER`` statement w
 
 .. caution:: Changing the parameters for compaction strategies or changing from one strategy to another (using the ``ALTER`` statement) can create issues. See `Changing Compaction Strategies or Properties`_ for more information. 
 
-.. _size-tiered-compaction-strategy-stcs:
-
-Size-tiered Compaction Strategy (STCS)
---------------------------------------
-
-The premise of ``SizeTieredCompactionStrategy`` (STCS) is to merge SSTables of approximately the same size. 
-All SSTables are put into different buckets depending on their size. 
-An SSTable is added to an existing bucket if size of the SSTable is within the parameters: :ref:`bucket_low <stcs-options>` and :ref:`bucket_high <stcs-options>`, which is based on calculating the current average size of the SSTables already in the bucket. 
-
-This will create several buckets and when the threshold number of tables(``min_threshold``) within a bucket is reached, the tables in that bucket are compacted.  
-Following the compaction, the tables are merged, resulting in one larger SSTable. As time progresses and several large SSTables have accumulated, they will be merged to form one even-larger SSTable and so on.
-
-This means that the system has several size tiers/buckets (small SSTables, large SSTables, even-larger SSTables) and in each tier, there is roughly the same number of SSTables. When one tier is full (the threshold has been reached), the system merges all its tables to create one SSTable which falls roughly  into the next size tier. 
-
-.. image:: compaction-size-tiered.png
 
 .. _leveled-compaction-strategy-lcs:
 
@@ -104,25 +88,12 @@ The compaction method works as follows:
    -  As before, compact the 1 SSTable from Level 1 and the 12 SSTables from Level 2 and create new SSTables in Level 2 (and delete the 1+12 original SSTables).
    -  If after this compaction of Level 1 into Level 2, there are excess SSTables in Level 2 (as Level 2 can only take 100 tables), merge them into Level 3.
 
-.. _temporary-fallback-to-stcs:
-
-Temporary Fallback to STCS
-..........................
-
-When new data is written very quickly, the Leveled Compaction strategy may be temporarily unable to keep up with the demand. This can result in an accumulation of a large number of SSTables in L0 which in turn create very slow reads as all read requests read from all SSTables in L0. So as an emergency measure, when the number of SSTables in L0 grows to 32, LCS falls back to STCS to quickly reduce the number of SSTables in L0. Eventually, LCS will move this data again to fixed-sized SSTables in higher levels.
-
-Likewise, when :term:`bootstrapping<Bootstrap>` a new node, SSTables are streamed from other nodes. The level of the remote SSTable is kept to avoid many compactions until after the bootstrap is done. During the bootstrap, the new node receives regular write requests while it is streaming the data from the remote node. Just like any other write, these writes are flushed to L0. If ScyllaDB did an LCS compaction on these L0 SSTables and created SSTables in higher level, this could have blocked the remote SSTables from going to the correct level (remember that SSTables in a run must not have overlapping key ranges). To remedy this from happening, ScyllaDB compacts the tables using STCS only in L0 until the bootstrap process is complete. Once done, all resumes as normal under LCS.
-
 .. _incremental-compaction-strategy-ics:
 
 Incremental Compaction Strategy (ICS)
 -------------------------------------
-
-.. versionadded:: 2019.1.4
-
-One of the issues with Size-tiered compaction is that it needs temporary space because SSTables are not removed until they are fully compacted. ICS takes a different approach and splits each large SSTable into a run of sorted, fixed-size (by default 1 GB) SSTables (a.k.a. fragments) in the same way that LCS does, except it treats the entire run and not the individual SSTables as the sizing file for STCS. As the run-fragments are small, the SSTables compact quickly, allowing individual SSTables to be removed as soon as they are compacted.  This approach uses low amounts of memory and temporary disk space.
-
-ICS uses the same philosophy as STCS, where the SSTables are sorted in buckets according to their size. However, unlike STCS, ICS compaction uses SSTable runs as input, and produces a new run as output. It doesn't matter if a run is composed of only one fragment that could have come from STCS migration. From an incremental compaction perspective, everything is a run.
+ICS merges SSTables of approximately the same size.
+It splits each large SSTable into a run of sorted, fixed-size (by default 1 GB) SSTables (a.k.a. fragments) in the same way that LCS does, except it treats the entire run and not the individual SSTables as the sizing file. As the run-fragments are small, the SSTables compact quickly, allowing individual SSTables to be removed as soon as they are compacted.  This approach uses low amounts of memory and temporary disk space.
 
 The strategy works as follows:
 
@@ -151,15 +122,6 @@ The strategy works as follows:
 
 .. image:: ics-incremental-compaction.png
 
-Incremental compaction as a solution for temporary space overhead in STCS
-.........................................................................
-
-We fixed the temporary space overhead on STCS by applying the incremental compaction approach to it, which resulted in the creation of Incremental Compaction Strategy (ICS). The compacted SSTables, that become increasingly larger over time with STCS, are replaced with sorted runs of SSTable fragments, together called “SSTable runs” – which is a concept borrowed from Leveled Compaction Strategy (LCS).
-
-Each fragment is a roughly fixed size (aligned to partition boundaries) SSTable and it holds a unique range of keys, a portion of the whole SSTable run. Note that as the SSTable-runs in ICS hold exactly the same data as the corresponding SSTables created by STCS, they become increasingly longer over time (holding more fragments), in the same way that SSTables grow in size with STCS, yet the ICS SSTable fragments’ size remains the same.
-
-For example, when compacting two SSTables (or SSTable runs) holding 7GB each: instead of writing up to 14GB into a single SSTable file, we’ll break the output SSTable into a run of 14 x 1GB fragments (fragment size is 1GB by default).
-
 .. image:: compaction-incremental.png
 
 .. _time-window-compactionstrategy-twcs:
@@ -167,14 +129,14 @@ For example, when compacting two SSTables (or SSTable runs) holding 7GB each: in
 Time-window Compaction Strategy (TWCS)
 --------------------------------------
 
-Time-Window Compaction Strategy is designed for handling time series workloads. It compacts SSTables within each time window using `Size-tiered Compaction Strategy (STCS)`_. SSTables from different time windows are never compacted together.
+Time-Window Compaction Strategy is designed for handling time series workloads. It compacts SSTables within each time window. SSTables from different time windows are never compacted together.
 
 .. include:: /rst_include/warning-ttl-twcs.rst
 
 The strategy works as follows:
 
 1. A time window is configured. The window is determined by the compaction window size :ref:`compaction_window_size <twcs-options>`  and the time unit (:ref:`compaction_window_unit <twcs-options>`).
-2. SSTables created within the time window are compacted using `Size-tiered Compaction Strategy (STCS)`_.
+2. SSTables created within the time window are compacted.
 3. Once a time window ends, take all SSTables which were created during the time window and compact the data into one SSTable.
 4. The final resulting SSTable is never compacted with other time-windows’ SSTables.
 
@@ -224,7 +186,3 @@ References
 * :doc:`How to Choose a Compaction Strategy </architecture/compaction/compaction-strategies>`.
 
 * `Blog: ScyllaDB’s Compaction Strategies Series: Write Amplification in Leveled Compaction <https://www.scylladb.com/2018/01/31/compaction-series-leveled-compaction/>`_
-
-* `Blog: ScyllaDB’s Compaction Strategies Series: Space Amplification in Size-Tiered Compaction <https://www.scylladb.com/2018/01/17/compaction-series-space-amplification/>`_
-
-* Size Tiered: `Shrikant Bang’s Notes <https://shrikantbang.wordpress.com/2014/04/22/size-tiered-compaction-strategy-in-apache-cassandra/>`_ 

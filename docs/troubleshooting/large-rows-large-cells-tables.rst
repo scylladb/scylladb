@@ -128,7 +128,7 @@ Large rows and large cells are stored in system tables with the following schema
       AND bloom_filter_fp_chance = 0.01
       AND caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
       AND comment = 'rows larger than specified threshold'
-      AND compaction = {'class': 'SizeTieredCompactionStrategy'}
+      AND compaction = {'class': 'IncrementalCompactionStrategy'}
       AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}
       AND crc_check_chance = 1.0
       AND default_time_to_live = 0
@@ -153,7 +153,7 @@ Large rows and large cells are stored in system tables with the following schema
       AND bloom_filter_fp_chance = 0.01
       AND caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
       AND comment = 'cells larger than specified threshold'
-      AND compaction = {'class': 'SizeTieredCompactionStrategy'}
+      AND compaction = {'class': 'IncrementalCompactionStrategy'}
       AND compression = {'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}
       AND crc_check_chance = 1.0
       AND default_time_to_live = 0

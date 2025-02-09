@@ -26,7 +26,7 @@ Procedure
        player_jersy_number int,
        player_position text,
        team text
-   ) AND compaction = {'class': 'SizeTieredCompactionStrategy'};
+   ) AND compaction = {'class': 'IncrementalCompactionStrategy'};
      
 2. Change the compaction strategy to a new one. If you are unsure of which strategy to use, refer to :ref:`Choose a Compaction Strategy <which-strategy-is-best>` for more information. 
 
