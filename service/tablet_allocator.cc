@@ -153,11 +153,11 @@ struct migration_badness {
     bool operator<=>(const migration_badness& other) const = default;
 };
 
-struct colocated_tablets {
+struct sibling_tablets {
     global_tablet_id left_tablet;
     global_tablet_id right_tablet;
 
-    auto operator<=>(const colocated_tablets&) const = default;
+    auto operator<=>(const sibling_tablets&) const = default;
 };
 
 // Represents either a single tablet replica or co-located replicas of sibling
@@ -166,13 +166,13 @@ struct colocated_tablets {
 // the balancer will work to preserve the co-location by migrating those replicas
 // to same destination.
 struct migration_tablet_set {
-    std::variant<global_tablet_id, colocated_tablets> tablet_s;
+    std::variant<global_tablet_id, sibling_tablets> tablet_s;
 
     table_id table() const {
         return std::visit(
             overloaded_functor{
                 [](global_tablet_id t) { return t.table; },
-                [](colocated_tablets t) { return t.left_tablet.table; },
+                [](sibling_tablets t) { return t.left_tablet.table; },
             },
             tablet_s);
     }
@@ -184,15 +184,15 @@ struct migration_tablet_set {
             overloaded_functor{
                 [](global_tablet_id t) {
                     return tablet_small_vector{t}; },
-                [](colocated_tablets t) {
+                [](sibling_tablets t) {
                     return tablet_small_vector{t.left_tablet, t.right_tablet};
                 },
             },
             tablet_s);
     }
 
-    bool colocated() const {
-        return std::holds_alternative<colocated_tablets>(tablet_s);
+    bool siblings() const {
+        return std::holds_alternative<sibling_tablets>(tablet_s);
     }
 
     auto operator<=>(const migration_tablet_set&) const = default;
@@ -219,8 +219,8 @@ template<>
 struct fmt::formatter<service::migration_tablet_set> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::migration_tablet_set& tablet_set, FormatContext& ctx) const {
-        if (tablet_set.colocated()) {
-            return fmt::format_to(ctx.out(), "{{colocated: {}}}", tablet_set.tablets());
+        if (tablet_set.siblings()) {
+            return fmt::format_to(ctx.out(), "{{siblings: {}}}", tablet_set.tablets());
         }
         return fmt::format_to(ctx.out(), "{}", tablet_set.tablets().front());
     }
@@ -245,8 +245,8 @@ namespace std {
 using namespace service;
 
 template <>
-struct hash<colocated_tablets> {
-    size_t operator()(const colocated_tablets& id) const {
+struct hash<sibling_tablets> {
+    size_t operator()(const sibling_tablets& id) const {
         return utils::hash_combine(std::hash<global_tablet_id>()(id.left_tablet),
                                    std::hash<global_tablet_id>()(id.right_tablet));
     }
@@ -1676,7 +1676,7 @@ public:
         }
         auto left_sibling = global_tablet_id{tablet.table, siblings->first};
         auto right_sibling = global_tablet_id{tablet.table, siblings->second};
-        erase_candidate(shard_info, migration_tablet_set{colocated_tablets{left_sibling, right_sibling}});
+        erase_candidate(shard_info, migration_tablet_set{sibling_tablets{left_sibling, right_sibling}});
     }
 
     void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
@@ -2900,7 +2900,7 @@ public:
                         // Exclude both sibling tablets if either haven't finished migration yet. That's to prevent balancer from
                         // un-doing the colocation.
                         if (!migrating(t1) && !migrating(t2)) {
-                            auto candidate = colocated_tablets{global_tablet_id{table, t1.tid}, global_tablet_id{table, t2->tid}};
+                            auto candidate = sibling_tablets{global_tablet_id{table, t1.tid}, global_tablet_id{table, t2->tid}};
                             add_candidate(shard_load_info, migration_tablet_set{std::move(candidate)});
                         }
                     } else {
