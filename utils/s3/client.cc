@@ -198,9 +198,49 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
     return get_units(_memory, size);
 }
 
+[[noreturn]] void map_s3_client_exception(std::exception_ptr ex) {
+    seastar::memory::scoped_critical_alloc_section alloc;
+
+    try {
+        std::rethrow_exception(std::move(ex));
+    } catch (const aws::aws_exception& e) {
+        int error_code;
+        switch (e.error().get_error_type()) {
+        case aws::aws_error_type::HTTP_NOT_FOUND:
+        case aws::aws_error_type::RESOURCE_NOT_FOUND:
+        case aws::aws_error_type::NO_SUCH_BUCKET:
+        case aws::aws_error_type::NO_SUCH_KEY:
+        case aws::aws_error_type::NO_SUCH_UPLOAD:
+            error_code = ENOENT;
+            break;
+        case aws::aws_error_type::HTTP_FORBIDDEN:
+        case aws::aws_error_type::HTTP_UNAUTHORIZED:
+        case aws::aws_error_type::ACCESS_DENIED:
+            error_code = EACCES;
+            break;
+        default:
+            error_code = EIO;
+        }
+        throw storage_io_error{error_code, format("S3 request failed. Code: {}. Reason: {}", e.error().get_error_type(), e.what())};
+    } catch (const httpd::unexpected_status_error& e) {
+        auto status = e.status();
+
+        if (http::reply::classify_status(status) == http::reply::status_class::redirection || status == http::reply::status_type::not_found) {
+            throw storage_io_error {ENOENT, format("S3 object doesn't exist ({})", status)};
+        }
+        if (status == http::reply::status_type::forbidden || status == http::reply::status_type::unauthorized) {
+            throw storage_io_error {EACCES, format("S3 access denied ({})", status)};
+        }
+
+        throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
+    } catch (...) {
+        auto e = std::current_exception();
+        throw storage_io_error {EIO, format("S3 error ({})", e)};
+    }
+}
+
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-        : retryable_client(std::move(f), max_conn, http::experimental::client::retry_requests::yes, retry_strategy)
-{
+    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::yes, retry_strategy) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {

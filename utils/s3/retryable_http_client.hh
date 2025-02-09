@@ -14,14 +14,19 @@ namespace aws {
 
 class retryable_http_client {
 public:
+    using error_handler = std::function<void(std::exception_ptr)>;
+
     retryable_http_client(std::unique_ptr<seastar::http::experimental::connection_factory>&& factory,
                           unsigned max_conn,
+                          error_handler error_func,
                           seastar::http::experimental::client::retry_requests should_retry,
-                          const aws::retry_strategy& retry_strategy);
+                          const retry_strategy& retry_strategy);
     seastar::future<> make_request(seastar::http::request req,
                                    seastar::http::experimental::client::reply_handler handle,
                                    std::optional<seastar::http::reply::status_type> expected = std::nullopt,
-                                   seastar::abort_source* = nullptr);
+                                   seastar::abort_source* as = nullptr);
+    seastar::future<>
+    make_request(seastar::http::request req, std::optional<seastar::http::reply::status_type> expected = std::nullopt, seastar::abort_source* as = nullptr);
     seastar::future<> close();
     [[nodiscard]] const seastar::http::experimental::client& get_http_client() const { return http; };
 
@@ -30,6 +35,8 @@ private:
     do_retryable_request(seastar::http::request req, seastar::http::experimental::client::reply_handler handler, seastar::abort_source* as = nullptr);
 
     seastar::http::experimental::client http;
-    const aws::retry_strategy& _retry_strategy;
+    const retry_strategy& _retry_strategy;
+    error_handler _error_handler;
 };
+
 } // namespace aws
