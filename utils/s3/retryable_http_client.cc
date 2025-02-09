@@ -56,14 +56,24 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
     }
 }
 
+future<> retryable_http_client::make_request(http::request req, std::optional<http::reply::status_type> expected, abort_source* as) {
+    co_return co_await make_request(
+        std::move(req),
+        [](const http::reply& rep, input_stream<char>&& in_) -> future<> {
+            auto in = std::move(in_);
+            co_await util::skip_entire_stream(in);
+        },
+        expected,
+        as);
+}
+
 future<> retryable_http_client::make_request(http::request req,
                                              http::experimental::client::reply_handler handle,
                                              std::optional<http::reply::status_type> expected,
                                              seastar::abort_source* as) {
     co_await do_retryable_request(
         std::move(req),
-        [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep,
-                                                                                                  input_stream<char>&& in) mutable -> future<> {
+        [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep, input_stream<char>&& in) -> future<> {
             auto payload = std::move(in);
             auto status_class = http::reply::classify_status(rep._status);
 

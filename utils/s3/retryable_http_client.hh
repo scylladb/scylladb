@@ -24,7 +24,9 @@ public:
     seastar::future<> make_request(seastar::http::request req,
                                    seastar::http::experimental::client::reply_handler handle,
                                    std::optional<seastar::http::reply::status_type> expected = std::nullopt,
-                                   seastar::abort_source* = nullptr);
+                                   seastar::abort_source* as = nullptr);
+    seastar::future<>
+    make_request(seastar::http::request req, std::optional<seastar::http::reply::status_type> expected = std::nullopt, seastar::abort_source* as = nullptr);
     seastar::future<> close();
     [[nodiscard]] const seastar::http::experimental::client& get_http_client() const { return http; };
 
