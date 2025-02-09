@@ -88,6 +88,8 @@ fedora_packages=(
     python3-unidiff
     python3-humanfriendly
     python3-jinja2
+    python3-deepdiff
+    python3-cryptography
     dnf-utils
     pigz
     net-tools
@@ -159,6 +161,8 @@ declare -A pip_packages=(
     [allure-pytest]=
     [pytest-xdist]=
     [pykmip]=
+    [universalasync]=""
+    [boto3-stubs[dynamodb]]=""
 )
 
 pip_symlinks=(
