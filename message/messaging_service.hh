@@ -440,11 +440,6 @@ public:
     void register_repair_get_full_row_hashes_with_rpc_stream(std::function<future<rpc::sink<repair_hash_with_cmd>> (const rpc::client_info& cinfo, uint32_t repair_meta_id, rpc::source<repair_stream_cmd> source, rpc::optional<shard_id> dst_cpu_id_opt)>&& func);
     future<> unregister_repair_get_full_row_hashes_with_rpc_stream();
 
-    // Wrapper for TASKS_GET_CHILDREN
-    void register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func);
-    future<> unregister_tasks_get_children();
-    future<tasks::get_children_response> send_tasks_get_children(msg_addr id, tasks::get_children_request);
-
     void foreach_server_connection_stats(std::function<void(const rpc::client_info&, const rpc::stats&)>&& f) const;
 
     // Drops all connections from the given host and prevents further communication from it to happen.

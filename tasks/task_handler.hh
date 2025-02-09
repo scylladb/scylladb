@@ -15,7 +15,7 @@
 namespace tasks {
 
 struct task_identity {
-    gms::inet_address node;
+    locator::host_id host_id;
     task_id task_id;
 };
 

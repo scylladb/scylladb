@@ -14,6 +14,7 @@
 #include "api/api.hh"
 #include "api/api-doc/task_manager.json.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "tasks/task_handler.hh"
 #include "utils/overloaded_functor.hh"
 
@@ -32,12 +33,16 @@ static ::tm get_time(db_clock::time_point tp) {
     return t;
 }
 
-tm::task_status make_status(tasks::task_status status) {
+tm::task_status make_status(tasks::task_status status, sharded<gms::gossiper>& gossiper) {
     std::vector<tm::task_identity> tis{status.children.size()};
-    std::ranges::transform(status.children, tis.begin(), [] (const auto& child) {
+    std::ranges::transform(status.children, tis.begin(), [&gossiper] (const auto& child) {
         tm::task_identity ident;
+        gms::inet_address addr{};
+        if (gossiper.local_is_initialized()) {
+            addr = gossiper.local().get_address_map().find(child.host_id).value_or(gms::inet_address{});
+        }
         ident.task_id = child.task_id.to_sstring();
-        ident.node = fmt::format("{}", child.node);
+        ident.node = fmt::format("{}", addr);
         return ident;
     });
 
@@ -81,7 +86,7 @@ tm::task_stats make_stats(tasks::task_stats stats) {
     return res;
 }
 
-void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm, db::config& cfg) {
+void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>& tm, db::config& cfg, sharded<gms::gossiper>& gossiper) {
     tm::get_modules.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         std::vector<std::string> v = tm.local().get_modules() | std::views::keys | std::ranges::to<std::vector>();
         co_return v;
@@ -139,7 +144,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         co_return std::move(f);
     });
 
-    tm::get_task_status.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tm::get_task_status.set(r, [&tm, &gossiper] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         tasks::task_status status;
         try {
@@ -148,7 +153,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         } catch (tasks::task_manager::task_not_found& e) {
             throw bad_param_exception(e.what());
         }
-        co_return make_status(status);
+        co_return make_status(status, gossiper);
     });
 
     tm::abort_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
@@ -164,7 +169,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         co_return json_void();
     });
 
-    tm::wait_task.set(r, [&tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tm::wait_task.set(r, [&tm, &gossiper] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         tasks::task_status status;
         std::optional<std::chrono::seconds> timeout = std::nullopt;
@@ -179,24 +184,24 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         } catch (timed_out_error& e) {
             throw httpd::base_exception{e.what(), http::reply::status_type::request_timeout};
         }
-        co_return make_status(status);
+        co_return make_status(status, gossiper);
     });
 
-    tm::get_task_status_recursively.set(r, [&_tm = tm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    tm::get_task_status_recursively.set(r, [&_tm = tm, &gossiper] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& tm = _tm;
         auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         try {
             auto task = tasks::task_handler{tm.local(), id};
             auto res = co_await task.get_status_recursively(true);
 
-            std::function<future<>(output_stream<char>&&)> f = [r = std::move(res)] (output_stream<char>&& os) -> future<> {
+            std::function<future<>(output_stream<char>&&)> f = [r = std::move(res), &gossiper] (output_stream<char>&& os) -> future<> {
                 auto s = std::move(os);
                 auto res = std::move(r);
                 co_await s.write("[");
                 std::string delim = "";
                 for (auto& status: res) {
                     co_await s.write(std::exchange(delim, ", "));
-                    co_await formatter::write(s, make_status(status));
+                    co_await formatter::write(s, make_status(status, gossiper));
                 }
                 co_await s.write("]");
                 co_await s.close();

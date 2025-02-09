@@ -67,7 +67,7 @@ private:
 public:
     task_manager_module(tasks::task_manager& tm, service::storage_service& ss) noexcept;
 
-    virtual std::set<gms::inet_address> get_nodes() const override;
+    virtual std::set<locator::host_id> get_nodes() const override;
 };
 
 }

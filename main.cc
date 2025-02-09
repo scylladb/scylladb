@@ -1140,7 +1140,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 return tasks::task_manager::config {
                     .task_ttl = cfg->task_ttl_seconds,
                     .user_task_ttl = cfg->user_task_ttl_seconds,
-                    .broadcast_address = broadcast_addr
                 };
             });
             task_manager.start(std::move(get_tm_cfg), std::ref(stop_signal.as_sharded_abort_source())).get();
@@ -1148,7 +1147,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 task_manager.stop().get();
             });
 
-            api::set_server_task_manager(ctx, task_manager, cfg).get();
+            api::set_server_task_manager(ctx, task_manager, cfg, gossiper).get();
             auto stop_tm_api = defer_verbose_shutdown("task manager API", [&ctx] {
                 api::unset_server_task_manager(ctx).get();
             });
@@ -1573,6 +1572,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // Task manager's messaging handlers need to be set like this because of dependency chain:
             // messaging -(needs)-> sys_ks -> db -> cm -> task_manager.
             task_manager.invoke_on_all([&] (auto& tm) {
+                tm.set_host_id(host_id);
                 tm.init_ms_handlers(messaging.local());
             }).get();
             auto uninit_tm_ms_handlers = defer([&task_manager] () {

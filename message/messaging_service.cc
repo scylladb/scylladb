@@ -85,6 +85,7 @@
 #include "idl/storage_service.dist.hh"
 #include "idl/join_node.dist.hh"
 #include "idl/migration_manager.dist.hh"
+#include "idl/tasks.dist.hh"
 #include "message/rpc_protocol_impl.hh"
 #include "idl/consistency_level.dist.impl.hh"
 #include "idl/tracing.dist.impl.hh"
@@ -128,6 +129,7 @@
 #include "idl/mapreduce_request.dist.impl.hh"
 #include "idl/storage_service.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
+#include "idl/tasks.dist.impl.hh"
 #include "gms/feature_service.hh"
 
 namespace netw {
@@ -1426,17 +1428,6 @@ unsigned messaging_service::add_statement_tenant(sstring tenant_name, scheduling
     _dynamic_tenants_to_client_idx.insert_or_assign(tenant_name, idx);
     undo.cancel();
     return idx;
-}
-
-// Wrapper for TASKS_CHILDREN_REQUEST
-void messaging_service::register_tasks_get_children(std::function<future<tasks::get_children_response> (const rpc::client_info& cinfo, tasks::get_children_request)>&& func) {
-    register_handler(this, messaging_verb::TASKS_GET_CHILDREN, std::move(func));
-}
-future<> messaging_service::unregister_tasks_get_children() {
-    return unregister_handler(messaging_verb::TASKS_GET_CHILDREN);
-}
-future<tasks::get_children_response> messaging_service::send_tasks_get_children(msg_addr id, tasks::get_children_request req) {
-    return send_message<future<tasks::get_children_response>>(this, messaging_verb::TASKS_GET_CHILDREN, std::move(id), std::move(req));
 }
 
 } // namespace net

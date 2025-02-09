@@ -317,13 +317,13 @@ future<> unset_server_commitlog(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_commitlog(ctx, r); });
 }
 
-future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg) {
+future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg, sharded<gms::gossiper>& gossiper) {
     auto rb = std::make_shared < api_registry_builder > (ctx.api_doc);
 
-    return ctx.http_server.set_routes([rb, &ctx, &tm, &cfg = *cfg](routes& r) {
+    return ctx.http_server.set_routes([rb, &ctx, &tm, &cfg = *cfg, &gossiper](routes& r) {
         rb->register_function(r, "task_manager",
                 "The task manager API");
-        set_task_manager(ctx, r, tm, cfg);
+        set_task_manager(ctx, r, tm, cfg, gossiper);
     });
 }
 
