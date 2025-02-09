@@ -160,19 +160,45 @@ struct sibling_tablets {
     auto operator<=>(const sibling_tablets&) const = default;
 };
 
-// Represents either a single tablet replica or co-located replicas of sibling
-// tablets. The migration tablet set is logically treated by balancer as a single
-// candidate. When candidate represents co-located replicas, it means that
-// the balancer will work to preserve the co-location by migrating those replicas
-// to same destination.
-struct migration_tablet_set {
-    std::variant<global_tablet_id, sibling_tablets> tablet_s;
+struct colocated_tablets {
+    std::vector<global_tablet_id> tablets;
 
+    auto operator<=>(const colocated_tablets&) const = default;
+};
+
+// Represents either a single tablet replica, or co-located replicas of sibling
+// tablets, or a set of co-located replicas of different tables. The migration
+// tablet set is logically treated by balancer as a single candidate. When
+// candidate represents co-located replicas, it means that the balancer will
+// work to preserve the co-location by migrating those replicas to same
+// destination.
+struct migration_tablet_set {
+    std::variant<global_tablet_id, sibling_tablets, colocated_tablets> tablet_s;
+
+    // This method doesn't make much sense anymore since when we have the
+    // colocated_tablets variant which has tablets from different tables and
+    // has no single well-defined "table". We should review all uses of the
+    // function and try to remove it.
     table_id table() const {
         return std::visit(
             overloaded_functor{
                 [](global_tablet_id t) { return t.table; },
                 [](sibling_tablets t) { return t.left_tablet.table; },
+                [](const colocated_tablets& t) { return t.tablets.begin()->table; },
+            },
+            tablet_s);
+    }
+
+    using table_small_vector = utils::small_vector<table_id, 2>;
+
+    table_small_vector tables() const {
+        return std::visit(
+            overloaded_functor{
+                [](global_tablet_id t) { return table_small_vector{t.table}; },
+                [](sibling_tablets t) { return table_small_vector{t.left_tablet.table}; },
+                [](const colocated_tablets& t) {
+                    return t.tablets | std::views::transform(std::mem_fn(&global_tablet_id::table)) | std::ranges::to<table_small_vector>();
+                }
             },
             tablet_s);
     }
@@ -187,12 +213,19 @@ struct migration_tablet_set {
                 [](sibling_tablets t) {
                     return tablet_small_vector{t.left_tablet, t.right_tablet};
                 },
+                [](const colocated_tablets& t) {
+                    return tablet_small_vector(t.tablets.begin(), t.tablets.end());
+                },
             },
             tablet_s);
     }
 
     bool siblings() const {
         return std::holds_alternative<sibling_tablets>(tablet_s);
+    }
+
+    bool colocated() const {
+        return std::holds_alternative<colocated_tablets>(tablet_s);
     }
 
     auto operator<=>(const migration_tablet_set&) const = default;
@@ -222,6 +255,9 @@ struct fmt::formatter<service::migration_tablet_set> : fmt::formatter<std::strin
         if (tablet_set.siblings()) {
             return fmt::format_to(ctx.out(), "{{siblings: {}}}", tablet_set.tablets());
         }
+        if (tablet_set.colocated()) {
+            return fmt::format_to(ctx.out(), "{{colocated: {}}}", tablet_set.tablets());
+        }
         return fmt::format_to(ctx.out(), "{}", tablet_set.tablets().front());
     }
 };
@@ -249,6 +285,16 @@ struct hash<sibling_tablets> {
     size_t operator()(const sibling_tablets& id) const {
         return utils::hash_combine(std::hash<global_tablet_id>()(id.left_tablet),
                                    std::hash<global_tablet_id>()(id.right_tablet));
+    }
+};
+
+template <>
+struct hash<colocated_tablets> {
+    size_t operator()(const colocated_tablets& id) const {
+        return (std::ranges::fold_left_first(
+                id.tablets | std::views::transform(std::hash<global_tablet_id>()),
+                utils::hash_combine)
+        ).value_or(0);
     }
 };
 
