@@ -271,10 +271,6 @@ public:
         }
         return make_ready_future();
     }
-    future<> on_alive(inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    future<> on_dead(inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    future<> on_remove(inet_address, gms::permit_id) override { return make_ready_future(); }
-    future<> on_restart(inet_address, endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
 
     future<> enable_features();
 };

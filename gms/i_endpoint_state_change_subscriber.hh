@@ -46,15 +46,15 @@ public:
      * @param endpoint endpoint for which the state change occurred.
      * @param epState  state that actually changed for the above endpoint.
      */
-    virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, permit_id) = 0;
+    virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, permit_id) { return make_ready_future<>(); }
 
-    virtual future<> on_change(inet_address endpoint, const application_state_map& states, permit_id) = 0;
+    virtual future<> on_change(inet_address endpoint, const application_state_map& states, permit_id) { return make_ready_future<>(); }
 
-    virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;
+    virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, permit_id) { return make_ready_future<>(); };
 
-    virtual future<> on_dead(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;
+    virtual future<> on_dead(inet_address endpoint, endpoint_state_ptr state, permit_id) { return make_ready_future<>(); };
 
-    virtual future<> on_remove(inet_address endpoint, permit_id) = 0;
+    virtual future<> on_remove(inet_address endpoint, permit_id) { return make_ready_future<>(); };
 
     /**
      * Called whenever a node is restarted.
@@ -62,7 +62,7 @@ public:
      * previously marked down. It will have only if {@code state.isAlive() == false}
      * as {@code state} is from before the restarted node is marked up.
      */
-    virtual future<> on_restart(inet_address endpoint, endpoint_state_ptr state, permit_id) = 0;
+    virtual future<> on_restart(inet_address endpoint, endpoint_state_ptr state, permit_id) { return make_ready_future<>(); };
 };
 
 } // namespace gms

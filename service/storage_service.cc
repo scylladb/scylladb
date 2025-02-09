@@ -977,27 +977,8 @@ public:
     }
 
     virtual future<>
-    on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override {
-        // Raft server ID never changes - do nothing
-        return make_ready_future<>();
-    }
-
-    virtual future<>
     on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
         return on_endpoint_change(endpoint, ep_state, permit_id, "on_alive");
-    }
-
-    virtual future<>
-    on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override {
-        return make_ready_future<>();
-    }
-
-    virtual future<>
-    on_remove(gms::inet_address endpoint, gms::permit_id) override {
-        // The mapping is removed when the server is removed from
-        // Raft configuration, not when it's dead or alive, or
-        // removed
-        return make_ready_future<>();
     }
 
     virtual future<>
