@@ -3124,58 +3124,93 @@ public:
             _tablet_count_per_table[table] = total_load;
         }
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for_each_table_group([&] (const auto& table_ids, table_group_processor tg) {
 
-            auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
-                return t ? sorted_replicas_for_tablet_load(*t->info, t->transition) : tablet_replica_set{};
+            auto get_replicas = [this] (table_id table, tablet_id tid) -> tablet_replica_set {
+                auto&& tmap = _tm->tablets().get_tablet_map(table);
+                auto& ti = tmap.get_tablet_info(tid);
+                auto* trinfo = tmap.get_tablet_transition_info(tid);
+                return sorted_replicas_for_tablet_load(ti, trinfo);
             };
-            auto migrating = [] (std::optional<tablet_desc> t) {
-                return t && bool(t->transition);
+
+            auto migrating = [this] (global_tablet_id t) {
+                auto&& tmap = _tm->tablets().get_tablet_map(t.table);
+                auto* trinfo = tmap.get_tablet_transition_info(t.tablet);
+                return bool(trinfo);
             };
 
-            // If a table is undergoing merge, co-located replicas of sibling tablets will be treated as a single migration candidate,
-            // even though each tablet replica will be migrated independently. Next invocation of load balancer is able to exclude both
-            // sibling if either haven't finished migration yet. That's to prevent load balancer from incorrectly considering that
-            // they're not co-located if only one of them completed migration.
-            co_await tmap.for_each_sibling_tablets([&, table = table] (tablet_desc t1, std::optional<tablet_desc> t2) -> future<> {
-                auto t1_replicas = get_replicas(t1);
-                // If t2 is disengaged, when tablet_count == 1, t2_replicas is empty and so will have no effect
-                // when adding t1 replicas as candidates.
-                auto t2_replicas = get_replicas(t2);
+            bool base_table_needs_merge = std::ranges::any_of(table_ids, [this, &tg] (table_id table) {
+                auto&& tmap = _tm->tablets().get_tablet_map(table);
+                return tmap.needs_merge() && tmap.tablet_count() == tg.base_tablet_count;
+            });
 
-                sibling_tablets_replicas_processor processor(t1, t2, std::move(t1_replicas), std::move(t2_replicas));
+            for (size_t base_tid = 0; base_tid < tg.base_tablet_count; base_tid += 2) {
+                size_t base_tid_left = base_tid;
+                std::optional<size_t> base_tid_right;
+                if (base_tid + 1 < tg.base_tablet_count) {
+                    base_tid_right = base_tid + 1;
+                }
 
-                auto get_table_desc = [&] (tablet_id tid) {
-                    return tid == t1.tid ? t1 : t2;
+                if (base_table_needs_merge &&
+                        (std::ranges::any_of(tg.all_tablets(base_tid_left), migrating)
+                         || (base_tid_right && std::ranges::any_of(tg.all_tablets(*base_tid_right), migrating)))) {
+                    continue;
+                }
+
+                using processor_t = tablets_by_replica_processor;
+                using global_tablet_id_and_side = processor_t::global_tablet_id_and_side;
+
+                processor_t::elem_container replicas;
+                replicas.reserve(std::ranges::distance(tg.all_tablets(base_tid_left))
+                        + (base_tid_right ? std::ranges::distance(tg.all_tablets(*base_tid_right)) : 0));
+
+                auto add_replicas = [&] (auto&& tids, processor_t::side s) {
+                    for (auto tid : tids) {
+                        replicas.emplace_back(std::make_pair(global_tablet_id_and_side{tid, s}, get_replicas(tid.table, tid.tablet)));
+                    }
                 };
 
+                add_replicas(tg.all_tablets(base_tid_left), processor_t::LEFT);
+                if (base_tid_right) {
+                    add_replicas(tg.all_tablets(*base_tid_right), processor_t::RIGHT);
+                }
+
+                // Process all tablets of the sibling tablets, grouped by
+                // replica. Tablets that are co-located are added as one
+                // candidate of type colocated_tablets in order to maintain
+                // their co-location.
+                processor_t processor(std::move(replicas));
                 while (auto next = processor.next_replica()) {
-                    auto& [replica, tids] = *next;
+                    auto&& [replica, tids_left, tids_right] = *next;
+
                     if (!nodes.contains(replica.host)) {
                         continue;
                     }
+
                     auto& node_load_info = nodes[replica.host];
                     shard_load& shard_load_info = node_load_info.shards[replica.shard];
-                    if (tmap.needs_merge() && tids.size() == 2) {
-                        // Exclude both sibling tablets if either haven't finished migration yet. That's to prevent balancer from
-                        // un-doing the colocation.
-                        if (!migrating(t1) && !migrating(t2)) {
-                            auto candidate = sibling_tablets{global_tablet_id{table, t1.tid}, global_tablet_id{table, t2->tid}};
-                            add_candidate(shard_load_info, migration_tablet_set{std::move(candidate)});
-                        }
+
+                    // if some table needs merge, we maintain co-location of
+                    // sibling tablets and add them as one migration cadidate.
+                    // Otherwise, we add each group of tablets as a separate
+                    // candidate.
+                    if (base_table_needs_merge && tids_left.size() > 0 && tids_right.size() > 0) {
+                        auto tids = std::views::join(std::array{std::move(tids_left), std::move(tids_right)}) | std::ranges::to<std::vector>();
+                        auto candidate = migration_tablet_set{colocated_tablets{std::move(tids)}};
+                        add_candidate(shard_load_info, migration_tablet_set{std::move(candidate)});
                     } else {
-                        for (auto tid : tids) {
-                            if (!migrating(get_table_desc(tid))) { // migrating tablets are not candidates
-                                add_candidate(shard_load_info, migration_tablet_set{global_tablet_id{table, tid}});
-                            }
+                        if (tids_left.size() > 0 && !std::ranges::any_of(tg.all_tablets(base_tid_left), migrating)) {
+                            auto candidate = tids_left.size() == 1 ? migration_tablet_set{tids_left[0]} : migration_tablet_set{colocated_tablets{std::move(tids_left)}};
+                            add_candidate(shard_load_info, std::move(candidate));
+                        }
+                        if (tids_right.size() > 0 && !std::ranges::any_of(tg.all_tablets(*base_tid_right), migrating)) {
+                            auto candidate = tids_right.size() == 1 ? migration_tablet_set{tids_right[0]} : migration_tablet_set{colocated_tablets{std::move(tids_right)}};
+                            add_candidate(shard_load_info, std::move(candidate));
                         }
                     }
                 }
-
-                return make_ready_future<>();
-            });
-        }
+            }
+        });
 
         if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
             host_id target = *min_load_node;
