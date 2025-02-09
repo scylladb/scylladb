@@ -68,6 +68,43 @@ Boost tests can also be run using test.py - which is a script that provides
 a uniform way to run all tests in scylladb.git - C++ tests, Python tests,
 etc.
 
+## Execution with pytest
+
+To run all tests with pytest execute 
+```bash
+pytest test/boost
+```
+
+To execute all tests in one file, provide the path to the source filename as a parameter
+```bash
+pytest test/boost/aggregate_fcts_test.cc
+```
+Since it's a normal path, autocompletion works in the terminal out of the box.
+
+To execute only one test function, provide the path to the source file and function name
+```bash
+pytest --mode dev test/boost/aggregate_fcts_test.cc::test_aggregate_avg
+```
+
+To provide a specific mode, use the next parameter `--mode dev`,
+if parameter isn't provided pytest tries to use `ninja mode_list` to find out the compiled modes.
+
+Parallel execution is controlled by `pytest-xdist` and the parameter `-n auto`.
+This command starts tests with the number of workers equal to CPU cores.
+The useful command to discover the tests in the file or directory is 
+```bash
+pytest --collect-only -q --mode dev test/boost/aggregate_fcts_test.cc
+```
+That will return all test functions in the file.
+To execute only one function from the test, you can invoke the output from the previous command.
+However, suffix for mode should be skipped.
+For example,
+output shows in the terminal something like this `test/boost/aggregate_fcts_test.cc::test_aggregate_avg.dev`.
+So to execute this specific test function, please use the next command 
+```bash
+pytest --mode dev test/boost/aggregate_fcts_test.cc::test_aggregate_avg
+```
+
 # Writing tests
 
 Because of the large build time and build size of each separate test
