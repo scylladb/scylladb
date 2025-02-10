@@ -194,6 +194,8 @@ public:
     uint32_t throughput_mbs() const noexcept {
         return _io_throughput_mbs.get();
     }
+
+    future<> fail_stream_plan(streaming::plan_id plan_id);
 };
 
 } // namespace streaming
