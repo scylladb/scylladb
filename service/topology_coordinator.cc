@@ -1199,6 +1199,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
             co_await coroutine::maybe_yield();
             generate_resize_update(out, guard, table_id, resize_decision);
+            if (_vb_coordinator_ptr) {
+                co_await _vb_coordinator_ptr->maybe_prepare_for_tablet_resize_start(guard, table_id);
+            }
         }
     }
 
@@ -1657,6 +1660,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         std::vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
+        bool notify_vb_coordinator = false;
 
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
@@ -1671,6 +1675,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
+
+            if (_vb_coordinator_ptr) {
+                auto vbc_updates = co_await _vb_coordinator_ptr->get_resize_tasks_mutations(guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
+                notify_vb_coordinator = !vbc_updates.empty() || notify_vb_coordinator;
+                for (auto&& mut: vbc_updates) {
+                    updates.emplace_back(std::move(mut));
+                }
+            }
         }
 
         updates.emplace_back(
@@ -1679,6 +1691,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_version(_topo_sm._topology.version + 1)
                 .build());
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet split finalization"));
+
+        if (notify_vb_coordinator) {
+            _vb_coordinator_ptr->notify();
+        }
     }
 
     future<> handle_truncate_table(group0_guard guard) {

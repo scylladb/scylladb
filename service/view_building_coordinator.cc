@@ -468,6 +468,17 @@ future<> view_building_coordinator::maybe_prepare_for_tablet_migration_start(con
     }
 }
 
+future<> view_building_coordinator::maybe_prepare_for_tablet_resize_start(const group0_guard& guard, table_id table_id) {
+    auto state = co_await load_coordinator_state();
+    if (state.currently_processed_base_table != table_id) {
+        co_return;
+    }
+
+    for (auto& target: _remote_work_map | std::views::keys) {
+        co_await abort_work(target);
+    }
+}
+
 future<std::vector<mutation>> view_building_coordinator::get_migrate_tasks_mutations(const group0_guard& guard, table_id table_id, std::optional<locator::tablet_replica> abandoning_replica, std::optional<locator::tablet_replica> pending_replica, const dht::token_range& range) {
     auto state = co_await load_coordinator_state();
     if (!state.tasks.contains(table_id)) {
@@ -495,6 +506,69 @@ future<std::vector<mutation>> view_building_coordinator::get_migrate_tasks_mutat
                 vbc_logger.info("Deleted task for view {} with range {} from (host: {}, shard: {})", view, range, abandoning_replica->host, abandoning_replica->shard);
             }
         }
+    }
+    co_return updates;
+}
+
+future<std::vector<mutation>> view_building_coordinator::get_resize_tasks_mutations(const group0_guard& guard, table_id table_id, const locator::tablet_map& tablet_map, const locator::tablet_map& new_tablet_map) {
+    auto state = co_await load_coordinator_state();
+    if (!state.tasks.contains(table_id)) {
+        co_return std::vector<mutation>();
+    }
+
+    std::vector<mutation> updates;
+    for (auto& [view, view_tasks]: state.tasks[table_id]) {
+        for (auto& [target, tasks]: view_tasks) {
+            std::vector<mutation> muts;
+            if (tablet_map.needs_split()) {
+                muts = co_await get_split_mutations(guard, tablet_map, view, target, tasks);
+            } else if (tablet_map.needs_merge()) {
+                muts = co_await get_merge_mutations(guard, tablet_map, new_tablet_map, view, target, tasks);                
+            }
+            updates.insert(updates.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
+        }
+    }
+
+    co_return updates;
+}
+
+future<std::vector<mutation>> view_building_coordinator::get_split_mutations(const group0_guard& guard, const locator::tablet_map& tablet_map, table_id view, const view_building_target& target, const std::vector<dht::token_range>& tasks) {
+    std::vector<mutation> updates;
+    updates.reserve(tasks.size() * 3);
+    for (auto& range: tasks) {
+        auto tid = tablet_map.get_tablet_id(range.end()->value());
+
+        auto left_range = tablet_map.get_token_range_after_split(tablet_map.get_first_token(tid));
+        auto right_range = tablet_map.get_token_range_after_split(tablet_map.get_last_token(tid));
+
+        auto del_mut = co_await _sys_ks.make_vbc_task_done_mutation(guard.write_timestamp(), view, target, range);
+        auto left_mut = co_await _sys_ks.make_vbc_task_mutation(guard.write_timestamp(), view, target, left_range);
+        auto right_mut = co_await _sys_ks.make_vbc_task_mutation(guard.write_timestamp(), view, target, right_range);
+        updates.push_back(std::move(del_mut));
+        updates.push_back(std::move(left_mut));
+        updates.push_back(std::move(right_mut));
+    }
+    co_return updates;
+}
+
+future<std::vector<mutation>> view_building_coordinator::get_merge_mutations(const group0_guard& guard, const locator::tablet_map& tablet_map, const locator::tablet_map& new_tablet_map, table_id view, const view_building_target& target, const std::vector<dht::token_range>& tasks) {
+    std::vector<mutation> updates;
+    std::unordered_set<locator::tablet_id> processed_ids;
+    for (auto& range: tasks) {
+        auto tid = tablet_map.get_tablet_id(range.end()->value());
+        auto new_tid = locator::tablet_id(tid.value() >> 1);
+
+        auto del_mut = co_await _sys_ks.make_vbc_task_done_mutation(guard.write_timestamp(), view, target, range);
+        updates.push_back(std::move(del_mut));
+
+        if (processed_ids.contains(new_tid)) {
+            continue;
+        }
+        processed_ids.insert(new_tid);
+
+        auto new_range = new_tablet_map.get_token_range(new_tid);
+        auto add_mut = co_await _sys_ks.make_vbc_task_mutation(guard.write_timestamp(), view, target, new_range);
+        updates.push_back(std::move(add_mut));
     }
     co_return updates;
 }
