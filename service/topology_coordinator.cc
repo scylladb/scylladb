@@ -2940,7 +2940,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
 
     for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
         locator::load_stats dc_stats;
-        rtlogger.info("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
+        rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
             auto dst = node.get().host_id();
 
