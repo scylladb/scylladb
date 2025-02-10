@@ -12,58 +12,8 @@ import pytest
 import time
 from botocore.exceptions import ClientError
 from .util import random_string, full_scan, full_query, multiset, \
-    new_test_table
+    new_test_table, wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
-
-# UpdateTable for creating a GSI is an asynchronous operation. The table's
-# TableStatus changes from ACTIVE to UPDATING for a short while, and then
-# goes back to ACTIVE, but the new GSI's IndexStatus appears as CREATING,
-# until eventually (in Amazon DynamoDB - it tests a *long* time...) it
-# becomes ACTIVE. During the CREATING phase, at some point the Backfilling
-# attribute also appears, until it eventually disappears. We need to wait
-# until all three markers indicate completion.
-# Unfortunately, while boto3 has a client.get_waiter('table_exists') to
-# wait for a table to exists, there is no such function to wait for an
-# index to come up, so we need to code it ourselves.
-def wait_for_gsi(table, gsi_name):
-    start_time = time.time()
-    # The timeout needs to be long because on Amazon DynamoDB, even on a
-    # a tiny table, it sometimes takes minutes.
-    while time.time() < start_time + 600:
-        desc = table.meta.client.describe_table(TableName=table.name)
-        table_status = desc['Table']['TableStatus']
-        if table_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
-        assert len(index_desc) == 1
-        index_status = index_desc[0]['IndexStatus']
-        if index_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        # When the index is ACTIVE, this must be after backfilling completed
-        assert not 'Backfilling' in index_desc[0]
-        return
-    raise AssertionError("wait_for_gsi did not complete")
-
-# Similarly to how wait_for_gsi() waits for a GSI to finish adding,
-# this function waits for a GSI to be finally deleted.
-def wait_for_gsi_gone(table, gsi_name):
-    start_time = time.time()
-    while time.time() < start_time + 600:
-        desc = table.meta.client.describe_table(TableName=table.name)
-        table_status = desc['Table']['TableStatus']
-        if table_status != 'ACTIVE':
-            time.sleep(0.1)
-            continue
-        if 'GlobalSecondaryIndexes' in desc['Table']:
-            index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == gsi_name]
-            if len(index_desc) != 0:
-                index_status = index_desc[0]['IndexStatus']
-                time.sleep(0.1)
-                continue
-        return
-    raise AssertionError("wait_for_gsi_gone did not complete")
 
 # All tests in test_gsi.py involved creating a new table with a GSI up-front.
 # This test will be about creating a base table *without* a GSI, putting data
@@ -73,7 +23,6 @@ def wait_for_gsi_gone(table, gsi_name):
 # the wrong type are silently ignored and not added to the index. We also
 # check that after adding the GSI, it is no longer possible to add more
 # items with wrong types to the base table.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill(dynamodb):
     # First create, and fill, a table without GSI. The items in items1
     # will have the appropriate string type for 'x' and will later get
@@ -141,7 +90,6 @@ def test_gsi_backfill(dynamodb):
 # check that the new GSI works. In Alternator's implementation, the LSI key
 # column will become a real column in the schema, and the GSI needs to use
 # that instead of the usual computed column.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill_with_lsi(dynamodb):
     # First create, and fill, a table with an LSI but without GSI.
     with new_test_table(dynamodb,
@@ -208,7 +156,6 @@ def test_gsi_backfill_with_lsi(dynamodb):
 # checked the case of a new GSI key being a real column because it was an
 # LSI key. In this test the GSI key is a real column because it was a
 # key column of the base table itself.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_backfill_with_real_column(dynamodb):
     with new_test_table(dynamodb,
             KeySchema=[
@@ -237,7 +184,6 @@ def test_gsi_backfill_with_real_column(dynamodb):
         assert multiset(items) == multiset(full_scan(table, ConsistentRead=False, IndexName='gsi'))
 
 # Test deleting an existing GSI using UpdateTable
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_delete(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -285,7 +231,6 @@ def test_gsi_delete(dynamodb):
 # still enforced because it is still an LSI key. In Alternator's
 # implementation this happens because the LSI key column was - and remains -
 # a real column in the schema.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_delete_with_lsi(dynamodb):
     # A table whose non-key column "x" serves as a range key in an LSI,
     # and partition key in a GSI.
@@ -315,6 +260,10 @@ def test_gsi_delete_with_lsi(dynamodb):
                 'Projection': { 'ProjectionType': 'ALL' }
             }
         ]) as table:
+        # We shouldn't need to wait for a GSI created together with the
+        # table, but let's do it anyway to work around bug #9059 (which
+        # isn't what this test is trying to reproduce).
+        wait_for_gsi(table, 'gsi')
         items = [{'p': random_string(), 'c': random_string(), 'x': random_string()} for i in range(10)]
         with table.batch_writer() as batch:
             for item in items:
@@ -362,7 +311,6 @@ def test_gsi_delete_with_lsi(dynamodb):
 # operation on a table set up by CreateTable. In this test we try several
 # of these operations in sequence, to check we can add more than one GSI,
 # delete a GSI that we just added, recreate a GSI that we just deleted, etc.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_creates_and_deletes(dynamodb):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -491,7 +439,6 @@ def test_gsi_backfill_empty_string(dynamodb):
 # happens during the table creation, and one here where the second GSI is
 # added after the table already exists with the first GSI.
 # Reproduces #13870.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_key_type_conflict_on_update(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }],
@@ -532,7 +479,6 @@ def table1(dynamodb):
         yield table
 
 # An empty update_table() call, without any parameters changed, is not allowed.
-@pytest.mark.xfail(reason="issue #11567")
 def test_updatetable_empty(dynamodb, table1):
     with pytest.raises(ClientError, match='ValidationException.*UpdateTable'):
         dynamodb.meta.client.update_table(TableName=table1.name)
@@ -543,7 +489,6 @@ def test_updatetable_empty(dynamodb, table1):
             GlobalSecondaryIndexUpdates=[])
 
 # Test various invalid cases of UpdateTable's GlobalSecondaryIndexUpdates.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_updatetable_errors(dynamodb, table1):
     client = dynamodb.meta.client
 
@@ -637,7 +582,6 @@ def test_gsi_updatetable_errors(dynamodb, table1):
 # In Alternator, we decided to detect this case anyway - it can help users
 # notice problems (see #19784). So because we differ from DynamoDB on this,
 # this test is marked scylla_only.
-@pytest.mark.xfail(reason="issue #11567")
 def test_gsi_updatetable_spurious_attribute_definitions(table1, scylla_only):
     with pytest.raises(ClientError, match='ValidationException.*AttributeDefinitions'):
         table1.meta.client.update_table(TableName=table1.name,
@@ -654,9 +598,132 @@ def test_gsi_updatetable_spurious_attribute_definitions(table1, scylla_only):
 
 # Check that attempting to delete a GSI that doesn't exist results in
 # the expected ResourceNotFoundException.
-@pytest.mark.xfail(reason="issue #11567")
 def test_updatetable_delete_missing_gsi(dynamodb, table1):
     with pytest.raises(ClientError, match='ResourceNotFoundException'):
         dynamodb.meta.client.update_table(TableName=table1.name,
             GlobalSecondaryIndexUpdates=[{  'Delete':
                 { 'IndexName': 'nonexistent' } }])
+
+# Whereas DynamoDB allows attribute values to reach a generous length (they
+# are only limited by the item's size limit, 400 KB), an attribute which is
+# a *key* has much stricter limits - 2048 bytes for a partition key, 1024
+# bytes for a sort key. This means that if a table has a GSI or LSI and
+# one of the attributes serves as a key in that GSI and LSI, DynamoDB
+# limits its length. In the tests test_gsi.py::test_gsi_limit_* we verified
+# that attempts to write an oversized value to an attribute which is a
+# GSI key are rejected. Here we test what happens when adding a GSI to
+# a table with pre-existing data, which already includes items with oversized
+# values for the key attribute. These items can't be "rejected" - they
+# are already in the base table - but should be skipped while filling the
+# GSI. What we don't want to happen is to see the view building hang,
+# as described in issue #8627 and #10347.
+# The first test here, test_gsi_backfill_oversized_key(), doesn't check the
+# specific limits of 2048 and 1024 bytes, it only checks that an item with
+# a 65 KB attribute (above Scylla's internal limitations for keys) are
+# cleanly skipped and don't cause view build hangs. The following test
+# test_gsi_backfill_key_limits will check the specific limits.
+def test_gsi_backfill_oversized_key(dynamodb):
+    # First create, and fill, a table without GSI:
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                                   { 'AttributeName': 'c', 'AttributeType': 'S' } ]) as table:
+        p1 = random_string()
+        p2 = random_string()
+        c = random_string()
+        # Create two items, one has a small "x" attribute, the other has
+        # a 65 KB "x" attribute.
+        table.put_item(Item={'p': p1, 'c': c, 'x': 'hello'})
+        table.put_item(Item={'p': p2, 'c': c, 'x': 'a'*66500})
+        # Now use UpdateTable to create two GSIs. In one of them "x" will be
+        # the partition key, and in the other "x" will be a sort key.
+        # DynamoDB limits the number of indexes that can be added in one
+        # UpdateTable command to just one, so we need to do it in two separate
+        # commands and wait for each to complete.
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index1',
+                              'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index1')
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index2',
+                              'KeySchema': [{ 'AttributeName': 'c', 'KeyType': 'HASH' },
+                                            { 'AttributeName': 'x', 'KeyType': 'RANGE' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index2')
+        # Verify that the items with the oversized x are missing from both
+        # GSIs, so only the one item with x = hello should appear in both.
+        # Note that we don't need to retry the reads here (i.e., use the
+        # assert_index_scan() or assert_index_query() functions) because after
+        # we waited for backfilling to complete, we know all the pre-existing
+        # data is already in the index.
+        assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index1')
+        assert [{'p': p1, 'c': c, 'x': 'hello'}] == full_scan(table, ConsistentRead=False, IndexName='index2')
+
+# The previous test, test_gsi_backfill_oversized_key(), checked that a
+# grossly oversized GSI key attribute (over Scylla's internal key limit
+# of 64 KB) doesn't hang the view building process. This test verifies
+# more specifically that DynamoDB's documented limits - 2048 bytes for
+# a GSI partition key and 1024 for a GSI sort key - are implemented. An
+# item that has an attribute longer than that should simply be skipped
+# during view building.
+# Reproduces issue #10347.
+@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+def test_gsi_backfill_key_limits(dynamodb):
+    # First create, and fill, a table without GSI:
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                                   { 'AttributeName': 'c', 'AttributeType': 'S' } ]) as table:
+        # Create four items, with 'x' attribute sizes of 1024, 1025, 2048
+        # and 2049. Only one item (1024) has x suitable for a sort key,
+        # and three (1024, 1025 and 2048) have length suitable for a partition
+        # key. The unsuitable items will be missing from the indexes.
+        lengths = [1024, 1025, 2048, 2049]
+        p = [random_string() for length in lengths]
+        x = ['a'*length for length in lengths]
+        c = random_string()
+        for i in range(len(lengths)):
+            table.put_item(Item={'p': p[i], 'c': c, 'x': x[i]})
+        # Now use UpdateTable to create two GSIs. In one of them "x" will be
+        # the partition key, and in the other "x" will be a sort key.
+        # DynamoDB limits the number of indexes that can be added in one
+        # UpdateTable command to just one, so we need to do it in two separate
+        # commands and wait for each to complete.
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index1',
+                              'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index1')
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{ 'AttributeName': 'x', 'AttributeType': 'S' },
+                                  { 'AttributeName': 'c', 'AttributeType': 'S' }],
+            GlobalSecondaryIndexUpdates=[
+                { 'Create': { 'IndexName': 'index2',
+                              'KeySchema': [{ 'AttributeName': 'c', 'KeyType': 'HASH' },
+                                            { 'AttributeName': 'x', 'KeyType': 'RANGE' }],
+                              'Projection': { 'ProjectionType': 'ALL' }}
+                }
+            ])
+        wait_for_gsi(table, 'index2')
+        # Verify that the items with the oversized x are missing from both
+        # GSIs. For index1 (x is a partition key, limited to 2048 bytes)
+        # items 0,1,2 should appear, for index2 (x is a sort key, limited
+        # to 1024 bytes), only item 0 should appear.
+        assert multiset([{'p': p[i], 'c': c, 'x': x[i]} for i in range(3)]) == multiset(full_scan(table, ConsistentRead=False, IndexName='index1'))
+        assert [{'p': p[0], 'c': c, 'x': x[0]}] == full_scan(table, ConsistentRead=False, IndexName='index2')
