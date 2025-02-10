@@ -9,9 +9,9 @@ import logging
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import unique_name, wait_for_view
+from test.topology.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
-
 
 # This test makes sure that view building is done mainly in the streaming scheduling group
 # and not the gossip scheduling group. We do that by measuring the time each group was
@@ -22,30 +22,30 @@ logger = logging.getLogger(__name__)
 async def test_view_building_scheduling_group(manager: ManagerClient):
     server = await manager.server_add()
     cql = manager.get_cql()
-    await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
-    await cql.run_async(f"CREATE TABLE ks.tab (p int, c int, PRIMARY KEY (p, c))")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (p int, c int, PRIMARY KEY (p, c))")
 
-    # Insert 50000 rows to the table. Use unlogged batches to speed up the process.
-    for i in range(1000):
-        inserts = [f"INSERT INTO ks.tab(p, c) VALUES ({i+1000*x}, {i+1000*x})" for x in range(50)]
-        batch = "BEGIN UNLOGGED BATCH\n" + "\n".join(inserts) + "\nAPPLY BATCH\n"
-        await manager.cql.run_async(batch)
+        # Insert 50000 rows to the table. Use unlogged batches to speed up the process.
+        for i in range(1000):
+            inserts = [f"INSERT INTO {ks}.tab(p, c) VALUES ({i+1000*x}, {i+1000*x})" for x in range(50)]
+            batch = "BEGIN UNLOGGED BATCH\n" + "\n".join(inserts) + "\nAPPLY BATCH\n"
+            await manager.cql.run_async(batch)
 
-    metrics_before = await manager.metrics.query(server.ip_addr)
-    ms_gossip_before = metrics_before.get('scylla_scheduler_runtime_ms', {'group': 'gossip'})
-    ms_streaming_before = metrics_before.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
+        metrics_before = await manager.metrics.query(server.ip_addr)
+        ms_gossip_before = metrics_before.get('scylla_scheduler_runtime_ms', {'group': 'gossip'})
+        ms_streaming_before = metrics_before.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
 
-    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT p, c FROM ks.tab WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p)")
-    await wait_for_view(cql, 'mv', 1)
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT p, c FROM {ks}.tab WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p)")
+        await wait_for_view(cql, 'mv', 1)
 
-    metrics_after = await manager.metrics.query(server.ip_addr)
-    ms_gossip_after = metrics_after.get('scylla_scheduler_runtime_ms', {'group': 'gossip'})
-    ms_streaming_after = metrics_after.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
-    ms_streaming = ms_streaming_after - ms_streaming_before
-    ms_statement = ms_gossip_after - ms_gossip_before
-    ratio = ms_statement / ms_streaming
-    print(f"ms_streaming: {ms_streaming}, ms_statement: {ms_statement}, ratio: {ratio}")
-    assert ratio < 0.1
+        metrics_after = await manager.metrics.query(server.ip_addr)
+        ms_gossip_after = metrics_after.get('scylla_scheduler_runtime_ms', {'group': 'gossip'})
+        ms_streaming_after = metrics_after.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
+        ms_streaming = ms_streaming_after - ms_streaming_before
+        ms_statement = ms_gossip_after - ms_gossip_before
+        ratio = ms_statement / ms_streaming
+        print(f"ms_streaming: {ms_streaming}, ms_statement: {ms_statement}, ratio: {ratio}")
+        assert ratio < 0.1
 
 # A sanity check test ensures that starting and shutting down Scylla when view building is
 # disabled is conducted properly and we don't run into any issues.

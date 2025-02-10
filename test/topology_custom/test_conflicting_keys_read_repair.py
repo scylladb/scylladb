@@ -12,6 +12,7 @@ from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
+from test.topology.util import new_test_keyspace
 
 
 logger = logging.getLogger(__name__)
@@ -44,38 +45,39 @@ async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureReq
     srvs = await manager.servers_add(3)
     cql, _ = await manager.get_ready_cql(srvs)
 
-    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};")
-    await cql.run_async("CREATE TABLE ks.t (pk bigint PRIMARY KEY, c int);")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};") as ks:
+        table = f"{ks}.t"
+        await cql.run_async(f"CREATE TABLE {table} (pk bigint PRIMARY KEY, c int);")
 
-    # Stop one of the nodes.
-    await manager.server_stop_gracefully(srvs[0].server_id)
+        # Stop one of the nodes.
+        await manager.server_stop_gracefully(srvs[0].server_id)
 
-    # Add rows with partition kays that cause murmur3 hash collision, token value [6874760189787677834].
-    pk1 = -4818441857111425024
-    pk2 = -8686612841249112064
-    await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, c) VALUES ({pk1}, 111)", consistency_level=ConsistencyLevel.ONE))
-    await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, c) VALUES ({pk2}, 222)", consistency_level=ConsistencyLevel.ONE))
+        # Add rows with partition kays that cause murmur3 hash collision, token value [6874760189787677834].
+        pk1 = -4818441857111425024
+        pk2 = -8686612841249112064
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES ({pk1}, 111)", consistency_level=ConsistencyLevel.ONE))
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES ({pk2}, 222)", consistency_level=ConsistencyLevel.ONE))
 
-    # Start the offline node.
-    await manager.server_start(srvs[0].server_id, wait_others=2)
+        # Start the offline node.
+        await manager.server_start(srvs[0].server_id, wait_others=2)
 
-    # Run a SELECT query with ALL consistency level, forcing reading from all 3 nodes.
-    res = await cql.run_async(SimpleStatement("SELECT * FROM ks.t", consistency_level=ConsistencyLevel.ALL))
+        # Run a SELECT query with ALL consistency level, forcing reading from all 3 nodes.
+        res = await cql.run_async(SimpleStatement(f"SELECT * FROM {table}", consistency_level=ConsistencyLevel.ALL))
 
-    # Validate the results (should be OK).
-    assert len(res) == 2
-    for row in res:
-        if (row.pk == pk1):
-            assert row.c == 111
-        elif (row.pk == pk2):
-            assert row.c == 222
+        # Validate the results (should be OK).
+        assert len(res) == 2
+        for row in res:
+            if (row.pk == pk1):
+                assert row.c == 111
+            elif (row.pk == pk2):
+                assert row.c == 222
 
-    res = await cql.run_async(SimpleStatement("SELECT * FROM ks.t", consistency_level=ConsistencyLevel.ALL))
+        res = await cql.run_async(SimpleStatement(f"SELECT * FROM {table}", consistency_level=ConsistencyLevel.ALL))
 
-    # Validate the results (will be wrong in case the diff calculation hash map uses tokens as keys).
-    assert len(res) == 2
-    for row in res:
-        if (row.pk == pk1):
-            assert row.c == 111
-        elif (row.pk == pk2):
-            assert row.c == 222
+        # Validate the results (will be wrong in case the diff calculation hash map uses tokens as keys).
+        assert len(res) == 2
+        for row in res:
+            if (row.pk == pk1):
+                assert row.c == 111
+            elif (row.pk == pk2):
+                assert row.c == 222

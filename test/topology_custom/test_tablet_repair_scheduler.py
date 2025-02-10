@@ -37,11 +37,11 @@ async def guarantee_repair_time_next_second():
 
 @pytest.mark.asyncio
 async def test_tablet_manual_repair(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = -1
 
     start = time.time()
-    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
     duration = time.time() - start
     map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
     logging.info(f'map1={map1} duration={duration}')
@@ -49,7 +49,7 @@ async def test_tablet_manual_repair(manager: ManagerClient):
     await guarantee_repair_time_next_second()
 
     start = time.time()
-    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
     duration = time.time() - start
     map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
     logging.info(f'map2={map2} duration={duration}')
@@ -62,7 +62,7 @@ async def test_tablet_manual_repair(manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_tombstone_gc_insert_flush(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = "all"
     logs = []
     for s in servers:
@@ -70,7 +70,7 @@ async def test_tombstone_gc_insert_flush(manager: ManagerClient):
         await manager.api.set_logger_level(s.ip_addr, "tablets", "debug")
         logs.append(await manager.server_open_log(s.server_id))
 
-    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
 
     timeout = 600
     deadline = time.time() + timeout
@@ -93,14 +93,14 @@ async def test_tombstone_gc_insert_flush(manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False, disable_flush_cache_time=True)
     token = "all"
     now = datetime.datetime.utcnow()
     map1 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
 
     await guarantee_repair_time_next_second()
 
-    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
     map2 = await load_tablet_repair_time(cql, hosts[0:1], table_id)
     logging.info(f'{map1=} {map2=}')
     assert len(map1) == len(map2)
@@ -113,7 +113,7 @@ async def test_tablet_manual_repair_all_tokens(manager: ManagerClient):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_manual_repair_reject_parallel_requests(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, fast_stats_refresh=False)
     token = -1
 
     await inject_error_on(manager, "tablet_repair_add_delay_in_ms", servers, params={'value':'3000'})
@@ -126,7 +126,7 @@ async def test_tablet_manual_repair_reject_parallel_requests(manager: ManagerCli
 
     async def run_repair(state):
         try:
-            await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
             state.ok = state.ok + 1
         except Exception as e:
             logging.info(f"Got exception as expected: {e}")
@@ -142,24 +142,24 @@ async def test_tablet_manual_repair_reject_parallel_requests(manager: ManagerCli
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_repair_error_and_retry(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
     # Repair should finish with one time error injection
     token = -1
     await inject_error_one_shot_on(manager, "repair_tablet_fail_on_rpc_call", servers)
-    await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
     await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_repair_error_not_finish(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
     token = -1
     # Repair should not finish with error
     await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
     try:
-        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token, timeout=10)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, timeout=10)
         assert False # Check the tablet repair is not supposed to finish
     except TimeoutError:
         logger.info("Repair timeout as expected")
@@ -168,13 +168,13 @@ async def test_tablet_repair_error_not_finish(manager: ManagerClient):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_repair_error_delete(manager: ManagerClient):
-    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
 
     token = -1
     async def repair_task():
         await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
         # Check failed repair request can be deleted
-        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", token, timeout=900)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, timeout=900)
 
     async def del_repair_task():
         tablet_task_id = None
