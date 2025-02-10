@@ -647,7 +647,6 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , data_centers(data_centers_)
     , hosts(hosts_)
     , ignore_nodes(ignore_nodes_)
-    , total_rf(erm->get_replication_factor())
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , _small_table_optimization(small_table_optimization)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
@@ -694,12 +693,16 @@ void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
 
 repair_neighbors repair::shard_repair_task_impl::get_repair_neighbors(const dht::token_range& range) {
     return neighbors.empty() ?
-        repair_neighbors(get_neighbors(gossiper, *erm, _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
+        repair_neighbors(get_neighbors(gossiper, *get_erm(), _status.keyspace, range, data_centers, hosts, ignore_nodes, _small_table_optimization)) :
         neighbors[range];
 }
 
 size_t repair::shard_repair_task_impl::ranges_size() const noexcept {
     return ranges.size() * table_ids.size();
+}
+
+locator::effective_replication_map_ptr repair::shard_repair_task_impl::get_erm() noexcept {
+    return erm ? erm : db.local().get_tables_metadata().get_table(table_ids[0]).get_effective_replication_map();
 }
 
 // Repair a single local range, multiple column families.
@@ -2566,7 +2569,6 @@ future<> repair::tablet_repair_task_impl::run() {
                     rlogger.debug("repair[{}] Table {}.{} does not exist anymore", id.uuid(), m.keyspace_name, m.table_name);
                     continue;
                 }
-                auto erm = t->get_effective_replication_map();
                 if (co_await rs.get_repair_module().is_aborted(id.uuid(), parent_shard)) {
                     throw abort_requested_exception();
                 }
@@ -2585,7 +2587,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 bool small_table_optimization = false;
 
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
-                        m.keyspace_name, rs, erm, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
+                        m.keyspace_name, rs, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
                         std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, sched_by_scheduler);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);

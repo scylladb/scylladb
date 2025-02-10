@@ -7,6 +7,7 @@ from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxExc
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.repair import create_table_insert_data_for_repair
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
@@ -805,3 +806,30 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
     # release drop and wait for it to complete
     await manager.api.message_injection(servers[0].ip_addr, "truncate_compaction_disabled_wait")
     await drop_ks_task
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_two_tablets_concurrent_repair_and_migration(manager: ManagerClient):
+    injection = "repair_shard_repair_task_impl_do_repair_ranges"
+    servers, cql, hosts, table_id = await create_table_insert_data_for_repair(manager)
+
+    all_replicas = await get_all_tablet_replicas(manager, servers[0], "test", "test")
+    assert len(all_replicas) >= 2
+    repair_replicas = all_replicas[0]
+    migration_replicas = all_replicas[1]
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    async def repair_task():
+        [await manager.api.enable_injection(s.ip_addr, injection) for s in servers]
+        await manager.api.tablet_repair(servers[0].ip_addr, "test", "test", repair_replicas.last_token)
+
+    async def migration_task():
+        done, pending = await asyncio.wait([asyncio.create_task(log.wait_for('Started to repair', from_mark=mark)) for log, mark in zip(logs, marks)], return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        await manager.api.move_tablet(servers[1].ip_addr, "test", "test", migration_replicas.replicas[0][0], migration_replicas.replicas[0][1], migration_replicas.replicas[0][0], 0 if migration_replicas.replicas[0][0] != 0 else 1, migration_replicas.last_token)
+        [await manager.api.message_injection(s.ip_addr, injection) for s in servers]
+
+    await asyncio.gather(repair_task(), migration_task())

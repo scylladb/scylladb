@@ -1382,7 +1382,11 @@ public:
         } else {
             return;
         }
-        flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization, this);
+        if (small_table_optimization) {
+            flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization, this);
+        } else {
+            flush_rows(_schema, _working_row_buf, _repair_writer);
+        }
     }
 
 private:
@@ -1855,7 +1859,7 @@ public:
             repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
             locator::host_id remote_node, unsigned node_idx,
-            const locator::effective_replication_map& erm, bool small_table_optimization,
+            locator::effective_replication_map_ptr erm, bool small_table_optimization,
             shard_id dst_cpu_id) {
         if (set_diff.empty()) {
             co_return;
@@ -1870,9 +1874,9 @@ public:
             rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
                     _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
         }
-        if (small_table_optimization) {
-            auto& strat = erm.get_replication_strategy();
-            const auto* tm = &erm.get_token_metadata();
+        if (small_table_optimization && erm) {
+            auto& strat = erm->get_replication_strategy();
+            const auto* tm = &erm->get_token_metadata();
             const auto* tmptr = co_await get_tm_for_small_table_optimization_check(tm);
             if (tmptr) {
                 tm = tmptr;
@@ -2921,7 +2925,7 @@ private:
             throw;
           }
         }
-        master.flush_rows_in_working_row_buf(get_erm(), _small_table_optimization);
+        master.flush_rows_in_working_row_buf(_small_table_optimization ? get_erm() : nullptr, _small_table_optimization);
         return op_status::next_step;
     }
 
@@ -2946,7 +2950,7 @@ private:
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::put_row_diff_with_rpc_stream_started;
                 try {
-                    co_await master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, *get_erm(), _small_table_optimization, dst_cpu_id);
+                    co_await master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, _small_table_optimization ? get_erm() : nullptr, _small_table_optimization, dst_cpu_id);
                     ns.state = repair_state::put_row_diff_with_rpc_stream_finished;
                 } catch (...) {
                     std::exception_ptr ep = std::current_exception();
@@ -2973,7 +2977,7 @@ private:
 
 private:
     locator::effective_replication_map_ptr get_erm() {
-        return _shard_task.erm;
+        return _shard_task.get_erm();
     }
 
 private:
@@ -2986,9 +2990,9 @@ private:
         auto my_address = get_erm()->get_topology().my_host_id();
         // Update repair_history table only if all replicas have been repaired
         size_t repaired_replicas = _all_live_peer_nodes.size() + 1;
-        if (_shard_task.total_rf != repaired_replicas){
+        if (_shard_task.get_total_rf() != repaired_replicas){
             rlogger.debug("repair[{}]: Skipped to update system.repair_history total_rf={}, repaired_replicas={}, local={}, peers={}",
-                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, my_address, _all_live_peer_nodes);
+                    _shard_task.global_repair_id.uuid(), _shard_task.get_total_rf(), repaired_replicas, my_address, _all_live_peer_nodes);
             co_return;
         }
         // Update repair_history table only if both hints and batchlog have been flushed.
@@ -3000,7 +3004,7 @@ private:
         // system.tablet.repair_time is updated.
         if (_is_tablet && _shard_task.sched_by_scheduler) {
             rlogger.debug("repair[{}]: Skipped to update system.repair_history for tablet repair scheduled by scheduler total_rf={} repaired_replicas={} local={} peers={}",
-                    _shard_task.global_repair_id.uuid(), _shard_task.total_rf, repaired_replicas, my_address, _all_live_peer_nodes);
+                    _shard_task.global_repair_id.uuid(), _shard_task.get_total_rf(), repaired_replicas, my_address, _all_live_peer_nodes);
             co_return;
         }
 
