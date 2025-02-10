@@ -19,6 +19,7 @@
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "retry_strategy.hh"
+#include "retryable_http_client.hh"
 #include "utils/s3/client_fwd.hh"
 
 using namespace seastar;
@@ -74,11 +75,11 @@ class client : public enable_shared_from_this<client> {
         }
     };
     struct group_client {
-        http::experimental::client http;
+        aws::retryable_http_client retryable_client;
         io_stats read_stats;
         io_stats write_stats;
         seastar::metrics::metric_groups metrics;
-        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
+        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
@@ -97,7 +98,6 @@ class client : public enable_shared_from_this<client> {
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
     future<> make_request(http::request req, reply_handler_ext handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
-    future<> do_retryable_request(group_client& gc, http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as = nullptr) const;
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
