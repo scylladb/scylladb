@@ -71,6 +71,7 @@ public:
     future<> stop();
 
     future<std::vector<mutation>> get_migrate_tasks_mutations(const group0_guard& guard, table_id table_id, locator::tablet_replica abandoning_replica, locator::tablet_replica pending_replica, dht::token_range range);
+    future<std::vector<mutation>> get_resize_tasks_mutations(const group0_guard& guard, table_id table_id, const locator::tablet_map& tablet_map, const locator::tablet_map& new_tablet_map);
 
     void notify() { _cond.broadcast(); }
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override { _cond.broadcast(); }
@@ -89,6 +90,9 @@ private:
 
     std::set<view_name> get_views_to_add(const vbc_state& state, const std::vector<view_name>& views, const std::vector<view_name>& built);
     std::set<view_name> get_views_to_remove(const vbc_state& state, const std::vector<view_name>& views);
+
+    future<std::vector<mutation>> get_split_mutations(const group0_guard& guard, const locator::tablet_map& tablet_map, const view_name& view, const view_building_target& target, const std::vector<dht::token_range>& tasks);
+    future<std::vector<mutation>> get_merge_mutations(const group0_guard& guard, const locator::tablet_map& tablet_map, const locator::tablet_map& new_tablet_map, const view_name& view, const view_building_target& target, const std::vector<dht::token_range>& tasks);
     
     table_id get_base_id(const view_name& view_name);
 
