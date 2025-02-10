@@ -171,8 +171,19 @@ async def delete_raft_data(cql: Session, host: Host) -> None:
     await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
 
 
+async def delete_discovery_state_and_group0_id(cql: Session, host: Host) -> None:
+    await cql.run_async("truncate table system.discovery", host=host)
+    await cql.run_async("delete value from system.scylla_local where key = 'raft_group0_id'", host=host)
+
+
 async def delete_upgrade_state(cql: Session, host: Host) -> None:
     await cql.run_async("delete from system.scylla_local where key = 'group0_upgrade_state'", host=host)
+
+
+async def delete_raft_group_data(group_id: str, cql: Session, host: Host) -> None:
+    await cql.run_async(f'delete from system.raft where group_id = {group_id}', host=host)
+    await cql.run_async(f'delete from system.raft_snapshots where group_id = {group_id}', host=host)
+    await cql.run_async(f'delete from system.raft_snapshot_config where group_id = {group_id}', host=host)
 
 
 async def delete_raft_data_and_upgrade_state(cql: Session, host: Host) -> None:
@@ -219,6 +230,9 @@ async def wait_until_last_generation_is_in_use(cql: Session):
         logger.info(f"The last generation is already in use.")
 
 async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host], cqls: Optional[list[Session]] = None):
+    # This function expects that all nodes in the topology are normal or left. Don't call it, for example, while a node
+    # is joining the topology.
+    #
     # The cqls parameter is a temporary workaround for testing the recovery mode in the presence of live zero-token
     # nodes. A zero-token node requires a different cql session not to be ignored by the driver because of empty tokens
     # in the system.peers table.
@@ -241,14 +255,16 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
             assert row.host_id is not None
             assert row.datacenter is not None
             assert row.ignore_msb is not None
-            assert row.node_state == "normal"
+            assert row.node_state == "normal" or row.node_state == "left"
             assert row.num_tokens is not None
             assert row.rack is not None
             assert row.release_version is not None
             assert row.supported_features is not None
             assert row.shard_count is not None
 
-            assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
+            tokens = 0 if row.tokens is None else len(row.tokens)
+            expected_tokens = row.num_tokens if row.node_state == "normal" else 0
+            assert tokens == expected_tokens
 
         assert topo_res[0].committed_cdc_generations is not None
         committed_generations = frozenset(gen[1] for gen in topo_res[0].committed_cdc_generations)
@@ -280,15 +296,17 @@ async def check_node_log_for_failed_mutations(manager: ManagerClient, server: Se
     assert len(occurrences) == 0
 
 
-async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency: int = 3):
+async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency: int = 3,
+                       ks_name: Optional[str] = None, node_shutdowns: bool = False):
     logging.info(f"Starting to asynchronously write, concurrency = {concurrency}")
 
     stop_event = asyncio.Event()
 
-    ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+    if ks_name is None:
+        ks_name = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
     await cql.run_async(f"USE {ks_name}")
-    await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
+    await cql.run_async(f"CREATE TABLE IF NOT EXISTS tbl (pk int PRIMARY KEY, v int)")
 
     # In the test we only care about whether operations report success or not
     # and whether they trigger errors in the nodes' logs. Inserting the same
@@ -302,6 +320,12 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
             try:
                 await cql.run_async(stmt)
                 write_count += 1
+            except NoHostAvailable as e:
+                for _, err in e.errors.items():
+                    # ConnectionException can be raised when the node is shutting down.
+                    if not node_shutdowns or not isinstance(err, ConnectionException):
+                        logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                        raise
             except Exception as e:
                 logging.error(f"Write started {time.time() - start_time}s ago failed: {e}")
                 raise
