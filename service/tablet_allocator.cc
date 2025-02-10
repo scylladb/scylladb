@@ -2944,7 +2944,6 @@ public:
 
 class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
-    const tablet_allocator::config _config;
     service::migration_notifier& _migration_notifier;
     replica::database& _db;
     load_balancer_stats_manager _load_balancer_stats;
@@ -2959,18 +2958,14 @@ private:
             _db.get_config().tablets_per_shard_goal(),
             std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
-        lb.set_initial_scale(_config.initial_tablets_scale);
+        lb.set_initial_scale(_db.get_config().tablets_initial_scale_factor());
         return lb;
     }
 public:
     tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
-            : _config(std::move(cfg))
-            , _migration_notifier(mn)
+            : _migration_notifier(mn)
             , _db(db)
             , _load_balancer_stats("load_balancer") {
-        if (_config.initial_tablets_scale == 0) {
-            throw std::runtime_error("Initial tablets scale must be positive");
-        }
         _migration_notifier.register_listener(this);
     }
 

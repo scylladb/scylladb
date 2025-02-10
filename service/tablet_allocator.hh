@@ -191,7 +191,6 @@ class migration_notifier;
 class tablet_allocator {
 public:
     struct config {
-        unsigned initial_tablets_scale = 1;
     };
     class impl {
     public:
