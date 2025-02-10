@@ -45,7 +45,7 @@ async def test_topology_upgrade_stuck(request, manager: ManagerClient):
     """
 
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True, 'enable_tablets': False}
+    cfg = {'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
 
     servers = [await manager.server_add(config=cfg) for _ in range(5)]
     to_be_upgraded_node, to_be_isolated_node, *to_be_shutdown_nodes = servers

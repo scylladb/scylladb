@@ -90,7 +90,7 @@ Enabling Tablets
 
 ScyllaDB now uses tablets by default for data distribution.
 Enabling tablets by default when creating new keyspaces is
-controlled by the :confval:`enable_tablets` option. However, tablets only work if
+controlled by the :confval:`tablets_mode_for_new_keyspaces` option. However, tablets only work if
 supported on all nodes within the cluster.
 
 When creating a new keyspace with tablets enabled by default, you can still opt-out

@@ -8,5 +8,5 @@ async def test_drop_table_during_streaming_receiver_side(manager: ManagerClient)
         'enable_repair_based_node_ops': False,
         'enable_user_defined_functions': False,
         'force_gossip_topology_changes': True,
-        'enable_tablets': False
+        'tablets_mode_for_new_keyspaces': 'disabled'
     }) for _ in range(2)]

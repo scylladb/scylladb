@@ -21,7 +21,7 @@ def workdir():
 
 async def test_file_streaming_respects_encryption(request, manager: ManagerClient, workdir):
     cfg = {
-        'enable_tablets': True,
+        'tablets_mode_for_new_keyspaces': 'enabled',
     }
 
     cmdline = ['--smp=1']
