@@ -2357,6 +2357,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             case topology::transition_state::tablet_resize_finalization:
                 co_await handle_tablet_resize_finalization(std::move(guard));
                 break;
+            case topology::transition_state::lock:
+                release_guard(std::move(guard));
+                co_await await_event();
+                break;
             case topology::transition_state::left_token_ring: {
                 auto node = get_node_to_work_on(std::move(guard));
 

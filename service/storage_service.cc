@@ -752,6 +752,8 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                 return read_new_t::no;
             }
             switch (*state) {
+                case topology::transition_state::lock:
+                    [[fallthrough]];
                 case topology::transition_state::join_group0:
                     [[fallthrough]];
                 case topology::transition_state::tablet_migration:
