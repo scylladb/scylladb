@@ -5776,7 +5776,7 @@ class scylla_read_stats(gdb.Command):
 
         for permit in intrusive_list(permit_list):
             try:
-                schema = permit['_schema']['_p']
+                schema = schema_ptr(permit['_schema'])
             except:
                 # schema is already a raw pointer in older versions
                 schema = permit['_schema']
