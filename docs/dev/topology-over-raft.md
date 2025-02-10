@@ -124,6 +124,9 @@ Additionally to specific node states, there entire topology can also be in a tra
     it from group 0. We also use this state to rollback a failed bootstrap or decommission.
 - `rollback_to_normal` - the decommission or removenode operation failed. Rollback the operation by
     moving the node we tried to decommission/remove back to the normal state.
+- `lock` - the topology stays in this state until externally changed (to null state), preventing topology
+    requests from starting. Intended to be used in tests which want to prevent internally-triggered topology
+    operations during the test.
 
 When a node bootstraps, we create new tokens for it and a new CDC generation
 and enter the `commit_cdc_generation` state. Once the generation is committed,

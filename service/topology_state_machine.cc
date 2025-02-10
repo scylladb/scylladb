@@ -153,6 +153,7 @@ static std::unordered_map<topology::transition_state, sstring> transition_state_
     {topology::transition_state::left_token_ring, "left token ring"},
     {topology::transition_state::rollback_to_normal, "rollback to normal"},
     {topology::transition_state::truncate_table, "truncate table"},
+    {topology::transition_state::lock, "lock"},
 };
 
 // Allows old deprecated names to be recognized and point to the correct transition.
