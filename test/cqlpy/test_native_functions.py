@@ -19,6 +19,13 @@ def table1(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int, i int, g bigint, b blob, s text, t timestamp, u timeuuid, d date, PRIMARY KEY (p)") as table:
         yield table
 
+@pytest.fixture(scope="module")
+def tbl_set(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace,
+                        "p int PRIMARY KEY, s1 set<int>, s2 set<int>,"
+                        "s3 set<tinyint>, m map<int, int>, s4 frozen<set<int>>") as table:
+        yield table
+
 # Check that a function that can take a column name as a parameter, can also
 # take a constant. This feature is barely useful for WHERE clauses, and
 # even less useful for selectors, but should be allowed for both.
@@ -161,3 +168,27 @@ def test_totimestamp_date_extreme(cql, table1):
     # and work fine.
     cql.execute(f"INSERT INTO {table1} (p, d) VALUES ({p}, {2**30})")
     cql.execute(f"SELECT totimestamp(d) FROM {table1} WHERE p={p}")
+
+# Test set_intersection() function. Not supported in Cassandra.
+def test_set_intersection_fn(cql, tbl_set, scylla_only):
+    p1 = unique_key_int()
+    p2 = unique_key_int()
+    cql.execute(f"INSERT INTO {tbl_set} (p, s1, s2, s3, m, s4) VALUES ({p1}, {{1,2,3}}, {{2,3,4}}, {{1}}, {{1:2, 2:3}}, {{-1,2}})")
+    cql.execute(f"INSERT INTO {tbl_set} (p, s1, s2, s3, m, s4) VALUES ({p2}, {{1,2,3}}, NULL, {{1}}, {{1:2, 2:3}}, {{-1,2}})")
+    # Normal intersection.
+    assert [(set([2,3]),)] == list(cql.execute(f"SELECT set_intersection(s1, s2) FROM {tbl_set} WHERE p={p1}"))
+    # Intersecting with NULL.
+    assert [(None,)] == list(cql.execute(f"SELECT set_intersection(s1, s2) FROM {tbl_set} WHERE p={p2}"))
+    # Frozen and non-frozen.
+    assert [(set([2]),)] == list(cql.execute(f"SELECT set_intersection(s1, s4) FROM {tbl_set} WHERE p={p1}"))
+    # Nesting
+    assert [(set([2]),)] == list(cql.execute(f"SELECT set_intersection(s1, set_intersection(s2, s4)) FROM {tbl_set} WHERE p={p1}"))
+    # Some error cases
+    with pytest.raises(InvalidRequest, match='accepts 2 arguments'):
+        cql.execute(f"SELECT set_intersection(s1, s2, s3) FROM {tbl_set} WHERE p={p1}")
+    with pytest.raises(InvalidRequest, match='accepts 2 arguments'):
+        cql.execute(f"SELECT set_intersection(s1) FROM {tbl_set} WHERE p={p1}")
+    with pytest.raises(InvalidRequest, match='both arguments are of set type'):
+        cql.execute(f"SELECT set_intersection(s1, p) FROM {tbl_set} WHERE p={p1}")
+    with pytest.raises(InvalidRequest, match='both arguments are of the same set type'):
+        cql.execute(f"SELECT set_intersection(s1, s3) FROM {tbl_set} WHERE p={p1}")
