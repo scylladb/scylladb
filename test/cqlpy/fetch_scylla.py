@@ -66,7 +66,9 @@ def download_scylla(release, dir):
     major = f'{v[0]}.{v[1]}'
     bucket = f'downloads.scylladb.com'
     scylla_arch_string = '.' + scylla_arch + '.'
-    if int(v[0]) >= 2023: # Enterprise release (new organization)
+    if int(v[0]) >= 2025: # New single release stream (no separate Enterprise)
+        prefix = f'downloads/scylla/relocatable/scylladb-{major}/scylla-{release}'
+    elif int(v[0]) >= 2023: # Enterprise release (new organization)
         prefix = f'downloads/scylla-enterprise/relocatable/scylladb-{major}/scylla-enterprise-{release}'
     elif int(v[0]) > 2000: # Enterprise release (old organization)
         prefix = f'downloads/scylla-enterprise/relocatable/scylladb-{major}/scylla-enterprise-{scylla_arch}-package-{release}'
