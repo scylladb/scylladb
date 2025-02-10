@@ -136,14 +136,6 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"path"
-                  },
-                  {
-                     "name":"unsafe",
-                     "description":"Set to True to perform an unsafe assassination",
-                     "required":false,
-                     "allowMultiple":false,
-                     "type":"boolean",
-                     "paramType":"query"
                   }
                ]
             }

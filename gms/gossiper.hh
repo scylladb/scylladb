@@ -382,8 +382,6 @@ public:
      */
     future<> advertise_token_removed(inet_address endpoint, locator::host_id host_id, permit_id);
 
-    future<> unsafe_assassinate_endpoint(sstring address);
-
     /**
      * Do not call this method unless you know what you are doing.
      * It will try extremely hard to obliterate any endpoint from the ring,

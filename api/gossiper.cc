@@ -53,12 +53,7 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
     httpd::gossiper_json::assassinate_endpoint.set(r, [&g](std::unique_ptr<http::request> req) {
-        if (req->get_query_param("unsafe") != "True") {
-            return g.assassinate_endpoint(req->get_path_param("addr")).then([] {
-                return make_ready_future<json::json_return_type>(json_void());
-            });
-        }
-        return g.unsafe_assassinate_endpoint(req->get_path_param("addr")).then([] {
+        return g.assassinate_endpoint(req->get_path_param("addr")).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
     });

@@ -1369,11 +1369,6 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_
     co_await sleep_abortable(INTERVAL * 2, _abort_source);
 }
 
-future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
-    logger.warn("Gossiper.unsafeAssassinateEndpoint is deprecated and will be removed in the next release; use assassinate_endpoint instead");
-    return assassinate_endpoint(address);
-}
-
 future<> gossiper::assassinate_endpoint(sstring address) {
     co_await container().invoke_on(0, [&] (auto&& gossiper) -> future<> {
         inet_address endpoint(address);
