@@ -94,8 +94,8 @@ encryption::parse_key_spec(const sstring& alg) {
     std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
     std::transform(padd.begin(), padd.end(), padd.begin(), ::tolower);
 
-    static const std::string padding = "padding";
-    if (padd.size() > padding.size() && std::equal(padding.rbegin(), padding.rend(), padd.rbegin())) {
+    static constexpr std::string_view padding = "padding";
+    if (padd.ends_with(padding)) {
         padd.resize(padd.size() - padding.size());
     }
 
