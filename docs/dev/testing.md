@@ -189,7 +189,7 @@ A typical debugging journey should start with looking at `test.py.log` in
 to server log and pytest output.
 
 To extend `test.py` logging, you can use the standard 'logging' module API.
-Individual pytests are programmed to not gobble stdout, so you can can also
+Individual pytests are programmed to not gobble stdout, so you can also
 add prints to pytests, and they will end up in the test' log.
 
 For example, imagine `cqlpy/test_null.py` fails. The relevant lines
@@ -275,7 +275,7 @@ operations and can clean up resources, including added
 servers, when tests end.
 `test.py` automatically detects if a cluster can not be shared with a
 subsequent test because it was manipulated with. Today the check
-is quite simple: any cluster that has has nodes added or removed,
+is quite simple: any cluster that has nodes added or removed,
 started or stopped, even if it ended up in the same state
 as it was at the beginning of the test, is considered "dirty".
 Such clusters are not returned to the pool, but destroyed, and

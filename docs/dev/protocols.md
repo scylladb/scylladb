@@ -25,7 +25,7 @@ https://www.scylladb.com/2020/05/21/dissecting-scylla-packets-with-wireshark/
 
 ## Internal communication
 
-All inter-node communiction - communication between the Scylla nodes
+All inter-node communication - communication between the Scylla nodes
 themselves - happen over one protocol and one TCP port - by default port 7000
 (unencrypted) or 7001 (encrypted). These are the same TCP ports used by
 Cassandra for this purpose, but Scylla's internal protocol is completely

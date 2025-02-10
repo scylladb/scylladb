@@ -34,7 +34,7 @@ Instructions for doing this can be found in:
 ## Write isolation policies
 
 Scylla was designed to optimize the performance of pure write operations -
-writes which do not need to read the the previous value of the item.
+writes which do not need to read the previous value of the item.
 In CQL, writes which do need the previous value of the item must explicitly
 use the slower LWT ("LightWeight Transaction") feature to be correctly
 isolated from each other. It is not allowed to mix LWT and non-LWT writes
@@ -89,12 +89,12 @@ one or more of the following:
 3. Consider using the `always_use_lwt` write isolation policy.
    It is slower, but has better guarantees.
 
-Another guarantee that that `always_use_lwt` can make and other write
+Another guarantee that `always_use_lwt` can make and other write
 isolation modes do not is that writes to the same item are _serialized_:
 Even if the two write are sent at exactly the same time to two different
 nodes, the result will appear as if one write happened first, and then
 the other. But in other modes (with non-LWT writes), two writes can get
-exactly the same microsecond-resolution timestamp, the the result may be
+exactly the same microsecond-resolution timestamp, the result may be
 a mixture of both writes - some attributes from one and some from the
 other - instead of being just one or the other.
 

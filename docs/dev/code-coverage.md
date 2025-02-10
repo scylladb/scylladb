@@ -50,7 +50,7 @@ Examples:
 
 ## Advanced And Manual Workflows
 Once built with code coverage instrumentation, all test executables and scylla executable are going
-to dump a a profile upon graceful shutdown / clean exit. However, in order to produce a coverage report some extra processing is needed.
+to dump a profile upon graceful shutdown / clean exit. However, in order to produce a coverage report some extra processing is needed.
 For reference of how to process the profile dumps using the llvm toolchain, refer to: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html
 
 HINT: It is recommended to run with LLVM_PROFILE_FILE set in the environment so the profiles will be dumped to a known location (https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program)
@@ -74,7 +74,7 @@ HINT: It is recommended to run with LLVM_PROFILE_FILE set in the environment so 
 
    #### 3. Producing A Report From Lcov trace files:
    For textual reports:
-   1. `lcov --summary profiles/85e5e08c67bd9bd74c2caeb98aca2a45360cf25a.info` for a summary of the the coverage rates:
+   1. `lcov --summary profiles/85e5e08c67bd9bd74c2caeb98aca2a45360cf25a.info` for a summary of the coverage rates:
    ```
    Reading tracefile profiles/85e5e08c67bd9bd74c2caeb98aca2a45360cf25a.info
    Summary coverage rate:
