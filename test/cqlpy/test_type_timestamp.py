@@ -81,6 +81,12 @@ def test_type_timestamp_from_string(cql, table1):
     assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(datetime(2011, 2, 3, 5, 6, 17, 123000),)]
     cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '2011-02-03+0000')")
     assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(datetime(2011, 2, 3, 0, 0, 0, 0),)]
+    cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '2011-02-03 UTC')")
+    assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(datetime(2011, 2, 3, 0, 0, 0, 0),)]
+    cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '2011-02-03 UTC ')")
+    assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(datetime(2011, 2, 3, 0, 0, 0, 0),)]
+    cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '2011-02-03z')")
+    assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(datetime(2011, 2, 3, 0, 0, 0, 0),)]
     # Dropping the timezone string +0000 is allowed, but results in an unknown
     # timezone (the on the machine running Scylla), so we don't know how to
     # check the correctness of the result. But at least the insert should
