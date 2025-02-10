@@ -16,6 +16,7 @@
 #   * 2023.1 (latest in this branch, Enterprise release)
 
 import boto3
+import botocore
 import sys
 import os
 import subprocess
@@ -81,7 +82,11 @@ def download_scylla(release, dir):
     # This prefix has many different packages belonging to all releases in
     # the same major version. We need to look only for those matching the
     # minor version, and take the highest minor number.
-    s3 = boto3.resource('s3')
+
+    # We set region_name and use unsigned (anonymous) requests to avoid
+    # the need of the user to have to set up a valid $HOME/.aws/config
+    # or $HOME/.aws/credentails.
+    s3 = boto3.resource('s3', region_name='us-east-1', config=botocore.client.Config(signature_version=botocore.UNSIGNED))
     bucket = s3.Bucket(bucket)
     matches = bucket.objects.filter(Prefix=prefix)
     candidates = [o.key.removeprefix(prefix) for o in matches if scylla_arch_string in o.key]
