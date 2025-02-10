@@ -1119,8 +1119,12 @@ void netstats_operation(scylla_rest_client& client, const bpo::variables_map& vm
                     fmt::print(std::cout, " (using /{})", private_ip);
                 }
                 fmt::print(std::cout, "\n");
-                print_stream_session(session["receiving_summaries"], session["receiving_files"], "Receiving", "received", "from", human_readable);
-                print_stream_session(session["sending_summaries"], session["sending_files"], "Sending", "sent", "to", human_readable);
+                if (session.HasMember("receiving_summaries")) {
+                    print_stream_session(session["receiving_summaries"], session["receiving_files"], "Receiving", "received", "from", human_readable);
+                }
+                if (session.HasMember("sending_summaries")) {
+                    print_stream_session(session["sending_summaries"], session["sending_files"], "Sending", "sent", "to", human_readable);
+                }
             }
         }
     }
