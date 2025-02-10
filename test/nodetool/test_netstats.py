@@ -44,8 +44,10 @@ class test_flag(Enum):
     private_ip = 2
     one_stream = 3
     no_streams = 4
-    human_readable_short = 5
-    human_readable_long = 6
+    sender_only = 5
+    receiver_only = 6
+    human_readable_short = 7
+    human_readable_long = 8
 
 
 class SessionSummary():
@@ -114,8 +116,8 @@ def _check_output(
                     assert lines[i] == f'    /{session["peer"]} (using /{session["connecting"]})'
 
                 for summaries, files, action_continuous, action_perfect, target in (
-                        (session["receiving_summaries"], session["receiving_files"], "Receiving", "received", "from"),
-                        (session["sending_summaries"], session["sending_files"], "Sending", "sent", "to")):
+                        (session.get("receiving_summaries", []), session.get("receiving_files", []), "Receiving", "received", "from"),
+                        (session.get("sending_summaries", []), session.get("sending_files", []), "Sending", "sent", "to")):
                     if not summaries:
                         continue
                     i += 1
@@ -189,6 +191,8 @@ def _check_output(
     test_flag.private_ip,
     test_flag.one_stream,
     test_flag.no_streams,
+    test_flag.sender_only,
+    test_flag.receiver_only,
     test_flag.human_readable_short,
     test_flag.human_readable_long))
 def test_netstats(nodetool, flag):
@@ -312,6 +316,14 @@ def test_netstats(nodetool, flag):
         del streams[1]
     elif flag == test_flag.no_streams or flag == test_flag.starting_mode:
         streams.clear()
+    elif flag == test_flag.sender_only:
+        for session in streams[0]["sessions"]:
+            del session["receiving_summaries"]
+            del session["receiving_files"]
+    elif flag == test_flag.receiver_only:
+        for session in streams[0]["sessions"]:
+            del session["sending_summaries"]
+            del session["sending_files"]
 
     read_repair_attempted = 78680
     read_repair_repaired_blocking = 78678
