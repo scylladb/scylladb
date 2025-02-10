@@ -17,6 +17,8 @@
 
 set -e
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 SCRIPT_NAME=$(basename $0)
 SCYLLA_S3_RELOC_SERVER_DEFAULT_URL=http://backtrace.scylladb.com
 

@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 releasever=`rpm -q --provides $(rpm -q --whatprovides "system-release(releasever)") | grep "system-release(releasever)"| uniq |  cut -d ' ' -f 3`
 
 # Can ignore error since we only needed when files exists

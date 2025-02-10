@@ -9,6 +9,8 @@
 
 set -e
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 gh_hosts=~/.config/gh/hosts.yml
 jenkins_url="https://jenkins.scylladb.com"
 FORCE=$2

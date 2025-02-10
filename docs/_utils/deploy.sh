@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+set -e
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 # Copy contents
 mkdir gh-pages
 cp -r ./docs/_build/dirhtml/. gh-pages

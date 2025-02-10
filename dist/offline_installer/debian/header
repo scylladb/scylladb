@@ -5,6 +5,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 print_usage() {
     echo "scylla_offline_installer.sh -- --skip-setup"
     echo "  --skip-setup skip running scylla_setup"

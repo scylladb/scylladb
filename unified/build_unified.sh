@@ -7,6 +7,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 print_usage() {
     echo "build_unified.sh --build-dir <build_dir>"
     echo "  --build-dir specify build directory (default: build/release)"

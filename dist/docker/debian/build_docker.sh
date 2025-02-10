@@ -8,6 +8,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 product="$(<build/SCYLLA-PRODUCT-FILE)"
 version="$(sed 's/-/~/' <build/SCYLLA-VERSION-FILE)"
 release="$(<build/SCYLLA-RELEASE-FILE)"

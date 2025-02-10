@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/bin/bash -e
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
 
 . /etc/os-release
 

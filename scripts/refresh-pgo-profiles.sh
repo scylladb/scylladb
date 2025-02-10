@@ -8,6 +8,8 @@
 
 set -eu
 
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
 SCRIPT_PATH="$(realpath "$0")"
 PROJECT_BASE="$(realpath "$(dirname "$0")"/..)"
 WORKING_DIR="$(realpath "$PWD")"
