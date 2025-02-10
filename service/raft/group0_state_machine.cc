@@ -57,7 +57,7 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
         group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat,
         bool topology_change_enabled)
     : _client(client), _mm(mm), _sp(sp), _ss(ss), _topology_change_enabled(topology_change_enabled)
-    , _state_id_handler(sp.local_db(), gossiper, server_accessor)
+    , _state_id_handler(sp.local_db(), gossiper, server_accessor), _feature_service(feat)
     , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
         // Using features to decide whether to start fetching topology snapshots
         // or not is technically not correct because we also use features to guard
@@ -322,6 +322,9 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     // memory and thus needs to be protected with apply mutex
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
     co_await _ss.topology_state_load();
+    if (_feature_service.compression_dicts) {
+        co_await _ss.compression_dictionary_updated_callback();
+    }
     _ss._topology_state_machine.event.broadcast();
 }
 
