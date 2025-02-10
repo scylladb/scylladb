@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 async def test_truncate_while_migration(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'enable_tablets': True,
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'error_injections_at_startup': ['migration_streaming_wait']
             }
 
@@ -74,7 +74,7 @@ async def get_raft_leader_and_log(manager: ManagerClient, servers):
 async def test_truncate_with_concurrent_drop(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'enable_tablets': True,
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
             'error_injections_at_startup': ['truncate_table_wait']
             }
 
@@ -125,7 +125,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
 async def test_truncate_while_node_restart(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'enable_tablets': True }
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
 
     servers = []
     servers.append(await manager.server_add(config=cfg))
@@ -173,7 +173,7 @@ async def test_truncate_while_node_restart(manager: ManagerClient):
 async def test_truncate_with_coordinator_crash(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
-    cfg = { 'enable_tablets': True }
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled' }
 
     servers = []
     servers.append(await manager.server_add(config=cfg))

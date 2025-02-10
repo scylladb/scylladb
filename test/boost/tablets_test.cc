@@ -82,10 +82,10 @@ void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, std::
 }
 
 static
-cql_test_config tablet_cql_test_config(bool enable_tablets = true) {
+cql_test_config tablet_cql_test_config(db::tablets_mode_t::mode enable_tablets = db::tablets_mode_t::mode::enabled) {
     cql_test_config c;
-    c.db_config->enable_tablets(enable_tablets);
-    if (enable_tablets) {
+    c.db_config->tablets_mode_for_new_keyspaces(enable_tablets);
+    if (c.db_config->enable_tablets_by_default()) {
         c.initial_tablets = 2;
     }
     return c;
@@ -3678,7 +3678,7 @@ future<> test_create_keyspace(sstring ks_name, std::optional<bool> tablets_opt, 
             testlog.debug("shard table_count={}", count);
             return count;
         }, int64_t(0), std::plus<int64_t>()).get();
-        if (tablets_opt.value_or(cfg.db_config->enable_tablets())) {
+        if (tablets_opt.value_or(cfg.db_config->enable_tablets_by_default())) {
             if (initial_tablets) {
                 BOOST_REQUIRE_EQUAL(total, initial_tablets);
             } else {
@@ -3693,10 +3693,10 @@ future<> test_create_keyspace(sstring ks_name, std::optional<bool> tablets_opt, 
 }
 
 // Test that tablets can be explicitly enabled
-// when creating a keyspace when the `enable_tablets`
-// configuration option is set to `false`.
+// when creating a keyspace when the `tablets_mode_for_new_keyspaces`
+// configuration option is set to `disabled`.
 SEASTAR_TEST_CASE(test_explicit_tablets_enable) {
-    auto cfg = tablet_cql_test_config(false);
+    auto cfg = tablet_cql_test_config(db::tablets_mode_t::mode::disabled);
 
     // By default tablets are disabled
     co_await test_create_keyspace("test_default_settings", std::nullopt, cfg);
@@ -3710,10 +3710,10 @@ SEASTAR_TEST_CASE(test_explicit_tablets_enable) {
 }
 
 // Test that tablets can be explicitly disabled
-// when creating a keyspace when the `enable_tablets`
-// configuration option is set to `true`.
+// when creating a keyspace when the `tablets_mode_for_new_keyspaces`
+// configuration option is set to `enabled`.
 SEASTAR_TEST_CASE(test_explicit_tablets_disable) {
-    auto cfg = tablet_cql_test_config(true);
+    auto cfg = tablet_cql_test_config(db::tablets_mode_t::mode::enabled);
 
     // By default tablets are enabled
     co_await test_create_keyspace("test_default_settings", std::nullopt, cfg);

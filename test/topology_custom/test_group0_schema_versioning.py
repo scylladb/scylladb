@@ -125,7 +125,7 @@ async def test_schema_versioning_with_recovery(manager: ManagerClient):
     """
     cfg = {'enable_user_defined_functions': False,
            'force_gossip_topology_changes': True,
-           'enable_tablets': False}
+           'tablets_mode_for_new_keyspaces': 'disabled'}
     logger.info("Booting cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(3)]
     cql = manager.get_cql()
@@ -294,7 +294,7 @@ async def test_upgrade(manager: ManagerClient):
     # to simulate a non-Raft cluster.
     cfg = {'enable_user_defined_functions': False,
            'force_gossip_topology_changes': True,
-           'enable_tablets': False}
+           'tablets_mode_for_new_keyspaces': 'disabled'}
     logger.info("Booting cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(2)]
     cql = manager.get_cql()

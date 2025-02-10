@@ -130,6 +130,19 @@ struct replication_strategy_restriction_t {
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
 
+struct tablets_mode_t {
+    // The `unset` mode is used internally for backward compatibility
+    // with the legacy `enable_tablets` option.
+    // It is defined as -1 as existing test code associates the value
+    // 0 with `false` and 1 with `true` when read from system.config.
+    enum class mode : int8_t {
+        unset = -1,
+        disabled = 0,
+        enabled = 1,
+    };
+    static std::unordered_map<sstring, mode> map(); // for enum_option<>
+};
+
 class config final : public utils::config_file {
 public:
     config();
@@ -528,6 +541,19 @@ public:
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;
     named_value<bool> enable_tablets;
+    named_value<enum_option<tablets_mode_t>> tablets_mode_for_new_keyspaces;
+
+    bool enable_tablets_by_default() const noexcept {
+        switch (tablets_mode_for_new_keyspaces()) {
+        case tablets_mode_t::mode::unset:
+            return enable_tablets();
+        case tablets_mode_t::mode::disabled:
+            return false;
+        case tablets_mode_t::mode::enabled:
+            return true;
+        }
+    }
+
     named_value<uint32_t> view_flow_control_delay_limit_in_ms;
 
     named_value<int> disk_space_monitor_normal_polling_interval_in_seconds;

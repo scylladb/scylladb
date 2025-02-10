@@ -61,7 +61,7 @@ def all_hints_metrics(metrics: ScyllaMetrics) -> list[str]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bool):
-    cfg = {'enable_tablets' : tablets_enabled}
+    cfg = {'tablets_mode_for_new_keyspaces' : 'enabled' if tablets_enabled else 'disabled'}
 
     logger.info("Bootstrapping first two nodes")
     servers = await manager.servers_add(2, config=cfg)

@@ -34,7 +34,7 @@ async def test_raft_fix_broken_snapshot(manager: ManagerClient):
 
     cfg = {'enable_user_defined_functions': False,
            'force_gossip_topology_changes': True,
-           'enable_tablets': False,
+           'tablets_mode_for_new_keyspaces': 'disabled',
            'error_injections_at_startup': ['raft_sys_table_storage::bootstrap/init_index_0']}
     srv = await manager.server_add(config=cfg)
     cql = manager.get_cql()

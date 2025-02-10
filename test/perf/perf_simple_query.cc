@@ -580,7 +580,7 @@ int scylla_simple_query_main(int argc, char** argv) {
             db_cfg->enable_cache(enable_cache);
             cql_test_config cfg(db_cfg);
             if (app.configuration().contains("tablets")) {
-                cfg.db_config->enable_tablets.set(true);
+                cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
             set_from_cli("audit", app, cfg.db_config->audit);
