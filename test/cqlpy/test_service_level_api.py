@@ -12,6 +12,12 @@ from .rest_api import get_request, post_request
 from .util import new_session, unique_name
 import time
 
+# All tests in this file check the Scylla-only service levels feature,
+# so let's mark them all scylla_only with an autouse fixture:
+@pytest.fixture(scope="function", autouse=True)
+def all_tests_are_scylla_only(scylla_only):
+    pass
+
 def count_opened_connections(cql, retry_unauthenticated=True):
     response = get_request(cql, "service_levels/count_connections")
     return response

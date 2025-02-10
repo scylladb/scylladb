@@ -49,7 +49,7 @@ def test_time_window_compaction_strategy_options(cql, table1):
 def test_leveled_compaction_strategy_options(cql, table1):
     assert_throws(cql, table1, r"sstable_size_in_mb value \(-5\) must be positive|sstable_size_in_mb must be larger than 0, but was -5", "ALTER TABLE %s WITH compaction = { 'class' : 'LeveledCompactionStrategy', 'sstable_size_in_mb' : -5 }")
 
-def test_incremental_compaction_strategy_options(cql, table1):
+def test_incremental_compaction_strategy_options(cql, table1, scylla_only):
     assert_throws(cql, table1, r"min_sstable_size value \(-1\) must be non negative", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'min_sstable_size' : -1 }")
     assert_throws(cql, table1, r"bucket_low value \(0\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'bucket_low' : 0.0 }")
     assert_throws(cql, table1, r"bucket_low value \(1.3\) must be between 0.0 and 1.0", "ALTER TABLE %s WITH compaction = { 'class' : 'IncrementalCompactionStrategy', 'bucket_low' : 1.3 }")
