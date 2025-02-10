@@ -150,7 +150,7 @@ namespace {
 // to keep things simple, we also fix a setting for compression. This allows this RPC client
 // to be established without checking the topology (which may not be known anyway
 // when we first start gossiping).
-static constexpr unsigned TOPOLOGY_INDEPENDENT_IDX = 0;
+constexpr unsigned TOPOLOGY_INDEPENDENT_IDX = 0;
 
 constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     // *_CONNECTION_COUNT constants needs to be updated after allocating a new index.
@@ -256,21 +256,22 @@ constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
 }
 
 // Count of connection types that are not associated with any tenant
-const size_t PER_SHARD_CONNECTION_COUNT = 2;
-// Counts per tenant connection types
-const size_t PER_TENANT_CONNECTION_COUNT = 3;
+constexpr size_t PER_SHARD_CONNECTION_COUNT = 2;
 
-constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> make_rpc_client_idx_table() {
+consteval std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> make_rpc_client_idx_table() {
     std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> tab{};
     for (size_t i = 0; i < tab.size(); ++i) {
         tab[i] = do_get_rpc_client_idx(messaging_verb(i));
-
-        // This SCYLLA_ASSERT guards against adding new connection types without
-        // updating *_CONNECTION_COUNT constants.
-        SCYLLA_ASSERT(tab[i] < PER_TENANT_CONNECTION_COUNT + PER_SHARD_CONNECTION_COUNT);
     }
     return tab;
 }
+
+// Counts per tenant connection types
+constexpr const size_t PER_TENANT_CONNECTION_COUNT = std::ranges::max(make_rpc_client_idx_table()) + 1 - PER_SHARD_CONNECTION_COUNT;
+static_assert(std::ranges::max(make_rpc_client_idx_table()) + 1 >= PER_SHARD_CONNECTION_COUNT);
+
+constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
+
 } // namespace
 
 static_assert(!std::is_default_constructible_v<msg_addr>);
@@ -744,8 +745,6 @@ future<> messaging_service::stop() {
 rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
-
-static std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
 
 msg_addr messaging_service::addr_for_host_id(locator::host_id hid) {
     auto opt_ip = _address_map.find(hid);
