@@ -2571,7 +2571,6 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
     }
     const auto host_id = _gossiper.get_host_id(endpoint);
     if (get_token_metadata().is_normal_token_owner(host_id)) {
-        auto state = pieces[0];
         auto remove_tokens = get_token_metadata().get_tokens(host_id);
         std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
         co_await excise(std::move(tmp), endpoint, host_id, extract_expire_time(pieces), pid);
