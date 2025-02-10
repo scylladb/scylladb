@@ -154,7 +154,7 @@ Compilation instructions:
     wasm2wat fib.wasm > fib.wat
 
 ..
-    The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_c
+    The compiled example can be viewed at test/cqlpy/test_wasm.py::test_docs_c
 
 AssemblyScript
 ..............
@@ -188,7 +188,7 @@ Compile directly to WebAssembly Text format with:
     asc fib.ts --textFile fib.wat --optimize
 
 ..
-    The compiled example can be viewed at test/cql-pytest/test_wasm.py::test_docs_assemblyscript
+    The compiled example can be viewed at test/cqlpy/test_wasm.py::test_docs_assemblyscript
 
 Similarly to C, the AssemblyScript can only be conveniently used with ``RETURNS NULL ON NULL INPUT`` UDFs that only have Wasm-compatible arguments/returns.
 

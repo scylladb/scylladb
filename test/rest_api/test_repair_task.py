@@ -1,7 +1,7 @@
 import sys
 
-# Use the util.py library from ../cql-pytest:
-sys.path.insert(1, sys.path[0] + '/test/cql-pytest')
+# Use the util.py library from ../cqlpy:
+sys.path.insert(1, sys.path[0] + '/test/cqlpy')
 from util import new_test_table, new_test_keyspace
 from test.rest_api.rest_util import set_tmp_task_ttl, scylla_inject_error
 from test.rest_api.task_manager_utils import list_tasks, drain_module_tasks, get_task_status, get_task_status_recursively, wait_for_task, check_child_parent_relationship, get_children
