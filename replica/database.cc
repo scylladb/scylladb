@@ -225,7 +225,7 @@ void database::setup_scylla_memory_diagnostics_producer() {
 
         writeln("  Read Concurrency Semaphores:\n");
 
-        static auto semaphore_dump = [&writeln] (const sstring& name, const reader_concurrency_semaphore& sem) {
+        auto semaphore_dump = [&writeln] (const sstring& name, const reader_concurrency_semaphore& sem) {
             const auto initial_res = sem.initial_resources();
             const auto available_res = sem.available_resources();
             if (sem.is_unlimited()) {
@@ -248,10 +248,10 @@ void database::setup_scylla_memory_diagnostics_producer() {
         semaphore_dump("streaming", _streaming_concurrency_sem);
         semaphore_dump("system", _system_read_concurrency_sem);
         semaphore_dump("compaction", _compaction_concurrency_sem);
-        _reader_concurrency_semaphores_group.foreach_semaphore([] (scheduling_group sg, reader_concurrency_semaphore& sem) {
+        _reader_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump] (scheduling_group sg, reader_concurrency_semaphore& sem) {
              semaphore_dump(sg.name(), sem);
         });
-        _view_update_read_concurrency_semaphores_group.foreach_semaphore([] (scheduling_group sg, reader_concurrency_semaphore& sem) {
+        _view_update_read_concurrency_semaphores_group.foreach_semaphore([&semaphore_dump] (scheduling_group sg, reader_concurrency_semaphore& sem) {
              semaphore_dump(sg.name(), sem);
         });
 
