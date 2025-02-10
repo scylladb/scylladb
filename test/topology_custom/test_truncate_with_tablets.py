@@ -5,6 +5,8 @@
 #
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest
+from cassandra.cluster import TruncateError
+from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.manager_client import ManagerClient
 from test.topology.conftest import skip_mode
 from test.topology.util import get_topology_coordinator
@@ -208,6 +210,58 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
     await manager.server_start(raft_leader.server_id)
     # Wait for truncate to complete
     await trunc_future
+
+    # Check if we have any data
+    row = await cql.run_async(SimpleStatement('SELECT COUNT(*) FROM test.test', consistency_level=ConsistencyLevel.ALL))
+    assert row[0].count == 0
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
+
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'error_injections_at_startup': ['migration_streaming_wait']
+            }
+
+    servers = []
+    servers.append(await manager.server_add(config=cfg))
+
+    cql = manager.get_cql()
+
+    # Create a keyspace with tablets and initial_tablets == 2, then insert data
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}")
+    await cql.run_async('CREATE TABLE test.test (pk int PRIMARY KEY, c int);')
+
+    keys = range(1024)
+    await asyncio.gather(*[cql.run_async(f'INSERT INTO test.test (pk, c) VALUES ({k}, {k});') for k in keys])
+
+    # Add a node to the cluster. This will cause the load balancer to migrate one tablet to the new node
+    servers.append(await manager.server_add(config=cfg))
+
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    s1_log = await manager.server_open_log(servers[1].server_id)
+
+    # Wait for tablet streaming to start
+    await s1_log.wait_for('migration_streaming_wait: start')
+
+    # Run a truncate which will quickly time out, but the truncate fiber remains alive
+    # Do not attempt to retry automatically (hense the FallthroughRetryPolicy)
+    with pytest.raises((TruncateError), match='Timeout during TRUNCATE TABLE of test.test'):
+        await cql.run_async(SimpleStatement('TRUNCATE TABLE test.test USING TIMEOUT 100ms', retry_policy=FallthroughRetryPolicy()))
+
+    # Run another truncate on the same table while the timedout one is still waiting
+    truncate_future = cql.run_async('TRUNCATE TABLE test.test', host=hosts[1])
+
+    # Make sure the second truncate re-used the existing global topology request
+    await s1_log.wait_for('Ongoing TRUNCATE for table test.test')
+
+    # Release streaming
+    await manager.api.message_injection(servers[1].ip_addr, 'migration_streaming_wait')
+
+    # Wait for the joined truncate to complete
+    await truncate_future
 
     # Check if we have any data
     row = await cql.run_async(SimpleStatement('SELECT COUNT(*) FROM test.test', consistency_level=ConsistencyLevel.ALL))
