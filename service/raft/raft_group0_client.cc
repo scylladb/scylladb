@@ -231,7 +231,7 @@ future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seas
     }
 }
 
-static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
+utils::UUID raft_group0_client::generate_group0_state_id(utils::UUID prev_state_id) {
     auto ts = api::new_timestamp();
     if (prev_state_id != utils::UUID{}) {
         auto lower_bound = utils::UUID_gen::micros_timestamp(prev_state_id);

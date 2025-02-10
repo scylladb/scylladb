@@ -654,7 +654,7 @@ public:
 public:
     future<std::optional<int8_t>> get_service_levels_version();
     
-    future<mutation> make_service_levels_version_mutation(int8_t version, const service::group0_guard& guard);
+    future<mutation> make_service_levels_version_mutation(int8_t version, api::timestamp_type timestamp);
     future<std::optional<mutation>> get_service_levels_version_mutation();
 
     // Publishes a new compression dictionary to `dicts`,
