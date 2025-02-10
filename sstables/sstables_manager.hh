@@ -108,8 +108,8 @@ private:
     size_t _total_memory_reclaimed{0};
     // Set of sstables from which memory has been reclaimed
     set_type _reclaimed;
-    // Condition variable that gets notified when an sstable is deleted
-    seastar::condition_variable _sstable_deleted_event;
+    // Condition variable that needs to be notified when an sstable is created or deleted
+    seastar::condition_variable _components_memory_change_event;
     future<> _components_reloader_status = make_ready_future<>();
 
     bool _closing = false;
@@ -212,13 +212,16 @@ private:
     // Allow at most 10% of memory to be filled with such reads.
     size_t max_memory_sstable_metadata_concurrent_reads(size_t available_memory) { return available_memory * 0.1; }
 
-    // Increment the _total_reclaimable_memory with the new SSTable's reclaimable
-    // memory and if the total memory usage exceeds the pre-defined threshold,
-    // reclaim it from the SSTable that has the most reclaimable memory.
-    void increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst);
+    // Increment the _total_reclaimable_memory with the new SSTable's reclaimable memory
+    void increment_total_reclaimable_memory(sstable* sst);
     // Fiber to reload reclaimed components back into memory when memory becomes available.
-    future<> components_reloader_fiber();
-    size_t get_memory_available_for_reclaimable_components();
+    future<> components_reclaim_reload_fiber();
+    // Reclaims components from SSTables if total memory usage exceeds the threshold.
+    future<> maybe_reclaim_components();
+    // Reloads components from reclaimed SSTables if memory is available.
+    future<> maybe_reload_components();
+    size_t get_components_memory_reclaim_threshold() const;
+    size_t get_memory_available_for_reclaimable_components() const;
     // Reclaim memory from the SSTable and remove it from the memory tracking metrics.
     // The method is idempotent and for an sstable that is deleted, it is called both
     // during unlink and during deactivation.

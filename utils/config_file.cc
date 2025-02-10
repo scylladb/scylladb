@@ -448,3 +448,17 @@ sstring utils::config_file::config_src::source_name() const noexcept {
 
     __builtin_unreachable();
 }
+
+template <typename T>
+struct fmt::formatter<std::vector<T>> : fmt::formatter<std::string_view> {
+    auto format(const std::vector<T>& vec, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        auto out = ctx.out();
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i != 0) {
+                fmt::format_to(out, ", ");
+            }
+            fmt::format_to(out, "{}", vec[i]);
+        }
+        return out;
+    }
+};
