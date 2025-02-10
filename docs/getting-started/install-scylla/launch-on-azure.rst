@@ -16,6 +16,7 @@ Prerequisites
 * Active Azure account
 * `Azure CLI <https://learn.microsoft.com/en-us/cli/azure/install-azure-cli>`_
 * ScyllaDB Image requires at least 2 vCPU servers.
+* Disable any automatic VM migration due to memory or CPU pressure detection by Azure.
 
 Launching ScyllaDB on Azure
 ------------------------------
