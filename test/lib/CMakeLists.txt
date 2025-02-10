@@ -17,7 +17,8 @@ target_sources(test-lib
     result_set_assertions.cc
     sstable_run_based_compaction_strategy_for_tests.cc
     sstable_utils.cc
-    data_model.cc)
+    data_model.cc
+    eventually.cc)
 target_include_directories(test-lib
   PUBLIC
     ${CMAKE_SOURCE_DIR})
