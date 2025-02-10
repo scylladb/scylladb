@@ -701,7 +701,8 @@ public:
         // Prepare plans for each DC separately and combine them to be executed in parallel.
         for (auto&& dc : topo.get_datacenters()) {
             auto dc_plan = co_await make_plan(dc, initial_scale, test_mode);
-            lblogger.info("Prepared {} migrations in DC {}", dc_plan.size(), dc);
+            auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+            lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
             plan.merge(std::move(dc_plan));
         }
 
@@ -711,7 +712,8 @@ public:
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
         plan.merge_resize_plan(co_await make_resize_plan(plan, initial_scale, test_mode));
 
-        lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
+        auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+        lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
                 plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count());
         co_return std::move(plan);
     }
@@ -1106,7 +1108,7 @@ public:
             }
 
             resize_load.update(table, std::move(size_desc));
-            lblogger.info("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
+            lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
             co_await coroutine::maybe_yield();
         }
 
@@ -2419,7 +2421,7 @@ public:
         auto shuffle = in_shuffle_mode();
 
         _stats.for_dc(dc).calls++;
-        lblogger.info("Examining DC {} (shuffle={}, balancing={})", dc, shuffle, _tm->tablets().balancing_enabled());
+        lblogger.debug("Examining DC {} (shuffle={}, balancing={})", dc, shuffle, _tm->tablets().balancing_enabled());
 
         const locator::topology& topo = _tm->get_topology();
 
@@ -2569,8 +2571,9 @@ public:
                 read += shard_load.streaming_read_load;
                 write += shard_load.streaming_write_load;
             }
-            lblogger.info("Node {}: rack={} avg_load={} tablets={} shards={} state={} stream_read={} stream_write={}",
-                          host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state(), read, write);
+            auto level = (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
+            lblogger.log(level, "Node {}: dc={} rack={} avg_load={} tablets={} shards={} state={} stream_read={} stream_write={}",
+                          host, dc, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state(), read, write);
         }
 
         if (!min_load_node) {
@@ -2683,7 +2686,8 @@ public:
 
         if (_tm->tablets().balancing_enabled() && plan.empty()) {
             auto dc_merge_plan = co_await make_merge_colocation_plan(nodes);
-            lblogger.info("Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
+            auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
+            lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
             plan.merge(std::move(dc_merge_plan));
         }
 
