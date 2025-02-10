@@ -131,6 +131,147 @@
 #include "gms/feature_service.hh"
 
 namespace netw {
+namespace {
+
+// The verbs using this RPC client use the following connection settings,
+// regardless of whether the peer is in the same DC/Rack or not:
+// - tcp_nodelay
+// - encryption (unless completely disabled in config)
+// - compression (unless completely disabled in config)
+//
+// The reason for having topology-independent setting for encryption is to ensure
+// that gossiper verbs can reach the peer, even though the peer may not know our topology yet.
+// See #11992 for detailed explanations.
+//
+// We also always want `tcp_nodelay` for gossiper verbs so they have low latency
+// (and there's no advantage from batching verbs in this group anyway).
+//
+// And since we fixed a topology-independent setting for encryption and tcp_nodelay,
+// to keep things simple, we also fix a setting for compression. This allows this RPC client
+// to be established without checking the topology (which may not be known anyway
+// when we first start gossiping).
+constexpr unsigned TOPOLOGY_INDEPENDENT_IDX = 0;
+
+constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
+    // *_CONNECTION_COUNT constants needs to be updated after allocating a new index.
+    switch (verb) {
+    // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
+    // sent on a different connection to avoid potential deadlocks
+    // as well as reduce latency as there are potentially many requests
+    // blocked on schema version request.
+    case messaging_verb::GOSSIP_DIGEST_SYN:
+    case messaging_verb::GOSSIP_DIGEST_ACK:
+    case messaging_verb::GOSSIP_DIGEST_ACK2:
+    case messaging_verb::GOSSIP_SHUTDOWN:
+    case messaging_verb::GOSSIP_ECHO:
+    case messaging_verb::GOSSIP_GET_ENDPOINT_STATES:
+    case messaging_verb::GET_SCHEMA_VERSION:
+    // Raft peer exchange is mainly running at boot, but still
+    // should not be blocked by any data requests.
+    case messaging_verb::GROUP0_PEER_EXCHANGE:
+    case messaging_verb::GROUP0_MODIFY_CONFIG:
+    case messaging_verb::GET_GROUP0_UPGRADE_STATE:
+    case messaging_verb::RAFT_TOPOLOGY_CMD:
+    case messaging_verb::JOIN_NODE_REQUEST:
+    case messaging_verb::JOIN_NODE_RESPONSE:
+    case messaging_verb::JOIN_NODE_QUERY:
+    case messaging_verb::TASKS_GET_CHILDREN:
+    case messaging_verb::RAFT_SEND_SNAPSHOT:
+    case messaging_verb::RAFT_APPEND_ENTRIES:
+    case messaging_verb::RAFT_APPEND_ENTRIES_REPLY:
+    case messaging_verb::RAFT_VOTE_REQUEST:
+    case messaging_verb::RAFT_VOTE_REPLY:
+    case messaging_verb::RAFT_TIMEOUT_NOW:
+    case messaging_verb::RAFT_READ_QUORUM:
+    case messaging_verb::RAFT_READ_QUORUM_REPLY:
+    case messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER:
+    case messaging_verb::RAFT_ADD_ENTRY:
+    case messaging_verb::RAFT_MODIFY_CONFIG:
+    case messaging_verb::RAFT_PULL_SNAPSHOT:
+        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
+        // DO NOT put any 'hot' (e.g. data path) verbs in this group,
+        // only verbs which are 'rare' and 'cheap'.
+        // DO NOT move GOSSIP_ verbs outside this group.
+        static_assert(TOPOLOGY_INDEPENDENT_IDX == 0);
+        return 0;
+    case messaging_verb::PREPARE_MESSAGE:
+    case messaging_verb::PREPARE_DONE_MESSAGE:
+    case messaging_verb::UNUSED__STREAM_MUTATION:
+    case messaging_verb::STREAM_MUTATION_DONE:
+    case messaging_verb::COMPLETE_MESSAGE:
+    case messaging_verb::UNUSED__REPLICATION_FINISHED:
+    case messaging_verb::UNUSED__REPAIR_CHECKSUM_RANGE:
+    case messaging_verb::STREAM_MUTATION_FRAGMENTS:
+    case messaging_verb::STREAM_BLOB:
+    case messaging_verb::REPAIR_ROW_LEVEL_START:
+    case messaging_verb::REPAIR_ROW_LEVEL_STOP:
+    case messaging_verb::REPAIR_GET_FULL_ROW_HASHES:
+    case messaging_verb::REPAIR_GET_COMBINED_ROW_HASH:
+    case messaging_verb::REPAIR_GET_SYNC_BOUNDARY:
+    case messaging_verb::REPAIR_GET_ROW_DIFF:
+    case messaging_verb::REPAIR_PUT_ROW_DIFF:
+    case messaging_verb::REPAIR_GET_ESTIMATED_PARTITIONS:
+    case messaging_verb::REPAIR_SET_ESTIMATED_PARTITIONS:
+    case messaging_verb::REPAIR_GET_DIFF_ALGORITHMS:
+    case messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
+    case messaging_verb::REPAIR_UPDATE_SYSTEM_TABLE:
+    case messaging_verb::REPAIR_FLUSH_HINTS_BATCHLOG:
+    case messaging_verb::NODE_OPS_CMD:
+    case messaging_verb::HINT_MUTATION:
+    case messaging_verb::TABLET_STREAM_FILES:
+    case messaging_verb::TABLET_STREAM_DATA:
+    case messaging_verb::TABLET_CLEANUP:
+    case messaging_verb::TABLET_REPAIR:
+    case messaging_verb::TABLE_LOAD_STATS:
+        return 1;
+    case messaging_verb::CLIENT_ID:
+    case messaging_verb::MUTATION:
+    case messaging_verb::READ_DATA:
+    case messaging_verb::READ_MUTATION_DATA:
+    case messaging_verb::READ_DIGEST:
+    case messaging_verb::DEFINITIONS_UPDATE:
+    case messaging_verb::TRUNCATE:
+    case messaging_verb::TRUNCATE_WITH_TABLETS:
+    case messaging_verb::MIGRATION_REQUEST:
+    case messaging_verb::SCHEMA_CHECK:
+    case messaging_verb::COUNTER_MUTATION:
+    // Use the same RPC client for light weight transaction
+    // protocol steps as for standard mutations and read requests.
+    case messaging_verb::PAXOS_PREPARE:
+    case messaging_verb::PAXOS_ACCEPT:
+    case messaging_verb::PAXOS_LEARN:
+    case messaging_verb::PAXOS_PRUNE:
+    case messaging_verb::DIRECT_FD_PING:
+        return 2;
+    case messaging_verb::MUTATION_DONE:
+    case messaging_verb::MUTATION_FAILED:
+        return 3;
+    case messaging_verb::MAPREDUCE_REQUEST:
+        return 4;
+    case messaging_verb::LAST:
+        return -1; // should never happen
+    }
+}
+
+// Count of connection types that are not associated with any tenant
+constexpr size_t PER_SHARD_CONNECTION_COUNT = 2;
+
+consteval std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> make_rpc_client_idx_table() {
+    std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> tab{};
+    for (size_t i = 0; i < tab.size(); ++i) {
+        tab[i] = do_get_rpc_client_idx(messaging_verb(i));
+    }
+    return tab;
+}
+
+// Counts per tenant connection types
+constexpr const size_t PER_TENANT_CONNECTION_COUNT = std::ranges::max(make_rpc_client_idx_table()) + 1 - PER_SHARD_CONNECTION_COUNT;
+static_assert(std::ranges::max(make_rpc_client_idx_table()) + 1 >= PER_SHARD_CONNECTION_COUNT);
+
+constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
+} // namespace
 
 static_assert(!std::is_default_constructible_v<msg_addr>);
 static_assert(std::is_nothrow_copy_constructible_v<msg_addr>);
@@ -194,11 +335,6 @@ struct messaging_service::connection_ref {
 };
 
 constexpr int32_t messaging_service::current_version;
-
-// Count of connection types that are not associated with any tenant
-const size_t PER_SHARD_CONNECTION_COUNT = 2;
-// Counts per tenant connection types
-const size_t PER_TENANT_CONNECTION_COUNT = 3;
 
 bool operator==(const msg_addr& x, const msg_addr& y) noexcept {
     // Ignore cpu id for now since we do not really support shard to shard connections
@@ -608,142 +744,6 @@ future<> messaging_service::stop() {
 rpc::no_wait_type messaging_service::no_wait() {
     return rpc::no_wait;
 }
-
-// The verbs using this RPC client use the following connection settings,
-// regardless of whether the peer is in the same DC/Rack or not:
-// - tcp_nodelay
-// - encryption (unless completely disabled in config)
-// - compression (unless completely disabled in config)
-//
-// The reason for having topology-independent setting for encryption is to ensure
-// that gossiper verbs can reach the peer, even though the peer may not know our topology yet.
-// See #11992 for detailed explanations.
-//
-// We also always want `tcp_nodelay` for gossiper verbs so they have low latency
-// (and there's no advantage from batching verbs in this group anyway).
-//
-// And since we fixed a topology-independent setting for encryption and tcp_nodelay,
-// to keep things simple, we also fix a setting for compression. This allows this RPC client
-// to be established without checking the topology (which may not be known anyway
-// when we first start gossiping).
-static constexpr unsigned TOPOLOGY_INDEPENDENT_IDX = 0;
-
-static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
-    // *_CONNECTION_COUNT constants needs to be updated after allocating a new index.
-    switch (verb) {
-    // GET_SCHEMA_VERSION is sent from read/mutate verbs so should be
-    // sent on a different connection to avoid potential deadlocks
-    // as well as reduce latency as there are potentially many requests
-    // blocked on schema version request.
-    case messaging_verb::GOSSIP_DIGEST_SYN:
-    case messaging_verb::GOSSIP_DIGEST_ACK:
-    case messaging_verb::GOSSIP_DIGEST_ACK2:
-    case messaging_verb::GOSSIP_SHUTDOWN:
-    case messaging_verb::GOSSIP_ECHO:
-    case messaging_verb::GOSSIP_GET_ENDPOINT_STATES:
-    case messaging_verb::GET_SCHEMA_VERSION:
-    // Raft peer exchange is mainly running at boot, but still
-    // should not be blocked by any data requests.
-    case messaging_verb::GROUP0_PEER_EXCHANGE:
-    case messaging_verb::GROUP0_MODIFY_CONFIG:
-    case messaging_verb::GET_GROUP0_UPGRADE_STATE:
-    case messaging_verb::RAFT_TOPOLOGY_CMD:
-    case messaging_verb::JOIN_NODE_REQUEST:
-    case messaging_verb::JOIN_NODE_RESPONSE:
-    case messaging_verb::JOIN_NODE_QUERY:
-    case messaging_verb::TASKS_GET_CHILDREN:
-        // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
-        // DO NOT put any 'hot' (e.g. data path) verbs in this group,
-        // only verbs which are 'rare' and 'cheap'.
-        // DO NOT move GOSSIP_ verbs outside this group.
-        static_assert(TOPOLOGY_INDEPENDENT_IDX == 0);
-        return 0;
-    case messaging_verb::PREPARE_MESSAGE:
-    case messaging_verb::PREPARE_DONE_MESSAGE:
-    case messaging_verb::UNUSED__STREAM_MUTATION:
-    case messaging_verb::STREAM_MUTATION_DONE:
-    case messaging_verb::COMPLETE_MESSAGE:
-    case messaging_verb::UNUSED__REPLICATION_FINISHED:
-    case messaging_verb::UNUSED__REPAIR_CHECKSUM_RANGE:
-    case messaging_verb::STREAM_MUTATION_FRAGMENTS:
-    case messaging_verb::STREAM_BLOB:
-    case messaging_verb::REPAIR_ROW_LEVEL_START:
-    case messaging_verb::REPAIR_ROW_LEVEL_STOP:
-    case messaging_verb::REPAIR_GET_FULL_ROW_HASHES:
-    case messaging_verb::REPAIR_GET_COMBINED_ROW_HASH:
-    case messaging_verb::REPAIR_GET_SYNC_BOUNDARY:
-    case messaging_verb::REPAIR_GET_ROW_DIFF:
-    case messaging_verb::REPAIR_PUT_ROW_DIFF:
-    case messaging_verb::REPAIR_GET_ESTIMATED_PARTITIONS:
-    case messaging_verb::REPAIR_SET_ESTIMATED_PARTITIONS:
-    case messaging_verb::REPAIR_GET_DIFF_ALGORITHMS:
-    case messaging_verb::REPAIR_GET_ROW_DIFF_WITH_RPC_STREAM:
-    case messaging_verb::REPAIR_PUT_ROW_DIFF_WITH_RPC_STREAM:
-    case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
-    case messaging_verb::REPAIR_UPDATE_SYSTEM_TABLE:
-    case messaging_verb::REPAIR_FLUSH_HINTS_BATCHLOG:
-    case messaging_verb::NODE_OPS_CMD:
-    case messaging_verb::HINT_MUTATION:
-    case messaging_verb::TABLET_STREAM_FILES:
-    case messaging_verb::TABLET_STREAM_DATA:
-    case messaging_verb::TABLET_CLEANUP:
-    case messaging_verb::TABLET_REPAIR:
-    case messaging_verb::TABLE_LOAD_STATS:
-        return 1;
-    case messaging_verb::CLIENT_ID:
-    case messaging_verb::MUTATION:
-    case messaging_verb::READ_DATA:
-    case messaging_verb::READ_MUTATION_DATA:
-    case messaging_verb::READ_DIGEST:
-    case messaging_verb::DEFINITIONS_UPDATE:
-    case messaging_verb::TRUNCATE:
-    case messaging_verb::TRUNCATE_WITH_TABLETS:
-    case messaging_verb::MIGRATION_REQUEST:
-    case messaging_verb::SCHEMA_CHECK:
-    case messaging_verb::COUNTER_MUTATION:
-    // Use the same RPC client for light weight transaction
-    // protocol steps as for standard mutations and read requests.
-    case messaging_verb::PAXOS_PREPARE:
-    case messaging_verb::PAXOS_ACCEPT:
-    case messaging_verb::PAXOS_LEARN:
-    case messaging_verb::PAXOS_PRUNE:
-    case messaging_verb::RAFT_SEND_SNAPSHOT:
-    case messaging_verb::RAFT_APPEND_ENTRIES:
-    case messaging_verb::RAFT_APPEND_ENTRIES_REPLY:
-    case messaging_verb::RAFT_VOTE_REQUEST:
-    case messaging_verb::RAFT_VOTE_REPLY:
-    case messaging_verb::RAFT_TIMEOUT_NOW:
-    case messaging_verb::RAFT_READ_QUORUM:
-    case messaging_verb::RAFT_READ_QUORUM_REPLY:
-    case messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER:
-    case messaging_verb::RAFT_ADD_ENTRY:
-    case messaging_verb::RAFT_MODIFY_CONFIG:
-    case messaging_verb::DIRECT_FD_PING:
-    case messaging_verb::RAFT_PULL_SNAPSHOT:
-        return 2;
-    case messaging_verb::MUTATION_DONE:
-    case messaging_verb::MUTATION_FAILED:
-        return 3;
-    case messaging_verb::MAPREDUCE_REQUEST:
-        return 4;
-    case messaging_verb::LAST:
-        return -1; // should never happen
-    }
-}
-
-static constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> make_rpc_client_idx_table() {
-    std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> tab{};
-    for (size_t i = 0; i < tab.size(); ++i) {
-        tab[i] = do_get_rpc_client_idx(messaging_verb(i));
-
-        // This SCYLLA_ASSERT guards against adding new connection types without
-        // updating *_CONNECTION_COUNT constants.
-        SCYLLA_ASSERT(tab[i] < PER_TENANT_CONNECTION_COUNT + PER_SHARD_CONNECTION_COUNT);
-    }
-    return tab;
-}
-
-static std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
 
 msg_addr messaging_service::addr_for_host_id(locator::host_id hid) {
     auto opt_ip = _address_map.find(hid);
