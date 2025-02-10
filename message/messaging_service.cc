@@ -176,6 +176,18 @@ constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::JOIN_NODE_RESPONSE:
     case messaging_verb::JOIN_NODE_QUERY:
     case messaging_verb::TASKS_GET_CHILDREN:
+    case messaging_verb::RAFT_SEND_SNAPSHOT:
+    case messaging_verb::RAFT_APPEND_ENTRIES:
+    case messaging_verb::RAFT_APPEND_ENTRIES_REPLY:
+    case messaging_verb::RAFT_VOTE_REQUEST:
+    case messaging_verb::RAFT_VOTE_REPLY:
+    case messaging_verb::RAFT_TIMEOUT_NOW:
+    case messaging_verb::RAFT_READ_QUORUM:
+    case messaging_verb::RAFT_READ_QUORUM_REPLY:
+    case messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER:
+    case messaging_verb::RAFT_ADD_ENTRY:
+    case messaging_verb::RAFT_MODIFY_CONFIG:
+    case messaging_verb::RAFT_PULL_SNAPSHOT:
         // See comment above `TOPOLOGY_INDEPENDENT_IDX`.
         // DO NOT put any 'hot' (e.g. data path) verbs in this group,
         // only verbs which are 'rare' and 'cheap'.
@@ -231,19 +243,7 @@ constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::PAXOS_ACCEPT:
     case messaging_verb::PAXOS_LEARN:
     case messaging_verb::PAXOS_PRUNE:
-    case messaging_verb::RAFT_SEND_SNAPSHOT:
-    case messaging_verb::RAFT_APPEND_ENTRIES:
-    case messaging_verb::RAFT_APPEND_ENTRIES_REPLY:
-    case messaging_verb::RAFT_VOTE_REQUEST:
-    case messaging_verb::RAFT_VOTE_REPLY:
-    case messaging_verb::RAFT_TIMEOUT_NOW:
-    case messaging_verb::RAFT_READ_QUORUM:
-    case messaging_verb::RAFT_READ_QUORUM_REPLY:
-    case messaging_verb::RAFT_EXECUTE_READ_BARRIER_ON_LEADER:
-    case messaging_verb::RAFT_ADD_ENTRY:
-    case messaging_verb::RAFT_MODIFY_CONFIG:
     case messaging_verb::DIRECT_FD_PING:
-    case messaging_verb::RAFT_PULL_SNAPSHOT:
         return 2;
     case messaging_verb::MUTATION_DONE:
     case messaging_verb::MUTATION_FAILED:
@@ -271,7 +271,6 @@ constexpr const size_t PER_TENANT_CONNECTION_COUNT = std::ranges::max(make_rpc_c
 static_assert(std::ranges::max(make_rpc_client_idx_table()) + 1 >= PER_SHARD_CONNECTION_COUNT);
 
 constexpr std::array<uint8_t, static_cast<size_t>(messaging_verb::LAST)> s_rpc_client_idx_table = make_rpc_client_idx_table();
-
 } // namespace
 
 static_assert(!std::is_default_constructible_v<msg_addr>);
