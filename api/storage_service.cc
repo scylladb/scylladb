@@ -1689,6 +1689,11 @@ rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std
         }
         auto ks = req->get_query_param("ks");
         auto table = req->get_query_param("table");
+        bool await_completion = false;
+        auto await = req->get_query_param("await_completion");
+        if (!await.empty()) {
+            await_completion = validate_bool(await);
+        }
         validate_table(ctx, ks, table);
         auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
         std::variant<utils::chunked_vector<dht::token>, service::storage_service::all_tokens_tag> tokens_variant;
@@ -1698,7 +1703,7 @@ rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std
             tokens_variant = tokens;
         }
 
-        auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant);
+        auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant, await_completion);
         co_return json::json_return_type(res);
 }
 
