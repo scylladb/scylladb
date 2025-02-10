@@ -162,17 +162,21 @@ struct tablet_task_info {
     db_clock::time_point request_time;
     int64_t sched_nr = 0;
     db_clock::time_point sched_time;
-    sstring repair_hosts_filter;
-    sstring repair_dcs_filter;
+    std::unordered_set<locator::host_id> repair_hosts_filter;
+    std::unordered_set<sstring> repair_dcs_filter;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
     bool is_user_repair_request() const;
-    static tablet_task_info make_user_repair_request();
-    static tablet_task_info make_auto_repair_request();
+    static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+    static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
     static tablet_task_info make_migration_request();
     static tablet_task_info make_intranode_migration_request();
     static tablet_task_info make_split_request();
     static tablet_task_info make_merge_request();
+    static sstring serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter);
+    static sstring serialize_repair_dcs_filter(std::unordered_set<sstring> filter);
+    static std::unordered_set<locator::host_id> deserialize_repair_hosts_filter(sstring filter);
+    static std::unordered_set<sstring> deserialize_repair_dcs_filter(sstring filter);
 };
 
 /// Stores information about a single tablet.
