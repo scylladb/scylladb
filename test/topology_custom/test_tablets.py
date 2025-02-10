@@ -805,3 +805,60 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
     # release drop and wait for it to complete
     await manager.api.message_injection(servers[0].ip_addr, "truncate_compaction_disabled_wait")
     await drop_ks_task
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_split_finalization(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/21762
+        1) Start a node with config --target-tablet-size-in-bytes set to a low value to trigger split earlier
+        2) Inject error to block split finalization
+        3) Create a table with 4 initial tablets and populate it
+        4) Wait for the table to reach split finalization stage
+        5) Add a new server
+        6) Clear the error injection and expect finalization to be preferred over migration
+    """
+    logger.info("Starting Node 1")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--target-tablet-size-in-bytes=10240',
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'load_balancer=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+
+    logger.info("Inject error to block split finalization")
+    injection_name = "tablet_split_finalization_postpone"
+    await manager.api.enable_injection(servers[0].ip_addr, injection_name, one_shot=False)
+
+    logger.info("Create the test table")
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    await manager.api.disable_autocompaction(servers[0].ip_addr, "test")
+    table_id = await cql.run_async("SELECT id FROM system_schema.tables WHERE keyspace_name = 'test' AND table_name = 'test'")
+    table_id = table_id[0].id
+
+    logger.info("Populate test.test")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(5000)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+
+    # Wait for splits to finalise; they don't execute yet as they are prevented by the error injection
+    logger.info("Wait for splits to finalize")
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.wait_for(f"Finalizing resize decision for table {table_id} as all replicas agree on sequence number 1")
+
+    logger.info("Start Node 2, to trigger tablet migration")
+    servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+
+    logger.info("Clear injected error")
+    await manager.api.disable_injection(servers[0].ip_addr, injection_name)
+
+    logger.info("Verify that split finalisation is preferred over migration")
+    split_finalization_mark = await log.wait_for("Finished generating tablet resize finalization updates", mark)
+    migration_mark = await log.wait_for(f"Will set tablet {table_id}:\\d+ stage to write_both_read_old", mark)
+    assert split_finalization_mark < migration_mark, "Tablet migration was scheduled before resize finalization"
+
+    # ensure migration completes
+    logger.info("Waiting for migration to complete")
+    await log.wait_for("Tablets are balanced", migration_mark)
