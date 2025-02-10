@@ -119,6 +119,8 @@ async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient)
         logger.info("Bootstrapping second and third nodes")
         servers += await manager.servers_add(2)
 
+        [host2, host3] = await wait_for_cql_and_get_hosts(cql, servers[-2:], time.time() + 60)
+
         log_file1 = await manager.server_open_log(servers[0].server_id)
         await log_file1.wait_for(f"CDC generation publisher fiber sleeps after injection")
         mark = await log_file1.mark()
@@ -138,11 +140,11 @@ async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient)
         mark = await log_file1.mark()
         gen_ids = await get_gen_ids()
         assert len(gen_ids) == 2 and first_gen_id not in gen_ids
-        await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1])
+        await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1, host2, host3])
 
         # Allow the CDC generation publisher to finish its job. One generation should remain.
         await handler.message()
         await log_file1.wait_for(f"CDC generation publisher fiber has nothing to do. Sleeping.", mark)
         gen_ids = await get_gen_ids()
         assert len(gen_ids) == 1
-        await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1])
+        await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1, host2, host3])
