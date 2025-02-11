@@ -2678,6 +2678,12 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
         cfg.tablets_per_shard_goal(100);
         rebalance_tablets(e, &load_stats);
         BOOST_REQUIRE_EQUAL(get_tablet_count(), 16);
+
+        // initial scale can be smaller than 1.
+        // 0.5 tablet/shard * 3 shards = 1.5 tablets =~ 2 tablets.
+        cfg.tablets_initial_scale_factor(0.5);
+        rebalance_tablets(e, &load_stats);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(), 2);
     }, cfg).get();
 }
 

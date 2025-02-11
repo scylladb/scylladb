@@ -597,7 +597,7 @@ class load_balancer {
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
-    int _initial_scale = 1;
+    double _initial_scale = 1;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -707,7 +707,7 @@ public:
         _use_table_aware_balancing = use_table_aware_balancing;
     }
 
-    void set_initial_scale(int initial_scale) {
+    void set_initial_scale(double initial_scale) {
         _initial_scale = initial_scale;
     }
 
@@ -1092,7 +1092,6 @@ public:
         size_t tablet_count = 0;
         const sstring* winning_dc = nullptr;
 
-        min_per_shard_tablet_count = std::max(1.0, min_per_shard_tablet_count);
         for (auto&& [dc, shards_in_dc] : shards_per_dc) {
             auto rf_in_dc = rs.get_replication_factor(dc);
             if (!rf_in_dc) {

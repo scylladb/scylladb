@@ -502,7 +502,7 @@ public:
     named_value<int> maximum_replication_factor_warn_threshold;
     named_value<int> maximum_replication_factor_fail_threshold;
 
-    named_value<int> tablets_initial_scale_factor;
+    named_value<double> tablets_initial_scale_factor;
     named_value<unsigned> tablets_per_shard_goal;
     named_value<uint64_t> target_tablet_size_in_bytes;
 
