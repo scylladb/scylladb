@@ -22,6 +22,7 @@
 #include "service/storage_service.hh"
 #include "sstables/sstables.hh"
 #include "partition_range_compat.hh"
+#include "tasks/task_handler.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
@@ -2539,6 +2540,12 @@ size_t repair::tablet_repair_task_impl::get_metas_size() const noexcept {
     return _metas.size() > 0 ? _metas.size() : _metas_size;
 }
 
+struct tablet_repair_helper {
+    tasks::task_manager::task_ptr task;
+    const tablet_repair_task_meta& m;
+    locator::effective_replication_map_ptr erm;
+};
+
 future<> repair::tablet_repair_task_impl::run() {
     auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = m->get_repair_service();
@@ -2601,6 +2608,9 @@ future<> repair::tablet_repair_task_impl::run() {
         std::vector<gc_clock::time_point> flush_times(smp::count);
         rs.container().invoke_on_all([&idx, &flush_times, id, &metas = _metas, parent_data, reason = _reason, tables = _tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism = _ranges_parallelism, parent_shard] (repair_service& rs) -> future<> {
             std::exception_ptr error;
+            std::vector<tablet_repair_helper> shard_repairs;
+            // FIXME: fix indentation.
+            try {
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
                     continue;
@@ -2627,7 +2637,7 @@ future<> repair::tablet_repair_task_impl::run() {
 
                 auto data_centers = std::vector<sstring>();
                 auto hosts = std::vector<sstring>();
-                std::unordered_set<locator::host_id> ignore_nodes;;
+                std::unordered_set<locator::host_id> ignore_nodes;
                 auto [hints_batchlog_flushed, flush_time] = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
                 bool small_table_optimization = false;
 
@@ -2636,26 +2646,45 @@ future<> repair::tablet_repair_task_impl::run() {
                         std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, sched_by_scheduler);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
-                task->start();
-                auto res = co_await coroutine::as_future(task->done());
+                shard_repairs.push_back(tablet_repair_helper{
+                    .task = std::move(task),
+                    .m = m,
+                    .erm = std::move(erm)
+                });
+            }
+
+            for (auto& sr : shard_repairs) {
+                sr.task->start();
+                auto res = co_await coroutine::as_future(sr.task->done());
+                auto& task_impl = dynamic_cast<repair::shard_repair_task_impl&>(sr.task->get_impl());
                 if (res.failed()) {
                     auto ep = res.get_exception();
                     sstring ignore_msg;
                     // Ignore the error if the keyspace and/or table were dropped
-                    auto ignore = co_await repair::table_sync_and_check(rs.get_db().local(), rs.get_migration_manager(), m.tid);
+                    auto ignore = co_await repair::table_sync_and_check(rs.get_db().local(), rs.get_migration_manager(), sr.m.tid);
                     if (ignore) {
                         ignore_msg = format("{} does not exist any more, ignoring it, ",
-                                rs.get_db().local().has_keyspace(m.keyspace_name) ? "table" : "keyspace");
+                                rs.get_db().local().has_keyspace(sr.m.keyspace_name) ? "table" : "keyspace");
                     }
                     rlogger.warn("repair[{}]: Repair tablet for table={}.{} range={} status=failed: {}{}",
-                            id.uuid(), m.keyspace_name, m.table_name, m.range, ignore_msg, ep);
+                            id.uuid(), sr.m.keyspace_name, sr.m.table_name, sr.m.range, ignore_msg, ep);
                     if (!ignore) {
                         error = std::move(ep);
                     }
                 }
                 auto current = flush_times[this_shard_id()];
-                auto time = task_impl_ptr->get_flush_time();
+                auto time = task_impl.get_flush_time();
                 flush_times[this_shard_id()] = current == gc_clock::time_point() ? time : std::min(current, time);
+            }
+            } catch (...) {
+                // Cleanup tasks that did not started.
+                for (auto sr : shard_repairs) {
+                    if (sr.task->get_status().state != tasks::task_manager::task_state::created) {
+                        sr.task->abort();
+                        sr.task->start();
+                    }
+                }
+                std::rethrow_exception(std::current_exception());
             }
             if (error) {
                 co_await coroutine::return_exception_ptr(std::move(error));

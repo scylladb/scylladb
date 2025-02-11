@@ -263,6 +263,8 @@ public:
         future<std::vector<task_essentials>> get_failed_children() const;
         void set_virtual_parent() noexcept;
 
+        impl& get_impl() noexcept;
+
         friend class test_task;
         friend class ::repair::task_manager_module;
     };

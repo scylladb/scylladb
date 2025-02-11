@@ -400,6 +400,10 @@ void task_manager::task::set_virtual_parent() noexcept {
     _impl->set_virtual_parent();
 }
 
+task_manager::task::impl& task_manager::task::get_impl() noexcept {
+    return *_impl;
+}
+
 task_manager::virtual_task::impl::impl(module_ptr module) noexcept
     : _module(std::move(module))
 {}
