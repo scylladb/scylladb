@@ -2681,6 +2681,59 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.db_config->tablets_per_shard_goal(100);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        // 10 tablets/shard (initial_scale) * 16 shards = 160 tablets, rounded up to 256.
+        // That's 16 tablet replicas per shard per table.
+        // Creating 100 tables without scaling would give 1'600 tablets per shard,
+        // which would overshoot the per-shard limit significantly.
+        // This test verifies that scaling kicks in sooner as more tables are created,
+        // and we end up with fewer tablets even before tablet merging is executed.
+
+        auto host1 = topo.add_node(node_state::normal, 16);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}});
+        std::vector<table_id> tables;
+        shared_load_stats load_stats;
+
+        const auto nr_tables = 100u;
+        parallel_for_each(std::views::iota(0u, nr_tables), [&] (auto i) -> future<> {
+            auto table_name = fmt::format("table_{}", i);
+            co_await e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))",
+                                               ks_name1, table_name));
+            table_id table = e.local_db().find_schema(ks_name1, table_name)->id();
+            tables.push_back(table);
+            load_stats.set_size(table, 0);
+        }).get();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            testlog.info("max load: {}", load.get_shard_minmax(host1).max());
+            // The value 415 was determined empirically. If there was lack of scaling, it would be 1'600.
+            BOOST_REQUIRE(load.get_shard_minmax(host1).max() <= 415);
+        }
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            testlog.info("max load: {}", load.get_shard_minmax(host1).max());
+            BOOST_REQUIRE(load.get_shard_minmax(host1).max() <= 200);
+        }
+    }, cfg).get();
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);
