@@ -228,6 +228,7 @@ public:
             virtual future<std::optional<double>> expected_total_workload() const;
             virtual std::optional<double> expected_children_number() const;
             task_manager::task::progress get_binary_progress() const;
+            virtual void on_task_registered();
 
             friend task;
         };
@@ -344,6 +345,7 @@ public:
         // Returns a set of nodes on which some of virtual tasks on this module can have their children.
         virtual std::set<locator::host_id> get_nodes() const;
         future<utils::chunked_vector<task_stats>> get_stats(is_internal internal, std::function<bool(std::string&, std::string&)> filter) const;
+        task_ptr maybe_get_local_task(task_id task_id);
 
         void register_task(task_ptr task);
         void register_virtual_task(virtual_task_ptr task);

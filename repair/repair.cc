@@ -1033,7 +1033,107 @@ future<> repair::shard_repair_task_impl::release_resources() noexcept {
     neighbors = {};
     dropped_tables = {};
     nodes_down = {};
+    _update_erm_callback = {};
     return make_ready_future();
+}
+
+static future<bool> ranges_intersect(const dht::token_range_vector& ranges, const dht::token_range& range) {
+    for (const auto& r : ranges) {
+        if (range.intersection(r, dht::token_comparator()).has_value()) {
+            co_return true;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return false;
+}
+
+static future<bool> compare_tablets(const locator::effective_replication_map& old_erm, const locator::effective_replication_map& new_erm, table_id table_id, const std::unordered_set<locator::tablet_id>& involved_tablets) {
+    auto& old_tablet_map = old_erm.get_token_metadata().tablets().get_tablet_map(table_id);
+    auto& new_tablet_map = new_erm.get_token_metadata().tablets().get_tablet_map(table_id);
+    if (old_tablet_map.tablet_count() != new_tablet_map.tablet_count()) {
+        co_return false;
+    }
+    auto tablet_changed = [&] (locator::tablet_id tid) {
+        try {
+            auto old_transition = old_tablet_map.get_tablet_transition_info(tid);
+            auto new_transition = new_tablet_map.get_tablet_transition_info(tid);
+            return (old_transition && new_transition ? *old_transition != *new_transition : old_transition || new_transition) ||
+                old_tablet_map.get_token_range(tid) != new_tablet_map.get_token_range(tid) ||
+                old_tablet_map.get_tablet_info(tid) != new_tablet_map.get_tablet_info(tid);
+        } catch (...) {
+            return true;
+        }
+    };
+    for (auto tid : involved_tablets) {
+        if (tablet_changed(tid)) {
+            co_return false;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return true;
+}
+
+future<> repair::shard_repair_task_impl::maybe_update_erm(tasks::task_manager::module_ptr module, replica::database& db, tasks::task_id task_id, table_id table_id, std::unordered_set<locator::tablet_id> involved_tablets) noexcept {
+    try {
+        if (module->abort_source().abort_requested()) {
+            // Shutdown.
+            co_return;
+        }
+
+        auto table = db.get_tables_metadata().get_table_if_exists(table_id);
+        if (!table) {
+            // Table dropped.
+            co_return;
+        }
+
+        auto new_erm = table->get_effective_replication_map();
+
+        auto task_keepalive = module->maybe_get_local_task(task_id);
+        if (!task_keepalive || !erm) {
+            // Task was unregistered or finished.
+            co_return;
+        }
+        bool new_same_as_old = !erm->get_validity_abort_source().abort_requested();
+        if (new_same_as_old || co_await compare_tablets(*erm, *new_erm, table_id, involved_tablets)) {
+            erm = std::move(new_erm);
+            _update_erm_callback = erm->get_validity_abort_source().subscribe([this, module = std::move(module), &db, task_id, table_id, involved_tablets = std::move(involved_tablets)] () noexcept {
+                (void)maybe_update_erm(std::move(module), db, task_id, table_id, std::move(involved_tablets));
+            });
+        }
+    } catch (...) {
+        rlogger.warn("shard_repair_task_impl with task_id={}: maybe_update_erm on table {} failed with {}", task_id, table_id, std::current_exception());
+    }
+}
+
+void repair::shard_repair_task_impl::start_erm_update_backround_fiber() noexcept {
+    if (tablet_repair) {
+        (void)[] (repair::shard_repair_task_impl& this_task) -> future<> {
+            auto table_id = this_task.table_ids[0];
+            auto task_id = this_task._status.id;
+            auto task_keepalive = this_task._module->maybe_get_local_task(task_id);
+
+            // Find tablets involved in this repair.
+            std::unordered_set<locator::tablet_id> involved_tablets;
+            auto& tablet_map = this_task.erm->get_token_metadata().tablets().get_tablet_map(table_id);
+            std::optional<locator::tablet_id> tid = tablet_map.first_tablet();
+            while (tid.has_value()) {
+                if (co_await ranges_intersect(this_task.ranges, tablet_map.get_token_range(*tid))) {
+                    involved_tablets.insert(*tid);
+                }
+                tid = tablet_map.next_tablet(*tid);
+            }
+
+            (void)this_task.maybe_update_erm(this_task._module, this_task.db.local(), task_id, table_id, std::move(involved_tablets));
+        }(*this).then_wrapped([task_id = _status.id, table_id = table_ids[0]] (auto f) {
+            if (f.failed()) {
+                rlogger.warn("Failed to start erm update layer: task_id={}, table_id={}, ex={}", task_id, table_id, f.get_exception());
+            }
+        });
+    }
+}
+
+void repair::shard_repair_task_impl::on_task_registered() {
+    start_erm_update_backround_fiber();
 }
 
 future<> repair::shard_repair_task_impl::do_repair_ranges() {
