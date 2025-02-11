@@ -17,6 +17,7 @@
 #include "db/view/view_build_status.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_fwd.hh"
+#include "service/view_building_coordinator.hh"
 #include "timestamp.hh"
 #include "utils/UUID.hh"
 #include "query-result-set.hh"
@@ -59,6 +60,7 @@ class group0_guard;
 
 namespace vbc {
     class vbc_tasks;
+    class vbc_target_staging_sstables_map;
 };
 }
 
@@ -197,6 +199,7 @@ public:
     static constexpr auto DICTS = "dicts";
     static constexpr auto VIEW_BUILDING_COORDINATOR_TASKS = "view_building_coordinator_tasks";
     static constexpr auto BUILT_TABLET_VIEWS = "built_tablet_views";
+    static constexpr auto VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES = "view_building_coordinator_staging_sstables";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -294,6 +297,7 @@ public:
     static schema_ptr dicts();
     static schema_ptr view_building_coordinator_tasks();
     static schema_ptr built_tablet_views();
+    static schema_ptr view_building_coordinator_staging_sstables();
 
     // auth
     static schema_ptr roles();
@@ -568,6 +572,10 @@ public:
 
     future<std::vector<system_keyspace_view_name>> load_built_tablet_views();
     future<mutation> make_tablet_view_built_mutation(api::timestamp_type ts, system_keyspace_view_name view_name);
+
+    future<service::vbc::vbc_target_staging_sstables_map> get_view_building_coordinator_staging_sstables_targets();
+    future<mutation> make_vbc_staging_sstable_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range);
+    future<mutation> make_vbc_staging_sstable_done_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range);
 
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
