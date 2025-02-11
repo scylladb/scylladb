@@ -224,7 +224,7 @@ future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
     reader_consumer_v2 consumer,
     utils::phased_barrier::operation&& op) {
     return do_with(multishard_writer(std::move(s), sharder, std::move(producer), std::move(consumer)), std::move(op), [] (multishard_writer& writer, utils::phased_barrier::operation&) {
-        return writer().finally([&writer] {
+        return seastar::futurize_invoke(writer).finally([&writer] {
             return writer.close();
         });
     });
