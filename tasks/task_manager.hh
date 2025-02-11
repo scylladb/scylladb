@@ -18,7 +18,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "db_clock.hh"
 #include "utils/log.hh"
-#include "gms/inet_address.hh"
+#include "locator/host_id.hh"
 #include "schema/schema_fwd.hh"
 #include "tasks/types.hh"
 #include "utils/chunked_vector.hh"
@@ -64,7 +64,6 @@ public:
     struct config {
         utils::updateable_value<uint32_t> task_ttl;
         utils::updateable_value<uint32_t> user_task_ttl;
-        gms::inet_address broadcast_address;
     };
     using task_ptr = lw_shared_ptr<task_manager::task>;
     using virtual_task_ptr = lw_shared_ptr<task_manager::virtual_task>;
@@ -84,6 +83,7 @@ private:
     tasks_collection _tasks;
     modules _modules;
     config _cfg;
+    locator::host_id _host_id = locator::host_id::create_null_id();
     seastar::abort_source _as;
     optimized_optional<seastar::abort_source::subscription> _abort_subscription;
     utils::updateable_value<uint32_t> _task_ttl;
@@ -338,7 +338,7 @@ public:
         tasks_collection& get_tasks_collection() noexcept;
         const tasks_collection& get_tasks_collection() const noexcept;
         // Returns a set of nodes on which some of virtual tasks on this module can have their children.
-        virtual std::set<gms::inet_address> get_nodes() const;
+        virtual std::set<locator::host_id> get_nodes() const;
         future<utils::chunked_vector<task_stats>> get_stats(is_internal internal, std::function<bool(std::string&, std::string&)> filter) const;
 
         void register_task(task_ptr task);
@@ -380,7 +380,9 @@ public:
     task_manager(config cfg, seastar::abort_source& as) noexcept;
     task_manager() noexcept;
 
-    gms::inet_address get_broadcast_address() const noexcept;
+    // Returns empty host_id if local info isn't resolved yet.
+    locator::host_id get_host_id() const noexcept;
+    void set_host_id(locator::host_id host_id) noexcept;
     modules& get_modules() noexcept;
     const modules& get_modules() const noexcept;
     task_map& get_local_tasks() noexcept;
@@ -391,7 +393,7 @@ public:
     const tasks_collection& get_tasks_collection() const noexcept;
     future<std::vector<task_id>> get_virtual_task_children(task_id parent_id);
 
-    std::set<gms::inet_address> get_nodes(service::storage_service& ss) const;
+    std::set<locator::host_id> get_nodes(service::storage_service& ss) const;
 
     module_ptr make_module(std::string name);
     void register_module(std::string name, module_ptr module);

@@ -734,6 +734,10 @@ private:
                 _gossip_address_map.stop().get();
             });
 
+            _task_manager.invoke_on_all([&] (auto& tm) {
+                tm.set_host_id(host_id);
+            }).get();
+
             auto arct_cfg = [&] {
                 return utils::advanced_rpc_compressor::tracker::config{
                     .zstd_quota_fraction{1.0},

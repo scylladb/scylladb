@@ -20,7 +20,7 @@ namespace tasks {
 using task_status_variant = std::variant<tasks::task_manager::foreign_task_ptr, tasks::task_manager::task::task_essentials>;
 
 static future<task_status> get_task_status(task_manager::task_ptr task) {
-    auto broadcast_address = task->get_module()->get_task_manager().get_broadcast_address();
+    auto host_id = task->get_module()->get_task_manager().get_host_id();
     auto local_task_status = task->get_status();
     auto status = task_status{
         .task_id = local_task_status.id,
@@ -41,16 +41,16 @@ static future<task_status> get_task_status(task_manager::task_ptr task) {
         .progress_units = local_task_status.progress_units,
         .progress = co_await task->get_progress(),
         .children = co_await task->get_children().map_each_task<task_identity>(
-            [broadcast_address] (const task_manager::foreign_task_ptr& task) {
+            [host_id] (const task_manager::foreign_task_ptr& task) {
                 // There is no race because id does not change for the whole task lifetime.
                 return task_identity{
-                    .node = broadcast_address,
+                    .host_id = host_id,
                     .task_id = task->id()
                 };
             },
-            [broadcast_address] (const task_manager::task::task_essentials& task) {
+            [host_id] (const task_manager::task::task_essentials& task) {
                 return task_identity{
-                    .node = broadcast_address,
+                    .host_id = host_id,
                     .task_id = task.task_status.id
                 };
             })
@@ -138,7 +138,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
     } else {        // virtual task
         res.push_back(sh.status);
         for (auto ident: sh.status.children) {
-            if (ident.node != _tm.get_broadcast_address()) {
+            if (ident.host_id != _tm.get_host_id()) {
                 // FIXME: add non-local version
                 continue;
             }
@@ -186,7 +186,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
                     .progress = task.task_progress,
                     .children = task.failed_children | std::views::transform([&tm = _tm] (auto& child) {
                         return task_identity{
-                            .node = tm.get_broadcast_address(),
+                            .host_id = tm.get_host_id(),
                             .task_id = child.task_status.id
                         };
                     }) | std::ranges::to<std::vector<task_identity>>()

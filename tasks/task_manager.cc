@@ -25,6 +25,7 @@
 #include "task_manager.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/error_injection.hh"
+#include "idl/tasks.dist.hh"
 
 using namespace std::chrono_literals;
 
@@ -409,18 +410,18 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
         auto ids = co_await module->get_task_manager().get_virtual_task_children(parent_id);
         co_return ids | std::views::transform([&tm = module->get_task_manager()] (auto id) {
             return task_identity{
-                .node = tm.get_broadcast_address(),
+                .host_id = tm.get_host_id(),
                 .task_id = id
             };
         }) | std::ranges::to<std::vector<task_identity>>();
     }
 
     auto nodes = module->get_nodes();
-    co_return co_await map_reduce(nodes, [ms, parent_id] (auto addr) -> future<std::vector<task_identity>> {
-        return ms->send_tasks_get_children(netw::msg_addr{addr}, parent_id).then([addr] (auto resp) {
-            return resp | std::views::transform([addr] (auto id) {
+    co_return co_await map_reduce(nodes, [ms, parent_id] (auto host_id) -> future<std::vector<task_identity>> {
+        return ser::tasks_rpc_verbs::send_tasks_get_children(ms, host_id, parent_id).then([host_id] (auto resp) {
+            return resp | std::views::transform([host_id] (auto id) {
                 return task_identity{
-                    .node = addr,
+                    .host_id = host_id,
                     .task_id = id
                 };
             }) | std::ranges::to<std::vector<task_identity>>();
@@ -532,8 +533,8 @@ const task_manager::tasks_collection& task_manager::module::get_tasks_collection
     return _tasks;
 }
 
-std::set<gms::inet_address> task_manager::module::get_nodes() const {
-    return {_tm.get_broadcast_address()};
+std::set<locator::host_id> task_manager::module::get_nodes() const {
+    return {_tm.get_host_id()};
 }
 
 future<utils::chunked_vector<task_stats>> task_manager::module::get_stats(is_internal internal, std::function<bool(std::string& keyspace, std::string& table)> filter) const {
@@ -653,8 +654,12 @@ task_manager::task_manager() noexcept
     , _user_task_ttl(0)
 {}
 
-gms::inet_address task_manager::get_broadcast_address() const noexcept {
-    return _cfg.broadcast_address;
+locator::host_id task_manager::get_host_id() const noexcept {
+    return _host_id;
+}
+
+void task_manager::set_host_id(locator::host_id host_id) noexcept {
+    _host_id = host_id;
 }
 
 task_manager::modules& task_manager::get_modules() noexcept {
@@ -689,15 +694,15 @@ const task_manager::tasks_collection& task_manager::get_tasks_collection() const
     return _tasks;
 }
 
-std::set<gms::inet_address> task_manager::get_nodes(service::storage_service& ss) const {
+std::set<locator::host_id> task_manager::get_nodes(service::storage_service& ss) const {
     return std::ranges::join_view(std::to_array({
             std::views::all(ss._topology_state_machine._topology.normal_nodes),
             std::views::all(ss._topology_state_machine._topology.transition_nodes)})
-        ) | std::views::transform([&ss] (auto& node) {
-            return ss.host2ip(locator::host_id{node.first.uuid()});
-        }) | std::views::filter([&ss] (gms::inet_address ip) {
-            return ss._gossiper.is_alive(ip);
-        }) | std::ranges::to<std::set<gms::inet_address>>();
+        ) | std::views::transform([] (auto& node) {
+            return locator::host_id{node.first.uuid()};
+        }) | std::views::filter([&ss] (locator::host_id host_id) {
+            return ss._gossiper.is_alive(host_id);
+        }) | std::ranges::to<std::set<locator::host_id>>();
 }
 
 future<std::vector<task_id>> task_manager::get_virtual_task_children(task_id parent_id) {
@@ -802,14 +807,14 @@ void task_manager::unregister_virtual_task(task_group group) noexcept {
 void task_manager::init_ms_handlers(netw::messaging_service& ms) {
     _messaging = &ms;
 
-    ms.register_tasks_get_children([this] (const rpc::client_info& cinfo, tasks::get_children_request req) -> future<tasks::get_children_response> {
+    ser::tasks_rpc_verbs::register_tasks_get_children(_messaging, [this] (const rpc::client_info& cinfo, tasks::get_children_request req) -> future<tasks::get_children_response> {
         return get_virtual_task_children(task_id{req.id});
     });
 }
 
 future<> task_manager::uninit_ms_handlers() {
     if (auto* ms = std::exchange(_messaging, nullptr)) {
-        return ms->unregister_tasks_get_children().discard_result();
+        return ser::tasks_rpc_verbs::unregister(ms).discard_result();
     }
     return make_ready_future();
 }

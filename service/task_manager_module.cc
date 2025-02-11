@@ -281,7 +281,7 @@ task_manager_module::task_manager_module(tasks::task_manager& tm, service::stora
     , _ss(ss)
 {}
 
-std::set<gms::inet_address> task_manager_module::get_nodes() const {
+std::set<locator::host_id> task_manager_module::get_nodes() const {
     return get_task_manager().get_nodes(_ss);
 }
 
