@@ -39,9 +39,9 @@ public:
 
     seastar::future<> stop();
 
-    virtual future<> on_change(gms::inet_address, const gms::application_state_map& states, gms::permit_id) override;
+    virtual future<> on_change(gms::inet_address, locator::host_id id, const gms::application_state_map& states, gms::permit_id) override;
 
-    virtual future<> on_remove(gms::inet_address, gms::permit_id) override;
+    virtual future<> on_remove(gms::inet_address, locator::host_id id, gms::permit_id) override;
 };
 
 }

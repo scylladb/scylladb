@@ -110,8 +110,8 @@ public:
         return _cdc_metadata;
     }
 
-    virtual future<> on_join(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override;
-    virtual future<> on_change(gms::inet_address, const gms::application_state_map&, gms::permit_id) override;
+    virtual future<> on_join(gms::inet_address, locator::host_id id, gms::endpoint_state_ptr, gms::permit_id) override;
+    virtual future<> on_change(gms::inet_address, locator::host_id id, const gms::application_state_map&, gms::permit_id) override;
 
     future<> check_and_repair_cdc_streams();
 

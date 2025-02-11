@@ -972,17 +972,17 @@ public:
     {}
 
     virtual future<>
-    on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+    on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
         return on_endpoint_change(endpoint, ep_state, permit_id, "on_join");
     }
 
     virtual future<>
-    on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+    on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
         return on_endpoint_change(endpoint, ep_state, permit_id, "on_alive");
     }
 
     virtual future<>
-    on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+    on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
         return on_endpoint_change(endpoint, ep_state, permit_id, "on_restart");
     }
 };
@@ -2580,12 +2580,12 @@ future<> storage_service::handle_state_removed(inet_address endpoint, std::vecto
     }
 }
 
-future<> storage_service::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
+future<> storage_service::on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_join: permit_id={}", endpoint, pid);
-    co_await on_change(endpoint, ep_state->get_application_state_map(), pid);
+    co_await on_change(endpoint, id, ep_state->get_application_state_map(), pid);
 }
 
-future<> storage_service::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
+future<> storage_service::on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id pid) {
     const auto& tm = get_token_metadata();
     const auto host_id = state->get_host_id();
     slogger.debug("endpoint={}/{} on_alive: permit_id={}", endpoint, host_id, pid);
@@ -2612,14 +2612,14 @@ future<std::optional<gms::inet_address>> storage_service::get_ip_from_peers_tabl
     co_return std::nullopt;
 }
 
-future<> storage_service::on_change(gms::inet_address endpoint, const gms::application_state_map& states_, gms::permit_id pid) {
+future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states_, gms::permit_id pid) {
     // copy the states map locally since the coroutine may yield
     auto states = states_;
     slogger.debug("endpoint={} on_change:     states={}, permit_id={}", endpoint, states, pid);
     if (raft_topology_change_enabled()) {
         slogger.debug("ignore status changes since topology changes are using raft");
     } else {
-        co_await on_application_state_change(endpoint, states, application_state::STATUS, pid, [this] (inet_address endpoint, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
+        co_await on_application_state_change(endpoint, id, states, application_state::STATUS, pid, [this] (inet_address endpoint, locator::host_id id, const gms::versioned_value& value, gms::permit_id pid) -> future<> {
             std::vector<sstring> pieces;
             boost::split(pieces, value.value(), boost::is_any_of(versioned_value::DELIMITER));
             if (pieces.empty()) {
@@ -2688,7 +2688,7 @@ future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_
 }
 
 
-future<> storage_service::on_remove(gms::inet_address endpoint, gms::permit_id pid) {
+future<> storage_service::on_remove(gms::inet_address endpoint, locator::host_id id, gms::permit_id pid) {
     slogger.debug("endpoint={} on_remove: permit_id={}", endpoint, pid);
 
     if (raft_topology_change_enabled()) {
@@ -2720,16 +2720,16 @@ future<> storage_service::on_remove(gms::inet_address endpoint, gms::permit_id p
     co_await replicate_to_all_cores(std::move(tmptr));
 }
 
-future<> storage_service::on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
+future<> storage_service::on_dead(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_dead: permit_id={}", endpoint, pid);
     return notify_down(endpoint);
 }
 
-future<> storage_service::on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id pid) {
+future<> storage_service::on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={} on_restart: permit_id={}", endpoint, pid);
     // If we have restarted before the node was even marked down, we need to reset the connection pool
     if (endpoint != get_broadcast_address() && _gossiper.is_alive(state->get_host_id())) {
-        return on_dead(endpoint, state, pid);
+        return on_dead(endpoint, id, state, pid);
     }
     return make_ready_future();
 }

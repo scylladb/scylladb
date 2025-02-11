@@ -841,18 +841,18 @@ future<> generation_service::leave_ring() {
     co_await _gossiper.unregister_(shared_from_this());
 }
 
-future<> generation_service::on_join(gms::inet_address ep, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
-    return on_change(ep, ep_state->get_application_state_map(), pid);
+future<> generation_service::on_join(gms::inet_address ep, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id pid) {
+    return on_change(ep, id, ep_state->get_application_state_map(), pid);
 }
 
-future<> generation_service::on_change(gms::inet_address ep, const gms::application_state_map& states, gms::permit_id pid) {
+future<> generation_service::on_change(gms::inet_address ep, locator::host_id id, const gms::application_state_map& states, gms::permit_id pid) {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     if (_raft_topology_change_enabled()) {
         return make_ready_future<>();
     }
 
-    return on_application_state_change(ep, states, gms::application_state::CDC_GENERATION_ID, pid, [this] (gms::inet_address ep, const gms::versioned_value& v, gms::permit_id) {
+    return on_application_state_change(ep, id, states, gms::application_state::CDC_GENERATION_ID, pid, [this] (gms::inet_address ep, locator::host_id id, const gms::versioned_value& v, gms::permit_id) {
         auto gen_id = gms::versioned_value::cdc_generation_id_from_string(v.value());
         cdc_log.debug("Endpoint: {}, CDC generation ID change: {}", ep, gen_id);
 

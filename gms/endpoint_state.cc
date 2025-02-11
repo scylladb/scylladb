@@ -80,11 +80,12 @@ std::unordered_set<dht::token> endpoint_state::get_tokens() const {
 }
 
 future<> i_endpoint_state_change_subscriber::on_application_state_change(inet_address endpoint,
+        locator::host_id id,
         const gms::application_state_map& states, application_state app_state, permit_id pid,
-        std::function<future<>(inet_address, const gms::versioned_value&, permit_id)> func) {
+        std::function<future<>(inet_address, locator::host_id, const gms::versioned_value&, permit_id)> func) {
     auto it = states.find(app_state);
     if (it != states.end()) {
-        return func(endpoint, it->second, pid);
+        return func(endpoint, id, it->second, pid);
     }
     return make_ready_future<>();
 }

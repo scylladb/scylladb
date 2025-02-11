@@ -540,7 +540,7 @@ private:
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.
-    future<> do_on_change_notifications(inet_address addr, const application_state_map& states, permit_id) const;
+    future<> do_on_change_notifications(inet_address addr, locator::host_id id, const application_state_map& states, permit_id) const;
 
     // notify that a node is DOWN (dead)
     // Must be called under lock_endpoint.

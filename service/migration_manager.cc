@@ -1151,13 +1151,13 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id 
     return db::schema_tables::get_column_mapping(sys_ks, table_id, v);
 }
 
-future<> migration_manager::on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) {
+future<> migration_manager::on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id) {
     schedule_schema_pull(ep_state->get_host_id(), *ep_state);
     return make_ready_future();
 }
 
-future<> migration_manager::on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id pid) {
-    return on_application_state_change(endpoint, states, gms::application_state::SCHEMA, pid, [this] (gms::inet_address endpoint, const gms::versioned_value&, gms::permit_id) {
+future<> migration_manager::on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states, gms::permit_id pid) {
+    return on_application_state_change(endpoint, id, states, gms::application_state::SCHEMA, pid, [this] (gms::inet_address endpoint, locator::host_id id, const gms::versioned_value&, gms::permit_id) {
         auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
             mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
@@ -1172,7 +1172,7 @@ future<> migration_manager::on_change(gms::inet_address endpoint, const gms::app
     });
 }
 
-future<> migration_manager::on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) {
+future<> migration_manager::on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id) {
     schedule_schema_pull(state->get_host_id(), *state);
     return make_ready_future();
 }
