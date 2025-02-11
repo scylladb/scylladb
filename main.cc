@@ -1692,9 +1692,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto stop_tsm = defer_verbose_shutdown("topology_state_machine", [&tsm] {
                 tsm.stop().get();
             });
-            auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe([&tsm] (unsigned goal) {
+            auto notify_topology = [&tsm] (auto) {
                 tsm.local().event.broadcast();
-            });
+            };
+            auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe(notify_topology);
+            auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
 
             auto compression_dict_updated_callback = [] () -> future<> {
                 auto dict = co_await sys_ks.local().query_dict();

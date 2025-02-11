@@ -1334,7 +1334,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , minimum_replication_factor_warn_threshold(this, "minimum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used,  3, "")
     , maximum_replication_factor_warn_threshold(this, "maximum_replication_factor_warn_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
     , maximum_replication_factor_fail_threshold(this, "maximum_replication_factor_fail_threshold", liveness::LiveUpdate, value_status::Used, -1, "")
-    , tablets_initial_scale_factor(this, "tablets_initial_scale_factor", value_status::Used, 10,
+    , tablets_initial_scale_factor(this, "tablets_initial_scale_factor", liveness::LiveUpdate, value_status::Used, 10,
          "Minimum average number of tablet replicas per shard per table. Suppressed by tablet options in table's schema: min_per_shard_tablet_count and min_tablet_count")
     , tablets_per_shard_goal(this, "tablets_per_shard_goal", liveness::LiveUpdate, value_status::Used, 100,
          "The goal for the maximum number of tablet replicas per shard. Tablet allocator tries to keep this goal.")
