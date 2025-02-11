@@ -103,6 +103,7 @@ namespace {
             system_keyspace::VIEW_BUILD_STATUS_V2,
             system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS,
             system_keyspace::BUILT_TABLET_VIEWS,
+            system_keyspace::VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -129,6 +130,7 @@ namespace {
                 system_keyspace::VIEW_BUILD_STATUS_V2,
                 system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS,
                 system_keyspace::BUILT_TABLET_VIEWS,
+                system_keyspace::VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES,
                 // auth tables
                 system_keyspace::ROLES,
                 system_keyspace::ROLE_MEMBERS,
@@ -1214,6 +1216,20 @@ schema_ptr system_keyspace::built_tablet_views() {
         return schema_builder(NAME, BUILT_TABLET_VIEWS, id)
                 .with_column("keyspace_name", utf8_type, column_kind::partition_key)
                 .with_column("view_name", utf8_type, column_kind::clustering_key)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::view_building_coordinator_staging_sstables() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+        return schema_builder(NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES, id)
+                .with_column("host_id", uuid_type, column_kind::partition_key)
+                .with_column("shard", int32_type, column_kind::clustering_key)
+                .with_column("start_token", long_type, column_kind::clustering_key)
+                .with_column("end_token", long_type, column_kind::clustering_key)
                 .with_hash_version()
                 .build();
     }();
@@ -2356,7 +2372,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_coordinator_tasks(), built_tablet_views(),
+                    dicts(), view_building_coordinator_tasks(), built_tablet_views(), view_building_coordinator_staging_sstables(),
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -2848,6 +2864,53 @@ future<mutation> system_keyspace::make_tablet_view_built_mutation(api::timestamp
     static sstring query = format("INSERT INTO {}.{} (keyspace_name, view_name) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::BUILT_TABLET_VIEWS);
 
     auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {view_name.first, view_name.second});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<service::vbc::vbc_target_staging_sstables_map> system_keyspace::get_view_building_coordinator_staging_sstables_targets() {
+    static const sstring query = format("SELECT * FROM {}.{}", NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+
+    service::vbc::vbc_target_staging_sstables_map target_staging_sstables_map;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto shard = unsigned(row.get_as<int32_t>("shard"));
+        auto start_token = row.get_as<int64_t>("start_token");
+        auto end_token = row.get_as<int64_t>("end_token");
+
+        service::vbc::view_building_target target{host_id, shard};
+        auto range = dht::token_range::make({dht::token(start_token), true}, {dht::token(end_token), true});
+        target_staging_sstables_map[target].push_back(range);
+        
+        co_return stop_iteration::no;
+    });
+    co_return target_staging_sstables_map;
+}
+
+future<mutation> system_keyspace::make_vbc_staging_sstable_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range) {
+    static const sstring stmt = format("INSERT INTO {}.{}(host_id, shard, start_token, end_token) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+    
+    // `range` is expected to have both start and end
+    data_value start = data_value(range.start()->value().data());
+    data_value end = data_value(range.end()->value().data());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {data_value(host_id.uuid()), data_value(int32_t(shard)), start, end});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_vbc_staging_sstable_done_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range) {
+    static sstring stmt = format("DELETE FROM {}.{} WHERE host_id = ? AND shard = ? AND start_token = ? AND end_token = ?", NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+
+    // `range` is expected to have both start and end
+    data_value start = data_value(range.start()->value().data());
+    data_value end = data_value(range.end()->value().data());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {data_value(host_id.uuid()), data_value(int32_t(shard)), start, end});
     if (muts.size() != 1) {
         on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
     }
