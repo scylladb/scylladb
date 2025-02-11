@@ -8,6 +8,7 @@
  */
 
 #include <seastar/core/sleep.hh>
+#include "gms/inet_address.hh"
 #include "load_meter.hh"
 #include "load_broadcaster.hh"
 #include "cache_hitrate_calculator.hh"
@@ -41,7 +42,7 @@ future<std::map<sstring, double>> load_meter::get_load_map() {
         std::map<sstring, double> load_map;
         if (_lb) {
             for (auto& x : _lb->get_load_info()) {
-                load_map.emplace(format("{}", x.first), x.second);
+                load_map.emplace(format("{}", _lb->gossiper().get_address_map().find(x.first).value_or(gms::inet_address{})), x.second);
                 llogger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
             }
             load_map.emplace(format("{}",
