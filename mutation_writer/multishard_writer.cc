@@ -86,7 +86,7 @@ shard_writer::shard_writer(schema_ptr s,
 future<> shard_writer::consume() {
     return _reader.peek().then([this] (mutation_fragment_v2* mf_ptr) {
         if (mf_ptr) {
-            return _consumer(std::move(_reader));
+            return _consumer(std::move(_reader), storage_hints{});
         }
         return make_ready_future<>();
     });

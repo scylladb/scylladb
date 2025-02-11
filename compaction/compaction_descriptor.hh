@@ -41,7 +41,7 @@ struct compaction_completion_desc {
 };
 
 // creates a new SSTable for a given shard
-using compaction_sstable_creator_fn = std::function<shared_sstable(shard_id shard)>;
+using compaction_sstable_creator_fn = std::function<shared_sstable(shard_id shard, storage_hints)>;
 // Replaces old sstable(s) by new one(s) which contain all non-expired data.
 using compaction_sstable_replacer_fn = std::function<void(compaction_completion_desc)>;
 

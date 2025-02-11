@@ -279,7 +279,7 @@ public:
 
                 auto descriptor = sstables::compaction_descriptor(std::move(ssts));
                 descriptor.enable_garbage_collection(cf->get_sstable_set());
-                descriptor.creator = [sst_gen = std::move(sst_gen)] (unsigned dummy) mutable {
+                descriptor.creator = [sst_gen = std::move(sst_gen)] (shard_id, storage_hints) mutable {
                     return sst_gen();
                 };
                 descriptor.replacer = sstables::replacer_fn_no_op();
