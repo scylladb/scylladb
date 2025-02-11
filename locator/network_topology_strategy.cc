@@ -296,13 +296,38 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
     return do_make_replication_map(table, shared_from_this(), std::move(tm), _rep_factor);
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count) const {
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count, std::optional<table_id> colocated_table = std::nullopt) const {
+    if (colocated_table) {
+        // The tablet count of the new table must be a multiple of the
+        // colocated_table in order for colocation to be possible.
+        auto& parent_tablet_map = tm->tablets().get_tablet_map(*colocated_table);
+        auto parent_tablet_count = parent_tablet_map.tablet_count();
+        tablet_count = std::max(tablet_count, parent_tablet_count);
+    }
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
         rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
         tablet_count = aligned_tablet_count;
     }
-    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
+
+    tablet_map new_tablet_map(tablet_count);
+
+    if (colocated_table) {
+        // initialize the tablet replicas to be colocated with those of colocated_table
+        auto& parent_tablet_map = tm->tablets().get_tablet_map(*colocated_table);
+        auto parent_tablet_count = parent_tablet_map.tablet_count();
+        size_t f = tablet_count / parent_tablet_count;
+        for (size_t base_tid = 0; base_tid < parent_tablet_count; base_tid++) {
+            auto& parent_replicas = parent_tablet_map.get_tablet_info(tablet_id(base_tid)).replicas;
+            for (size_t tid = base_tid * f; tid < (base_tid + 1) * f; tid++) {
+                auto tinfo = new_tablet_map.get_tablet_info(tablet_id(tid));
+                tinfo.replicas = parent_replicas;
+                new_tablet_map.set_tablet(tablet_id(tid), std::move(tinfo));
+            }
+        }
+    }
+
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), std::move(new_tablet_map));
 }
 
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
