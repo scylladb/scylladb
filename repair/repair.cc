@@ -2586,7 +2586,7 @@ future<> repair::tablet_repair_task_impl::run() {
 
         auto parent_shard = this_shard_id();
         std::vector<gc_clock::time_point> flush_times(smp::count);
-        rs.container().invoke_on_all([&idx, &flush_times, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism = _ranges_parallelism, parent_shard] (repair_service& rs) -> future<> {
+        rs.container().invoke_on_all([&idx, &flush_times, id, &metas = _metas, parent_data, reason = _reason, tables = _tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism = _ranges_parallelism, parent_shard] (repair_service& rs) -> future<> {
             std::exception_ptr error;
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
