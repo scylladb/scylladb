@@ -178,8 +178,8 @@ public:
 
 private:
     void fail_all_sessions();
-    void fail_sessions(inet_address endpoint);
-    bool has_peer(inet_address endpoint) const;
+    void fail_sessions(locator::host_id id);
+    bool has_peer(locator::host_id id) const;
 
     void init_messaging_service_handler(abort_source& as);
     future<> uninit_messaging_service_handler();

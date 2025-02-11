@@ -3206,20 +3206,20 @@ public:
             locator::host_id id,
             gms::endpoint_state_ptr state,
             gms::permit_id) override {
-        return remove_row_level_repair(_repair_service.get_gossiper().get_host_id(endpoint));
+        return remove_row_level_repair(id);
     }
     virtual future<> on_remove(
             gms::inet_address endpoint,
             locator::host_id id,
             gms::permit_id) override {
-        return remove_row_level_repair(_repair_service.get_gossiper().get_host_id(endpoint));
+        return remove_row_level_repair(id);
     }
     virtual future<> on_restart(
             gms::inet_address endpoint,
             locator::host_id id,
             gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {
-        return remove_row_level_repair(_repair_service.get_gossiper().get_host_id(endpoint));
+        return remove_row_level_repair(id);
     }
 };
 

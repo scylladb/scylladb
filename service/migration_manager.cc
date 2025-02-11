@@ -1152,28 +1152,27 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id 
 }
 
 future<> migration_manager::on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id) {
-    schedule_schema_pull(ep_state->get_host_id(), *ep_state);
+    schedule_schema_pull(id, *ep_state);
     return make_ready_future();
 }
 
 future<> migration_manager::on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states, gms::permit_id pid) {
     return on_application_state_change(endpoint, id, states, gms::application_state::SCHEMA, pid, [this] (gms::inet_address endpoint, locator::host_id id, const gms::versioned_value&, gms::permit_id) {
-        auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
+        auto ep_state = _gossiper.get_endpoint_state_ptr(id);
         if (!ep_state || _gossiper.is_dead_state(*ep_state)) {
-            mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", endpoint);
+            mlogger.debug("Ignoring state change for dead or unknown endpoint: {}", id);
             return make_ready_future();
         }
-        const auto host_id = _gossiper.get_host_id(endpoint);
-        const auto* node = _storage_proxy.get_token_metadata_ptr()->get_topology().find_node(host_id);
+        const auto* node = _storage_proxy.get_token_metadata_ptr()->get_topology().find_node(id);
         if (node && node->is_member()) {
-            schedule_schema_pull(host_id, *ep_state);
+            schedule_schema_pull(id, *ep_state);
         }
         return make_ready_future<>();
     });
 }
 
 future<> migration_manager::on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id) {
-    schedule_schema_pull(state->get_host_id(), *state);
+    schedule_schema_pull(id, *state);
     return make_ready_future();
 }
 

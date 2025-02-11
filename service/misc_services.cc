@@ -294,7 +294,7 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, locat
             return make_ready_future();
         }
         auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
-        return _sp.invoke_on_all([id = _gossiper.get_host_id(endpoint), backlog] (service::storage_proxy& sp) {
+        return _sp.invoke_on_all([id, backlog] (service::storage_proxy& sp) {
             auto[it, inserted] = sp._view_update_backlogs.try_emplace(id, backlog);
             if (!inserted && it->second.ts < backlog.ts) {
                 it->second = backlog;
@@ -305,7 +305,7 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, locat
 }
 
 future<> view_update_backlog_broker::on_remove(gms::inet_address endpoint, locator::host_id id, gms::permit_id) {
-    _sp.local()._view_update_backlogs.erase(_gossiper.get_host_id(endpoint));
+    _sp.local()._view_update_backlogs.erase(id);
     return make_ready_future();
 }
 
