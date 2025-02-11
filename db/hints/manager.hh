@@ -382,6 +382,12 @@ private:
     /// ALL requested sync points will be canceled, i.e. an exception will be issued
     /// in the corresponding futures.
     future<> perform_migration();
+
+public:
+    /// Performs draining for all nodes that have already left the cluster.
+    /// This should only be called when the hint endpoint managers have been initialized
+    /// and the hint manager has started.
+    future<> drain_left_nodes();
 };
 
 } // namespace db::hints
