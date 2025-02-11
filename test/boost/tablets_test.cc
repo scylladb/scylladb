@@ -49,6 +49,22 @@ using namespace locator;
 using namespace replica;
 using namespace service;
 
+struct shared_load_stats {
+    locator::load_stats stats;
+
+    locator::load_stats_ptr get() {
+        return make_lw_shared(stats);
+    }
+
+    void set_size(table_id table, size_t size_in_bytes) {
+        stats.tables[table].size_in_bytes = size_in_bytes;
+    }
+
+    void set_split_ready_seq_number(table_id table, size_t seq_number) {
+        stats.tables[table].split_ready_seq_number = seq_number;
+    }
+};
+
 static api::timestamp_type current_timestamp(cql_test_env& e) {
     // Mutations in system.tablets got there via group0, so in order for new
     // mutations to take effect, their timestamp should be "later" than that
@@ -1475,9 +1491,10 @@ void check_tablet_invariants(const tablet_metadata& tmeta);
 static
 void do_rebalance_tablets(cql_test_env& e,
                           group0_guard& guard,
-                          locator::load_stats_ptr load_stats = {},
+                          shared_load_stats* load_stats = nullptr,
                           std::unordered_set<host_id> skiplist = {},
-                          std::function<bool(const migration_plan&)> stop = nullptr)
+                          std::function<bool(const migration_plan&)> stop = nullptr,
+                          bool auto_split = false)
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -1487,7 +1504,7 @@ void do_rebalance_tablets(cql_test_env& e,
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats ? load_stats->get() : nullptr, skiplist).get();
         if (plan.empty()) {
             return;
         }
@@ -1498,6 +1515,17 @@ void do_rebalance_tablets(cql_test_env& e,
             apply_plan(tm, plan);
             return make_ready_future<>();
         }).get();
+
+        if (auto_split && load_stats) {
+            auto& tm = *stm.get();
+            for (auto& [table, tmap]: tm.tablets().all_tables()) {
+                if (std::holds_alternative<resize_decision::split>(tmap->resize_decision().way)) {
+                    testlog.debug("set_split_ready_seq_number({}, {})", table, tmap->resize_decision().sequence_number);
+                    load_stats->set_split_ready_seq_number(table, tmap->resize_decision().sequence_number);
+                }
+            }
+        }
+
         handle_resize_finalize(e, guard, plan).get();
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
@@ -1508,16 +1536,17 @@ void do_rebalance_tablets(cql_test_env& e,
 // only reflects it in the metadata.
 // Run in a seastar thread.
 void rebalance_tablets(cql_test_env& e,
-                       load_stats_ptr load_stats = nullptr,
+                       shared_load_stats* load_stats = nullptr,
                        std::unordered_set<host_id> skiplist = {},
-                       std::function<bool(const migration_plan&)> stop = nullptr) {
+                       std::function<bool(const migration_plan&)> stop = nullptr,
+                       bool auto_split = true) {
     abort_source as;
     testlog.debug("rebalance_tablets(): start");
 
     auto guard = e.get_raft_group0_client().start_operation(as).get();
     testlog.debug("rebalance_tablets(): took group0 guard");
 
-    do_rebalance_tablets(e, guard, std::move(load_stats), std::move(skiplist), std::move(stop));
+    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split);
     testlog.debug("rebalance_tablets(): rebalanced");
 
     // We should not introduce inconsistency between on-disk state and in-memory state
@@ -2703,8 +2732,9 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
     auto tablet_count = [&] {
         return stm.get()->tablets().get_tablet_map(table1).tablet_count();
     };
-    auto do_rebalance_tablets = [&] (locator::load_stats load_stats) {
-        rebalance_tablets(e, make_lw_shared(std::move(load_stats)));
+    shared_load_stats load_stats;
+    auto do_rebalance_tablets = [&] () {
+        rebalance_tablets(e, &load_stats);
     };
 
     const uint64_t target_tablet_size = service::default_target_tablet_size;
@@ -2713,15 +2743,11 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
     };
 
     while (tablet_count() > 1) {
-        locator::load_stats load_stats = {
-            .tables = {
-                { table1, table_load_stats{ .size_in_bytes = merge_threshold() - 1 }},
-            }
-        };
+        load_stats.set_size(table1, merge_threshold() - 1);
 
         auto old_tablet_count = tablet_count();
         check_tablet_invariants(stm.get()->tablets());
-        do_rebalance_tablets(std::move(load_stats));
+        do_rebalance_tablets();
         check_tablet_invariants(stm.get()->tablets());
         BOOST_REQUIRE_LT(tablet_count(), old_tablet_count);
     }
@@ -2867,8 +2893,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             return stm.get()->tablets().get_tablet_map(table1).resize_decision();
         };
 
-        auto do_rebalance_tablets = [&] (locator::load_stats load_stats) {
-            rebalance_tablets(e, make_lw_shared(std::move(load_stats)));
+        shared_load_stats load_stats;
+        auto do_rebalance_tablets = [&] () {
+            rebalance_tablets(e, &load_stats, {}, nullptr, false); // no auto-split
         };
 
         const uint64_t max_tablet_size = service::default_target_tablet_size * 2;
@@ -2879,15 +2906,13 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
         const auto initial_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
 
+        load_stats.set_split_ready_seq_number(table1, initial_ready_seq_number);
+
         // avg size moved above target size, so merge is cancelled
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.75), .split_ready_seq_number = initial_ready_seq_number }},
-                }
-            };
+            load_stats.set_size(table1, to_size_in_bytes(0.75));
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
         }
@@ -2897,13 +2922,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
         // avg size hits split threshold, and balancer emits split request
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(1.1), .split_ready_seq_number = initial_ready_seq_number }},
-                }
-            };
+            load_stats.set_size(table1, to_size_in_bytes(1.1));
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::split>(resize_decision().way));
             BOOST_REQUIRE_GT(resize_decision().sequence_number, 0);
@@ -2912,13 +2933,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         // replicas set their split status as ready, and load balancer finalizes split generating a new
         // tablet map, twice as large as the previous one.
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(1.1), .split_ready_seq_number = resize_decision().sequence_number }},
-                }
-            };
+            load_stats.set_split_ready_seq_number(table1, resize_decision().sequence_number);
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
 
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets * 2);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
@@ -2926,13 +2943,10 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
         // Check that balancer detects table size dropped to 0 and reduces tablet count down to 1 through merges.
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.0), .split_ready_seq_number = initial_ready_seq_number }},
-                }
-            };
+            load_stats.set_size(table1, to_size_in_bytes(0.0));
+            load_stats.set_split_ready_seq_number(table1, initial_ready_seq_number);
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
             BOOST_REQUIRE_EQUAL(tablet_count(), 1);
         }
 
