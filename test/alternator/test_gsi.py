@@ -15,7 +15,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from test.alternator.util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table
+from .util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table, wait_for_gsi
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -261,8 +261,16 @@ def test_gsi_describe(test_table_gsi_1):
 # backfilled might be in other states, but that case is tested in different
 # tests in test_gsi_updatetable.py.
 # Reproduces #11471.
-@pytest.mark.xfail(reason="issue #11471")
 def test_gsi_describe_indexstatus(test_table_gsi_1):
+    # In DynamoDB, a GSI created together with the table is always immediately
+    # ACTIVE, but this is not always true in Alternator: Although a new table
+    # is completely empty and its "view building" phase has nothing to do,
+    # this "nothing" can still take a short while (especially in debug builds)
+    # and in the mean time the test might see the CREATING state and be flaky.
+    # So let's wait_for_gsi() just to be sure the view building is over.
+    # Note that this makes the explicit IndexStatus check below redundant,
+    # because wait_for_gsi() already does it..
+    wait_for_gsi(test_table_gsi_1, 'hello')
     desc = test_table_gsi_1.meta.client.describe_table(TableName=test_table_gsi_1.name)
     gsis = desc['Table']['GlobalSecondaryIndexes']
     assert len(gsis) == 1
@@ -606,6 +614,122 @@ def test_gsi_wrong_type_attribute_batch(test_table_gsi_2):
                 batch.put_item(item)
     for p in [p1, p2, p3]:
         assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Test when a table has a GSI, if the indexed attribute is a partition key
+# in the GSI and its value is 2048 bytes, the update operation is rejected,
+# and is added to neither base table nor index. DynamoDB limits partition
+# keys to that length (see test_limits.py::test_limit_partition_key_len_2048)
+# so wants to limit the GSI keys as well.
+# Note that in test_gsi_updatetable.py we have a similar test for when adding
+# a pre-existing table. In that case we can't reject the base-table update
+# because the oversized attribute is already there - but can just drop this
+# item from the GSI.
+@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+def test_gsi_limit_partition_key_len_2048(test_table_gsi_2):
+    # A value for 'x' (the GSI's partition key) of length 2048 is fine:
+    p = random_string()
+    x = 'a'*2048
+    test_table_gsi_2.put_item(Item={'p': p, 'x': x})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x}],
+        KeyConditions={
+            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # PutItem with oversized for 'x' is rejected, item isn't created even
+    # in the base table.
+    p = random_string()
+    x = 'a'*2049
+    with pytest.raises(ClientError, match='ValidationException.*2048'):
+        test_table_gsi_2.put_item(Item={'p':  p, 'x': x})
+    assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
+
+# This is a variant of the above test, where we don't insist that the
+# partition key length limit must be exactly 2048 bytes as in DynamoDB,
+# but that it be *at least* 2408. I.e., we verify that 2048-byte values
+# are allowed for GSI partition keys, while very long keys that surpass
+# Scylla's low-level key-length limit (64 KB) are forbidden with an
+# appropriate error message and not an "internal server error". This test
+# should pass even if Alternator decides to adopt a different key length
+# limits from DynamoDB. We do have to adopt *some* limit because the
+# internal Scylla implementation has a 64 KB limit on key lengths.
+@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+def test_gsi_limit_partition_key_len(test_table_gsi_2):
+    # A value for 'x' (the GSI's partition key) of length 2048 is fine:
+    p = random_string()
+    x = 'a'*2048
+    test_table_gsi_2.put_item(Item={'p': p, 'x': x})
+    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x}],
+        KeyConditions={
+            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # Attribute, that is a GSI partition key, of length 64 KB + 1 is forbidden:
+    # it obviously exceeds DynamoDB's limit (2048 bytes), but also exceeds
+    # Scylla's internal limit on key length (64 KB - 1). We except to get a
+    # reasonable error on request validation - not some "internal server error".
+    # We actually used to get this "internal server error" for 64 KB - 2
+    # (this is probably related to issue #16772).
+    p = random_string()
+    x = 'a'*65536
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_gsi_2.put_item(Item={'p':  p, 'x': x})
+    assert not 'Item' in test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Test when a table has a GSI, if the indexed attribute is a partition key
+# in the GSI and its value is 1024 bytes, the update operation is rejected,
+# and is added to neither base table nor index. DynamoDB limits partition
+# keys to that length (see test_limits.py::test_limit_partition_key_len_1024)
+# so wants to limit the GSI keys as well.
+# Note that in test_gsi_updatetable.py we have a similar test for when adding
+# a pre-existing table. In that case we can't reject the base-table update
+# because the oversized attribute is already there - but can just drop this
+# item from the GSI.
+@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+def test_gsi_limit_sort_key_len_1024(test_table_gsi_5):
+    # A value for 'x' (the GSI's partition key) of length 1024 is fine:
+    p = random_string()
+    c = random_string()
+    x = 'a'*1024
+    test_table_gsi_5.put_item(Item={'p': p, 'c': c, 'x': x})
+    assert_index_query(test_table_gsi_5, 'hello', [{'p': p, 'c': c, 'x': x}],
+        KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # PutItem with oversized for 'x' is rejected, item isn't created even
+    # in the base table.
+    p = random_string()
+    x = 'a'*1025
+    with pytest.raises(ClientError, match='ValidationException.*1024'):
+        test_table_gsi_5.put_item(Item={'p':  p, 'c': c, 'x': x})
+    assert not 'Item' in test_table_gsi_5.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
+
+# This is a variant of the above test, where we don't insist that the
+# partition key length limit must be exactly 1024 bytes as in DynamoDB,
+# but that it be *at least* 1024. I.e., we verify that 1024-byte values
+# are allowed for GSI partition keys, while very long keys that surpass
+# Scylla's low-level key-length limit (64 KB) are forbidden with an
+# appropriate error message and not an "internal server error". This test
+# should pass even if Alternator decides to adopt a different key length
+# limits from DynamoDB. We do have to adopt *some* limit because the
+# internal Scylla implementation has a 64 KB limit on key lengths.
+@pytest.mark.xfail(reason="issue #10347: key length limits not enforced")
+def test_gsi_limit_sort_key_len(test_table_gsi_5):
+    # A value for 'x' (the GSI's partition key) of length 1024 is fine:
+    p = random_string()
+    c = random_string()
+    x = 'a'*1024
+    test_table_gsi_5.put_item(Item={'p': p, 'c': c, 'x': x})
+    assert_index_query(test_table_gsi_5, 'hello', [{'p': p, 'c': c, 'x': x}],
+        KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+            'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # Attribute, that is a GSI partition key, of length 64 KB + 1 is forbidden:
+    # it obviously exceeds DynamoDB's limit (1024 bytes), but also exceeds
+    # Scylla's internal limit on key length (64 KB - 1). We except to get a
+    # reasonable error on request validation - not some "internal server error".
+    # We actually used to get this "internal server error" for 64 KB - 2
+    # (this is probably related to issue #16772).
+    p = random_string()
+    x = 'a'*65536
+    with pytest.raises(ClientError, match='ValidationException.*limit'):
+        test_table_gsi_5.put_item(Item={'p':  p, 'c': c, 'x': x})
+    assert not 'Item' in test_table_gsi_5.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
 
 # A third scenario of GSI. Index has a hash key and a sort key, both are
 # non-key attributes from the base table. This scenario may be very

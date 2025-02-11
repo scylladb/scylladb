@@ -1591,7 +1591,7 @@ void row::apply_monotonically(const schema& our_schema, const schema& their_sche
 // we erase the live cells according to the shadowable_tombstone rules.
 static bool dead_marker_shadows_row(const schema& s, column_kind kind, const row_marker& marker) {
     return s.is_view()
-            && s.view_info()->has_base_non_pk_columns_in_view_pk()
+            && (s.view_info()->has_base_non_pk_columns_in_view_pk() || s.view_info()->has_computed_column_depending_on_base_non_primary_key())
             && !marker.is_live()
             && kind == column_kind::regular_column; // not applicable to static rows
 }

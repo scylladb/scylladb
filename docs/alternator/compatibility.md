@@ -272,12 +272,6 @@ behave the same in Alternator. However, there are a few features which we have
 not implemented yet. Unimplemented features return an error when used, so
 they should be easy to detect. Here is a list of these unimplemented features:
 
-* Currently in Alternator, a GSI (Global Secondary Index) can only be added
-  to a table at table creation time. DynamoDB allows adding a GSI (but not an
-  LSI) to an existing table using an UpdateTable operation, and similarly it
-  allows removing a GSI from a table.
-  <https://github.com/scylladb/scylla/issues/11567>
-
 * GSI (Global Secondary Index) and LSI (Local Secondary Index) may be
   configured to project only a subset of the base-table attributes to the
   index. This option is not yet respected by Alternator - all attributes
@@ -378,3 +372,14 @@ they should be easy to detect. Here is a list of these unimplemented features:
   that can be used to forbid table deletion. This table option was added to
   DynamoDB in March 2023.
   <https://github.com/scylladb/scylla/issues/14482>
+
+* Alternator does not support the table option WarmThroughput that can be
+  used to check or guarantee that the database has "warmed" to handle a
+  particular throughput. This table option was added to DynamoDB in
+  November 2024.
+  <https://github.com/scylladb/scylladb/issues/21853>
+
+* Alternator does not support the table option MultiRegionConsistency
+  that can be used to achieve consistent reads on global (multi-region) tables.
+  This table option was added as a preview to DynamoDB in December 2024.
+  <https://github.com/scylladb/scylladb/issues/21852>
