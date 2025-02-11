@@ -12,7 +12,8 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.topology.conftest import cluster_con
+from test.topology.conftest import cluster_con, skip_mode
+from test.topology.util import get_coordinator_host
 
 
 @pytest.mark.asyncio
@@ -85,3 +86,80 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
 
     logging.info('Executing read barrier')
     await read_barrier(manager.api, dc_servers[1][0].ip_addr)
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_raft_limited_voters_upgrade(manager: ManagerClient):
+    """
+    Test that the limited voters feature works correctly during the upgrade.
+
+    The scenario being tested here is that we first have a cluster that doesn't
+    have the limited voters feature enabled, and then we enable it during the
+    upgrade.
+
+    We first upgrade all nodes except the coordinator, and then the coordinator
+    itself. When the feature is not available on the coordinator, and would be
+    enabled on the other nodes, the other nodes wouldn't become voters until the
+    coordinator is upgraded as well. But that couldn't be done because the
+    coordinator would be the last voter, thus the majority would be lost.
+
+    Therefore we use the feature flags and only enable the feature after all
+    nodes are upgraded (all nodes report that they support the feature).
+
+    Arrange:
+        - create a 3-node cluster with the limited voters feature disabled
+    Act:
+        - upgrade all nodes except the coordinator, with the feature enabled
+        - upgrade the leader node
+    Assert:
+        - the feature has been enabled and the cluster works correctly
+          (i.e. has enough voters to execute e.g. a read barrier)
+    """
+
+    # Arrange: Create a 3-node cluster with the limited voters feature disabled
+
+    cfg = {
+        "error_injections_at_startup": [
+            {
+                "name": "suppress_features",
+                "value": "GROUP0_LIMITED_VOTERS"
+            },
+        ]
+    }
+    servers = await manager.servers_add(3, config=cfg)
+
+    async def upgrade_server(srv):
+        await manager.server_stop_gracefully(srv.server_id)
+        await asyncio.gather(*(manager.server_not_sees_other_server(s.ip_addr, srv.ip_addr)
+                               for s in servers if s.server_id != srv.server_id))
+        await manager.server_update_config(srv.server_id, "error_injections_at_startup", [])
+        await manager.server_start(srv.server_id)
+        await asyncio.gather(*(manager.server_sees_other_server(s.ip_addr, srv.ip_addr)
+                               for s in servers if s.server_id != srv.server_id))
+
+    # Act: Upgrade all nodes except the coordinator, with the feature enabled
+
+    logging.info('Upgrading all nodes except the coordinator')
+    coordinator_host = await get_coordinator_host(manager)
+    for srv in servers:
+        if srv.server_id != coordinator_host.server_id:
+            await upgrade_server(srv)
+
+    logs = [await manager.server_open_log(srv.server_id) for srv in servers]
+    marks = [await log.mark() for log in logs]
+
+    # Act: Upgrade the coordinator node
+
+    logging.info('Upgrading the leader node')
+    await upgrade_server(coordinator_host)
+
+    # Assert: Verify that the feature has been enabled and the majority has not been lost
+    # (we can execute a read barrier)
+
+    logging.info('Waiting for the GROUP0_LIMITED_VOTERS feature to be enabled')
+    await asyncio.gather(*(log.wait_for("Feature GROUP0_LIMITED_VOTERS is enabled", mark, timeout=60)
+                           for log, mark in zip(logs, marks)))
+
+    logging.info('Executing read barrier')
+    await read_barrier(manager.api, servers[0].ip_addr)
