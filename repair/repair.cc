@@ -2543,7 +2543,6 @@ size_t repair::tablet_repair_task_impl::get_metas_size() const noexcept {
 struct tablet_repair_helper {
     tasks::task_manager::task_ptr task;
     const tablet_repair_task_meta& m;
-    locator::effective_replication_map_ptr erm;
 };
 
 future<> repair::tablet_repair_task_impl::run() {
@@ -2641,15 +2640,15 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto [hints_batchlog_flushed, flush_time] = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
                 bool small_table_optimization = false;
 
+                auto this_erm = m.erm ? std::exchange(m.erm, nullptr).release() : std::move(erm);
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
-                        m.keyspace_name, rs, erm, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
+                        m.keyspace_name, rs, std::move(this_erm), std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
                         std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, sched_by_scheduler);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
                 shard_repairs.push_back(tablet_repair_helper{
                     .task = std::move(task),
                     .m = m,
-                    .erm = std::move(erm)
                 });
             }
 
