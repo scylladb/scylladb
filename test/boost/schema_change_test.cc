@@ -14,8 +14,6 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/defer.hh>
 
-#include <boost/range/algorithm/copy.hpp>
-
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "service/migration_manager.hh"
@@ -514,7 +512,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
                 auto group0_guard = mm.start_group0_operation().get();
                 const auto ts = group0_guard.write_timestamp();
                 auto muts = service::prepare_keyspace_drop_announcement(e.local_db(), "ks", ts).get();
-                boost::copy(muts, std::back_inserter(all_muts));
+                std::ranges::copy(muts, std::back_inserter(all_muts));
                 mm.announce(muts, std::move(group0_guard), "").get();
             }
 
@@ -524,7 +522,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
 
                 // all_muts contains keyspace drop.
                 auto muts = service::prepare_new_keyspace_announcement(e.db().local(), keyspace, ts);
-                boost::copy(muts, std::back_inserter(all_muts));
+                std::ranges::copy(muts, std::back_inserter(all_muts));
                 mm.announce(muts, std::move(group0_guard), "").get();
             }
 
@@ -533,7 +531,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
                 const auto ts = group0_guard.write_timestamp();
 
                 auto muts = service::prepare_new_column_family_announcement(mm.get_storage_proxy(), s0, ts).get();
-                boost::copy(muts, std::back_inserter(all_muts));
+                std::ranges::copy(muts, std::back_inserter(all_muts));
 
                 mm.announce(all_muts, std::move(group0_guard), "").get();
             }
