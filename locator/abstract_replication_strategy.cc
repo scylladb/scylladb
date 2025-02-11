@@ -10,7 +10,6 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
-#include <boost/range/algorithm/remove_if.hpp>
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>

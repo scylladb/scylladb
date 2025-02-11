@@ -11,8 +11,6 @@
 #include "compaction_strategy_state.hh"
 #include <algorithm>
 
-#include <boost/range/algorithm/remove_if.hpp>
-
 namespace sstables {
 
 leveled_compaction_strategy_state& leveled_compaction_strategy::get_state(table_state& table_s) const {
@@ -50,10 +48,9 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
     for (auto level = int(manifest.get_level_count()); level >= 0; level--) {
         auto& sstables = manifest.get_level(level);
         // filter out sstables which droppable tombstone ratio isn't greater than the defined threshold.
-        auto e = boost::range::remove_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
+        std::erase_if(sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
             return !worth_dropping_tombstones(sst, compaction_time, table_s);
         });
-        sstables.erase(e, sstables.end());
         if (sstables.empty()) {
             continue;
         }
