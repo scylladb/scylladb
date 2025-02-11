@@ -956,107 +956,108 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
         return encryption_schema_extension::parse(*ctxt, std::move(v));
     });
     exts.add_sstable_file_io_extension(encryption_attribute, std::make_unique<encryption_file_io_extension>(ctxt));
-    
-    auto maybe_get_options = [&](const utils::config_file::string_map& map, const sstring& what) -> std::optional<options> {
-        options opts(map.begin(), map.end());
-        opt_wrapper get_opt(opts);
-        if (!::strcasecmp(get_opt("enabled").value_or("false").c_str(), "false")) {
-            return std::nullopt;
-        }
-        // commitlog/system table encryption/global user encryption should not use replicated keys,
-        // We default to local keys, but KMIP/KMS is ok as well (better in fact).
-        opts[KEY_PROVIDER] = get_opt(KEY_PROVIDER).value_or(LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY);
-        if (opts[KEY_PROVIDER] == LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY && !get_opt(SECRET_KEY_FILE)) {
-            // system encryption uses different key folder than user tables.
-            // explicitly set the key file path
-            opts[SECRET_KEY_FILE] = (bfs::path(cfg.system_key_directory()) / bfs::path("system") / bfs::path(get_opt("key_name").value_or("system_table_keytab"))).string();
-        }
-        // forbid replicated. we cannot guarantee being able to open sstables on populate
-        if (opts[KEY_PROVIDER] == REPLICATED_KEY_PROVIDER_FACTORY) {
-            throw std::invalid_argument("Replicated provider is not allowed for " + what);
-        }
-        return opts;
-    };
+    std::exception_ptr p;
+    try {
+        auto maybe_get_options = [&](const utils::config_file::string_map& map, const sstring& what) -> std::optional<options> {
+            options opts(map.begin(), map.end());
+            opt_wrapper get_opt(opts);
+            if (!::strcasecmp(get_opt("enabled").value_or("false").c_str(), "false")) {
+                return std::nullopt;
+            }
+            // commitlog/system table encryption/global user encryption should not use replicated keys,
+            // We default to local keys, but KMIP/KMS is ok as well (better in fact).
+            opts[KEY_PROVIDER] = get_opt(KEY_PROVIDER).value_or(LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY);
+            if (opts[KEY_PROVIDER] == LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY && !get_opt(SECRET_KEY_FILE)) {
+                // system encryption uses different key folder than user tables.
+                // explicitly set the key file path
+                opts[SECRET_KEY_FILE] = (bfs::path(cfg.system_key_directory()) / bfs::path("system") / bfs::path(get_opt("key_name").value_or("system_table_keytab"))).string();
+            }
+            // forbid replicated. we cannot guarantee being able to open sstables on populate
+            if (opts[KEY_PROVIDER] == REPLICATED_KEY_PROVIDER_FACTORY) {
+                throw std::invalid_argument("Replicated provider is not allowed for " + what);
+            }
+            return opts;
+        };
 
-    future<> f = make_ready_future<>();
+        auto opts = maybe_get_options(cfg.system_info_encryption(), "system table encryption");
 
-    auto opts = maybe_get_options(cfg.system_info_encryption(), "system table encryption");
-    
-    if (opts) {
-        logg.info("Adding system info encryption using {}", *opts);
+        if (opts) {
+            logg.info("Adding system info encryption using {}", *opts);
 
-        exts.add_commitlog_file_extension(encryption_attribute, std::make_unique<encryption_commitlog_file_extension>(ctxt, *opts));
+            exts.add_commitlog_file_extension(encryption_attribute, std::make_unique<encryption_commitlog_file_extension>(ctxt, *opts));
 
-        // modify schemas for tables holding sensitive data to use encryption w. key described
-        // by the opts.
-        // since schemas are duplicated across shards, we must call to each shard and augment
-        // them all.
-        // Since we are in pre-init phase, this should be safe.
-        f = f.then([opts = *opts, &exts] {
-            return smp::invoke_on_all([opts = make_lw_shared<options>(opts), &exts] () mutable {
+            // modify schemas for tables holding sensitive data to use encryption w. key described
+            // by the opts.
+            // since schemas are duplicated across shards, we must call to each shard and augment
+            // them all.
+            // Since we are in pre-init phase, this should be safe.
+            co_await smp::invoke_on_all([&opts, &exts] () mutable {
                 auto& f = exts.schema_extensions().at(encryption_attribute);
                 for (auto& s : { db::system_keyspace::paxos(), db::system_keyspace::batchlog(), db::system_keyspace::dicts() }) {
                     exts.add_extension_to_schema(s, encryption_attribute, f(*opts));
                 }
             });
-        });
-    }
+        }
 
-    if (cfg.config_encryption_active()) {
-        f = f.then([&cfg, ctxt] {
-           return ctxt->load_config_encryption_key(cfg.config_encryption_key_name());
-        });
-    }
+        if (cfg.config_encryption_active()) {
+            co_await ctxt->load_config_encryption_key(cfg.config_encryption_key_name());
+        }
 
 
-    if (!cfg.kmip_hosts().empty()) {
-        // only pre-create on shard 0.
-        f = f.then([&cfg, ctxt] {
-            return parallel_for_each(cfg.kmip_hosts(), [ctxt](auto& p) {
+        if (!cfg.kmip_hosts().empty()) {
+            // only pre-create on shard 0.
+            co_await parallel_for_each(cfg.kmip_hosts(), [ctxt](auto& p) {
                 auto host = ctxt->get_kmip_host(p.first);
                 return host->connect();
             });
-        });
-    }
+        }
 
-    if (!cfg.kms_hosts().empty()) {
-        // only pre-create on shard 0.
-        f = f.then([&cfg, ctxt] {
-            return parallel_for_each(cfg.kms_hosts(), [ctxt](auto& p) {
+        if (!cfg.kms_hosts().empty()) {
+            // only pre-create on shard 0.
+            co_await parallel_for_each(cfg.kms_hosts(), [ctxt](auto& p) {
                 auto host = ctxt->get_kms_host(p.first);
                 return host->init();
             });
-        });
-    }
+        }
 
-    if (!cfg.gcp_hosts().empty()) {
-        // only pre-create on shard 0.
-        f = f.then([&cfg, ctxt] {
-            return parallel_for_each(cfg.gcp_hosts(), [ctxt](auto& p) {
+        if (!cfg.gcp_hosts().empty()) {
+            // only pre-create on shard 0.
+            co_await parallel_for_each(cfg.gcp_hosts(), [ctxt](auto& p) {
                 auto host = ctxt->get_gcp_host(p.first);
                 return host->init();
             });
-        });
-    }
+        }
 
-    replicated_key_provider_factory::init(exts);
+        replicated_key_provider_factory::init(exts);
 
-    auto user_opts = maybe_get_options(cfg.user_info_encryption(), "user table encryption");
-    
-    if (user_opts) {
-        logg.info("Adding user info encryption using {}", *user_opts);
+        auto user_opts = maybe_get_options(cfg.user_info_encryption(), "user table encryption");
 
-        f = f.then([user_opts = *user_opts, ctxt] {
-            return smp::invoke_on_all([user_opts = make_lw_shared<options>(user_opts), ctxt]()  {
+        if (user_opts) {
+            logg.info("Adding user info encryption using {}", *user_opts);
+            co_await smp::invoke_on_all([&user_opts, ctxt]()  {
                 auto ext = encryption_schema_extension::create(*ctxt, *user_opts);
                 ctxt->add_global_user_encryption(std::move(ext));
             });
-        });
+        }
+
+        co_return ctxt;
+    } catch (...) {
+        p = std::current_exception();
     }
 
-    return f.then([ctxt]() -> ::shared_ptr<encryption_context> {
-        return ctxt;
-    });
+    /**
+     * This only really affects tests, but in the case where we
+     * have a bad config/env vars (hint minio), we could fail even
+     * setting up the context. In a "normal" run, this is ok. We will
+     * report the exception, and the do a exit(1).
+     * In tests however, we don't and active context will instead be
+     * freed quite proper, in which case we need to call stop to ensure
+     * we don't crash on shared pointer destruction on wrong shard.
+     * Doing so will hide the real issue from whomever runs the test.
+     */
+    assert(p);
+    co_await ctxt->stop();
+    std::rethrow_exception(p);
 }
 
 }
