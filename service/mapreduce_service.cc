@@ -8,7 +8,6 @@
 
 #include "service/mapreduce_service.hh"
 
-#include <boost/range/algorithm/remove_if.hpp>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -198,8 +197,8 @@ static const dht::token& end_token(const dht::partition_range& r) {
 }
 
 static void retain_local_endpoints(const locator::topology& topo, host_id_vector_replica_set& eps) {
-    auto itend = boost::range::remove_if(eps, std::not_fn(topo.get_local_dc_filter()));
-    eps.erase(itend, eps.end());
+    auto [b, e] = std::ranges::remove_if(eps, std::not_fn(topo.get_local_dc_filter()));
+    eps.erase(b, e);
 }
 
 // Given an initial partition range vector, iterate through ranges owned by

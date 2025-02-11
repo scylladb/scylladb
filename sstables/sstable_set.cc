@@ -12,7 +12,6 @@
 #include <seastar/util/defer.hh>
 
 #include <boost/icl/interval_map.hpp>
-#include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/numeric.hpp>
 
 #include "sstables.hh"
@@ -885,7 +884,7 @@ make_sstable_filter(const dht::ring_position& pos, const schema& schema, const s
 static std::vector<shared_sstable>
 filter_sstable_for_reader(std::vector<shared_sstable>&& sstables, const schema& schema, const dht::ring_position& pos, const sstable_predicate& predicate) {
     auto filter = [_filter = make_sstable_filter(pos, schema, predicate)] (const shared_sstable& sst) { return !_filter(*sst); };
-    sstables.erase(boost::remove_if(sstables, filter), sstables.end());
+    std::erase_if(sstables, filter);
     return std::move(sstables);
 }
 

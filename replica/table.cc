@@ -53,7 +53,6 @@
 #include "replica/global_table_ptr.hh"
 #include "locator/tablets.hh"
 
-#include <boost/range/algorithm/remove_if.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/numeric.hpp>
 #include "utils/error_injection.hh"
@@ -1970,10 +1969,9 @@ compaction_group::update_sstable_sets_on_compaction_completion(sstables::compact
     // or they could stay forever in the set, resulting in deleted files remaining
     // opened and disk space not being released until shutdown.
     auto undo_compacted_but_not_deleted = defer([&] {
-        auto e = boost::range::remove_if(sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) {
+        std::erase_if(sstables_compacted_but_not_deleted, [&] (sstables::shared_sstable sst) {
             return s.contains(sst);
         });
-        sstables_compacted_but_not_deleted.erase(e, sstables_compacted_but_not_deleted.end());
         _t.rebuild_statistics();
     });
 
