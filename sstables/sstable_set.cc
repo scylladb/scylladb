@@ -12,9 +12,7 @@
 #include <seastar/util/defer.hh>
 
 #include <boost/icl/interval_map.hpp>
-#include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm/remove_if.hpp>
-#include <boost/range/algorithm/copy.hpp>
 #include <boost/range/numeric.hpp>
 
 #include "sstables.hh"
@@ -325,12 +323,9 @@ std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
-    auto ipair = query(range);
-    auto b = std::move(ipair.first);
-    auto e = std::move(ipair.second);
     value_set result;
-    while (b != e) {
-        boost::copy(b++->second, std::inserter(result, result.end()));
+    for (auto [b, e] = query(range); b != e; ++b) {
+        std::ranges::copy(b->second, std::inserter(result, result.end()));
     }
     auto r = _unleveled_sstables;
     r.insert(r.end(), result.begin(), result.end());
