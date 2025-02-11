@@ -32,6 +32,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/log.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/commitlog/commitlog.hh"
@@ -66,6 +67,7 @@ struct test_provider_args {
 static void do_create_and_insert(cql_test_env& env, const test_provider_args& args, const std::string& pk, const std::string& v) {
     for (auto i = 0u; i < args.n_tables; ++i) {
         if (args.before_create_table) {
+            testlog.debug("Calling before create table");
             args.before_create_table(env);
         }
         if (args.options.empty()) {
@@ -75,11 +77,13 @@ static void do_create_and_insert(cql_test_env& env, const test_provider_args& ar
         }
 
         if (args.after_create_table) {
+            testlog.debug("Calling after create table");
             args.after_create_table(env);
         }
         try {
             env.execute_cql(fmt::format("insert into ks.t{} (pk, v) values ('{}', '{}')", i, pk, v)).get();
         } catch (...) {
+            testlog.info("Insert error {}. Notifying.", std::current_exception());
             args.on_insert_exception(env);
             throw;
         }
@@ -442,15 +446,15 @@ class fake_proxy {
     bool _do_proxy = true;
     future<> _f;
 
-    future<> run(std::string s) {
+    future<> run(std::string dst_addr) {
         uint16_t port = 443u;
-        auto i = s.find_last_of(':');
-        if (i != std::string::npos && i > 0 && s[i - 1] != ':') { // just check against ipv6...
-            port = std::stoul(s.substr(i + 1));
-            s = s.substr(0, i);
+        auto i = dst_addr.find_last_of(':');
+        if (i != std::string::npos && i > 0 && dst_addr[i - 1] != ':') { // just check against ipv6...
+            port = std::stoul(dst_addr.substr(i + 1));
+            dst_addr = dst_addr.substr(0, i);
         }
 
-        auto addr = co_await seastar::net::dns::resolve_name(s);
+        auto addr = co_await seastar::net::dns::resolve_name(dst_addr);
         std::vector<future<>> work;
 
         while (_go_on) {
@@ -458,11 +462,14 @@ class fake_proxy {
                 auto client = co_await _socket.accept();
                 auto dst = co_await seastar::connect(socket_address(addr, port));
 
-                auto f = [&]() -> future<> {      
+                testlog.debug("Got proxy connection: {}->{}:{} ({})", client.remote_address, dst_addr, port, _do_proxy);
+
+                auto f = [&]() -> future<> {
                     auto& s = client.connection;
                     auto& ldst = dst;
+                    auto addr = client.remote_address;
 
-                    auto do_io = [this](connected_socket& src, connected_socket& dst) -> future<> {
+                    auto do_io = [this, &addr, &dst_addr, port](connected_socket& src, connected_socket& dst) -> future<> {
                         auto sin = src.input();
                         auto dout = dst.output();
                         // note: have to have differing conditions for proxying
@@ -470,24 +477,36 @@ class fake_proxy {
                         // kmip connector caches connection -> not new socket.
                         while (_go_on && _do_proxy && !sin.eof()) {
                             auto buf = co_await sin.read();
+                            auto n = buf.size();
+                            testlog.trace("Read {} bytes: {}->{}:{}", n, addr, dst_addr, port);
                             if (_do_proxy) {
                                 co_await dout.write(std::move(buf));
                                 co_await dout.flush();
+                                testlog.trace("Wrote {} bytes: {}->{}:{}", n, addr, dst_addr, port);
                             }
                         }
                         co_await dout.close();
+                        co_await sin.close();
                     };
-
-                    co_await when_all(do_io(s, ldst), do_io(ldst, s));
+                    try {
+                        co_await when_all(do_io(s, ldst), do_io(ldst, s));
+                    } catch (...) {
+                        testlog.warn("Exception running proxy {}:{}->{}: {}", dst_addr, port, _address, std::current_exception());
+                        throw;
+                    }
                 }();
 
                 work.emplace_back(std::move(f));
             } catch (...) {
+                testlog.warn("Exception running proxy {}: {}", _address, std::current_exception());
             }
         }
 
         for (auto&& f : work) {
-            co_await std::move(f);
+            try {
+                co_await std::move(f);
+            } catch (...) {
+            }
         }
     }
 public:
@@ -502,9 +521,11 @@ public:
     }
     void enable(bool b) {
         _do_proxy = b;
+        testlog.info("Set proxy {} enabled = {}", _address, b);
     }
     future<> stop() {
         if (std::exchange(_go_on, false)) {
+            testlog.info("Stopping proxy {}", _address);
             _socket.abort_accept();
             co_await std::move(_f);
         }
@@ -572,6 +593,18 @@ Simple test of KMS provider. Still has some caveats:
     * ENABLE_KMS_TEST - set to non-zero (1/true) to run
     * KMS_KEY_ALIAS - default "alias/kms_encryption_test" - set to key alias you have access to.
     * KMS_AWS_REGION - default us-east-1 - set to whatever region your key is in.
+
+    NOTE: When run via test.py, the minio server used there will, unless already set,
+    put AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY into the inherited process env, with
+    values purely fictional, and only usable by itself. This _will_ screw up credentials
+    resolution in the KMS connector, and will lead to errors not intended.
+
+    In CI, we provide the vars from jenkins, with working values, and the minio
+    respects this.
+
+    As a workaround, try setting the vars yourself to something that actually works (i.e. 
+    values from your .awscredentials). Or complain until we find a way to make the minio
+    server optional for tests.
 
 */
 static future<> kms_test_helper(std::function<future<>(const tmpdir&, std::string_view, std::string_view, std::string_view)> f) {
