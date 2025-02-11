@@ -254,7 +254,7 @@ future<> task_manager::task::impl::finish() noexcept {
         _status.state = task_manager::task_state::done;
         co_await maybe_fold_into_parent();
         _done.set_value();
-        release_resources();
+        co_await release_resources();
     }
 }
 
@@ -265,7 +265,7 @@ future<> task_manager::task::impl::finish_failed(std::exception_ptr ex, std::str
         _status.error = std::move(error);
         co_await maybe_fold_into_parent();
         _done.set_exception(ex);
-        release_resources();
+        co_await release_resources();
     }
 }
 

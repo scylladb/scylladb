@@ -15,6 +15,7 @@
 #include "sstables/sstables_manager.hh"
 #include <memory>
 #include <fmt/ranges.h>
+#include <seastar/core/future.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -503,7 +504,7 @@ public:
 
     virtual ~sstables_task_executor() = default;
 
-    virtual void release_resources() noexcept override;
+    virtual future<> release_resources() noexcept override;
 
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
         return compaction_task_impl::get_progress(_compaction_data, _progress_monitor);
@@ -788,9 +789,10 @@ compaction::compaction_state::~compaction_state() {
     compaction_done.broken();
 }
 
-void sstables_task_executor::release_resources() noexcept {
+future<> sstables_task_executor::release_resources() noexcept {
     _cm._stats.pending_tasks -= _sstables.size() - (_state == state::pending);
     _sstables = {};
+    return make_ready_future();
 }
 
 future<compaction_manager::compaction_stats_opt> compaction_task_executor::run_compaction() noexcept {
@@ -1565,10 +1567,10 @@ public:
         , _can_purge(can_purge)
     {}
 
-    virtual void release_resources() noexcept override {
+    virtual future<> release_resources() noexcept override {
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
-        sstables_task_executor::release_resources();
+        co_await sstables_task_executor::release_resources();
     }
 
 protected:
@@ -1846,11 +1848,12 @@ public:
 
     virtual ~cleanup_sstables_compaction_task_executor() = default;
 
-    virtual void release_resources() noexcept override {
+    virtual future<> release_resources() noexcept override {
         _cm._stats.pending_tasks -= _pending_cleanup_jobs.size();
         _pending_cleanup_jobs = {};
         _compacting.release_all();
         _owned_ranges_ptr = nullptr;
+        return make_ready_future();
     }
 
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
