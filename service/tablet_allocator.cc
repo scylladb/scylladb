@@ -1105,10 +1105,20 @@ public:
                 }
 
                 table_plan.avg_tablet_size = avg_tablet_size;
+            } else {
+                // When we don't have tablet size info, allow tablet count to increase but not to decrease.
+                // Increasing will always bring us closer to the true target count, since tablet_count_from_size
+                // can only increase the count above it, but decreasing may go against the true target count
+                // if tablet_count_from_size would demand more tablets.
+                if (tablet_count < min_tablet_count) {
+                    // TODO: extend to n-way split when needed
+                    target_tablet_count = min_tablet_count;
+                    decision = resize_decision::split{};
+                }
             }
 
             table_plan.target_tablet_count = target_tablet_count;
-            table_plan.target_tablet_count_aligned = target_tablet_count;
+            table_plan.target_tablet_count_aligned = 1u << log2ceil(target_tablet_count);
             table_plan.resize_decision = decision;
 
             lblogger.debug("make_sizing_plan: table={}.{}, id={}, tablet_count={}, avg_tablet_size={}, min_tablet_count={}, target_tablet_count={}: decision={}",
