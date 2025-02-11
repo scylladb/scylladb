@@ -2310,6 +2310,24 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             checkpoint(stop_signal, "allow replaying hints");
             proxy.invoke_on_all(&service::storage_proxy::allow_replaying_hints).get();
 
+            // Note: This is here because we can only start draining after we allow for replaying hints.
+            //
+            //       We want the draining to be started before exposing the API of hinted handoff to
+            //       the user (note it happens in the following step in this file). That's a preventive
+            //       measure to avoid situations when e.g. the user decides to change the host filter
+            //       and effectively disable sending hints towards some nodes. Since we only drain hints
+            //       for nodes that have left the cluster, we want to perform that before the user has
+            //       the means to interrupt it in any way.
+            //
+            //       Lastly, note that this call does NOT await the draining. It only starts the draining
+            //       process that will be taking place in the background. Thus, it does not slow down
+            //       the initialization of the node.
+            //
+            //       See the logic of draining in `db::hints::internal::hint_sender` for more details
+            //       of the semantics of the process of draining hints.
+            supervisor::notify("Drain hints for nodes that have already left the cluster");
+            proxy.invoke_on_all(&service::storage_proxy::drain_hints_for_left_nodes).get();
+
             api::set_hinted_handoff(ctx, proxy, gossiper).get();
             auto stop_hinted_handoff_api = defer_verbose_shutdown("hinted handoff API", [&ctx] {
                 api::unset_hinted_handoff(ctx).get();

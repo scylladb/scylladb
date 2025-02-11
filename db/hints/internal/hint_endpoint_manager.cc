@@ -146,6 +146,10 @@ future<> hint_endpoint_manager::stop(drain should_drain) noexcept {
     });
 }
 
+void hint_endpoint_manager::cancel_draining() noexcept {
+    _sender.cancel_draining();
+}
+
 hint_endpoint_manager::hint_endpoint_manager(const endpoint_id& key, fs::path hint_directory, manager& shard_manager)
     : _key(key)
     , _shard_manager(shard_manager)

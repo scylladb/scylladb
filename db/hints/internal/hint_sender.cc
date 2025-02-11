@@ -10,6 +10,7 @@
 #include "db/hints/internal/hint_sender.hh"
 
 // Seastar features.
+#include <chrono>
 #include <exception>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
@@ -187,6 +188,14 @@ future<> hint_sender::stop(drain should_drain) noexcept {
         //       relies on the old one.
         manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
     });
+}
+
+void hint_sender::cancel_draining() {
+    manager_logger.info("Draining of {} has been marked as canceled", _ep_key);
+    if (_state.contains(state::draining)) {
+        _state.remove(state::draining);
+    }
+    _state.set(state::canceled_draining);
 }
 
 void hint_sender::add_segment(sstring seg_name) {
@@ -446,6 +455,8 @@ bool hint_sender::send_one_file(const sstring& fname) {
     gc_clock::duration secs_since_file_mod = std::chrono::seconds(last_mod.tv_sec);
     lw_shared_ptr<send_one_file_ctx> ctx_ptr = make_lw_shared<send_one_file_ctx>(_last_schema_ver_to_column_mapping);
 
+    struct canceled_draining_exception {};
+
     try {
         commitlog::read_log_file(fname, manager::FILENAME_PREFIX, [this, secs_since_file_mod, &fname, ctx_ptr] (commitlog::buffer_and_replay_position buf_rp) -> future<> {
             auto& buf = buf_rp.buffer;
@@ -456,6 +467,12 @@ bool hint_sender::send_one_file(const sstring& fname) {
                 // is DOWN or if we have already failed to send some of the previous hints.
                 if (!draining() && ctx_ptr->segment_replay_failed) {
                     co_return;
+                }
+
+                if (canceled_draining()) {
+                    manager_logger.debug("[{}] Exiting reading from commitlog because of canceled draining", _ep_key);
+                    // We need to throw an exception here to cancel reading the segment.
+                    throw canceled_draining_exception{};
                 }
 
                 // Break early if stop() was called or the destination node went down.
@@ -488,6 +505,8 @@ bool hint_sender::send_one_file(const sstring& fname) {
         manager_logger.error("{}: {}. Dropping...", fname, ex.what());
         ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
+    } catch  (const canceled_draining_exception&) {
+        manager_logger.debug("[{}] Loop in send_one_file finishes due to canceled draining", _ep_key);
     } catch (...) {
         manager_logger.trace("sending of {} failed: {}", fname, std::current_exception());
         ctx_ptr->segment_replay_failed = true;
@@ -495,6 +514,12 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
     // wait till all background hints sending is complete
     ctx_ptr->file_send_gate.close().get();
+
+    // If draining was canceled, we can't say anything about the segment's state,
+    // so return immediately. We return false here because of that reason too.
+    if (canceled_draining()) {
+        return false;
+    }
 
     // If we are draining ignore failures and drop the segment even if we failed to send it.
     if (draining() && ctx_ptr->segment_replay_failed) {
@@ -553,6 +578,10 @@ void hint_sender::send_hints_maybe() noexcept {
 
     try {
         while (true) {
+            if (canceled_draining()) {
+                manager_logger.debug("[{}] Exiting loop in send_hints_maybe because of canceled draining", _ep_key);
+                break;
+            }
             const sstring* seg_name = name_of_current_segment();
             if (!seg_name || !replay_allowed() || !can_send()) {
                 break;
