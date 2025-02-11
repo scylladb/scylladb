@@ -168,6 +168,7 @@ private:
     sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
+    db::config* _db_config;
 
     service::raft_group0_client* _group0_client;
 
@@ -651,6 +652,7 @@ private:
             _lang_manager.invoke_on_all(&lang::manager::start).get();
 
 
+            _db_config = &*cfg;
             _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(abort_sources), utils::cross_shard_barrier()).get();
             auto stop_db = defer_verbose_shutdown("database", [this] {
                 _db.stop().get();
@@ -1151,6 +1153,10 @@ public:
 
     virtual sharded<qos::service_level_controller>& service_level_controller_service() override {
         return _sl_controller;
+    }
+
+    db::config& db_config() override {
+        return *_db_config;
     }
 };
 
