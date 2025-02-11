@@ -1074,7 +1074,6 @@ public:
             table_sizing& table_plan = plan.tables[table];
             table_plan.current_tablet_count = tablet_count;
 
-            locator::resize_decision_way decision;
             auto target_tablet_count = tablet_count;
 
             auto min_tablet_count = std::max<size_t>(1,
@@ -1092,7 +1091,6 @@ public:
                     (cur_decision.is_split() && avg_tablet_size >= _target_tablet_size)) {
                     // TODO: extend to n-way split when needed
                     target_tablet_count *= 2;
-                    decision = resize_decision::split{};
                 } else if (target_tablet_count / 2 >= min_tablet_count) {
                     // Consider merge, as long as it wouldn't violate min_tablet_count.
                     // If the current resize_decision is merge, apply hysteresis,
@@ -1100,7 +1098,6 @@ public:
                     if (avg_tablet_size < target_min_tablet_size() ||
                         (cur_decision.is_merge() && avg_tablet_size <= _target_tablet_size)) {
                         target_tablet_count /= 2;
-                        decision = resize_decision::merge{};
                     }
                 }
 
@@ -1110,16 +1107,17 @@ public:
                 // Increasing will always bring us closer to the true target count, since tablet_count_from_size
                 // can only increase the count above it, but decreasing may go against the true target count
                 // if tablet_count_from_size would demand more tablets.
-                if (tablet_count < min_tablet_count) {
-                    // TODO: extend to n-way split when needed
-                    target_tablet_count = min_tablet_count;
-                    decision = resize_decision::split{};
-                }
+                target_tablet_count = std::max(target_tablet_count, min_tablet_count);
             }
 
             table_plan.target_tablet_count = target_tablet_count;
-            table_plan.target_tablet_count_aligned = 1u << log2ceil(target_tablet_count);
-            table_plan.resize_decision = decision;
+            table_plan.target_tablet_count_aligned = 1u << log2ceil(table_plan.target_tablet_count);
+
+            if (table_plan.target_tablet_count_aligned > table_plan.current_tablet_count) {
+                table_plan.resize_decision = locator::resize_decision::split();
+            } else if (table_plan.target_tablet_count_aligned < table_plan.current_tablet_count) {
+                table_plan.resize_decision = locator::resize_decision::merge();
+            }
 
             lblogger.debug("make_sizing_plan: table={}.{}, id={}, tablet_count={}, avg_tablet_size={}, min_tablet_count={}, target_tablet_count={}: decision={}",
                            s->ks_name(), s->cf_name(), s->id(), tablet_count, table_plan.avg_tablet_size, min_tablet_count, target_tablet_count, table_plan.resize_decision);
