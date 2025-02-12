@@ -629,6 +629,7 @@ bool sstable_directory::compare_sstable_storage_prefix(const sstring& prefix_a, 
 future<sstable_directory::pending_delete_result> sstable_directory::create_pending_deletion_log(opened_directory& base_dir, const std::vector<shared_sstable>& ssts) {
     return seastar::async([&] {
         min_max_tracker<generation_type> gen_tracker;
+        sstring pending_delete_log;
         pending_delete_result res;
 
         for (const auto& sst : ssts) {
@@ -638,8 +639,9 @@ future<sstable_directory::pending_delete_result> sstable_directory::create_pendi
         }
 
         sstring pending_delete_dir = (base_dir.path() / sstables::pending_delete_dir).native();
-        res.pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
-        sstring tmp_pending_delete_log = res.pending_delete_log + ".tmp";
+        pending_delete_log = format("{}/sstables-{}-{}.log", pending_delete_dir, gen_tracker.min(), gen_tracker.max());
+        res.pending_delete_log = pending_delete_log;
+        sstring tmp_pending_delete_log = pending_delete_log + ".tmp";
         dirlog.trace("Writing {}", tmp_pending_delete_log);
 
             touch_directory(pending_delete_dir).get();
@@ -669,11 +671,11 @@ future<sstable_directory::pending_delete_result> sstable_directory::create_pendi
         }
 
             // Once flushed and closed, the temporary log file can be renamed.
-            io_check(rename_file, tmp_pending_delete_log, res.pending_delete_log).get();
+            io_check(rename_file, tmp_pending_delete_log, pending_delete_log).get();
 
             // Guarantee that the changes above reached the disk.
             base_dir.sync(general_disk_error_handler).get();
-            dirlog.debug("{} written successfully.", res.pending_delete_log);
+            dirlog.debug("{} written successfully.", pending_delete_log);
 
       return res;
     });
