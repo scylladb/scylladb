@@ -3279,6 +3279,9 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         try {
             operations_with_func.at(operation)(schema, permit, sstables, sst_man, app_config, as);
+        } catch (abort_requested_exception&) {
+            fmt::print(std::cerr, "abort requested\n");
+            return 0;
         } catch (std::invalid_argument& e) {
             fmt::print(std::cerr, "error processing arguments: {}\n", e.what());
             return 1;
