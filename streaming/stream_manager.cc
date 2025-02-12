@@ -9,6 +9,7 @@
  */
 
 #include <seastar/core/distributed.hh>
+#include "db/view/view_building_worker.hh"
 #include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
@@ -27,11 +28,13 @@ extern logging::logger sslog;
 stream_manager::stream_manager(db::config& cfg,
             sharded<replica::database>& db,
             db::view::view_builder& view_builder,
+            sharded<db::view::view_building_worker>& view_building_worker,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
             gms::gossiper& gossiper, scheduling_group sg)
         : _db(db)
         , _view_builder(view_builder)
+        , _view_building_worker(view_building_worker)
         , _ms(ms)
         , _mm(mm)
         , _gossiper(gossiper)
