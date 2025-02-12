@@ -1700,7 +1700,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             });
 
             checkpoint(stop_signal, "starting view building worker");
-            view_building_worker.start(std::ref(db), std::ref(view_update_generator), std::ref(messaging)).get();
+            view_building_worker.start(std::ref(db), std::ref(group0_client), std::ref(sys_ks), std::ref(view_update_generator), std::ref(messaging)).get();
             auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [] {
                 view_building_worker.stop().get();
             });
