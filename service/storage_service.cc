@@ -2567,7 +2567,7 @@ future<> storage_service::handle_state_removed(inet_address endpoint, locator::h
         std::unordered_set<token> tmp(remove_tokens.begin(), remove_tokens.end());
         co_await excise(std::move(tmp), endpoint, host_id, extract_expire_time(pieces), pid);
     } else { // now that the gossiper has told us about this nonexistent member, notify the gossiper to remove it
-        add_expire_time_if_found(endpoint, extract_expire_time(pieces));
+        add_expire_time_if_found(host_id, extract_expire_time(pieces));
         co_await remove_endpoint(endpoint, pid);
     }
 }
@@ -5044,7 +5044,7 @@ future<> storage_service::excise(std::unordered_set<token> tokens, inet_address 
 
 future<> storage_service::excise(std::unordered_set<token> tokens, inet_address endpoint_ip,
         locator::host_id endpoint_hid, int64_t expire_time, gms::permit_id pid) {
-    add_expire_time_if_found(endpoint_ip, expire_time);
+    add_expire_time_if_found(endpoint_hid, expire_time);
     return excise(tokens, endpoint_ip, endpoint_hid, pid);
 }
 
@@ -5096,7 +5096,7 @@ storage_service::stream_ranges(std::unordered_map<sstring, std::unordered_multim
     }
 }
 
-void storage_service::add_expire_time_if_found(inet_address endpoint, int64_t expire_time) {
+void storage_service::add_expire_time_if_found(locator::host_id endpoint, int64_t expire_time) {
     if (expire_time != 0L) {
         using clk = gms::gossiper::clk;
         auto time = clk::time_point(clk::duration(expire_time));

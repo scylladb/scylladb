@@ -244,7 +244,7 @@ private:
      * gossip gets propagated to all nodes */
     std::map<locator::host_id, clk::time_point> _just_removed_endpoints;
 
-    std::map<inet_address, clk::time_point> _expire_time_endpoint_map;
+    std::map<locator::host_id, clk::time_point> _expire_time_endpoint_map;
 
     bool _in_shadow_round = false;
 
@@ -419,7 +419,7 @@ private:
     future<> do_status_check();
 
 public:
-    clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;
+    clk::time_point get_expire_time_for_endpoint(locator::host_id endpoint) const noexcept;
 
     // Gets a shared pointer to the endpoint_state, if exists.
     // Otherwise, returns a null ptr.
@@ -639,7 +639,7 @@ public:
     bool is_enabled() const;
 
 public:
-    void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
+    void add_expire_time_for_endpoint(locator::host_id endpoint, clk::time_point expire_time);
 
     static clk::time_point compute_expire_time();
 public:

@@ -783,7 +783,7 @@ future<> gossiper::do_status_check() {
         }
 
         // check for dead state removal
-        auto expire_time = get_expire_time_for_endpoint(endpoint);
+        auto expire_time = get_expire_time_for_endpoint(host_id);
         if (!is_alive && (now > expire_time)) {
             const auto host_id = eps->get_host_id();
             if (!host_id) {
@@ -1277,7 +1277,7 @@ future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
         }
         g._endpoint_state_map.erase(endpoint);
     });
-    _expire_time_endpoint_map.erase(endpoint);
+    _expire_time_endpoint_map.erase(hid);
     quarantine_endpoint(hid);
     logger.debug("evicting {} from gossip", endpoint);
 }
@@ -1360,7 +1360,7 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_
     auto expire_time = compute_expire_time();
     eps.add_application_state(application_state::STATUS, versioned_value::removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
     logger.info("Completing removal of {}", endpoint);
-    add_expire_time_for_endpoint(endpoint, expire_time);
+    add_expire_time_for_endpoint(host_id, expire_time);
     co_await replicate(endpoint, std::move(eps), pid);
     // ensure at least one gossip round occurs before returning
     co_await sleep_abortable(INTERVAL * 2, _abort_source);
@@ -1469,9 +1469,9 @@ bool gossiper::is_gossip_only_member(locator::host_id host_id) const {
     return !is_dead_state(*es) && (!node || !node->is_member());
 }
 
-clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
+clk::time_point gossiper::get_expire_time_for_endpoint(locator::host_id id) const noexcept {
     /* default expire_time is A_VERY_LONG_TIME */
-    auto it = _expire_time_endpoint_map.find(endpoint);
+    auto it = _expire_time_endpoint_map.find(id);
     if (it == _expire_time_endpoint_map.end()) {
         return compute_expire_time();
     } else {
@@ -1746,28 +1746,29 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
     update_timestamp(es);
 
+    auto host_id = es->get_host_id();
     logger.debug("removing expire time for endpoint : {}", addr);
     bool was_live = false;
-    co_await mutate_live_and_unreachable_endpoints([addr = es->get_host_id(), &was_live] (live_and_unreachable_endpoints& data) {
+    co_await mutate_live_and_unreachable_endpoints([addr = host_id, &was_live] (live_and_unreachable_endpoints& data) {
         data.unreachable.erase(addr);
         auto [it_, inserted] = data.live.insert(addr);
         was_live = !inserted;
     });
-    _expire_time_endpoint_map.erase(addr);
+    _expire_time_endpoint_map.erase(host_id);
     if (was_live) {
         co_return;
     }
 
     if (_endpoints_to_talk_with.empty()) {
-        _endpoints_to_talk_with.push_back({es->get_host_id()});
+        _endpoints_to_talk_with.push_back({host_id});
     } else {
-        _endpoints_to_talk_with.front().push_back(es->get_host_id());
+        _endpoints_to_talk_with.front().push_back(host_id);
     }
 
-    logger.info("InetAddress {}/{} is now UP, status = {}", es->get_host_id(), addr, status);
+    logger.info("InetAddress {}/{} is now UP, status = {}", host_id, addr, status);
 
-    co_await _subscribers.for_each([addr, es, pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
-        co_await subscriber->on_alive(addr, es->get_host_id(), es, pid);
+    co_await _subscribers.for_each([addr, host_id, es, pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+        co_await subscriber->on_alive(addr, host_id, es, pid);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
     });
 }
@@ -2352,7 +2353,7 @@ bool gossiper::is_enabled() const {
     return _enabled && !_abort_source.abort_requested();
 }
 
-void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {
+void gossiper::add_expire_time_for_endpoint(locator::host_id endpoint, clk::time_point expire_time) {
     auto now_ = now();
     auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();
     logger.info("Node {} will be removed from gossip at [{:%Y-%m-%d %T}]: (expire = {}, now = {}, diff = {} seconds)",
