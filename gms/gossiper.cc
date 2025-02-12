@@ -785,10 +785,6 @@ future<> gossiper::do_status_check() {
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(host_id);
         if (!is_alive && (now > expire_time)) {
-            const auto host_id = eps->get_host_id();
-            if (!host_id) {
-                on_internal_error_noexcept(logger, format("Endpoint {} is dead and expired, but unexpecteduly, it has no HOST_ID in endpoint state", endpoint));
-            }
             const auto* node = get_token_metadata_ptr()->get_topology().find_node(host_id);
             if (!host_id || !node || !node->is_member()) {
                 logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
