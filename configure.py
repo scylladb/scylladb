@@ -2192,6 +2192,8 @@ def write_build_file(f,
         libs = {libs}
         pool link_pool
             depth = {link_pool_depth}
+        pool lto_link_pool
+            depth = 1
         pool submodule_pool
             depth = 1
         rule gen
@@ -2436,6 +2438,8 @@ def write_build_file(f,
                     local_libs += f' {seastar_testing_libs}'
                 f.write('build $builddir/{}/{}: {}.{} {} | {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep))
                 f.write('   libs = {}\n'.format(local_libs))
+                if do_lto:
+                    f.write('   pool = lto_link_pool\n')
                 f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
                 f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
             for src in srcs:
