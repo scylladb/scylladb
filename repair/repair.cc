@@ -633,6 +633,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         bool small_table_optimization,
         std::optional<int> ranges_parallelism,
         gc_clock::time_point flush_time,
+        bool tablet_repair,
         bool sched_by_scheduler)
     : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
     , rs(repair)
@@ -653,6 +654,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , _small_table_optimization(small_table_optimization)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
     , _flush_time(flush_time)
+    , tablet_repair(tablet_repair)
     , sched_by_scheduler(sched_by_scheduler)
 {
     rlogger.debug("repair[{}]: Setting user_ranges_parallelism to {}", global_repair_id.uuid(),
@@ -2643,7 +2645,7 @@ future<> repair::tablet_repair_task_impl::run() {
                 auto this_erm = m.erm ? std::exchange(m.erm, nullptr).release() : std::move(erm);
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
                         m.keyspace_name, rs, std::move(this_erm), std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
-                        std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, sched_by_scheduler);
+                        std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, true, sched_by_scheduler);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
                 shard_repairs.push_back(tablet_repair_helper{

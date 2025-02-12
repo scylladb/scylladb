@@ -176,6 +176,7 @@ private:
     uint64_t _ranges_complete = 0;
     gc_clock::time_point _flush_time;
 public:
+    bool tablet_repair = false;
     bool sched_by_scheduler = false;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
@@ -194,6 +195,7 @@ public:
             bool small_table_optimization,
             std::optional<int> ranges_parallelism,
             gc_clock::time_point flush_time,
+            bool tablet_repair = false,
             bool sched_by_scheduler = false);
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
