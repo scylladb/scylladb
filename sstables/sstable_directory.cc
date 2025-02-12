@@ -653,17 +653,13 @@ future<sstable_directory::pending_delete_result> sstable_directory::create_pendi
         try {
             auto trim_size = base_dir.native().size() + 1; // Account for the '/' delimiter
             for (const auto& sst : ssts) {
-                auto prefix = sst->_storage->prefix();
-                if (prefix.size() > trim_size) {
-                    out.write(prefix.begin() + trim_size, prefix.size() - trim_size).get();
-                    out.write("/").get();
+                auto toc = sst->toc_filename();
+                if (toc.size() <= trim_size) {
+                    on_internal_error(dirlog, fmt::format("Sstable {} outside of basedir {} is scheduled for deletion", toc, base_dir.native()));
                 }
-                auto toc = sst->component_basename(component_type::TOC);
-                out.write(toc).get();
+                out.write(toc.begin() + trim_size, toc.size() - trim_size).get();
                 out.write("\n").get();
-                dirlog.trace("Wrote '{}{}' to {}",
-                    prefix.size() > trim_size ? sstring(prefix.begin() + trim_size, prefix.size() - trim_size) + "/" : "",
-                    sst->component_basename(component_type::TOC), tmp_pending_delete_log);
+                dirlog.trace("Wrote '{}' to {}", sstring(toc.begin() + trim_size, toc.size() - trim_size), tmp_pending_delete_log);
             }
 
             out.flush().get();
