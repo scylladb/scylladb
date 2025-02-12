@@ -372,14 +372,17 @@ private:
     mutation_fragment_v2::kind _last_kind = mutation_fragment_v2::kind::partition_end;
     sstable_consumer& _consumer;
     filter_type _filter;
+    abort_source& _as;
 public:
-    consumer_wrapper(sstable_consumer& consumer, filter_type filter)
-        : _consumer(consumer), _filter(std::move(filter)) {
+    consumer_wrapper(sstable_consumer& consumer, filter_type filter, abort_source& as)
+        : _consumer(consumer), _filter(std::move(filter)), _as(as) {
     }
     mutation_fragment_v2::kind last_kind() const {
         return _last_kind;
     }
     future<stop_iteration> operator()(mutation_fragment_v2&& mf) {
+        _as.check();
+
         sst_log.trace("consume {}", mf.mutation_fragment_kind());
         if (mf.is_partition_start() && _filter && !_filter(mf.as_partition_start().key())) {
             return make_ready_future<stop_iteration>(stop_iteration::yes);
@@ -806,7 +809,7 @@ public:
     }
 };
 
-stop_iteration consume_reader(mutation_reader rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips) {
+stop_iteration consume_reader(mutation_reader rd, sstable_consumer& consumer, sstables::sstable* sst, const partition_set& partitions, bool no_skips, abort_source& as) {
     auto close_rd = deferred_close(rd);
     if (consumer.consume_sstable_start(sst).get() == stop_iteration::yes) {
         return consumer.consume_sstable_end().get();
@@ -821,8 +824,10 @@ stop_iteration consume_reader(mutation_reader rd, sstable_consumer& consumer, ss
             return pass;
         };
     }
-    auto wrapper = consumer_wrapper(consumer, filter);
+    auto wrapper = consumer_wrapper(consumer, filter, as);
     while (!rd.is_end_of_stream()) {
+        as.check();
+
         skip_partition = false;
         rd.consume_pausable(std::ref(wrapper)).get();
         sst_log.trace("consumer paused, skip_partition={}", skip_partition);
@@ -840,7 +845,9 @@ stop_iteration consume_reader(mutation_reader rd, sstable_consumer& consumer, ss
         if (skip_partition) {
             if (no_skips) {
                 mutation_fragment_v2_opt mfopt;
-                while ((mfopt = rd().get()) && !mfopt->is_end_of_partition());
+                while ((mfopt = rd().get()) && !mfopt->is_end_of_partition()) {
+                    as.check();
+                }
             } else {
                 rd.next_partition().get();
             }
@@ -977,14 +984,13 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
         throw std::invalid_argument("no sstables specified on the command line");
     }
 
-    abort_source abort;
     // Collect JSON output and print after validation is done, to prevent
     // interleaving with error messages from validation.
     std::stringstream json_output_stream;
     json_writer writer(json_output_stream);
     writer.StartStream();
     for (const auto& sst : sstables) {
-        const auto errors = sst->validate(permit, abort, [] (sstring what) { sst_log.info("{}", what); }).get();
+        const auto errors = sst->validate(permit, as, [] (sstring what) { sst_log.info("{}", what); }).get();
         writer.Key(sst->get_filename());
         writer.StartObject();
         writer.Key("errors");
@@ -1036,9 +1042,20 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     compaction_descriptor.replacer = [] (sstables::compaction_completion_desc) { };
 
     auto compaction_data = sstables::compaction_data{};
+    // pre-allocate stop reason, to make call to compaction_data::stop() noexcept
+    sstring stop_reason = "abort requested";
+
+    auto sub = as.subscribe([&compaction_data, stop_reason = stop_reason] () mutable noexcept {
+        compaction_data.stop(std::move(stop_reason));
+    });
 
     compaction_progress_monitor progress_monitor;
-    sstables::compact_sstables(std::move(compaction_descriptor), compaction_data, table_state, progress_monitor).get();
+    try {
+        sstables::compact_sstables(std::move(compaction_descriptor), compaction_data, table_state, progress_monitor).get();
+    } catch (sstables::compaction_stopped_exception&) {
+        // translate to abort exception expected by scylla-sstable
+        throw abort_requested_exception();
+    }
 }
 
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -1050,6 +1067,8 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
+        as.check();
+
         sstables::index_reader idx_reader(sst, permit);
         auto close_idx_reader = deferred_close(idx_reader);
 
@@ -1057,6 +1076,8 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
         writer.StartArray();
 
         while (!idx_reader.eof()) {
+            as.check();
+
             idx_reader.read_partition_data().get();
             auto pos = idx_reader.get_data_file_position();
             auto pkey = idx_reader.get_partition_key();
@@ -1090,6 +1111,8 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     writer.StartStream();
 
     for (auto& sst : sstables) {
+        as.check();
+
         const auto& compression = sst->get_compression();
 
         writer.Key(sst->get_filename());
@@ -1110,6 +1133,8 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
         writer.Key("offsets");
         writer.StartArray();
         for (const auto& offset : compression.offsets) {
+            as.check();
+
             writer.Uint64(offset);
         }
         writer.EndArray();
@@ -1128,6 +1153,8 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
     writer.StartStream();
 
     for (auto& sst : sstables) {
+        as.check();
+
         auto& summary = sst->get_summary();
 
         writer.Key(sst->get_filename());
@@ -1157,6 +1184,8 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
         writer.Key("entries");
         writer.StartArray();
         for (const auto& e : summary.entries) {
+            as.check();
+
             writer.StartObject();
 
             auto pkey = e.get_key().to_partition_key(*schema);
@@ -1427,6 +1456,8 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
+        as.check();
+
         auto& statistics = sst->get_statistics();
 
         writer.Key(sst->get_filename());
@@ -1442,6 +1473,8 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
 
         const auto version = sst->get_version();
         for (const auto& [type, _] : statistics.offsets.elements) {
+            as.check();
+
             const auto& metadata_ptr = statistics.contents.at(type);
             switch (type) {
                 case sstables::metadata_type::Validation:
@@ -1612,6 +1645,8 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
+        as.check();
+
         writer.Key(sst->get_filename());
         writer.StartObject();
         auto m = sst->get_scylla_metadata();
@@ -1620,6 +1655,8 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
             continue;
         }
         for (const auto& [k, v] : m->data.data) {
+            as.check();
+
             std::visit(scylla_metadata_visitor(writer), v);
         }
         writer.EndObject();
@@ -1639,6 +1676,8 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
     json_writer writer(json_output_stream);
     writer.StartStream();
     for (auto& sst : sstables) {
+        as.check();
+
         const auto res = sstables::validate_checksums(sst, permit).get();
         writer.Key(sst->get_filename());
         writer.StartObject();
@@ -1677,6 +1716,8 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 
     for (const auto& sst : sstables) {
+        as.check();
+
         if (!sst->get_compression()) {
             sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
             continue;
@@ -1695,6 +1736,8 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
         auto close_istream = defer([&istream] { istream.close().get(); });
 
         istream.consume([&] (temporary_buffer<char> buf) {
+            as.check();
+
             return ostream.write(buf.get(), buf.size()).then([] {
                 return consumption_result<char>(continue_consuming{});
             });
@@ -2566,12 +2609,17 @@ private:
         }
     };
     std::unique_ptr<impl> _impl;
+    abort_source& _as;
 
 public:
-    explicit json_mutation_stream_parser(schema_ptr schema, reader_permit permit, input_stream<char> istream)
+    explicit json_mutation_stream_parser(schema_ptr schema, reader_permit permit, input_stream<char> istream, abort_source& as)
         : _impl(std::make_unique<impl>(std::move(schema), std::move(permit), std::move(istream)))
+        , _as(as)
     { }
-    future<mutation_fragment_v2_opt> operator()() { return (*_impl)(); }
+    future<mutation_fragment_v2_opt> operator()() {
+        _as.check();
+        return (*_impl)();
+    }
 };
 
 void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -2618,7 +2666,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     auto ifile = open_file_dma(input_file, open_flags::ro).get();
     auto istream = make_file_input_stream(std::move(ifile));
-    auto parser = json_mutation_stream_parser{schema, permit, std::move(istream)};
+    auto parser = json_mutation_stream_parser{schema, permit, std::move(istream), as};
     auto reader = make_generating_reader_v2(schema, permit, std::move(parser));
     auto writer_cfg = manager.configure_writer("scylla-sstable");
     writer_cfg.validation_level = validation_level;
@@ -2643,7 +2691,7 @@ void script_operation(schema_ptr schema, reader_permit permit, const std::vector
     auto consumer = make_lua_sstable_consumer(schema, permit, script_file, std::move(script_params)).get();
     consumer->consume_stream_start().get();
     consume_sstables(schema, permit, sstables, merge, false, [&, &consumer = *consumer] (mutation_reader& rd, sstables::sstable* sst) {
-        return consume_reader(std::move(rd), consumer, sst, partitions, false);
+        return consume_reader(std::move(rd), consumer, sst, partitions, false, as);
     });
     consumer->consume_stream_end().get();
 }
@@ -2661,14 +2709,15 @@ void sstable_consumer_operation(schema_ptr schema, reader_permit permit, const s
     auto consumer = std::make_unique<SstableConsumer>(schema, permit, vm);
     consumer->consume_stream_start().get();
     consume_sstables(schema, permit, sstables, merge, use_full_scan_reader, [&, &consumer = *consumer] (mutation_reader& rd, sstables::sstable* sst) {
-        return consume_reader(std::move(rd), consumer, sst, partitions, no_skips);
+        return consume_reader(std::move(rd), consumer, sst, partitions, no_skips, as);
     });
     consumer->consume_stream_end().get();
 }
 
 void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
                           sstables::sstables_manager& sstable_manager,
-                          const bpo::variables_map& vm) {
+                          const bpo::variables_map& vm,
+                          abort_source& as) {
     if (!vm.count("shards")) {
         throw std::invalid_argument("missing required option '--shards'");
     }
@@ -2678,6 +2727,8 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
+        as.check();
+
         // sst was loaded with the smp::count as its shard_count but that's not
         // necessarily identical to the "shards" specified in the command line.
         // reload the sst with the specified shard_count and ignore_msb_bits
@@ -2694,6 +2745,8 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
         writer.Key(sst->get_filename());
         writer.StartArray();
         for (unsigned shard_id : new_sst->get_shards_for_this_sstable()) {
+            as.check();
+
             writer.Uint(shard_id);
         }
         writer.EndArray();
@@ -2705,7 +2758,8 @@ void shard_of_with_tablets(schema_ptr schema,
                            const std::vector<sstables::shared_sstable>& sstables,
                            std::filesystem::path data_dir_path,
                            sstables::sstables_manager& sstable_manager,
-                           reader_permit permit) {
+                           reader_permit permit,
+                           abort_source& as) {
     auto& dbcfg = sstable_manager.config();
     auto tablets = tools::load_system_tablets(dbcfg, data_dir_path,
                                               schema->ks_name(), schema->cf_name(),
@@ -2713,6 +2767,8 @@ void shard_of_with_tablets(schema_ptr schema,
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
+        as.check();
+
         writer.Key(sst->get_filename());
         writer.StartArray();
 
@@ -2733,6 +2789,8 @@ void shard_of_with_tablets(schema_ptr schema,
         }
         auto& [token, replica_set] = *tablet;
         for (auto& replica : replica_set) {
+            as.check();
+
             writer.StartObject();
             writer.Key("host");
             writer.String(fmt::to_string(replica.host));
@@ -2760,10 +2818,10 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
         throw std::invalid_argument("Please specify '--tablets' or '--vnodes'");
     }
     if (vm.count("vnodes")) {
-        shard_of_with_vnodes(sstables, sstable_manager, vm);
+        shard_of_with_vnodes(sstables, sstable_manager, vm, as);
     } else {
         auto info = extract_from_sstable_path(vm);
-        shard_of_with_tablets(schema, sstables, info.data_dir_path, sstable_manager, permit);
+        shard_of_with_tablets(schema, sstables, info.data_dir_path, sstable_manager, permit, as);
     }
 }
 
