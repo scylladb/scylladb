@@ -33,5 +33,6 @@ ERROR_INJECTIONS_NODE_MAY_HANG = (
     "stop_after_sending_join_node_request",
     "stop_after_updating_cdc_generation",
     "stop_before_streaming",
+    "stop_after_streaming",
     "stop_after_bootstrapping_initial_raft_configuration",
 )
