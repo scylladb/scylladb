@@ -18,7 +18,7 @@ import logging
 
 from test.topology.conftest import skip_mode
 from test.topology.util import get_topology_coordinator, find_server_by_host_id
-from test.topology_custom.test_mv_tablets import get_tablet_replicas
+from test.topology_custom.mv.tablets.test_mv_tablets import get_tablet_replicas
 
 logger = logging.getLogger(__name__)
 
