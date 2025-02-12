@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "db/view/view_build_status.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_fwd.hh"
 #include "timestamp.hh"
@@ -553,6 +554,11 @@ public:
     future<std::vector<mutation>> get_built_views_mutations();
     future<std::vector<view_name>> load_built_views(view_type view_type);
     future<std::vector<view_build_progress>> load_view_build_progress();
+
+    future<mutation> make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
+    future<mutation> make_view_build_status_update_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
+    future<mutation> make_remove_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name);
+    future<mutation> make_remove_view_build_status_on_host_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id);
 
     future<service::view_building_coordinator_tasks> get_view_building_coordinator_tasks();
     future<mutation> make_vbc_task_mutation(api::timestamp_type ts, table_id view_id, const service::view_building_target& target, const dht::token_range& range);

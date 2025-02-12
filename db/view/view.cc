@@ -26,8 +26,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "db/view/view_build_status.hh"
 #include "db/view/view_building_worker.hh"
 #include "dht/i_partitioner_fwd.hh"
+#include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -61,6 +63,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
+#include "timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "view_info.hh"
@@ -2555,8 +2558,7 @@ static future<> announce_with_raft(
         cql3::query_processor& qp,
         ::service::raft_group0_client& group0_client,
         seastar::abort_source& as,
-        const sstring query_string,
-        std::vector<data_value_or_unset> values,
+        std::function<future<mutation>(api::timestamp_type)> mutation_gen,
         std::string_view description) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -2566,12 +2568,9 @@ static future<> announce_with_raft(
         auto guard = co_await group0_client.start_operation(as);
         auto timestamp = guard.write_timestamp();
 
-        auto muts = co_await qp.get_mutations_internal(
-                query_string,
-                view_builder_query_state(),
-                timestamp,
-                values);
-        std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+        auto mut = co_await mutation_gen(guard.write_timestamp());
+        std::vector<canonical_mutation> cmuts;
+        cmuts.emplace_back(std::move(mut));
 
         auto group0_cmd = group0_client.prepare_command(
             ::service::write_mutations{
@@ -2595,12 +2594,10 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
-            const sstring query_string = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)",
-                    db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             auto host_id = _db.get_token_metadata().get_my_id();
-            co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
-                    {std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED"},
-                    "view builder: mark view build STARTED");
+            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
+                        return _sys_ks.make_view_build_status_mutation(ts, {ks_name, view_name}, host_id, build_status::STARTED);
+                    }, "view builder: mark view build STARTED");
         },
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
@@ -2613,12 +2610,10 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
-            const sstring query_string = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
-                    db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             auto host_id = _db.get_token_metadata().get_my_id();
-            co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
-                    {"SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid()},
-                    "view builder: mark view build SUCCESS");
+            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
+                        return _sys_ks.make_view_build_status_update_mutation(ts, {ks_name, view_name}, host_id, build_status::SUCCESS);
+                    }, "view builder: mark view build SUCCESS");
         },
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
@@ -2630,11 +2625,9 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
-            const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?",
-                    db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
-            co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
-                    {std::move(ks_name), std::move(view_name)},
-                    "view builder: delete view build status");
+            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (auto ts) {
+                        return _sys_ks.make_remove_view_build_status_mutation(ts, {ks_name, view_name});
+                    }, "view builder: delete view build status");
         },
         [this, ks_name, view_name] () -> future<> {
             co_await _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
@@ -2850,21 +2843,11 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     }
 
     auto& qp = sys_ks.query_processor();
-
-    const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
-            db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
-
     muts.reserve(muts.size() + db.get_views().size());
-
     // We expect the table to have a row for each existing view, so generate delete mutations for all views.
     for (auto& view : db.get_views()) {
-        auto vb_muts = co_await qp.get_mutations_internal(
-                query_string,
-                view_builder_query_state(),
-                timestamp,
-                {view->ks_name(), view->cf_name(), host_id.uuid()});
-        SCYLLA_ASSERT(vb_muts.size() == 1);
-        muts.push_back(canonical_mutation(std::move(vb_muts[0])));
+        auto mut = co_await sys_ks.make_remove_view_build_status_on_host_mutation(timestamp, {view->ks_name(), view->cf_name()}, host_id);
+        muts.emplace_back(std::move(mut));
     }
 }
 

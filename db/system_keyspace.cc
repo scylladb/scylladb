@@ -2702,6 +2702,46 @@ static future<std::optional<mutation>> get_scylla_local_mutation(replica::databa
     co_return std::nullopt;
 }
 
+future<mutation> system_keyspace::make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status) {
+    static const sstring stmt = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view_name.first, view_name.second, host_id.uuid(), view::build_status_to_sstring(status)});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_view_build_status_update_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status) {
+    static const sstring stmt = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view::build_status_to_sstring(status), view_name.first, view_name.second, host_id.uuid()});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_remove_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view_name.first, view_name.second});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_remove_view_build_status_on_host_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view_name.first, view_name.second, host_id.uuid()});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
 static dht::token_range make_token_range(int64_t& start_token, int64_t& end_token) {
     dht::token start = dht::minimum_token();
     dht::token end = dht::maximum_token();
