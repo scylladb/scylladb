@@ -312,7 +312,7 @@ public:
     // Creates the deletion log for atomic deletion of sstables at `base_dir` (helper for the
     // above function that's also used by tests)
     // Returns the name of the pending_delete_log and an unordered_set of sstable prefixes.
-    static future<pending_delete_result> create_pending_deletion_log(opened_directory& base_dir, const std::vector<shared_sstable>& ssts);
+    static future<sstring> create_pending_deletion_log(opened_directory& base_dir, const std::vector<shared_sstable>& ssts);
 
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
     sstable_state state() const noexcept { return _state; }
