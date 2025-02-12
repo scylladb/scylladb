@@ -2517,7 +2517,7 @@ tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexce
 
 future<> repair::tablet_repair_task_impl::release_resources() noexcept {
     _metas_size = _metas.size();
-    _metas = {};
+    _metas.clear();
     _tables = {};
     return make_ready_future();
 }
