@@ -9,6 +9,7 @@
 #include <exception>
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
+#include "db/view/view_building_worker.hh"
 #include "gms/endpoint_state.hh"
 #include "repair/repair.hh"
 #include "message/messaging_service.hh"
@@ -402,6 +403,7 @@ class repair_writer_impl : public repair_writer::impl {
     mutation_fragment_queue _mq;
     sharded<replica::database>& _db;
     db::view::view_builder& _view_builder;
+    sharded<db::view::view_building_worker>& _view_building_worker;
     streaming::stream_reason _reason;
     mutation_reader _queue_reader;
 public:
@@ -410,6 +412,7 @@ public:
         reader_permit permit,
         sharded<replica::database>& db,
         db::view::view_builder& view_builder,
+        sharded<db::view::view_building_worker>& view_building_worker,
         streaming::stream_reason reason,
         mutation_fragment_queue queue,
         mutation_reader queue_reader)
@@ -418,6 +421,7 @@ public:
         , _mq(std::move(queue))
         , _db(db)
         , _view_builder(view_builder)
+        , _view_building_worker(view_building_worker)
         , _reason(reason)
         , _queue_reader(std::move(queue_reader))
     {}
@@ -494,7 +498,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     auto erm = t.get_effective_replication_map();
     auto& sharder = erm->get_sharder(*(w->schema()));
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder, std::move(_queue_reader),
-            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard),
+            streaming::make_streaming_consumer(sstables::repair_origin, _db, _view_builder, _view_building_worker, w->get_estimated_partitions(), _reason, is_offstrategy_supported(_reason), topo_guard),
     t.stream_in_progress()).then([w, erm] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
@@ -511,10 +515,11 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             reader_permit permit,
             streaming::stream_reason reason,
             sharded<replica::database>& db,
-            db::view::view_builder& view_builder) {
+            db::view::view_builder& view_builder,
+            sharded<db::view::view_building_worker>& view_building_worker) {
     auto [queue_reader, queue_handle] = make_queue_reader_v2(schema, permit);
     auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
-    auto i = std::make_unique<repair_writer_impl>(schema, permit, db, view_builder, reason, std::move(queue), std::move(queue_reader));
+    auto i = std::make_unique<repair_writer_impl>(schema, permit, db, view_builder, view_building_worker, reason, std::move(queue), std::move(queue_reader));
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));
 }
 
@@ -803,7 +808,7 @@ public:
             , _remote_sharder(make_remote_sharder())
             , _same_sharding_config(is_same_sharding_config(cf))
             , _nr_peer_nodes(nr_peer_nodes)
-            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, rs.get_view_builder()))
+            , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, rs.get_view_builder(), rs.get_view_building_worker()))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, locator::host_id addr) {
                         auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);
@@ -3246,6 +3251,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         sharded<db::batchlog_manager>& bm,
         sharded<db::system_keyspace>& sys_ks,
         db::view::view_builder& vb,
+        sharded<db::view::view_building_worker>& vbw,
         tasks::task_manager& tm,
         service::migration_manager& mm,
         size_t max_repair_memory)
@@ -3257,6 +3263,7 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _bm(bm)
     , _sys_ks(sys_ks)
     , _view_builder(vb)
+    , _view_building_worker(vbw)
     , _repair_module(seastar::make_shared<repair::task_manager_module>(tm, *this, max_repair_memory))
     , _mm(mm)
     , _node_ops_metrics(_repair_module)
