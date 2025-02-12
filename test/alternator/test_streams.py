@@ -530,15 +530,25 @@ def test_table_ss_new_and_old_images(dynamodb, dynamodbstreams):
 
 # Test that it is, sadly, not allowed to use UpdateTable on a table which
 # already has a stream enabled to change that stream's StreamViewType.
-# Currently, Alternator does allow this (see issue #6939), so the test is
-# marked xfail.
-@pytest.mark.xfail(reason="Alternator allows changing StreamViewType - see issue #6939")
+# Relates to #6939
 def test_streams_change_type(test_table_ss_keys_only):
     table, arn = test_table_ss_keys_only
     with pytest.raises(ClientError, match='ValidationException.*already'):
         table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'OLD_IMAGE'});
         # If the above change succeeded (because of issue #6939), switch it back :-)
         table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'});
+
+# It is not allowed to enable stream for a table that already has a stream,
+# even if of the same type.
+def test_streams_enable_on_enabled(test_table_ss_new_and_old_images):
+    table, arn = test_table_ss_new_and_old_images
+    with pytest.raises(ClientError, match='ValidationException.*already.*enabled'):
+        table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'});
+
+# It is not allowed to disbale stream on a table that does not have a stream.
+def test_streams_disable_on_disabled(test_table):
+    with pytest.raises(ClientError, match='ValidationException.*stream.*disable'):
+        test_table.update(StreamSpecification={'StreamEnabled': False});
 
 # Utility function for listing all the shards of the given stream arn.
 # Implemented by multiple calls to DescribeStream, possibly several pages
