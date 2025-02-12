@@ -239,6 +239,8 @@ struct log_entry {
     term_t term;
     index_t idx;
     std::variant<command, configuration, dummy> data;
+
+    size_t get_size() const;
 };
 
 using log_entry_ptr = seastar::lw_shared_ptr<const log_entry>;
