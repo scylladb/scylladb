@@ -39,6 +39,7 @@
 #include "tools/sstable_consumer.hh"
 #include "tools/utils.hh"
 #include "locator/host_id.hh"
+#include "utils/stop_signal.hh"
 
 using namespace seastar;
 using namespace sstables;
@@ -3236,7 +3237,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
     tool_app_template app(std::move(app_cfg));
 
     return app.run_async(argc, argv, [&app] (const operation& operation, const bpo::variables_map& app_config) {
-        abort_source as;
+        ::stop_signal stop_signal;
+        abort_source& as = stop_signal.as_local_abort_source();
 
         schema_ptr schema;
         std::optional<schema_with_source> schema_with_source;
