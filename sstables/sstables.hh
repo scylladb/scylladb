@@ -526,7 +526,6 @@ private:
     }
 
     friend class sstable_stream_sink_impl;
-    friend class sstable_directory;
     friend class filesystem_storage;
     friend class s3_storage;
     friend class tiered_storage;
