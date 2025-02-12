@@ -91,7 +91,7 @@ name should be created (if not exists) or loaded.
 We known that, Redis allows us to store keys that map to any one of the
 basic data structures. Scylla supports variant type, which allows us to
 define one table to store all kind of these Redis data. For example ,we
-create the table with the scheme as follow:
+create the table with the schema as follow:
 
 ```
 CREATE TABLE redis （
