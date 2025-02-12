@@ -252,8 +252,9 @@ class TestSuite(ABC):
         return []
 
     def build_test_list(self) -> List[str]:
-        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in
-                self.suite_path.glob(self.pattern)]
+        pattern = self.pattern if isinstance(self.pattern, list) else [self.pattern]
+        tests = itertools.chain(*[self.suite_path.rglob(i) for i in pattern])
+        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in tests]
 
     async def add_test_list(self) -> None:
         options = self.options
@@ -583,15 +584,9 @@ class PythonTestSuite(TestSuite):
 
         return create_cluster
 
-    def build_test_list(self) -> List[str]:
-        """For pytest, search for directories recursively"""
-        path = self.suite_path
-        pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
-        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
-
     @property
     def pattern(self) -> str:
-        assert False
+        return ["*_test.py","test_*.py"]
 
     async def add_test(self, shortname, casename) -> None:
         test = PythonTest(self.next_id((shortname, self.suite_key)), shortname, casename, self)
@@ -611,9 +606,6 @@ class CQLApprovalTestSuite(PythonTestSuite):
     def __init__(self, path, cfg, options: argparse.Namespace, mode) -> None:
         super().__init__(path, cfg, options, mode)
 
-    def build_test_list(self) -> List[str]:
-        return TestSuite.build_test_list(self)
-
     async def add_test(self, shortname: str, casename: str) -> None:
         test = CQLApprovalTest(self.next_id((shortname, self.suite_key)), shortname, self)
         self.tests.append(test)
@@ -630,19 +622,10 @@ class TopologyTestSuite(PythonTestSuite):
        are done per test case.
     """
 
-    def build_test_list(self) -> List[str]:
-        """Build list of Topology python tests"""
-        return TestSuite.build_test_list(self)
-
     async def add_test(self, shortname: str, casename: str) -> None:
         """Add test to suite"""
         test = TopologyTest(self.next_id((shortname, 'topology', self.mode)), shortname, casename, self)
         self.tests.append(test)
-
-    @property
-    def pattern(self) -> str:
-        """Python pattern"""
-        return "test_*.py"
 
     def junit_tests(self):
         """Return an empty list, since topology tests are excluded from an aggregated Junit report to prevent double
@@ -681,15 +664,9 @@ class ToolTestSuite(TestSuite):
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
 
-    def build_test_list(self) -> List[str]:
-        """For pytest, search for directories recursively"""
-        path = self.suite_path
-        pytests = itertools.chain(path.rglob("*_test.py"), path.rglob("test_*.py"))
-        return [os.path.splitext(t.relative_to(self.suite_path))[0] for t in pytests]
-
     @property
     def pattern(self) -> str:
-        assert False
+        return ["*_test.py", "test_*.py"]
 
     async def add_test(self, shortname, casename) -> None:
         test = ToolTest(self.next_id((shortname, self.suite_key)), shortname, self)
