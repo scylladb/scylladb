@@ -2859,8 +2859,6 @@ public:
     future<> run();
     future<> stop();
 
-    virtual void on_join_cluster(const gms::inet_address& endpoint) {}
-    virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {};
     virtual void on_up(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
     virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
 };

@@ -6899,15 +6899,11 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     co_return;
 }
 
-void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
-
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
     (void) _hints_manager.drain_for(hid, endpoint);
     (void) _hints_for_views_manager.drain_for(hid, endpoint);
 }
-
-void storage_proxy::on_up(const gms::inet_address& endpoint) {};
 
 void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
     SCYLLA_ASSERT(thread::running_in_thread());

@@ -35,7 +35,7 @@ public:
      *
      * @param endpoint the newly added endpoint.
      */
-    virtual void on_join_cluster(const gms::inet_address& endpoint) = 0;
+    virtual void on_join_cluster(const gms::inet_address& endpoint) {}
 
     /**
      * Called when a new node leave the cluster (decommission or removeToken).
@@ -43,21 +43,21 @@ public:
      * @param endpoint the IP of the endpoint that is leaving.
      * @param host_id the host ID of the endpoint that is leaving.
      */
-    virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& host_id) = 0;
+    virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& host_id) {}
 
     /**
      * Called when a node is marked UP.
      *
      * @param endpoint the endpoint marked UP.
      */
-    virtual void on_up(const gms::inet_address& endpoint) = 0;
+    virtual void on_up(const gms::inet_address& endpoint) {}
 
     /**
      * Called when a node is marked DOWN.
      *
      * @param endpoint the endpoint marked DOWN.
      */
-    virtual void on_down(const gms::inet_address& endpoint) = 0;
+    virtual void on_down(const gms::inet_address& endpoint) {}
 };
 
 class endpoint_lifecycle_notifier {
