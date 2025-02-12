@@ -1113,6 +1113,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    bool has_tablet_transitions() const {
+        auto tm = get_token_metadata_ptr();
+        for (auto&& [_, tmap] : tm->tablets().all_tables()) {
+            if (tmap->has_transitions()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     bool is_excluded(raft::server_id server_id) const {
         return _topo_sm._topology.get_excluded_nodes().contains(server_id);
     }
