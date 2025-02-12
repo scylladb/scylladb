@@ -453,7 +453,7 @@ def get_uuid_from_str(string: str) -> str:
     return uuid
 
 
-async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_elections: int, deadline: float) -> None:
+async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_elections: int, deadline: float) -> int:
     """Wait new coordinator to be elected
 
     Wait while the table 'system.group0_history' will have a number of lines 
@@ -462,12 +462,13 @@ async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_e
     """
     async def new_coordinator_elected():
         coordinators_ids = await get_coordinator_host_ids(manager)
-        if len(coordinators_ids) == expected_num_of_elections \
+        num_elections = len(coordinators_ids)
+        if num_elections >= expected_num_of_elections \
             and coordinators_ids[0] != coordinators_ids[1]:
-            return True
+            return num_elections
         logger.warning("New coordinator was not elected %s", coordinators_ids)
 
-    await wait_for(new_coordinator_elected, deadline=deadline)
+    return await wait_for(new_coordinator_elected, deadline=deadline)
 
 @asynccontextmanager
 async def new_test_keyspace(cql, opts, host=None):
