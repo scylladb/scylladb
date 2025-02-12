@@ -9,11 +9,12 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
+import time
 from shutil import rmtree
 from typing import TYPE_CHECKING
 
 from test.pylib.tablets import get_all_tablet_replicas
-from test.topology.util import get_coordinator_host, get_non_coordinator_host
+from test.topology.util import get_coordinator_host, get_non_coordinator_host, wait_new_coordinator_elected
 from test.topology_custom.random_failures.error_injections import ERROR_INJECTIONS
 
 if TYPE_CHECKING:
@@ -564,6 +565,7 @@ async def stop_coordinator_node_gracefully(manager: ManagerClient,
 
     LOGGER.info("Stop the coordinator node gracefully")
     await manager.server_stop_gracefully(server_id=(await get_coordinator_host(manager=manager)).server_id)
+    await wait_new_coordinator_elected(manager=manager, expected_num_of_elections=2, deadline=time.time() + 60)
 
     yield
 
@@ -589,9 +591,7 @@ async def kill_coordinator_node(manager: ManagerClient,
 
     LOGGER.info("Kill the coordinator node")
     await manager.server_stop(server_id=(await get_coordinator_host(manager=manager)).server_id)
-
-    LOGGER.info("Sleep for 2 seconds")
-    await asyncio.sleep(2)
+    await wait_new_coordinator_elected(manager=manager, expected_num_of_elections=2, deadline=time.time() + 60)
 
     yield
 
