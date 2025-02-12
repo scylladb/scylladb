@@ -23,7 +23,6 @@
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 #include "utils/disk-error-handler.hh"
-#include "sstables/sstable_directory.hh"
 
 class schema;
 
@@ -41,7 +40,10 @@ class sstable;
 class sstables_manager;
 class entry_descriptor;
 
-using atomic_delete_context = sstable_directory::pending_delete_result;
+struct atomic_delete_context {
+    sstring pending_delete_log;
+    std::unordered_set<sstring> prefixes;
+};
 
 class opened_directory final {
     std::filesystem::path _pathname;

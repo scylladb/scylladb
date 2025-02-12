@@ -291,11 +291,6 @@ public:
     using can_be_remote = bool_class<struct can_be_remote_tag>;
     future<> collect_output_unshared_sstables(std::vector<sstables::shared_sstable> resharded_sstables, can_be_remote);
 
-    struct pending_delete_result {
-        sstring pending_delete_log;
-        std::unordered_set<sstring> prefixes;
-    };
-
     // When we compact sstables, we have to atomically instantiate the new
     // sstable and delete the old ones.  Otherwise, if we compact A+B into C,
     // and if A contained some data that was tombstoned by B, and if B was
