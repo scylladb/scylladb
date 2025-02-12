@@ -391,10 +391,10 @@ public:
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
     virtual future<> on_effective_service_levels_cache_reloaded() override;
 
-    virtual void on_join_cluster(const gms::inet_address& endpoint) override;
+    virtual void on_join_cluster(const gms::inet_address& endpoint, locator::host_id hid) override;
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;
-    virtual void on_up(const gms::inet_address& endpoint) override;
-    virtual void on_down(const gms::inet_address& endpoint) override;
+    virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) override;
+    virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) override;
 };
 
 inline service::endpoint_lifecycle_subscriber* cql_server::get_lifecycle_listener() const noexcept { return _notifier.get(); }

@@ -2859,8 +2859,8 @@ public:
     future<> run();
     future<> stop();
 
-    virtual void on_up(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
-    virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
+    virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
+    virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
 };
 
 future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_tables(group0_guard guard) {

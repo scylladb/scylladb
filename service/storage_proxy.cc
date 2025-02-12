@@ -6921,9 +6921,9 @@ void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstra
     }
 }
 
-void storage_proxy::on_down(const gms::inet_address& endpoint) {
+void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id id) {
     // FIXME: make gossiper notifictaions to pass host ids
-    return cancel_write_handlers([id = remote().gossiper().get_host_id(endpoint)] (const abstract_write_response_handler& handler) {
+    return cancel_write_handlers([id] (const abstract_write_response_handler& handler) {
         const auto& targets = handler.get_targets();
         return std::ranges::find(targets, id) != targets.end();
     });

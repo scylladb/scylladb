@@ -35,7 +35,7 @@ public:
      *
      * @param endpoint the newly added endpoint.
      */
-    virtual void on_join_cluster(const gms::inet_address& endpoint) {}
+    virtual void on_join_cluster(const gms::inet_address& endpoint, locator::host_id host_id) {}
 
     /**
      * Called when a new node leave the cluster (decommission or removeToken).
@@ -50,14 +50,14 @@ public:
      *
      * @param endpoint the endpoint marked UP.
      */
-    virtual void on_up(const gms::inet_address& endpoint) {}
+    virtual void on_up(const gms::inet_address& endpoint, locator::host_id host_id) {}
 
     /**
      * Called when a node is marked DOWN.
      *
      * @param endpoint the endpoint marked DOWN.
      */
-    virtual void on_down(const gms::inet_address& endpoint) {}
+    virtual void on_down(const gms::inet_address& endpoint, locator::host_id host_id) {}
 };
 
 class endpoint_lifecycle_notifier {
@@ -67,10 +67,10 @@ public:
     void register_subscriber(endpoint_lifecycle_subscriber* subscriber);
     future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;
 
-    future<> notify_down(gms::inet_address endpoint);
+    future<> notify_down(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_left(gms::inet_address endpoint, locator::host_id host_id);
-    future<> notify_up(gms::inet_address endpoint);
-    future<> notify_joined(gms::inet_address endpoint);
+    future<> notify_up(gms::inet_address endpoint, locator::host_id host_id);
+    future<> notify_joined(gms::inet_address endpoint, locator::host_id host_id);
 };
 
 }

@@ -232,7 +232,7 @@ future<> cql_server::event_notifier::on_effective_service_levels_cache_reloaded(
     return _server.update_connections_service_level_params();
 }
 
-void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint)
+void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint, locator::host_id hid)
 {
     if (!_server._gossiper.is_cql_ready(endpoint)) {
         _endpoints_pending_joined_notification.insert(endpoint);
@@ -262,7 +262,7 @@ void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpo
     }
 }
 
-void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
+void cql_server::event_notifier::on_up(const gms::inet_address& endpoint, locator::host_id hid)
 {
     if (_endpoints_pending_joined_notification.erase(endpoint)) {
         send_join_cluster(endpoint);
@@ -280,7 +280,7 @@ void cql_server::event_notifier::on_up(const gms::inet_address& endpoint)
     }
 }
 
-void cql_server::event_notifier::on_down(const gms::inet_address& endpoint)
+void cql_server::event_notifier::on_down(const gms::inet_address& endpoint, locator::host_id hid)
 {
     bool was_down = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;
     _last_status_change[endpoint] = event::status_change::status_type::DOWN;

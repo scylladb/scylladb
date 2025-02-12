@@ -777,11 +777,11 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
-    future<> notify_down(inet_address endpoint);
+    future<> notify_down(inet_address endpoint, locator::host_id hid);
     future<> notify_left(inet_address endpoint, locator::host_id hid);
-    future<> notify_up(inet_address endpoint);
-    future<> notify_joined(inet_address endpoint);
-    future<> notify_cql_change(inet_address endpoint, bool ready);
+    future<> notify_up(inet_address endpoint, locator::host_id hid);
+    future<> notify_joined(inet_address endpoint, locator::host_id hid);
+    future<> notify_cql_change(inet_address endpoint, locator::host_id hid,bool ready);
     future<> remove_rpc_client_with_ignored_topology(inet_address endpoint, locator::host_id id);
 public:
     future<bool> is_cleanup_allowed(sstring keyspace);
@@ -956,7 +956,7 @@ private:
 
     struct nodes_to_notify_after_sync {
         std::vector<std::pair<gms::inet_address, locator::host_id>> left;
-        std::vector<gms::inet_address> joined;
+        std::vector<std::pair<gms::inet_address, locator::host_id>> joined;
     };
 
     using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
