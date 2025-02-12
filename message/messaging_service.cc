@@ -993,7 +993,7 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
     // _preferred_ip_cache so that they reopen with the preferred IPs we've
     // just read.
     //
-    remove_rpc_client(msg_addr(ep));
+    remove_rpc_client(msg_addr(ep), std::nullopt);
 }
 
 void messaging_service::init_feature_listeners() {
@@ -1221,17 +1221,15 @@ void messaging_service::remove_error_rpc_client(messaging_verb verb, locator::ho
 
 // Removes client to id.addr in both _client and _clients_with_host_id
 // FIXME: make removing from _clients_with_host_id more efficient
-void messaging_service::remove_rpc_client(msg_addr id) {
+void messaging_service::remove_rpc_client(msg_addr id, std::optional<locator::host_id> hid) {
     for (auto& c : _clients) {
         find_and_remove_client(c, id, [] (const auto&) { return true; });
     }
+    if (!hid) {
+        hid = _address_to_host_id_mapper(id.addr);
+    }
     for (auto& c : _clients_with_host_id) {
-        for (auto it = c.begin(); it != c.end();) {
-            auto& [hid, si] = *it++;
-            if (id.addr == si.endpoint) {
-                find_and_remove_client(c, hid, [] (const auto&) { return true; });
-            }
-        }
+        find_and_remove_client(c, *hid, [] (const auto&) { return true; });
     }
 }
 

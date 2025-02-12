@@ -7325,7 +7325,7 @@ future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint, lo
 
 future<> storage_service::notify_down(inet_address endpoint, locator::host_id hid) {
     co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
-        ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0});
+        ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0}, hid);
         return ss._lifecycle_notifier.notify_down(endpoint, hid);
     });
     slogger.debug("Notify node {}/{} has been down", endpoint, hid);

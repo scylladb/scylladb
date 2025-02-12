@@ -462,7 +462,7 @@ public:
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_error_rpc_client(messaging_verb verb, locator::host_id id);
     void remove_rpc_client_with_ignored_topology(msg_addr id, locator::host_id hid);
-    void remove_rpc_client(msg_addr id);
+    void remove_rpc_client(msg_addr id, std::optional<locator::host_id> hid);
     connection_drop_registration_t when_connection_drops(connection_drop_slot_t& slot) {
         return _connection_dropped.connect(slot);
     }
