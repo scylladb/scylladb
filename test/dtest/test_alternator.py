@@ -1233,7 +1233,8 @@ class TesterAlternator(BaseAlternator):
 
         assert result[0]["value"] == expected_item["value"], "The value of the result is not equal to the sum of the values added through the threads"
 
-    @pytest.mark.next_gating
+    # Removed from next_gating because of https://github.com/scylladb/scylladb/issues/22794
+    # @pytest.mark.next_gating
     def test_delete_elements_from_a_set(self):
         """
         Verifies https://github.com/scylladb/scylla/commit/253387ea07962d4fd8cb221eb90298b9127caf9f
