@@ -39,8 +39,6 @@ TESTS_SHUFFLE_SEED = random.randrange(sys.maxsize)  # seed for the tests order r
 ERROR_INJECTIONS_COUNT = len(ERROR_INJECTIONS)  # change it to limit number of error injections
 CLUSTER_EVENTS_COUNT = len(CLUSTER_EVENTS)  # change it to limit number of cluster events
 
-WAIT_FOR_IP_TIMEOUT = 30  # seconds
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -149,7 +147,7 @@ async def test_random_failures(manager: ManagerClient,
 
     server_log = await manager.server_open_log(server_id=s_info.server_id)
 
-    if cluster_event_duration + 1 >= WAIT_FOR_IP_TIMEOUT and error_injection in ERROR_INJECTIONS_NODE_MAY_HANG:
+    if error_injection in ERROR_INJECTIONS_NODE_MAY_HANG:
         LOGGER.info("Expecting the added node can hang and we'll have a message in the coordinator's log.  See #18638.")
         coordinator = await get_coordinator_host(manager=manager)
         coordinator_log = await manager.server_open_log(server_id=coordinator.server_id)
