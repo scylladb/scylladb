@@ -74,6 +74,8 @@ Requires:       %{product}-python3 = %{version}-%{release}
 AutoReqProv:    no
 Provides:       %{product}-tools:%{_bindir}/nodetool
 Provides:       %{product}-tools:%{_sysconfigdir}/bash_completion.d/nodetool-completion
+Provides:       scylla-enterprise-tools:%{_bindir}/nodetool
+Provides:       scylla-enterprise-tools:%{_sysconfigdir}/bash_completion.d/nodetool-completion
 Provides:       scylla-enterprise-server = %{version}-%{release}
 Obsoletes:      scylla-enterprise-server < 2025.1.0
 
