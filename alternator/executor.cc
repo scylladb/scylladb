@@ -13,6 +13,7 @@
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "cdc/log.hh"
+#include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
 #include "utils/log.hh"
@@ -1643,10 +1644,19 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             add_stream_options(*stream_specification, builder, p.local());
             // Alternator Streams doesn't yet work when the table uses tablets (#16317)
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
-            if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool() &&
-                p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
-                co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
-                    "If you want to enable streams, re-create this table with vnodes (with the tag 'experimental:initial_tablets' set to 'none').");
+            if (stream_enabled && stream_enabled->IsBool()) {
+                if (stream_enabled->GetBool()) {
+                    if (p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
+                    co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
+                        "If you want to enable streams, re-create this table with vnodes (with the tag 'experimental:initial_tablets' set to 'none').");
+                    }
+                    if (tab->cdc_options().enabled()) {
+                        co_return api_error::validation("Table already has an enabled stream: TableName: " + tab->cf_name());
+                    }
+                }
+                else if (!tab->cdc_options().enabled()) {
+                    co_return api_error::validation("Table has no stream to disable: TableName: " + tab->cf_name());
+                }
             }
         }
 
