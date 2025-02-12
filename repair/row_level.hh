@@ -36,6 +36,10 @@ class system_keyspace;
 class system_distributed_keyspace;
 class batchlog_manager;
 
+namespace view {
+class view_building_worker;
+}
+
 }
 
 namespace gms {
@@ -101,6 +105,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     sharded<db::batchlog_manager>& _bm;
     sharded<db::system_keyspace>& _sys_ks;
     db::view::view_builder& _view_builder;
+    sharded<db::view::view_building_worker>& _view_building_worker;
     shared_ptr<repair::task_manager_module> _repair_module;
     service::migration_manager& _mm;
     node_ops_metrics _node_ops_metrics;
@@ -138,6 +143,7 @@ public:
             sharded<db::batchlog_manager>& bm,
             sharded<db::system_keyspace>& sys_ks,
             db::view::view_builder& vb,
+            sharded<db::view::view_building_worker>& vbw,
             tasks::task_manager& tm,
             service::migration_manager& mm, size_t max_repair_memory);
     ~repair_service();
@@ -196,6 +202,7 @@ public:
     sharded<replica::database>& get_db() noexcept { return _db; }
     service::migration_manager& get_migration_manager() noexcept { return _mm; }
     db::view::view_builder& get_view_builder() noexcept { return _view_builder; }
+    sharded<db::view::view_building_worker>& get_view_building_worker() noexcept { return _view_building_worker; }
     gms::gossiper& get_gossiper() noexcept { return _gossiper.local(); }
     size_t max_repair_memory() const { return _max_repair_memory; }
     seastar::semaphore& memory_sem() { return _memory_sem; }
