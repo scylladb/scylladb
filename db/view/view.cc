@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <optional>
 #include <ranges>
@@ -53,12 +54,19 @@
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
+#include "seastar/core/shard_id.hh"
 #include "seastar/rpc/rpc_types.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/group0_state_machine.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
 #include "timestamp.hh"
+#include "sstables/open_info.hh"
+#include "sstables/sstable_directory.hh"
+#include "sstables/sstables.hh"
 #include "utils/assert.hh"
+#include "utils/disk-error-handler.hh"
 #include "utils/small_vector.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
@@ -3642,20 +3650,29 @@ public:
     }
 };
 
-view_building_worker::view_building_worker(replica::database& db, view_update_generator& vug, sharded<netw::messaging_service>& messaging) 
+view_building_worker::view_building_worker(replica::database& db, service::raft_group0_client& group0_client, db::system_keyspace& sys_ks, view_update_generator& vug, sharded<netw::messaging_service>& messaging) 
     : _db(db)
+    , _group0_client(group0_client)
+    , _sys_ks(sys_ks)
     , _vug(vug)
     , _messaging(messaging)
 {
-    init_messaging_service();   
+    if (this_shard_id() == 0) {
+        _staging_detector_fiber = start_staging_detector();
+    }
+    init_messaging_service();
 }
 
 future<> view_building_worker::stop() {
+    _view_building_as.request_abort();
+    _detector_as.request_abort();
+    _cond.broken();
     co_await uninit_messaging_service();
+    co_await std::move(_staging_detector_fiber);
 }
 
 future<> view_building_worker::build_views_range(table_id base_id, dht::token_range range, std::vector<table_id> views) {
-    _as = abort_source();
+    _view_building_as = abort_source();
     
     auto base_cf = _db.find_column_family(base_id).shared_from_this();
     auto views_to_build = std::move(views) | std::views::transform([this] (const table_id& view_id) {
@@ -3664,8 +3681,8 @@ future<> view_building_worker::build_views_range(table_id base_id, dht::token_ra
 
     return seastar::async([this, base_cf = std::move(base_cf), range, views_to_build = std::move(views_to_build)] {
         when_all(base_cf->await_pending_writes(), base_cf->await_pending_streams()).get();
-        flush_base(base_cf, _as).get();
-        _as.check();
+        flush_base(base_cf, _view_building_as).get();
+        _view_building_as.check();
 
         vbw_logger.info("Starting to process range {} for base table {}.{}. Views to build: {}", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), views_to_build | std::views::transform([] (const view_ptr& view) {
             return view->cf_name();
@@ -3702,10 +3719,10 @@ future<> view_building_worker::build_views_range(table_id base_id, dht::token_ra
                     permit,
                     _vug.shared_from_this(),
                     now,
-                    _as));
+                    _view_building_as));
             
             try {
-                utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, _as).get();
+                utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, _view_building_as).get();
                 auto end_token = reader.consume_in_thread(std::move(consumer));
                 vbw_logger.info("Build range {} for base table: {}.{}", dht::token_range(range_to_process.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
 
@@ -3735,6 +3752,86 @@ future<> view_building_worker::build_views_range(table_id base_id, dht::token_ra
     });
 }
 
+future<> view_building_worker::notify() {
+    return container().invoke_on(0, [] (view_building_worker& vbw) {
+        vbw._cond.broadcast();
+    });
+}
+
+future<> view_building_worker::start_staging_detector() {
+    using namespace std::chrono_literals;
+    static auto retry_sleep_time = 1s;
+
+    while (!_detector_as.abort_requested()) {
+        bool retry = false;
+        
+        try {
+            vbw_logger.debug("staging sstables detector iteration...");
+            co_await detect_staging_sstables();
+            _detector_as.check();
+            co_await _cond.wait();
+        } catch (service::group0_concurrent_modification&) {
+            vbw_logger.warn("group0_concurrent_modification exception while registering staging sstables, retrying in {}", retry_sleep_time);
+            retry = true;
+        } catch (broken_semaphore&) {
+            break;
+        } catch (sleep_aborted&) {
+            break;
+        } catch (...) {
+            vbw_logger.error("Error in staging sstable detector: {}", std::current_exception());
+            retry = true;
+        }
+    
+        if (retry) {
+            co_await sleep(retry_sleep_time);
+        }
+    }
+}
+
+future<> view_building_worker::detect_staging_sstables() {
+    struct staging_sstable_info {
+        unsigned shard;
+        dht::token_range range;
+    };
+
+    auto guard = co_await _group0_client.start_operation(_detector_as);
+    auto current_base = co_await _sys_ks.get_vbc_processing_base();
+    if (!current_base) {
+        vbw_logger.trace("staging sstables detector - no table to process");
+        co_return;
+    }
+    auto& table = _db.find_column_family(*current_base);
+
+    std::vector<staging_sstable_info> infos;
+    table.get_sstable_set().for_each_sstable([&infos] (const sstables::shared_sstable& sst) {
+        if (sst->state() != sstables::sstable_state::staging) {
+            return;
+        }
+
+        auto shard = sst->get_shards_for_this_sstable()[0];
+        auto first_token = sst->get_first_decorated_key().token();
+        auto last_token = sst->get_last_decorated_key().token();
+        infos.emplace_back(shard, dht::token_range::make({first_token, true}, {last_token, true}));
+        vbw_logger.trace("Detected staging sstable at shard {} with range {}", shard, infos.back().range);
+    });
+
+    auto erm = table.get_effective_replication_map();
+    const auto& this_node_id = erm->get_token_metadata().get_topology().this_node()->host_id();
+    auto ts = guard.write_timestamp();
+
+    std::vector<canonical_mutation> muts;
+    for (auto& info: infos) {
+        auto mut = co_await _sys_ks.make_vbc_staging_sstable_mutation(ts, this_node_id, info.shard, info.range);
+        muts.emplace_back(std::move(mut));
+    }
+
+    if (!muts.empty()) {
+        service::write_mutations change{ .mutations = std::move(muts) };
+        auto cmd = _group0_client.prepare_command(std::move(change), guard, "vbc staging sstables");
+        co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _detector_as);
+    }
+}
+
 void view_building_worker::init_messaging_service() {
     ser::view_rpc_verbs::register_build_views_range(&_messaging.local(), [this] (table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views) -> future<> {
         return container().invoke_on(shard, [base_id, range = std::move(range), views = std::move(views)] (auto& vbr) {
@@ -3743,7 +3840,7 @@ void view_building_worker::init_messaging_service() {
     });
     ser::view_rpc_verbs::register_abort_vbc_work(&_messaging.local(), [this] (unsigned shard) -> future<rpc::no_wait_type> {
         co_await container().invoke_on(shard, [] (auto& vbw) {
-            vbw._as.request_abort();
+            vbw._view_building_as.request_abort();
         });
         co_return rpc::no_wait_type{};
     });
