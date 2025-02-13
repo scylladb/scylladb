@@ -43,3 +43,8 @@ inline seastar::sstring build_status_to_sstring(build_status status) {
 }
 
 }
+template <> struct fmt::formatter<db::view::build_status> : fmt::formatter<string_view> {
+    auto format(const db::view::build_status& status, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", db::view::build_status_to_sstring(status));
+    }
+};
