@@ -480,6 +480,15 @@ void clearsnapshot_operation(scylla_rest_client& client, const bpo::variables_ma
     client.del("/storage_service/snapshots", std::move(params));
 }
 
+static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
+    const std::unordered_map<sstring, sstring> params = {{"replication", "tablets"}};
+    const auto res = client.get("/storage_service/keyspaces", params);
+
+    const auto& ks_array = res.GetArray();
+    const auto is_same_ks = [&] (const auto& json_ks) { return rjson::to_string_view(json_ks) == keyspace; };
+    return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
+}
+
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.contains("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
@@ -1801,15 +1810,6 @@ static std::map<sstring, float> get_effective_ownership(scylla_rest_client& clie
     }
 
     return rjson_to_map<float>(client.get(request_str, params));
-}
-
-static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
-    const std::unordered_map<sstring, sstring> params = {{"replication", "tablets"}};
-    const auto res = client.get("/storage_service/keyspaces", params);
-
-    const auto& ks_array = res.GetArray();
-    const auto is_same_ks = [&] (const auto& json_ks) { return rjson::to_string_view(json_ks) == keyspace; };
-    return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
 }
 
 void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
