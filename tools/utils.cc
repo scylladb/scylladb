@@ -140,6 +140,10 @@ const operation* get_selected_operation(int& ac, char**& av, const std::vector<o
 // Set ERROR as the default log level, except for the logger \p logger_name, which
 // is configured with INFO level.
 void configure_tool_mode(app_template::seastar_options& opts, const sstring& logger_name) {
+    // Disable handling of SIGINT/SIGTERM by seastar, allow the tool to be
+    // interrupted by way of not handling these signals.
+    opts.auto_handle_sigint_sigterm = false;
+
     opts.reactor_opts.blocked_reactor_notify_ms.set_value(60000);
     opts.reactor_opts.overprovisioned.set_value();
     opts.reactor_opts.idle_poll_time_us.set_value(0);
