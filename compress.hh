@@ -105,7 +105,9 @@ public:
     void validate();
     std::map<sstring, sstring> get_options() const;
 
-    compressor_ptr get_compressor() const { return compressor::create(*this); }
+    bool compression_enabled() const { 
+        return _algorithm != algorithm::none;
+    }
     static compression_parameters no_compression() {
         return compression_parameters(algorithm::none);
     }
