@@ -1511,21 +1511,20 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
                             info.version = sstable->get_version();
 
                             if (sstable->has_component(sstables::component_type::CompressionInfo)) {
-                                auto& c = sstable->get_compression();
-                                auto cp = sstables::get_sstable_compressor(c);
+                                const auto& cp = sstable->get_compression().get_compressor();
 
                                 ss::named_maps nm;
                                 nm.group = "compression_parameters";
-                                for (auto& p : cp->options()) {
+                                for (auto& p : cp.options()) {
                                     ss::mapper e;
                                     e.key = p.first;
                                     e.value = p.second;
                                     nm.attributes.push(std::move(e));
                                 }
-                                if (!cp->options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
+                                if (!cp.options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
                                     ss::mapper e;
                                     e.key = compression_parameters::SSTABLE_COMPRESSION;
-                                    e.value = cp->name();
+                                    e.value = cp.name();
                                     nm.attributes.push(std::move(e));
                                 }
                                 info.extended_properties.push(std::move(nm));
