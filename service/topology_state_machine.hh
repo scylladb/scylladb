@@ -117,6 +117,7 @@ struct topology {
         write_both_read_new,
         tablet_migration,
         tablet_resize_finalization,
+        tablet_split_finalization, // deprecated in favor of tablet_resize_finalization, kept for backward compatibility.
         left_token_ring,
         rollback_to_normal,
         truncate_table,
