@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "seastar/core/sharded.hh"
+#include "sstables/exceptions.hh"
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #include <lz4.h>
