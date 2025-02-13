@@ -218,7 +218,7 @@ SEASTAR_TEST_CASE(datafile_generation_12) {
     });
 }
 
-static future<> sstable_compression_test(compressor_ptr c) {
+static future<> sstable_compression_test(compression_parameters::algorithm c) {
     return test_env::do_with_async([c] (test_env& env) {
         // NOTE: set a given compressor algorithm to schema.
         schema_builder builder(complex_schema());
@@ -245,15 +245,15 @@ static future<> sstable_compression_test(compressor_ptr c) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_13) {
-    return sstable_compression_test(compressor::lz4);
+    return sstable_compression_test(compression_parameters::algorithm::lz4);
 }
 
 SEASTAR_TEST_CASE(datafile_generation_14) {
-    return sstable_compression_test(compressor::snappy);
+    return sstable_compression_test(compression_parameters::algorithm::snappy);
 }
 
 SEASTAR_TEST_CASE(datafile_generation_15) {
-    return sstable_compression_test(compressor::deflate);
+    return sstable_compression_test(compression_parameters::algorithm::deflate);
 }
 
 future<> test_datafile_generation_16(test_env_config cfg) {

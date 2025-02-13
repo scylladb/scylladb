@@ -17,6 +17,8 @@
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
+class compression_parameters;
+
 class compressor {
 public:
     enum class algorithm {
@@ -64,8 +66,7 @@ public:
     using opt_getter = std::function<opt_string(const sstring&)>;
     using ptr_type = shared_ptr<compressor>;
 
-    static ptr_type create(const sstring& name, const opt_getter&);
-    static ptr_type create(const std::map<sstring, sstring>&);
+    static ptr_type create(const compression_parameters& params);
 
     static thread_local const ptr_type lz4;
     static thread_local const ptr_type snappy;
@@ -78,6 +79,13 @@ class class_registry;
 using compressor_ptr = compressor::ptr_type;
 using compressor_registry = class_registry<compressor, const typename compressor::opt_getter&>;
 
+// Per-table compression options, parsed and validated.
+//
+// Compression options are configured through the JSON-like `compression` entry in the schema.
+// The CQL layer parses the text of that entry to a `map<string, string>`.
+// A `compression_parameters` object is constructed from this map.
+// and the passed keys and values are parsed and validated in the constructor.
+// This object can be then used to create a `compressor` objects for sstable readers and writers.
 class compression_parameters {
 public:
     using algorithm = compressor::algorithm;
@@ -91,28 +99,32 @@ public:
     static const sstring CHUNK_LENGTH_KB_ERR;
     static const sstring CRC_CHECK_CHANCE;
 private:
-    compressor_ptr _compressor;
+    algorithm _algorithm;
     std::optional<int> _chunk_length;
     std::optional<double> _crc_check_chance;
+    std::optional<int> _zstd_compression_level;
 public:
     compression_parameters();
-    compression_parameters(compressor_ptr);
+    compression_parameters(algorithm);
     compression_parameters(const std::map<sstring, sstring>& options);
     ~compression_parameters();
 
-    compressor_ptr get_compressor() const { return _compressor; }
     int32_t chunk_length() const { return _chunk_length.value_or(int(DEFAULT_CHUNK_LENGTH)); }
     double crc_check_chance() const { return _crc_check_chance.value_or(double(DEFAULT_CRC_CHECK_CHANCE)); }
+    algorithm get_algorithm() const { return _algorithm; }
+    std::optional<int> zstd_compression_level() const { return _zstd_compression_level; }
 
     void validate();
     std::map<sstring, sstring> get_options() const;
-    bool operator==(const compression_parameters& other) const;
 
+    compressor_ptr get_compressor() const { return compressor::create(*this); }
     static compression_parameters no_compression() {
-        return compression_parameters(nullptr);
+        return compression_parameters(algorithm::none);
     }
+    bool operator==(const compression_parameters&) const = default;
     static std::string_view algorithm_to_name(algorithm);
     static std::string algorithm_to_qualified_name(algorithm);
 private:
-    void validate_options(const std::map<sstring, sstring>&);
+    static void validate_options(const std::map<sstring, sstring>&);
+    static algorithm name_to_algorithm(std::string_view name);
 };

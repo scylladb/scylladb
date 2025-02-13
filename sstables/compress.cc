@@ -256,23 +256,7 @@ local_compression::local_compression(compressor_ptr p)
 {}
 
 local_compression::local_compression(const compression& c)
-    : _compressor([&c] {
-        sstring n(c.name.value.begin(), c.name.value.end());
-        return compressor::create(n, [&c, &n](const sstring& key) -> compressor::opt_string {
-            if (key == compression_parameters::CHUNK_LENGTH_KB || key == compression_parameters::CHUNK_LENGTH_KB_ERR) {
-                return to_sstring(c.chunk_len / 1024);
-            }
-            if (key == compression_parameters::SSTABLE_COMPRESSION) {
-                return n;
-            }
-            for (auto& o : c.options.elements) {
-                if (key == sstring(o.key.value.begin(), o.key.value.end())) {
-                    return sstring(o.value.value.begin(), o.value.value.end());
-                }
-            }
-            return std::nullopt;
-        });
-    }())
+    : _compressor(compressor::create(options_from_compression(c)))
 {}
 
 size_t local_compression::uncompress(const char* input,
@@ -335,7 +319,17 @@ compression::locate(uint64_t position, const compression::segmented_offsets::acc
     return { chunk_start, chunk_end - chunk_start, chunk_offset };
 }
 
+std::map<sstring, sstring> options_from_compression(const compression& c) {
+    std::map<sstring, sstring> result;
+    result.emplace(compression_parameters::SSTABLE_COMPRESSION, sstring(c.name.value.begin(), c.name.value.end()));
+    result.emplace(compression_parameters::CHUNK_LENGTH_KB, to_sstring(c.chunk_len / 1024));
+    for (const auto& [k, v] : c.options.elements) {
+        result.emplace(sstring(k.value.begin(), k.value.end()), sstring(v.value.begin(), v.value.end()));
+    }
+    return result;
 }
+
+} // namespace sstables
 
 // For SSTables 2.x (formats 'ka' and 'la'), the full checksum is a combination of checksums of compressed chunks.
 // For SSTables 3.x (format 'mc'), however, it is supposed to contain the full checksum of the file written so
