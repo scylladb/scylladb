@@ -3560,6 +3560,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         }
 
         gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
+        auto scf = make_sstable_compressor_factory();
         cache_tracker tracker;
         sstables::directory_semaphore dir_sem(1);
         abort_source abort;
@@ -3579,6 +3580,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             1_GiB,
             dir_sem,
             [host_id = locator::host_id::create_random_id()] { return host_id; },
+            *scf,
             abort,
             current_scheduling_group(),
             &sstm.local());

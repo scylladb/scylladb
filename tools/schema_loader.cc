@@ -396,8 +396,9 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     reader_concurrency_semaphore rcs_sem(reader_concurrency_semaphore::no_limits{}, __FUNCTION__, reader_concurrency_semaphore::register_metrics::no);
     auto stop_semaphore = deferred_stop(rcs_sem);
 
+    auto scf = make_sstable_compressor_factory();
     sharded<sstable_manager_service> sst_man;
-    sst_man.start(std::ref(dbcfg)).get();
+    sst_man.start(std::ref(dbcfg), std::ref(*scf)).get();
     auto stop_sst_man_service = deferred_stop(sst_man);
 
     auto schema_tables_path = scylla_data_path / db::schema_tables::NAME;
@@ -495,9 +496,10 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     cache_tracker tracker;
     sstables::directory_semaphore dir_sem(1);
     abort_source abort;
+    auto scf = make_sstable_compressor_factory();
     sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, dbcfg, feature_service, tracker,
         memory::stats().total_memory(), dir_sem,
-        [host_id = locator::host_id::create_random_id()] { return host_id; }, abort);
+        [host_id = locator::host_id::create_random_id()] { return host_id; }, *scf, abort);
     auto close_sst_man = deferred_close(sst_man);
 
     schema_ptr bootstrap_schema = schema_builder(keyspace, table).with_column("pk", int32_type, column_kind::partition_key).build();

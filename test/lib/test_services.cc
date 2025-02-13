@@ -199,6 +199,7 @@ struct test_env::impl {
     ::cache_tracker cache_tracker;
     gms::feature_service feature_service;
     db::nop_large_data_handler nop_ld_handler;
+    std::unique_ptr<sstable_compressor_factory> scf;
     test_env_sstables_manager mgr;
     std::unique_ptr<test_env_compaction_manager> cmgr;
     reader_concurrency_semaphore semaphore;
@@ -222,9 +223,10 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm, tmpdi
     , db_config(make_db_config(dir.path().native(), cfg.storage))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
+    , scf(make_sstable_compressor_factory())
     , mgr("test_env", cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config,
         feature_service, cache_tracker, cfg.available_memory, dir_sem,
-        [host_id = locator::host_id::create_random_id()]{ return host_id; }, abort, current_scheduling_group(), sstm)
+        [host_id = locator::host_id::create_random_id()]{ return host_id; }, *scf, abort, current_scheduling_group(), sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
     , use_uuid(cfg.use_uuid)
     , storage(std::move(cfg.storage))
