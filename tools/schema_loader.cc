@@ -562,7 +562,7 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     }
 
     // compression options
-    builder.set_compressor_params(sstables::get_sstable_compressor(compression));
+    builder.set_compressor_params(sstables::options_from_compression(compression));
 
     return builder.build();
 }
