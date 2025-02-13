@@ -2338,6 +2338,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             case topology::transition_state::tablet_migration:
                 co_await handle_tablet_migration(std::move(guard), false);
                 break;
+            case topology::transition_state::tablet_split_finalization:
+                [[fallthrough]];
             case topology::transition_state::tablet_resize_finalization:
                 co_await handle_tablet_resize_finalization(std::move(guard));
                 break;
@@ -2918,11 +2920,15 @@ future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0
         co_return false;
     }
 
+    auto resize_finalization_transition_state = [this] {
+        return _db.features().tablet_merge ? topology::transition_state::tablet_resize_finalization : topology::transition_state::tablet_split_finalization;
+    };
+
     std::vector<canonical_mutation> updates;
 
     updates.emplace_back(
         topology_mutation_builder(guard.write_timestamp())
-            .set_transition_state(topology::transition_state::tablet_resize_finalization)
+            .set_transition_state(resize_finalization_transition_state())
             .set_version(_topo_sm._topology.version + 1)
             .build());
 

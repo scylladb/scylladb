@@ -3490,7 +3490,7 @@ SEASTAR_TEST_CASE(test_explicit_tablets_disable) {
 
 SEASTAR_TEST_CASE(test_recognition_of_deprecated_name_for_resize_transition) {
     using transition_state = service::topology::transition_state;
-    BOOST_REQUIRE_EQUAL(service::transition_state_from_string("tablet split finalization"), transition_state::tablet_resize_finalization);
+    BOOST_REQUIRE_EQUAL(service::transition_state_from_string("tablet split finalization"), transition_state::tablet_split_finalization);
     BOOST_REQUIRE_EQUAL(service::transition_state_from_string("tablet resize finalization"), transition_state::tablet_resize_finalization);
     return make_ready_future<>();
 }
