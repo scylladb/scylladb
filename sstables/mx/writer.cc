@@ -886,11 +886,13 @@ void writer::init_file_writers() {
     if (!_compression_enabled) {
         _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.get_filename());
     } else {
+        auto compressor = compressor::create(_sst._schema->get_compressor_params());
         _data_writer = std::make_unique<file_writer>(
             make_compressed_file_m_format_output_stream(
                 output_stream<char>(std::move(out)),
                 &_sst._components->compression,
-                _sst._schema->get_compressor_params()), _sst.get_filename());
+                _sst._schema->get_compressor_params(),
+                std::move(compressor)), _sst.get_filename());
     }
 
     out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get();
