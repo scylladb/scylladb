@@ -1063,10 +1063,11 @@ template void sstable::write_simple<component_type::Summary>(const sstables::sum
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
     if (!has_component(component_type::CompressionInfo)) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return read_simple<component_type::CompressionInfo>(_components->compression);
+    co_await read_simple<component_type::CompressionInfo>(_components->compression);
+    _components->compression.set_compressor(compressor::create(options_from_compression(_components->compression)));
 }
 
 void sstable::write_compression() {
