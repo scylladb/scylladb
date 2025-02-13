@@ -6,9 +6,12 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#define ZSTD_STATIC_LINKING_ONLY
+#include <zstd.h>
 #include <lz4.h>
 #include <zlib.h>
 #include <snappy-c.h>
+#include <seastar/util/log.hh>
 
 #include <seastar/util/log.hh>
 #include "compress.hh"
@@ -47,6 +50,8 @@ public:
     algorithm get_algorithm() const override { return algorithm::deflate; }
 };
 
+static const sstring COMPRESSION_LEVEL = "compression_level";
+
 std::set<sstring> compressor::option_names() const {
     return {};
 }
@@ -56,39 +61,32 @@ std::map<sstring, sstring> compressor::options() const {
 }
 
 std::string compressor::name() const {
-    auto result = std::string(compression_parameters::name_prefix);
-    result.append(compression_parameters::algorithm_to_name(get_algorithm()));
-    return result;
+    return compression_parameters::algorithm_to_qualified_name(get_algorithm());
 }
 
-compressor::ptr_type compressor::create(const sstring& name, const opt_getter& opts) {
-    if (name.empty()) {
-        return {};
-    }
-
-    qualified_name qn(compression_parameters::name_prefix, name);
-
-    for (auto& c : { lz4, snappy, deflate }) {
-        if (c->name() == static_cast<const sstring&>(qn)) {
-            return c;
-        }
-    }
-
-    return compressor_registry::create(qn, opts);
-}
-
-shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& options) {
-    auto i = options.find(compression_parameters::SSTABLE_COMPRESSION);
-    if (i != options.end() && !i->second.empty()) {
-        return create(i->second, [&options](const sstring& key) -> opt_string {
-            auto i = options.find(key);
-            if (i == options.end()) {
+compressor_ptr compressor::create(const compression_parameters& params) {
+    using algorithm = compression_parameters::algorithm;
+    switch (params.get_algorithm()) {
+    case algorithm::lz4:
+        return lz4;
+    case algorithm::deflate:
+        return deflate;
+    case algorithm::snappy:
+        return snappy;
+    case algorithm::zstd: {
+        auto opts = params.get_options();
+        auto qn = sstring(compression_parameters::algorithm_to_name(algorithm::zstd));
+        return compressor_registry::create(qn, [&] (const sstring& key) -> opt_string {
+            if (auto it = opts.find(key); it != opts.end()) {
+                return it->second;
+            } else {
                 return std::nullopt;
             }
-            return { i->second };
         });
     }
-    return {};
+    case algorithm::none:
+        return nullptr;
+    }
 }
 
 thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>();
@@ -101,15 +99,33 @@ const sstring compression_parameters::CHUNK_LENGTH_KB_ERR = "chunk_length_kb";
 const sstring compression_parameters::CRC_CHECK_CHANCE = "crc_check_chance";
 
 compression_parameters::compression_parameters()
-    : compression_parameters(compressor::lz4)
+    : compression_parameters(algorithm::lz4)
 {}
 
 compression_parameters::~compression_parameters()
 {}
 
-compression_parameters::compression_parameters(compressor_ptr c)
-    : _compressor(std::move(c))
+compression_parameters::compression_parameters(algorithm alg)
+    : compression_parameters::compression_parameters(
+        alg == algorithm::none
+        ? std::map<sstring, sstring>{}
+        : std::map<sstring, sstring>{{sstring(SSTABLE_COMPRESSION), sstring(algorithm_to_name(alg))}}
+    )
 {}
+
+auto compression_parameters::name_to_algorithm(std::string_view name) -> algorithm {
+    if (name.empty()) {
+        return algorithm::none;
+    }
+    auto unqualified = sstring(unqualified_name(name_prefix, name));
+    for (int i = 0; i < static_cast<int>(algorithm::none); ++i) {
+        auto alg = static_cast<algorithm>(i);
+        if (std::string_view(unqualified) == algorithm_to_name(alg)) {
+            return alg;
+        }
+    }
+    throw std::runtime_error(std::format("Unknown sstable_compression: {}", name));
+}
 
 std::string_view compression_parameters::algorithm_to_name(algorithm alg) {
     switch (alg) {
@@ -129,26 +145,60 @@ std::string compression_parameters::algorithm_to_qualified_name(algorithm alg) {
 }
 
 compression_parameters::compression_parameters(const std::map<sstring, sstring>& options) {
-    _compressor = compressor::create(options);
+    std::set<sstring> used_options;
+    auto get_option = [&options, &used_options] (const sstring& x) -> const sstring* {
+        used_options.insert(x);
+        if (auto it = options.find(x); it != options.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    };
 
-    validate_options(options);
+    if (auto v = get_option(SSTABLE_COMPRESSION)) {
+        _algorithm = name_to_algorithm(*v);
+    } else {
+        _algorithm = algorithm::none;
+    }
 
-    auto chunk_length = options.find(CHUNK_LENGTH_KB) != options.end() ?
-        options.find(CHUNK_LENGTH_KB) : options.find(CHUNK_LENGTH_KB_ERR);
-
-    if (chunk_length != options.end()) {
+    const sstring* chunk_length = nullptr;
+    if (auto v = get_option(CHUNK_LENGTH_KB_ERR)) {
+        chunk_length = v;
+    }
+    if (auto v = get_option(CHUNK_LENGTH_KB)) {
+        chunk_length = v;
+    }
+    if (chunk_length) {
         try {
-            _chunk_length = std::stoi(chunk_length->second) * 1024;
+            _chunk_length = std::stoi(*chunk_length) * 1024;
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sstring("Invalid integer value ") + chunk_length->second + " for " + chunk_length->first);
+            throw exceptions::syntax_exception(sstring("Invalid integer value ") + *chunk_length + " for " + CHUNK_LENGTH_KB);
         }
     }
-    auto crc_chance = options.find(CRC_CHECK_CHANCE);
-    if (crc_chance != options.end()) {
+
+    if (auto v = get_option(CRC_CHECK_CHANCE)) {
         try {
-            _crc_check_chance = std::stod(crc_chance->second);
+            _crc_check_chance = std::stod(*v);
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sstring("Invalid double value ") + crc_chance->second + "for " + CRC_CHECK_CHANCE);
+            throw exceptions::syntax_exception(sstring("Invalid double value ") + *v + "for " + CRC_CHECK_CHANCE);
+        }
+    }
+
+    switch (_algorithm) {
+    case algorithm::zstd:
+        if (auto v = get_option(COMPRESSION_LEVEL)) {
+            try {
+                _zstd_compression_level = std::stoi(*v);
+            } catch (const std::exception&) {
+                throw exceptions::configuration_exception(format("Invalid integer value {} for {}", *v, COMPRESSION_LEVEL));
+            }
+        }
+        break;
+    default:
+    }
+
+    for (const auto& o : options) {
+        if (!used_options.contains(o.first)) {
+            throw exceptions::configuration_exception(format("Unknown compression option '{}'.", o.first));
         }
     }
 }
@@ -175,15 +225,21 @@ void compression_parameters::validate() {
     if (_crc_check_chance && (_crc_check_chance.value() < 0.0 || _crc_check_chance.value() > 1.0)) {
         throw exceptions::configuration_exception(sstring(CRC_CHECK_CHANCE) + " must be between 0.0 and 1.0.");
     }
+    if (_zstd_compression_level) {
+        if (*_zstd_compression_level != std::clamp<int>(*_zstd_compression_level, ZSTD_minCLevel(), ZSTD_maxCLevel())) {
+            throw exceptions::configuration_exception(fmt::format("{} must be between {} and {}, got {}", ZSTD_minCLevel(), ZSTD_maxCLevel(), COMPRESSION_LEVEL, *_zstd_compression_level));
+        }
+    }
 }
 
 std::map<sstring, sstring> compression_parameters::get_options() const {
-    if (!_compressor) {
-        return std::map<sstring, sstring>();
+    auto opts = std::map<sstring, sstring>();
+    if (_algorithm != algorithm::none) {
+        opts.emplace(compression_parameters::SSTABLE_COMPRESSION, algorithm_to_qualified_name(_algorithm));
     }
-    auto opts = _compressor->options();
-
-    opts.emplace(compression_parameters::SSTABLE_COMPRESSION, _compressor->name());
+    if (_zstd_compression_level) {
+        opts.emplace(COMPRESSION_LEVEL, std::to_string(_zstd_compression_level.value()));
+    }
     if (_chunk_length) {
         opts.emplace(sstring(CHUNK_LENGTH_KB), std::to_string(_chunk_length.value() / 1024));
     }
@@ -191,31 +247,6 @@ std::map<sstring, sstring> compression_parameters::get_options() const {
         opts.emplace(sstring(CRC_CHECK_CHANCE), std::to_string(_crc_check_chance.value()));
     }
     return opts;
-}
-
-bool compression_parameters::operator==(const compression_parameters& other) const {
-    return _compressor == other._compressor
-           && _chunk_length == other._chunk_length
-           && _crc_check_chance == other._crc_check_chance;
-}
-
-void compression_parameters::validate_options(const std::map<sstring, sstring>& options) {
-    // currently, there are no options specific to a particular compressor
-    static std::set<sstring> keywords({
-        sstring(SSTABLE_COMPRESSION),
-        sstring(CHUNK_LENGTH_KB),
-        sstring(CHUNK_LENGTH_KB_ERR),
-        sstring(CRC_CHECK_CHANCE),
-    });
-    std::set<sstring> ckw;
-    if (_compressor) {
-        ckw = _compressor->option_names();
-    }
-    for (auto&& opt : options) {
-        if (!keywords.contains(opt.first) && !ckw.contains(opt.first)) {
-            throw exceptions::configuration_exception(format("Unknown compression option '{}'.", opt.first));
-        }
-    }
 }
 
 size_t lz4_processor::uncompress(const char* input, size_t input_len,

@@ -381,5 +381,6 @@ output_stream<char> make_compressed_file_m_format_output_stream(output_stream<ch
                 sstables::compression* cm,
                 const compression_parameters& cp);
 
-}
+std::map<sstring, sstring> options_from_compression(const compression& c);
 
+}

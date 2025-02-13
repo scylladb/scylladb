@@ -2783,7 +2783,7 @@ void scrub_validate_cassandra_compat(const compression_parameters& cp, sstring s
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_cassandra_compat) {
     for (const auto& [cp, subdir] : {
             std::pair{compression_parameters::no_compression(), "uncompressed"},
-            {compression_parameters(compressor::lz4), "lz4"}
+            {compression_parameters(compression_parameters::algorithm::lz4), "lz4"}
         }) {
         testlog.info("Validating {}compressed SSTable from Cassandra...", cp.get_compressor() ? "" : "un");
         scrub_validate_cassandra_compat(
@@ -2799,7 +2799,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_cassandr
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_cassandra_compat) {
     for (const auto& [cp, subdir] : {
             std::pair{compression_parameters::no_compression(), "uncompressed"},
-            {compression_parameters(compressor::lz4), "lz4"}
+            {compression_parameters(compression_parameters::algorithm::lz4), "lz4"}
         }) {
         testlog.info("Validating {}compressed SSTable from Cassandra with invalid checksums...", cp.get_compressor() ? "" : "un");
         scrub_validate_cassandra_compat(
@@ -2815,7 +2815,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_cassand
 SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest_cassandra_compat) {
     for (const auto& [cp, subdir] : {
             std::pair{compression_parameters::no_compression(), "uncompressed"},
-            {compression_parameters(compressor::lz4), "lz4"}
+            {compression_parameters(compression_parameters::algorithm::lz4), "lz4"}
         }) {
         testlog.info("Validating {}compressed SSTable from Cassandra with invalid digest...", cp.get_compressor() ? "" : "un");
         scrub_validate_cassandra_compat(
