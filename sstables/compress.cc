@@ -245,10 +245,6 @@ void compression::update(uint64_t compressed_file_length) {
     _compressed_file_length = compressed_file_length;
 }
 
-compressor_ptr get_sstable_compressor(const compression& c) {
-    return compressor::create(options_from_compression(c));
-}
-
 // locate() takes a byte position in the uncompressed stream, and finds the
 // the location of the compressed chunk on disk which contains it, and the
 // offset in this chunk.
