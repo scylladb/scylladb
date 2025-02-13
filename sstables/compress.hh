@@ -361,9 +361,6 @@ public:
     friend class sstable;
 };
 
-// for API query only. Free function just to distinguish it from an accessor in compression
-compressor_ptr get_sstable_compressor(const compression&);
-
 // Note: compression_metadata is passed by reference; The caller is
 // responsible for keeping the compression_metadata alive as long as there
 // are open streams on it. This should happen naturally on a higher level -
