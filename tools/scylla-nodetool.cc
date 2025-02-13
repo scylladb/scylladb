@@ -492,6 +492,25 @@ static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& key
     return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
 }
 
+std::optional<sstring> maybe_get_dcs(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm.contains("in-local-dc")) {
+        const auto res = client.get("/snitch/datacenter");
+        return sstring(rjson::to_string_view(res));
+    } else if (vm.contains("in-dc")) {
+        const auto dcs = vm["in-dc"].as<std::vector<sstring>>();
+        return fmt::to_string(fmt::join(dcs.begin(), dcs.end(), ","));
+    }
+    return std::nullopt;
+}
+
+std::optional<sstring> maybe_get_hosts(const bpo::variables_map& vm) {
+    if (vm.contains("in-hosts")) {
+        const auto hosts = vm["in-hosts"].as<std::vector<sstring>>();
+        return fmt::to_string(fmt::join(hosts.begin(), hosts.end(), ","));
+    }
+    return std::nullopt;
+}
+
 void compact_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     if (vm.contains("user-defined")) {
         throw std::invalid_argument("--user-defined flag is unsupported");
@@ -1476,9 +1495,8 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         repair_params["ignoreUnreplicatedKeyspaces"] = "true";
     }
 
-    if (vm.contains("in-hosts")) {
-        const auto hosts = vm["in-hosts"].as<std::vector<sstring>>();
-        repair_params["hosts"] = fmt::to_string(fmt::join(hosts.begin(), hosts.end(), ","));
+    if (auto hosts = maybe_get_hosts(vm); hosts.has_value()) {
+        repair_params["hosts"] = std::move(hosts.value());
     }
 
     if (vm.contains("sequential")) {
@@ -1487,12 +1505,8 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         repair_params["parallelism"] = "dc_parallel";
     }
 
-    if (vm.contains("in-local-dc")) {
-        const auto res = client.get("/snitch/datacenter");
-        repair_params["dataCenters"] = sstring(rjson::to_string_view(res));
-    } else if (vm.contains("in-dc")) {
-        const auto dcs = vm["in-dc"].as<std::vector<sstring>>();
-        repair_params["dataCenters"] = fmt::to_string(fmt::join(dcs.begin(), dcs.end(), ","));
+    if (auto dcs = maybe_get_dcs(client, vm); dcs.has_value()) {
+        repair_params["dataCenters"] = std::move(dcs.value());
     }
 
     if (vm.contains("pull")) {
