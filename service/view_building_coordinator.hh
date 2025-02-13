@@ -12,9 +12,11 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
+#include "db/view/view_build_status.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
+#include "mutation/canonical_mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0.hh"
@@ -45,11 +47,13 @@ using view_name = std::pair<sstring, sstring>;
 using view_tasks = std::map<view_building_target, dht::token_range_vector>;
 using base_tasks = std::map<view_name, view_tasks>;
 using vbc_tasks = std::map<table_id, base_tasks>;
+using view_build_status_map = std::map<view_name, std::map<locator::host_id, db::view::build_status>>;
 
 class view_building_coordinator : public migration_listener::only_view_notifications {
     struct vbc_state {
         vbc_tasks tasks;
         std::optional<table_id> currently_processed_base_table;
+        view_build_status_map status_map;
     };
 
     replica::database& _db;
@@ -85,7 +89,7 @@ private:
     // Returns true if the coordinator should sleep after handling the error.
     bool handle_error(std::exception_ptr eptr) noexcept;
     
-    future<std::optional<vbc_state>> update_coordinator_state();
+    future<std::optional<std::pair<group0_guard, vbc_state>>> update_coordinator_state();
     future<std::vector<canonical_mutation>> add_view(const group0_guard& guard, const view_name& view_name);
     future<std::vector<canonical_mutation>> remove_view(const group0_guard& guard, const view_name& view_name);
 
@@ -97,11 +101,14 @@ private:
     
     table_id get_base_id(const view_name& view_name);
 
-    future<> build_view(vbc_state state);
+    future<> build_view(group0_guard guard, vbc_state state);
     future<> send_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
     future<> mark_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
     future<> abort_work(locator::host_id host, unsigned shard);
     future<> abort_previous_coordinator();
+
+    future<std::vector<canonical_mutation>> maybe_mark_build_status_started(const group0_guard& guard, vbc_state& state, const std::vector<view_name>& views, locator::host_id host_id);
+    future<std::optional<mutation>> maybe_mark_build_status_success(const group0_guard& guard, const view_tasks& view_tasks, const view_name& view, locator::host_id host_id);
 };
 
 }

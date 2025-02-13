@@ -7,6 +7,7 @@
  */
 
 #include <chrono>
+#include <algorithm>
 #include <exception>
 #include <iterator>
 #include <ranges>
@@ -16,6 +17,8 @@
 #include "cql3/query_processor.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
+#include "db/view/view_build_status.hh"
+#include "db/view/view_builder.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
@@ -70,13 +73,16 @@ future<> view_building_coordinator::await_event() {
 future<view_building_coordinator::vbc_state> view_building_coordinator::load_coordinator_state() {
     auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
     auto currently_processed_base_table = co_await _sys_ks.get_vbc_processing_base();
+    auto status_map = co_await _sys_ks.get_view_build_status_map();
 
     vbc_logger.debug("Loaded state: {}", tasks);
     vbc_logger.debug("Processing base: {}", currently_processed_base_table);
+    vbc_logger.debug("Status map: {}", status_map);
 
     co_return vbc_state {
         .tasks = std::move(tasks),
         .currently_processed_base_table = std::move(currently_processed_base_table),
+        .status_map = std::move(status_map)
     };
 }
 
@@ -118,7 +124,8 @@ future<> view_building_coordinator::run() {
                 // If state_opt is nullopt, it means there was work to do and the state has changed.
                 continue;
             }
-            co_await build_view(std::move(*state_opt));
+            auto [guard, state] = std::move(*state_opt);
+            co_await build_view(std::move(guard), std::move(state));
             co_await await_event();
         } catch (...) {
             sleep = handle_error(std::current_exception());
@@ -135,7 +142,7 @@ future<> view_building_coordinator::run() {
     }
 }
 
-future<std::optional<view_building_coordinator::vbc_state>> view_building_coordinator::update_coordinator_state() {
+future<std::optional<std::pair<group0_guard, view_building_coordinator::vbc_state>>> view_building_coordinator::update_coordinator_state() {
     vbc_logger.debug("update_coordinator_state()");
 
     auto guard = co_await start_operation();
@@ -180,7 +187,7 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
         co_return std::nullopt;
     }
     vbc_logger.debug("no updates to process, returning current state...");
-    co_return state;
+    co_return std::make_pair(std::move(guard), std::move(state));
 }
 
 static std::optional<dht::token_range> get_range_to_build(const locator::tablet_map& tablet_map, const dht::token_range_vector ranges) {
@@ -225,7 +232,7 @@ static std::pair<std::vector<view_name>, dht::token_range> get_views_and_range_f
     return {std::move(views), *range};
 }
 
-future<> view_building_coordinator::build_view(vbc_state state) {
+future<> view_building_coordinator::build_view(group0_guard guard, vbc_state state) {
     if (!state.currently_processed_base_table) {
         vbc_logger.info("No view to process");
         co_return;
@@ -234,6 +241,7 @@ future<> view_building_coordinator::build_view(vbc_state state) {
     SCYLLA_ASSERT(state.tasks.contains(*state.currently_processed_base_table));
     auto& base_tasks = state.tasks[*state.currently_processed_base_table];
 
+    std::vector<canonical_mutation> cmuts;
     for (auto& [id, replica_state]: _topo_sm._topology.normal_nodes) {
         locator::host_id host_id{id.uuid()};
 
@@ -253,9 +261,21 @@ future<> view_building_coordinator::build_view(vbc_state state) {
                 continue;
             }
 
+            auto muts = co_await maybe_mark_build_status_started(guard, state, views, host_id);
+            cmuts.insert(cmuts.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
             future<> rpc = send_task(target, *state.currently_processed_base_table, range, std::move(views));
             _rpc_handlers.insert({target, std::move(rpc)});
         }
+    }
+
+    // TO CONSIDER: 
+    // What if this fails because of group0_concurrent_modification? Should we abort rpc calls then? 
+    // Or drop the guard and retry to commit the changes again?
+    if (!cmuts.empty()) {
+        auto cmd = _group0.client().prepare_command(write_mutations{
+            .mutations{std::move(cmuts)},
+        }, guard, "update view build status");
+        co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
     }
 }
 
@@ -311,7 +331,12 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
         auto& ranges = base_tasks[view][target];
         std::erase(ranges, range);
         if (ranges.empty()) {
+            // This means the view was built on the target.
             base_tasks[view].erase(target);
+            auto status_mut_opt = co_await maybe_mark_build_status_success(guard, base_tasks[view], view, target.host);
+            if (status_mut_opt) {
+                muts.emplace_back(std::move(*status_mut_opt));
+            }
         }
         vbc_logger.info("Token range {} (view: {}.{} | base_id: {}) was built on node {}, shard {}", range, view.first, view.second, base_id, target.host, target.shard);
 
@@ -352,6 +377,28 @@ future<> view_building_coordinator::abort_previous_coordinator() {
             co_await abort_work(locator::host_id{id.uuid()}, shard);
         });
     });
+}
+
+future<std::vector<canonical_mutation>> view_building_coordinator::maybe_mark_build_status_started(const group0_guard& guard, vbc_state& state, const std::vector<view_name>& views, locator::host_id host_id) {
+    std::vector<canonical_mutation> muts;
+    for (auto& view: views) {
+        if (!state.status_map.contains(view) || !state.status_map[view].contains(host_id)) {
+            state.status_map[view][host_id] = db::view::build_status::STARTED;
+            auto mut = co_await _sys_ks.make_view_build_status_mutation(guard.write_timestamp(), view, host_id, db::view::build_status::STARTED);
+            muts.emplace_back(std::move(mut));
+        }
+    }
+    co_return muts;
+}
+
+future<std::optional<mutation>> view_building_coordinator::maybe_mark_build_status_success(const group0_guard& guard, const view_tasks& view_tasks, const view_name& view, locator::host_id host_id) {
+    bool host_has_any_tasks = std::any_of(view_tasks.begin(), view_tasks.end(), [&] (auto& e) {
+        return e.first.host == host_id;
+    });
+    if (host_has_any_tasks) {
+        co_return std::nullopt;
+    }
+    co_return co_await _sys_ks.make_view_build_status_update_mutation(guard.write_timestamp(), view, host_id, db::view::build_status::SUCCESS);
 }
 
 std::set<view_name> view_building_coordinator::get_views_to_add(const vbc_state& state, const std::vector<view_name>& views, const std::vector<view_name>& built) {
