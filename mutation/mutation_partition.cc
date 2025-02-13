@@ -1876,8 +1876,8 @@ mutation_querier::mutation_querier(const schema& s, query::result::partition_wri
                                    query::result_memory_accounter& memory_accounter)
     : _schema(s)
     , _memory_accounter(memory_accounter)
-    , _pw(std::move(pw))
     , _static_cells_wr(pw.start().start_static_row().start_cells())
+    , _pw(std::move(pw))
 {
 }
 
