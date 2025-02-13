@@ -101,7 +101,7 @@ class zstd_processor : public compressor {
     }
 
 public:
-    zstd_processor(const opt_getter&);
+    zstd_processor(const compression_parameters&);
 
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
@@ -114,32 +114,12 @@ public:
     std::map<sstring, sstring> options() const override;
 };
 
-zstd_processor::zstd_processor(const opt_getter& opts) {
-    auto level = opts(COMPRESSION_LEVEL);
-    if (level) {
-        try {
-            _compression_level = std::stoi(*level);
-        } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(
-                format("Invalid integer value {} for {}", *level, COMPRESSION_LEVEL));
-        }
-
-        auto min_level = ZSTD_minCLevel();
-        auto max_level = ZSTD_maxCLevel();
-        if (min_level > _compression_level || _compression_level > max_level) {
-            throw exceptions::configuration_exception(
-                format("{} must be between {} and {}, got {}", COMPRESSION_LEVEL, min_level, max_level, _compression_level));
-        }
+zstd_processor::zstd_processor(const compression_parameters& opts) {
+    if (auto level = opts.zstd_compression_level()) {
+        _compression_level = *level;
     }
 
-    auto chunk_len_kb = opts(compression_parameters::CHUNK_LENGTH_KB);
-    if (!chunk_len_kb) {
-        chunk_len_kb = opts(compression_parameters::CHUNK_LENGTH_KB_ERR);
-    }
-    auto chunk_len = chunk_len_kb
-       // This parameter has already been validated.
-       ? std::stoi(*chunk_len_kb) * 1024
-       : compression_parameters::DEFAULT_CHUNK_LENGTH;
+    auto chunk_len = opts.chunk_length();
 
     // We assume that the uncompressed input length is always <= chunk_len.
     auto cparams = ZSTD_getCParams(_compression_level, chunk_len, 0);
@@ -207,15 +187,7 @@ compressor_ptr compressor::create(const compression_parameters& params) {
     case algorithm::snappy:
         return snappy;
     case algorithm::zstd: {
-        auto opts = params.get_options();
-        auto qn = sstring(compression_parameters::algorithm_to_name(algorithm::zstd));
-        return seastar::make_shared<zstd_processor>([&] (const sstring& key) -> opt_string {
-            if (auto it = opts.find(key); it != opts.end()) {
-                return it->second;
-            } else {
-                return std::nullopt;
-            }
-        });
+        return seastar::make_shared<zstd_processor>(params);
     }
     case algorithm::none:
         return nullptr;
