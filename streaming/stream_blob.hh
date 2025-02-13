@@ -92,7 +92,7 @@ public:
     streaming::file_ops fops;
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
-    // We can extend this verb to send arbitary blob of data
+    // We can extend this verb to send arbitrary blob of data
 };
 
 enum class store_result {
