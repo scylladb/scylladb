@@ -61,9 +61,6 @@ public:
 
     virtual algorithm get_algorithm() const = 0;
 
-    // to cheaply bridge sstable compression options / maps
-    using opt_string = std::optional<sstring>;
-    using opt_getter = std::function<opt_string(const sstring&)>;
     using ptr_type = shared_ptr<compressor>;
 
     static ptr_type create(const compression_parameters& params);
