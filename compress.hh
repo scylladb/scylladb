@@ -73,11 +73,7 @@ public:
     static thread_local const ptr_type deflate;
 };
 
-template<typename BaseType, typename... Args>
-class class_registry;
-
 using compressor_ptr = compressor::ptr_type;
-using compressor_registry = class_registry<compressor, const typename compressor::opt_getter&>;
 
 // Per-table compression options, parsed and validated.
 //
