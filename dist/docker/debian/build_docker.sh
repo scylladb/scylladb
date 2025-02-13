@@ -94,9 +94,6 @@ packages=(
 
 bcp "${packages[@]}" packages/
 
-bcp dist/docker/etc etc/
-bcp dist/docker/scylla-housekeeping-service.sh /scylla-housekeeping-service.sh
-
 bcp dist/docker/scyllasetup.py /scyllasetup.py
 bcp dist/docker/commandlineparser.py /commandlineparser.py
 bcp dist/docker/docker-entrypoint.py /docker-entrypoint.py
@@ -108,21 +105,14 @@ run apt-get -y update
 run apt-get -y upgrade
 run apt-get -y --no-install-suggests install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
-run apt-get -y --no-install-suggests install hostname supervisor python3 python3-yaml curl sudo systemd
+run apt-get -y --no-install-suggests install hostname python3 python3-yaml curl sudo systemd
 run bash -ec "echo LANG=C.UTF-8 > /etc/default/locale"
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
-run mkdir -p /etc/supervisor.conf.d
 run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
 run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --network-stack posix"/' /etc/default/scylla-server
-
-run mkdir -p /opt/scylladb/supervisor
-run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
-bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
-bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
-bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
 bconfig --env LANG=C.UTF-8

@@ -27,8 +27,6 @@ Options:
   --housekeeping           enable housekeeping service
   --nonroot                install Scylla without required root privilege
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
-  --supervisor             enable supervisor to manage scylla processes
-  --supervisor-log-to-stdout logging to stdout on supervisor
   --without-systemd         skip installing systemd units
   --debuginfo               install debuginfo
   --help                   this helpful message
@@ -44,8 +42,6 @@ check_usermode_support() {
 root=/
 housekeeping=false
 nonroot=false
-supervisor=false
-supervisor_log_to_stdout=false
 without_systemd=false
 debuginfo=false
 skip_systemd_check=false
@@ -75,15 +71,6 @@ while [ $# -gt 0 ]; do
         "--sysconfdir")
             sysconfdir="$2"
             shift 2
-            ;;
-        "--supervisor")
-            supervisor=true
-            skip_systemd_check=true
-            shift 1
-            ;;
-        "--supervisor-log-to-stdout")
-            supervisor_log_to_stdout=true
-            shift 1
             ;;
         "--without-systemd")
             without_systemd=true
@@ -144,12 +131,6 @@ fi
 if $nonroot; then
     scylla_args+=(--nonroot)
     args+=(--nonroot)
-fi
-if $supervisor; then
-    scylla_args+=(--supervisor)
-fi
-if $supervisor_log_to_stdout; then
-    scylla_args+=(--supervisor-log-to-stdout)
 fi
 if $without_systemd; then
     scylla_args+=(--without-systemd)
