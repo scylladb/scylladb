@@ -60,10 +60,6 @@ constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr generation_type::value_type gossiper::MAX_GENERATION_DIFFERENCE;
 
-netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
-    return msg_addr{to, _default_cpuid};
-}
-
 const sstring& gossiper::get_cluster_name() const noexcept {
     return _gcfg.cluster_name;
 }
