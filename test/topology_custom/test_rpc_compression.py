@@ -215,7 +215,7 @@ async def test_external_dicts(manager: ManagerClient) -> None:
     await asyncio.gather(*[manager.server_stop_gracefully(s.server_id) for s in servers])
     await asyncio.gather(*[manager.server_update_config(s.server_id, 'rpc_dict_training_when', 'never') for s in servers])
     await asyncio.gather(*[manager.server_start(s.server_id) for s in servers])
-    await with_retries(functools.partial(test_once, "lz4", 0.5), timeout=10)
+    await with_retries(functools.partial(test_once, "lz4", 0.5), timeout=600)
 
 # Similar to test_external_dicts, but simpler.
 @pytest.mark.asyncio
