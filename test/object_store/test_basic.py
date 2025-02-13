@@ -256,3 +256,18 @@ async def test_object_storage_config(manager: ManagerClient, tmpdir, s3_server):
     print('Scylla fails to start with an empty object storage config')
     Path(obj_cfg).touch()
     server = await manager.server_add(config=cfg, expected_error='a minimum of one endpoint is required')
+
+@pytest.mark.asyncio
+async def test_get_object_store_endpoints(manager: ManagerClient, tmpdir, s3_server):
+    obj_cfg = tmpdir / 'object_storage.yaml'
+    cfg = {'object_storage_config_file': str(obj_cfg)}
+
+    print('Scylla returns the object storage endpoints')
+    MinioServer.create_conf_file(s3_server.address, s3_server.port, 'bad_key', 'bad_secret', 'bad_region', obj_cfg)
+    MinioServer.append_endpoint_to_conf('localhost', s3_server.port, 'worse_region', obj_cfg)
+    server = await manager.server_add(config=cfg)
+
+    resp = await manager.api.get_object_store_endpoints(server.ip_addr)
+    endpoints = sorted(resp, key=lambda d: d['region'])
+    assert endpoints == [{'provider': 's3', 'name': s3_server.address, 'port': s3_server.port, 'https': False, 'region': 'bad_region'},
+                         {'provider': 's3', 'name': 'localhost', 'port': s3_server.port, 'https': False, 'region': 'worse_region'}]

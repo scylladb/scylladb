@@ -165,6 +165,21 @@ class MinioServer:
                         }
             yaml.dump({'endpoints': [endpoint]}, config_file)
 
+    @staticmethod
+    def append_endpoint_to_conf(address: str, port: int, region: str, conf: str):
+        with open(conf, 'r+', encoding='ascii') as config_file:
+            new_endpoint = {'name': address,
+                        'port': port,
+                        'aws_region': region,
+                        }
+            existing_cfg = yaml.load(config_file, Loader=yaml.Loader)
+            existing_cfg['endpoints'].append(new_endpoint)
+
+            config_file.seek(0)
+            yaml.dump(existing_cfg, config_file)
+
+
+
     async def _run_server(self, port):
         self.logger.info(f'Starting minio server at {self.address}:{port}')
         cmd = await asyncio.create_subprocess_exec(

@@ -460,6 +460,9 @@ class ScyllaRESTAPIClient():
 
     async def get_config(self, node_ip: str, id: str):
         return await self.client.get_json(f'/v2/config/{id}', host=node_ip)
+        
+    async def get_object_store_endpoints(self, node_ip: str):
+        return await self.client.get_json(f'/v2/config/object_store_endpoints', host=node_ip)
 
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
