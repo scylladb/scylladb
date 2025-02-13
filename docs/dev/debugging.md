@@ -346,7 +346,7 @@ The form can also be used to decode backtraces generated
 by the corresponding scylla binary.
 
 **NOTE**: Use the normal relocatable package, usually called
-`scylla-package.tar.gz`, not not the debuginfo one usually called
+`scylla-package.tar.gz`, not the debuginfo one usually called
 `scylla-debug-package.tar.gz`.
 
 Build-id:s for all official releases are listed on

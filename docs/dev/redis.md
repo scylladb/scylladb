@@ -51,7 +51,7 @@ time. When using simple Redis client,  the server address is needed, and
 all the requests are sent to this address, and the requests only send to
 the single Redis server.
 
-In Scylla terminology, the node receiving the request acts as the the
+In Scylla terminology, the node receiving the request acts as the
 coordinator, and often passes the request on to one or more other nodes,
 which hold copies of the requested data.  Any node of Scylla cluster can
 process the request correctly. In other words, Client can send request to
@@ -91,7 +91,7 @@ name should be created (if not exists) or loaded.
 We known that, Redis allows us to store keys that map to any one of the
 basic data structures. Scylla supports variant type, which allows us to
 define one table to store all kind of these Redis data. For example ,we
-create the table with the schame as follow:
+create the table with the schema as follow:
 
 ```
 CREATE TABLE redis （
@@ -113,7 +113,7 @@ will have more performance cost with bigger data structure.
 > structure is exceeded the server's memory size.
 
 So single table to store all the data structures is not good idea, instead
-of five independent tables are created to hold the the different Redis
+of five independent tables are created to hold the different Redis
 structure types within each column family related Redis database. In other
 words, all of the STRINGs of the Redis will be stored in a table within the
 column family, and all of the LISTs' elements will be stored in anther
@@ -374,7 +374,7 @@ The Redis API in Scylla supports the following subset of the Redis commands.
 | **Connection** | |
 | `ECHO message` | Echo a `message` back to the client. The server returns `message´ as a response. |
 | `PING [message]` | Check connection liveness or measure response time. The server returns `PONG` as a response. |
-| `SELECT index` | Select logical database database for the current connection. |
+| `SELECT index` | Select logical database for the current connection. |
 | **Keys** | |
 | `DEL key [key ...]` | Delete `key` from the database. |
 | `EXISTS key [key..]` | Check if `key` exists in the database. |

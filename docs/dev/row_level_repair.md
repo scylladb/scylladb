@@ -1,6 +1,6 @@
 # Row level repair
 
-## How the the partition level repair works
+## How the partition level repair works
 
 - The repair master decides which ranges to work on.
 - The repair master splits the ranges to sub ranges which contains around 100

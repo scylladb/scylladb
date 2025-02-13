@@ -89,7 +89,7 @@ With Alternator enabled on port 8000 (for example), every Scylla node
 listens for DynamoDB API requests on this port. These requests, in
 JSON format over HTTP, are parsed and result in calls to internal Scylla
 C++ functions - there is no CQL generation or parsing involved.
-In Scylla terminology, the node receiving the request acts as the the
+In Scylla terminology, the node receiving the request acts as the
 *coordinator*, and often passes the request on to one or more other nodes -
 *replicas* which hold copies of the requested data.
 

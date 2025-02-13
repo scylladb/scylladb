@@ -35,7 +35,7 @@ The above command works as follows:
    container, so the same directory can be reused.
 3. The ":z" flag is necessary on systems with SELinux enabled, and causes a
    special selinux label to be applied to $HOME/.ccache so docker can write
-   it it. While this (rightfully) sounds fishy, note that dbuild already does
+   it. While this (rightfully) sounds fishy, note that dbuild already does
    the same thing to your current directory, where the build output is
    written - the current directory is also mounted with the ":z" flag.
 

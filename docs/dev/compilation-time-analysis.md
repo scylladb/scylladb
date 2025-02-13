@@ -3,7 +3,7 @@ our issue #1 - https://github.com/scylladb/scylladb/issues/1 - is about it.
 To reduce Scylla's compilation time, it's important to understand what is
 causing it.
 
-In the old days of of C compilers, the compilation time was mostly
+In the old days of C compilers, the compilation time was mostly
 proportional to the amount of source code. The only way to reduce compilation
 time without deleting source code was to reduce the amount of unnecessary
 header-file inclusion. However, in modern template-heavy C++ code, such
@@ -207,7 +207,7 @@ that included database.hh, only 46 included it directly - others included
 it through `wasm.hh` and `query_processor.hh` - are those indirect
 includes necessary?
 
-It's worth noting that the the cost of 1086 seconds is an **overestimation**.
+It's worth noting that the cost of 1086 seconds is an **overestimation**.
 In practice, deleting this header file will not reduce 1086 seconds of the
 compilation time. The reason is that database.hh probably includes other
 headers and instantiates templates which get "billed" to it because this

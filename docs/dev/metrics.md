@@ -3,7 +3,7 @@ Scylla exposes dozens of different metrics which are valuable for
 understanding the performance of a node, and for diagnosing performance
 problems when those occur. Among other things, you can see counts of requests,
 activity of disks, cpus and network, memory usage of different types,
-activity in different individual tables, and many many more metrics.
+activity in different individual tables, and many more metrics.
 
 Scylla's metrics are implemented using Seastar's metrics infrastructure.
 Scylla's code updates metrics continuously in memory variables, and then
@@ -188,7 +188,7 @@ this using the Prometheus time-series database.
 Prometheus is installed on a separate monitoring node (which we shall call
 below "monitornode"). It connects to several Scylla nodes, and saves their
 metrics into a time-series database. Prometheus then allows querying,
-analyzing, and and graphing this data, via a Web interface at:
+analyzing, and graphing this data, via a Web interface at:
 
     http://monitornode:9090/
 

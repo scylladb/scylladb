@@ -23,7 +23,7 @@ The groups currently defined are:
 | gossip                                       | 1000
 | streaming (a.k.a maintenance)                | 200
 
-TODO: explain the purpose each of each of these scheduling groups, and what they are used for. E.g., "streaming" is also called maintenance and used also used for repair. memtable is used for memtable flushes (?). default is used for gossip, etc.
+TODO: explain the purpose of each of these scheduling groups, and what they are used for. E.g., "streaming" is also called maintenance and used also used for repair. memtable is used for memtable flushes (?). default is used for gossip, etc.
 
 The "Default shares" is the initial number of shares given to each scheduling group. They can be later modified by controllers, which aim to discover when a certain component needs to run faster because it is not keeping up - or run slower because it is finishing more quickly than it needs and causing performance to fluctuate. See the "Controllers" section below.
 

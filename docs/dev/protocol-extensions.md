@@ -56,7 +56,7 @@ The keys and values are:
     is connected to (for example, `3`).
   - `SCYLLA_NR_SHARDS` is an integer containing the number of shards on this
     node (for example, `12`). All shard numbers are smaller than this number.
-  - `SCYLLA_PARTITIONER` is a the fully-qualified name of the partitioner in use (i.e.
+  - `SCYLLA_PARTITIONER` is the fully-qualified name of the partitioner in use (i.e.
     `org.apache.cassandra.partitioners.Murmur3Partitioner`).
   - `SCYLLA_SHARDING_ALGORITHM` is the name of an algorithm used to select how
     partitions are mapped into shards (described below)

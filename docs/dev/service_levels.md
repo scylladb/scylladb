@@ -160,7 +160,7 @@ The response is returned immediately but the actual work might take up to tens o
 
 ### Inspecting current scheduling group of connections
 
-`/service_levels/count_connections` endpoing is a tool to inspect status of all opened CQL connections. It returns a map with connections count per scheduling group, per user:
+`/service_levels/count_connections` endpoint is a tool to inspect status of all opened CQL connections. It returns a map with connections count per scheduling group, per user:
 ```
 {'sl:default': {'cassandra': 3}, 'sl:sl1': {'test_user': 3}}
 ```
