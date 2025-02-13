@@ -128,6 +128,7 @@ public:
     static constexpr std::string_view ks_name = "ks";
     static std::atomic<bool> active;
 private:
+    std::unique_ptr<sstable_compressor_factory> _scf;
     sharded<replica::database> _db;
     sharded<gms::feature_service> _feature_service;
     sharded<sstables::storage_manager> _sstm;
@@ -656,9 +657,10 @@ private:
             auto stop_lang_manager = defer_verbose_shutdown("lang manager", [this] { _lang_manager.stop().get(); });
             _lang_manager.invoke_on_all(&lang::manager::start).get();
 
+            _scf = make_sstable_compressor_factory();
 
             _db_config = &*cfg;
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(abort_sources), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(*_scf), std::ref(abort_sources), utils::cross_shard_barrier()).get();
             auto stop_db = defer_verbose_shutdown("database", [this] {
                 _db.stop().get();
             });
