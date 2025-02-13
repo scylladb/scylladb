@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <seastar/coroutine/as_future.hh>
+
 #include "readers/queue.hh"
 
 namespace mutation_writer {
@@ -63,14 +65,15 @@ future<> feed_writer(mutation_reader&& rd_ref, Writer wr) {
         }
     }
 
-    try {
-        co_await wr.close();
-    } catch (...) {
+    auto f = co_await coroutine::as_future(wr.close());
+    if (f.failed()) [[unlikely]] {
+        // Need to consume the failed future exception even if not used
+        auto close_ex = f.get_exception();
         if (!ex) {
-            ex = std::current_exception();
+            ex = std::move(close_ex);
         }
     }
-    if (ex) {
+    if (ex) [[unlikely]] {
         std::rethrow_exception(ex);
     }
 }
