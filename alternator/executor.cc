@@ -1258,7 +1258,7 @@ regular_column_transformation::result extract_from_attrs_column_computation::com
 }
 
 // extract_from_attrs_column_computation needs the whole row to compute
-// value, it cann't use just the partition key.
+// value, it can't use just the partition key.
 bytes extract_from_attrs_column_computation::compute_value(const schema&, const partition_key&) const {
     on_internal_error(elogger, "extract_from_attrs_column_computation::compute_value called without row");
 }
@@ -1574,7 +1574,7 @@ future<executor::request_return_type> executor::create_table(client_state& clien
 // in a AttributeDefinitions. If one of these key columns are *already* key
 // columns of the base table or any of its prior GSIs or LSIs, the type
 // given in AttributeDefinitions must match the type of the existing key -
-// otherise Alternator will not know which type to enforce in new writes.
+// otherwise Alternator will not know which type to enforce in new writes.
 // This function checks for such conflicts. It assumes that the structure of
 // the given attribute_definitions was already validated (with
 // validate_attribute_definitions()).
