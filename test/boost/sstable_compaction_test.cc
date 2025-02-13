@@ -2785,7 +2785,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_valid_sstable_cassandr
             std::pair{compression_parameters::no_compression(), "uncompressed"},
             {compression_parameters(compression_parameters::algorithm::lz4), "lz4"}
         }) {
-        testlog.info("Validating {}compressed SSTable from Cassandra...", cp.get_compressor() ? "" : "un");
+        testlog.info("Validating {}compressed SSTable from Cassandra...", cp.compression_enabled() ? "" : "un");
         scrub_validate_cassandra_compat(
                 cp,
                 seastar::format("test/resource/sstables/3.x/{}/partition_key_with_values_of_different_types", subdir),
@@ -2801,7 +2801,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_cassand
             std::pair{compression_parameters::no_compression(), "uncompressed"},
             {compression_parameters(compression_parameters::algorithm::lz4), "lz4"}
         }) {
-        testlog.info("Validating {}compressed SSTable from Cassandra with invalid checksums...", cp.get_compressor() ? "" : "un");
+        testlog.info("Validating {}compressed SSTable from Cassandra with invalid checksums...", cp.compression_enabled() ? "" : "un");
         scrub_validate_cassandra_compat(
                 cp,
                 seastar::format("test/resource/sstables/3.x/{}/integrity_check/invalid_checksums", subdir),
@@ -2817,7 +2817,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest_
             std::pair{compression_parameters::no_compression(), "uncompressed"},
             {compression_parameters(compression_parameters::algorithm::lz4), "lz4"}
         }) {
-        testlog.info("Validating {}compressed SSTable from Cassandra with invalid digest...", cp.get_compressor() ? "" : "un");
+        testlog.info("Validating {}compressed SSTable from Cassandra with invalid digest...", cp.compression_enabled() ? "" : "un");
         scrub_validate_cassandra_compat(
                 cp,
                 seastar::format("test/resource/sstables/3.x/{}/integrity_check/invalid_digest", subdir),
