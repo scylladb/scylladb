@@ -660,8 +660,8 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                 return make_ready_future<>();
             }
         } else {
-            if (_just_removed_endpoints.contains(ep)) {
-                logger.trace("Ignoring gossip for {} because it is quarantined", ep);
+            if (_just_removed_endpoints.contains(hid)) {
+                logger.trace("Ignoring gossip for {} because it is quarantined", hid);
                 return make_ready_future<>();
             }
         }
@@ -736,7 +736,7 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
         _syn_handlers.erase(host_id);
         _ack_handlers.erase(host_id);
     }
-    quarantine_endpoint(endpoint);
+    quarantine_endpoint(host_id);
     logger.info("Removed endpoint {}", endpoint);
 
     if (was_alive) {
@@ -767,13 +767,14 @@ future<> gossiper::do_status_check() {
             continue;
         }
         auto& ep_state = *eps;
-        bool is_alive = this->is_alive(ep_state.get_host_id());
+        auto host_id = ep_state.get_host_id();
+        bool is_alive = this->is_alive(host_id);
         auto update_timestamp = ep_state.get_update_timestamp();
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
-        if (is_gossip_only_member(ep_state.get_host_id())
-            && !_just_removed_endpoints.contains(endpoint)
+        if (is_gossip_only_member(host_id)
+            && !_just_removed_endpoints.contains(host_id)
             && ((now - update_timestamp) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             co_await remove_endpoint(endpoint, pid); // will put it in _just_removed_endpoints to respect quarantine delay
@@ -1277,18 +1278,18 @@ future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
         g._endpoint_state_map.erase(endpoint);
     });
     _expire_time_endpoint_map.erase(endpoint);
-    quarantine_endpoint(endpoint);
+    quarantine_endpoint(hid);
     logger.debug("evicting {} from gossip", endpoint);
 }
 
-void gossiper::quarantine_endpoint(inet_address endpoint) {
-    quarantine_endpoint(endpoint, now());
+void gossiper::quarantine_endpoint(locator::host_id id) {
+    quarantine_endpoint(id, now());
 }
 
-void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start) {
+void gossiper::quarantine_endpoint(locator::host_id id, clk::time_point quarantine_start) {
     if (!_topo_sm) {
         // In raft topology mode the coodinator maintains banned nodes list
-        _just_removed_endpoints[endpoint] = quarantine_start;
+        _just_removed_endpoints[id] = quarantine_start;
     }
 }
 

@@ -242,7 +242,7 @@ private:
      * gossip. We will ignore any gossip regarding these endpoints for QUARANTINE_DELAY time
      * after removal to prevent nodes from falsely reincarnating during the time when removal
      * gossip gets propagated to all nodes */
-    std::map<inet_address, clk::time_point> _just_removed_endpoints;
+    std::map<locator::host_id, clk::time_point> _just_removed_endpoints;
 
     std::map<inet_address, clk::time_point> _expire_time_endpoint_map;
 
@@ -353,7 +353,7 @@ private:
      *
      * @param endpoint
      */
-    void quarantine_endpoint(inet_address endpoint);
+    void quarantine_endpoint(locator::host_id id);
 
     /**
      * Quarantines the endpoint until quarantine_start + QUARANTINE_DELAY
@@ -361,7 +361,7 @@ private:
      * @param endpoint
      * @param quarantine_start
      */
-    void quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start);
+    void quarantine_endpoint(locator::host_id id, clk::time_point quarantine_start);
 
 private:
     /**
