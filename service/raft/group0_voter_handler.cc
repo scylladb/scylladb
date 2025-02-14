@@ -275,17 +275,31 @@ future<> group0_voter_handler::update_nodes(
     // Load the current members
     const auto& group0_config = _group0.group0_server().get_configuration();
 
-    const auto& members = _topology.normal_nodes;
+    const auto& nodes_alive = _gossiper.get_live_token_owners();
+    const auto& nodes_dead = _gossiper.get_unreachable_nodes();
 
-    auto nodes = members | std::ranges::views::transform([this, &nodes_removed, &group0_config](const auto& member) {
-        const auto& id = member.first;
-        return std::make_pair(id, group0_voter_calculator::node_descriptor{
-                                          .datacenter = member.second.datacenter,
-                                          .rack = member.second.rack,
-                                          .is_voter = group0_config.can_vote(id),
-                                          .is_alive = _gossiper.is_alive(locator::host_id{id.uuid()}) && !nodes_removed.contains(id),
-                                  });
-    }) | std::ranges::to<std::unordered_map>();
+    group0_voter_calculator::nodes_list_t nodes;
+
+    auto add_nodes = [this, &nodes, &group0_config](const std::set<locator::host_id>& nodes_set, bool is_alive) {
+        for (const auto& host_id : nodes_set) {
+            const raft::server_id id{host_id.uuid()};
+            const auto* const node = _topology.find(id);
+            if (!node) {
+                rvlogger.warn("Node {} not found in the topology", id);
+                continue;
+            }
+            const auto& rs = node->second;
+            nodes.emplace(id, group0_voter_calculator::node_descriptor{
+                                      .datacenter = rs.datacenter,
+                                      .rack = rs.rack,
+                                      .is_voter = group0_config.can_vote(id),
+                                      .is_alive = is_alive,
+                              });
+        }
+    };
+
+    add_nodes(nodes_alive, true);
+    add_nodes(nodes_dead, false);
 
     // Handle the added nodes
     for (const auto& id : nodes_added) {

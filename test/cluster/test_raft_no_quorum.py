@@ -63,8 +63,8 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
     servers += await manager.servers_add(servers_num=2)
 
     logger.info("stopping the last two nodes")
-    await asyncio.gather(manager.server_stop_gracefully(servers[2].server_id),
-                         manager.server_stop_gracefully(servers[3].server_id))
+    await asyncio.gather(manager.server_stop(servers[2].server_id),
+                         manager.server_stop(servers[3].server_id))
 
     logger.info("starting a fifth node with no quorum")
     await manager.server_add(expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
@@ -109,7 +109,7 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
     await log_file.wait_for("join-node-before-add-entry: waiting", timeout=60)
 
     logger.info("stopping the second node")
-    await manager.server_stop_gracefully(servers[1].server_id)
+    await manager.server_stop(servers[1].server_id)
 
     logger.info("release join-node-before-add-entry injection")
     await injection_handler.message()
@@ -156,7 +156,7 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
     await log_file.wait_for("join-node-response_handler-before-read-barrier: waiting", timeout=60)
 
     logger.info("stopping the second node")
-    await manager.server_stop_gracefully(servers[1].server_id)
+    await manager.server_stop(servers[1].server_id)
 
     logger.info("release join-node-response_handler-before-read-barrier injection")
     injection_handler = InjectionHandler(manager.api,
@@ -194,7 +194,7 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
     await manager.get_cql().run_async(f'create table {ks}.test_table (pk int primary key)')
 
     logger.info("stopping the second node")
-    await manager.server_stop_gracefully(servers[1].server_id)
+    await manager.server_stop(servers[1].server_id)
 
     logger.info("attempting removenode for the second node")
     await manager.remove_node(servers[0].server_id, servers[1].server_id,
