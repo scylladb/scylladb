@@ -27,7 +27,7 @@ namespace service {
 class migration_manager;
 }
 
-namespace repair {
+namespace streaming {
 
 class database;
 

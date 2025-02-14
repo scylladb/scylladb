@@ -742,7 +742,7 @@ future<> repair::shard_repair_task_impl::repair_range(const dht::token_range& ra
         co_return;
     }
     try {
-        auto dropped = co_await with_table_drop_silenced(db.local(), mm, table.id, [&] (const table_id& uuid) {
+        auto dropped = co_await streaming::with_table_drop_silenced(db.local(), mm, table.id, [&] (const table_id& uuid) {
             return repair_cf_range_row_level(*this, table.name, table.id, range, neighbors, _small_table_optimization);
         });
         if (dropped) {
@@ -2225,7 +2225,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         }
         table_id tid = t->schema()->id();
         // Invoke group0 read barrier before obtaining erm pointer so that it sees all prior metadata changes
-        auto dropped = co_await repair::table_sync_and_check(_db.local(), _mm, tid);
+        auto dropped = co_await streaming::table_sync_and_check(_db.local(), _mm, tid);
         if (dropped) {
             rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
             continue;
@@ -2498,7 +2498,7 @@ future<> repair::tablet_repair_task_impl::run() {
                     auto ep = res.get_exception();
                     sstring ignore_msg;
                     // Ignore the error if the keyspace and/or table were dropped
-                    auto ignore = co_await repair::table_sync_and_check(rs.get_db().local(), rs.get_migration_manager(), m.tid);
+                    auto ignore = co_await streaming::table_sync_and_check(rs.get_db().local(), rs.get_migration_manager(), m.tid);
                     if (ignore) {
                         ignore_msg = format("{} does not exist any more, ignoring it, ",
                                 rs.get_db().local().has_keyspace(m.keyspace_name) ? "table" : "keyspace");
