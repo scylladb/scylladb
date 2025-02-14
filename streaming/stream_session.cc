@@ -21,6 +21,7 @@
 #include <seastar/core/thread.hh>
 #include "streaming/stream_blob.hh"
 #include "streaming/stream_session_state.hh"
+#include "streaming/table_check.hh"
 #include "service/migration_manager.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "sstables/sstable_set.hh"
@@ -218,7 +219,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                 make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
                 make_streaming_consumer(estimated_partitions, reason, topo_guard),
                 std::move(op)
-            ).then_wrapped([this, s, plan_id_ = plan_id, from, sink_ = sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable -> future<> {
+            ).then_wrapped(coroutine::lambda([this, s, plan_id_ = plan_id, from, sink_ = sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr), cf_id] (future<uint64_t> f) mutable -> future<> {
                 auto sink = sink_;
                 auto plan_id = plan_id_;
                 int32_t status = 0;
@@ -231,7 +232,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     }
                     status = -1;
                     // The status code -2 means error and the table is dropped
-                    if (try_catch<data_dictionary::no_such_column_family>(ex)) {
+                    if (co_await table_sync_and_check(_db.local(), _mm.local(), cf_id)) {
                         level = seastar::log_level::debug;
                         status = -2;
                     }
@@ -256,7 +257,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                 co_await sink(status).finally([sink] () mutable {
                     return sink.close();
                 });
-            }).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
+            })).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
                 auto level = seastar::log_level::error;
                 if (try_catch<seastar::rpc::closed_error>(ep)) {
                     level = seastar::log_level::debug;
