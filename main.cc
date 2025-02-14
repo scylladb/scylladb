@@ -1739,6 +1739,12 @@ sharded<locator::shared_token_metadata> token_metadata;
                 only_on_shard0(&*disk_space_monitor_shard0)
             ).get();
 
+            ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
+                return rpc_dict_training_worker.submit<std::vector<std::byte>>([sample = std::move(sample)] {
+                    return utils::zdict_train(sample, {});
+                });
+            });
+
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
             });
