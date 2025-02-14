@@ -13,14 +13,97 @@
 #include <snappy-c.h>
 #include <seastar/util/log.hh>
 #include "utils/reusable_buffer.hh"
+#include "utils/hashers.hh"
 
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
+#include "sstables/sstable_compressor_factory.hh"
+#include "sstables/exceptions.hh"
 
 sstring compressor::make_name(std::string_view short_name) {
     return seastar::format("org.apache.cassandra.io.compress.{}", short_name);
 }
+
+// SHA256
+using dict_id = std::array<std::byte, 32>;
+class sstable_compressor_factory_impl;
+
+class raw_dict : public enable_lw_shared_from_this<raw_dict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    dict_id _id;
+    std::vector<std::byte> _dict;
+public:
+    raw_dict(sstable_compressor_factory_impl& owner, dict_id key, std::span<const std::byte> dict)
+        : _owner(&owner)
+        , _id(key)
+        , _dict(dict.begin(), dict.end())
+    {}
+    ~raw_dict();
+    const std::span<const std::byte> raw() const {
+        return _dict;
+    }
+    dict_id id() const {
+        return _id;
+    }
+    auto disown() const {
+        _owner = nullptr;
+    }
+};
+
+class zstd_ddict : public enable_lw_shared_from_this<zstd_ddict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    lw_shared_ptr<const raw_dict> _raw;
+    std::unique_ptr<ZSTD_DDict, decltype(&ZSTD_freeDDict)> _dict;
+public:
+    zstd_ddict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw)
+        : _owner(&owner)
+        , _raw(raw)
+        , _dict(ZSTD_createDDict_byReference(_raw->raw().data(), _raw->raw().size()), ZSTD_freeDDict)
+    {
+        if (!_dict) {
+            throw std::bad_alloc();
+        }
+    }
+    ~zstd_ddict();
+    auto dict() const {
+        return _dict.get();
+    }
+    auto raw() const {
+        return _raw->raw();
+    }
+    auto disown() const {
+        _owner = nullptr;
+    }
+};
+
+class zstd_cdict : public enable_lw_shared_from_this<zstd_cdict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    lw_shared_ptr<const raw_dict> _raw;
+    int _level;
+    std::unique_ptr<ZSTD_CDict, decltype(&ZSTD_freeCDict)> _dict;
+public:
+    zstd_cdict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw, int level)
+        : _owner(&owner)
+        , _raw(raw)
+        , _level(level)
+        , _dict(ZSTD_createCDict_byReference(_raw->raw().data(), _raw->raw().size(), level), ZSTD_freeCDict)
+    {
+        if (!_dict) {
+            throw std::bad_alloc();
+        }
+    }
+    ~zstd_cdict();
+    auto dict() const {
+        return _dict.get();
+    }
+    auto raw() const {
+        return _raw->raw();
+    }
+    auto disown() const {
+        _owner = nullptr;
+    }
+};
 
 class lz4_processor: public compressor {
 public:
@@ -179,7 +262,6 @@ static std::map<sstring, sstring> dict_as_options(std::span<const std::byte> d) 
     return result;
 }
 
-[[maybe_unused]]
 static std::optional<std::vector<std::byte>> dict_from_options(const sstables::compression& c) {
     std::map<int, bytes_view> parts;
     for (const auto& [k, v] : c.options.elements) {
@@ -515,3 +597,186 @@ size_t snappy_processor::compress_max_size(size_t input_len) const {
     return snappy_max_compressed_length(input_len);
 }
 
+class sstable_compressor_factory_impl : public sstable_compressor_factory {
+    shard_id _owner_shard;
+    const gms::feature_service& _feature_service;
+    struct zstd_cdict_id {
+        dict_id id;
+        int level;
+        std::strong_ordering operator<=>(const zstd_cdict_id&) const = default;
+    };
+    std::map<dict_id, const raw_dict*> _raw_dicts;
+    std::map<zstd_cdict_id, const zstd_cdict*> _zstd_cdicts;
+    std::map<dict_id, const zstd_ddict*> _zstd_ddicts;
+    std::map<table_id, lw_shared_ptr<const raw_dict>> _recommended;
+
+    lw_shared_ptr<const raw_dict> get_canonical_ptr(std::span<const std::byte> dict) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        auto id = get_sha256(dict);
+        if (auto it = _raw_dicts.find(id); it != _raw_dicts.end()) {
+            return it->second->shared_from_this();
+        } else {
+            auto p = make_lw_shared<const raw_dict>(*this, id, dict);
+            _raw_dicts.emplace(id, p.get());
+            return p;
+        }
+    }
+    using zstd_dicts = std::pair<
+        foreign_ptr<lw_shared_ptr<const zstd_ddict>>,
+        foreign_ptr<lw_shared_ptr<const zstd_cdict>>
+    >;
+    zstd_dicts get_zstd_dicts(lw_shared_ptr<const raw_dict> raw, int level) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        lw_shared_ptr<const zstd_ddict> ddict;
+        lw_shared_ptr<const zstd_cdict> cdict;
+        if (auto it = _zstd_ddicts.find(raw->id()); it != _zstd_ddicts.end()) {
+            ddict = it->second->shared_from_this();
+        } else {
+            ddict = make_lw_shared<zstd_ddict>(*this, raw);
+            _zstd_ddicts.emplace(raw->id(), ddict.get());
+        }
+        if (auto it = _zstd_cdicts.find({raw->id(), level}); it != _zstd_cdicts.end()) {
+            cdict = it->second->shared_from_this();
+        } else {
+            cdict = make_lw_shared<zstd_cdict>(*this, raw, level);
+            _zstd_cdicts.emplace(zstd_cdict_id{raw->id(), level}, cdict.get());
+        }
+        return {make_foreign(std::move(ddict)), make_foreign(std::move(cdict))};
+    }
+    future<zstd_dicts> get_zstd_dicts(std::span<const std::byte> dict, int level) {
+        return smp::submit_to(_owner_shard, [this, dict, level] -> zstd_dicts {
+            auto raw = get_canonical_ptr(dict);
+            return get_zstd_dicts(raw, level);
+        });
+    }
+    future<zstd_dicts> get_zstd_dicts(table_id t, int level) {
+        return smp::submit_to(_owner_shard, [this, t, level] -> zstd_dicts {
+            if (!_feature_service.sstable_compression_dicts) {
+                return {};
+            }
+            auto rec_it = _recommended.find(t);
+            if (rec_it != _recommended.end()) {
+                return get_zstd_dicts(rec_it->second, level);
+            } else {
+                return {};
+            }
+        });
+    }
+
+public:
+    sstable_compressor_factory_impl(const gms::feature_service& fs)
+        : _owner_shard(this_shard_id())
+        , _feature_service(fs)
+    {
+    }
+    sstable_compressor_factory_impl(sstable_compressor_factory_impl&&) = delete;
+    ~sstable_compressor_factory_impl() {
+        // The factory is only needed for creating compressors, but the compressors are allowed to outlive it.
+        // Therefore we need to detach all compressors from the factory.
+        for (auto& [k, v] : _raw_dicts) {
+            v->disown();
+        }
+        _raw_dicts.clear();
+        for (auto& [k, v] : _zstd_cdicts) {
+            v->disown();
+        }
+        _zstd_cdicts.clear();
+        for (auto& [k, v] : _zstd_ddicts) {
+            v->disown();
+        }
+        _zstd_ddicts.clear();
+    }
+    void forget_raw_dict(dict_id id) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _raw_dicts.erase(id);
+    }
+    void forget_zstd_cdict(dict_id id, int level) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _zstd_cdicts.erase({id, level});
+    }
+    void forget_zstd_ddict(dict_id id) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _zstd_ddicts.erase(id);
+    }
+    future<> set_recommended_dict(table_id t, std::span<const std::byte> dict) override {
+        return smp::submit_to(_owner_shard, [this, t, dict] {
+            if (dict.size()) {
+                auto canonical_ptr = get_canonical_ptr(dict);
+                _recommended.emplace(t, canonical_ptr);
+            } else {
+                if (auto it = _recommended.find(t); it != _recommended.end()) {
+                    it->second->disown();
+                    _recommended.erase(it);
+                }
+            }
+        });
+    }
+    future<compressor_ptr> make_compressor_for_writing(schema_ptr) override;
+    future<compressor_ptr> make_compressor_for_reading(sstables::compression&) override;
+};
+
+
+future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_writing(schema_ptr s) {
+    auto params = s->get_compressor_params();
+    using algorithm = compression_parameters::algorithm;
+    switch (params.get_algorithm()) {
+    case algorithm::lz4:
+        // FIXME: use the dict.
+        co_return compressor::lz4;
+    case algorithm::deflate:
+        co_return compressor::deflate;
+    case algorithm::snappy:
+        co_return compressor::snappy;
+    case algorithm::zstd: {
+        // FIXME: use the dict.
+        co_return seastar::make_shared<zstd_processor>(params);
+    }
+    case algorithm::none:
+        co_return nullptr;
+    }
+    abort();
+}
+
+future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_reading(sstables::compression& c) {
+    auto params = compression_parameters(sstables::options_from_compression(c));
+    [[maybe_unused]]
+    auto dict = dict_from_options(c);
+    using algorithm = compression_parameters::algorithm;
+    std::unique_ptr<compressor> p;
+    switch (params.get_algorithm()) {
+    case algorithm::lz4:
+        // FIXME: use the dict.
+        co_return compressor::lz4;
+    case algorithm::deflate:
+        co_return compressor::deflate;
+    case algorithm::snappy:
+        co_return compressor::snappy;
+    case algorithm::zstd:
+        // FIXME: use the dict.
+        co_return seastar::make_shared<zstd_processor>(params);
+    case algorithm::none:
+        co_return nullptr;
+    }
+}
+
+raw_dict::~raw_dict() {
+    if (_owner) {
+        _owner->forget_raw_dict(_id);
+    }
+}
+
+zstd_cdict::~zstd_cdict() {
+    if (_owner) {
+        _owner->forget_zstd_cdict(_raw->id(), _level);
+    }
+}
+
+zstd_ddict::~zstd_ddict() {
+    if (_owner) {
+        _owner->forget_zstd_ddict(_raw->id());
+    }
+}
+
+std::unique_ptr<sstable_compressor_factory> make_sstable_compressor_factory(const gms::feature_service& fs) {
+    return std::make_unique<sstable_compressor_factory_impl>(fs);
+}
