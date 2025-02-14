@@ -48,9 +48,12 @@ public:
     virtual size_t compress_max_size(size_t input_len) const = 0;
 
     /**
-     * Returns original options used in instantiating this compressor
+     * Returns metadata which must be written together with the compressed
+     * data and used to construct a corresponding decompressor.
      */
     virtual std::map<sstring, sstring> options() const;
+
+    static bool is_hidden_option_name(std::string_view sv);
 
     std::string name() const;
 

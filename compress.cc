@@ -13,6 +13,8 @@
 #include <snappy-c.h>
 #include <seastar/util/log.hh>
 #include "utils/reusable_buffer.hh"
+#include "sstables/compress.hh"
+#include "sstables/exceptions.hh"
 
 #include <seastar/util/log.hh>
 #include "compress.hh"
@@ -157,6 +159,51 @@ auto zstd_processor::get_algorithm() const -> algorithm {
     return algorithm::zstd;
 }
 
+const std::string_view DICTIONARY_OPTION = ".dictionary.";
+
+[[maybe_unused]]
+static std::map<sstring, sstring> dict_as_options(std::span<const std::byte> d) {
+    std::map<sstring, sstring> result;
+    const size_t max_part_size = std::numeric_limits<uint16_t>::max() - 1;
+    while (!d.empty()) {
+        auto this_part_size = std::min(max_part_size, d.size());
+        auto part_name = fmt::format("{}{:08}", DICTIONARY_OPTION, result.size());
+        auto part = d.subspan(0, this_part_size);
+        auto part_as_string = std::string_view(reinterpret_cast<const char*>(part.data()), part.size());
+        result.emplace(part_name, part_as_string);
+        d = d.subspan(this_part_size);
+    }
+    return result;
+}
+
+[[maybe_unused]]
+static std::optional<std::vector<std::byte>> dict_from_options(const sstables::compression& c) {
+    std::map<int, bytes_view> parts;
+    for (const auto& [k, v] : c.options.elements) {
+        auto k_str = sstring(k.value.begin(), k.value.end());
+        if (k_str.starts_with(DICTIONARY_OPTION)) {
+            try {
+                auto i = std::stoi(k_str.substr(DICTIONARY_OPTION.size()));
+                parts.emplace(i, v.value);
+            } catch (const std::exception& e) {
+                throw sstables::malformed_sstable_exception(fmt::format("Corrupted dictionary option: {}", k_str));
+            }
+        }
+        auto v_str = sstring(v.value.begin(), v.value.end());
+    }
+    std::vector<std::byte> result;
+    int i = 0;
+    for (const auto& [k, v] : parts) {
+        if (k != i) {
+            throw sstables::malformed_sstable_exception(fmt::format("Missing dictionary part: expected {}, got {}", i, k));
+        }
+        ++i;
+        auto s = std::as_bytes(std::span(v));
+        result.insert(result.end(), s.begin(), s.end());
+    }
+    return result;
+}
+
 std::map<sstring, sstring> zstd_processor::options() const {
     return {{COMPRESSION_LEVEL, std::to_string(_compression_level)}};
 }
@@ -167,6 +214,10 @@ std::map<sstring, sstring> compressor::options() const {
 
 std::string compressor::name() const {
     return compression_parameters::algorithm_to_qualified_name(get_algorithm());
+}
+
+bool compressor::is_hidden_option_name(std::string_view sv) {
+    return sv.starts_with('.');
 }
 
 compressor_ptr compressor::create(const compression_parameters& params) {

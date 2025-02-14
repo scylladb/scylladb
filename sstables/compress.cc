@@ -268,7 +268,12 @@ std::map<sstring, sstring> options_from_compression(const compression& c) {
     result.emplace(compression_parameters::SSTABLE_COMPRESSION, sstring(c.name.value.begin(), c.name.value.end()));
     result.emplace(compression_parameters::CHUNK_LENGTH_KB, to_sstring(c.chunk_len / 1024));
     for (const auto& [k, v] : c.options.elements) {
-        result.emplace(sstring(k.value.begin(), k.value.end()), sstring(v.value.begin(), v.value.end()));
+        auto k_str = sstring(k.value.begin(), k.value.end());
+        auto v_str = sstring(v.value.begin(), v.value.end());
+        if (compressor::is_hidden_option_name(k_str)) {
+            continue;
+        }
+        result.emplace(std::move(k_str), std::move(v_str));
     }
     return result;
 }
