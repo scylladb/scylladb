@@ -60,14 +60,12 @@ public:
 
     virtual algorithm get_algorithm() const = 0;
 
-    using ptr_type = shared_ptr<compressor>;
-
-    static thread_local const ptr_type lz4;
-    static thread_local const ptr_type snappy;
-    static thread_local const ptr_type deflate;
+    using ptr_type = std::unique_ptr<compressor>;
 };
 
 using compressor_ptr = compressor::ptr_type;
+
+compressor_ptr make_lz4_sstable_compressor_for_tests();
 
 // Per-table compression options, parsed and validated.
 //

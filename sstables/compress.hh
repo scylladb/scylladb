@@ -53,7 +53,6 @@ class reader_permit;
 
 class compression_parameters;
 class compressor;
-using compressor_ptr = shared_ptr<compressor>;
 
 namespace sstables {
 
