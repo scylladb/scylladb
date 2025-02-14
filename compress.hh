@@ -61,8 +61,6 @@ public:
 
     using ptr_type = shared_ptr<compressor>;
 
-    static ptr_type create(const compression_parameters& params);
-
     static thread_local const ptr_type lz4;
     static thread_local const ptr_type snappy;
     static thread_local const ptr_type deflate;
