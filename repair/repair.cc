@@ -15,7 +15,7 @@
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "message/messaging_service.hh"
-#include "repair/table_check.hh"
+#include "streaming/table_check.hh"
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_service.hh"
