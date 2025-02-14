@@ -886,7 +886,7 @@ void writer::init_file_writers() {
     if (!_compression_enabled) {
         _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.get_filename());
     } else {
-        auto compressor = compressor::create(_sst._schema->get_compressor_params());
+        auto compressor = _sst.manager().get_compressor_factory().make_compressor_for_writing(_sst._schema).get();
         _data_writer = std::make_unique<file_writer>(
             make_compressed_file_m_format_output_stream(
                 output_stream<char>(std::move(out)),
@@ -1494,6 +1494,12 @@ void writer::consume_end_of_stream() {
     _sst.write_filter();
     _sst.write_statistics();
     _sst.write_compression();
+    // Note: during the SSTable write, the `compressor` object in `_sst._components->compression`
+    // can only compress, not decompress. We have to create a decompressing `compressor` here.
+    // (The reason we split the two is that we don't want to keep the compressor-specific compression
+    // context after the write is over, because it hogs memory).
+    auto decompressor = _sst.manager().get_compressor_factory().make_compressor_for_reading(_sst._components->compression).get();
+    _sst._components->compression.set_compressor(std::move(decompressor));
     run_identifier identifier{_run_identifier};
     std::optional<scylla_metadata::large_data_stats> ld_stats(scylla_metadata::large_data_stats{
         .map = {
