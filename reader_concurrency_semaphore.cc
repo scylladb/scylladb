@@ -31,7 +31,6 @@ struct reader_concurrency_semaphore::inactive_read {
     mutation_reader reader;
     const dht::partition_range* range = nullptr;
     eviction_notify_handler notify_handler;
-    timer<lowres_clock> ttl_timer;
     inactive_read_handle* handle = nullptr;
 
     explicit inactive_read(mutation_reader reader_, const dht::partition_range* range_) noexcept
@@ -42,7 +41,6 @@ struct reader_concurrency_semaphore::inactive_read {
         : reader(std::move(o.reader))
         , range(o.range)
         , notify_handler(std::move(o.notify_handler))
-        , ttl_timer(std::move(o.ttl_timer))
         , handle(o.handle)
     {
         o.handle = nullptr;
@@ -1163,11 +1161,7 @@ void reader_concurrency_semaphore::set_notify_handler(inactive_read_handle& irh,
     auto& ir = *(*irh._permit)->aux_data().ir;
     ir.notify_handler = std::move(notify_handler);
     if (ttl_opt) {
-        irh._permit->set_timeout(db::no_timeout);
-        ir.ttl_timer.set_callback([this, permit = *irh._permit] () mutable {
-            evict(*permit, evict_reason::time);
-        });
-        ir.ttl_timer.arm(lowres_clock::now() + *ttl_opt);
+        irh._permit->set_timeout(lowres_clock::now() + *ttl_opt);
     }
 }
 
@@ -1269,7 +1263,6 @@ future<> reader_concurrency_semaphore::stop() noexcept {
 void reader_concurrency_semaphore::do_detach_inactive_reader(reader_permit::impl& permit, evict_reason reason) noexcept {
     dequeue_permit(permit);
     auto& ir = *permit.aux_data().ir;
-    ir.ttl_timer.cancel();
     ir.detach();
     ir.reader.permit()->on_evicted();
     tracing::trace(permit.trace_state(), "[reader_concurrency_semaphore {}] evicted, reason: {}", _name, reason);
