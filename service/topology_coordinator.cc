@@ -829,6 +829,43 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    future<> group0_voter_refresher_fiber() {
+        rtlogger.debug("start group0 members refresh fiber");
+        bool retry = false;
+        while (!_as.abort_requested()) {
+            try {
+                // only wait for the event in case we are not retrying the operation
+                if (!retry) {
+                    co_await _topo_sm.event.when();
+                    // wait for a moment to accumulate correlated changes
+                    co_await seastar::sleep_abortable(std::chrono::milliseconds{100}, _as);
+                }
+                retry = false;
+
+                if (!_feature_service.group0_limited_voters) {
+                    rtlogger.debug("group0 voters refresh fiber iteration skipped because the feature is disabled");
+                    continue;
+                }
+
+                co_await _voter_handler.refresh(_as);
+            } catch (raft::request_aborted&) {
+                rtlogger.debug("group0 voters refresh fiber aborted");
+                break; // exit the loop immediately (not waiting for the abort source to be set)
+            } catch (seastar::abort_requested_exception) {
+                rtlogger.debug("group0 voters refresh fiber aborted");
+                break; // exit the loop immediately (not waiting for the abort source to be set)
+            } catch (group0_concurrent_modification&) {
+                rtlogger.debug("group0 voters refresh fiber notices concurrent modification, retrying...");
+                retry = true;
+            } catch (term_changed_error&) {
+                rtlogger.debug("group0 voters refresh fiber notices term change {} -> {}", _term, _raft.get_current_term());
+                break; // exit the loop immediately (term change means we're not the coordinator anymore)
+            } catch (...) {
+                rtlogger.error("group0 voters refresh fiber got error {}", std::current_exception());
+            }
+        }
+    }
+
     // Precondition: there is no node request and no ongoing topology transition
     // (checked under the guard we're holding).
     future<> handle_global_request(group0_guard guard) {
@@ -3398,6 +3435,7 @@ future<> topology_coordinator::run() {
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
+    auto group0_voter_refresher = group0_voter_refresher_fiber();
 
     while (!_as.abort_requested()) {
         bool sleep = false;
@@ -3438,6 +3476,7 @@ future<> topology_coordinator::run() {
     co_await _tablet_load_stats_refresh.join();
     co_await std::move(cdc_generation_publisher);
     co_await std::move(gossiper_orphan_remover);
+    co_await std::move(group0_voter_refresher);
 }
 
 future<> topology_coordinator::stop() {
