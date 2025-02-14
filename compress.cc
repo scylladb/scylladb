@@ -392,10 +392,6 @@ bool compressor::is_hidden_option_name(std::string_view sv) {
     return sv.starts_with('.');
 }
 
-thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>();
-thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>();
-thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>();
-
 const sstring compression_parameters::SSTABLE_COMPRESSION = "sstable_compression";
 const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_in_kb";
 const sstring compression_parameters::CHUNK_LENGTH_KB_ERR = "chunk_length_kb";
@@ -639,6 +635,10 @@ std::map<sstring, sstring> lz4_processor::options() const {
     } else {
         return {};
     }
+}
+
+compressor_ptr make_lz4_sstable_compressor_for_tests() {
+    return std::make_unique<lz4_processor>();
 }
 
 size_t deflate_processor::uncompress(const char* input,
@@ -975,13 +975,13 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_writ
     compressor_factory_logger.debug("make_compressor_for_writing: table={} algo={}", s->id(), algo);
     switch (algo) {
     case algorithm::lz4:
-        co_return compressor::lz4;
+        co_return std::make_unique<lz4_processor>(nullptr, nullptr);
     case algorithm::deflate:
-        co_return compressor::deflate;
+        co_return std::make_unique<deflate_processor>();
     case algorithm::snappy:
-        co_return compressor::snappy;
+        co_return std::make_unique<snappy_processor>();
     case algorithm::zstd:
-        co_return seastar::make_shared<zstd_processor>(params, nullptr, nullptr);
+        co_return std::make_unique<zstd_processor>(params, nullptr, nullptr);
     case algorithm::none:
         co_return nullptr;
     }
@@ -995,13 +995,14 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_read
     compressor_factory_logger.debug("make_compressor_for_reading: compression={} algo={}", fmt::ptr(&c), algo);
     switch (algo) {
     case algorithm::lz4:
-        co_return compressor::lz4;
+        co_return std::make_unique<lz4_processor>(nullptr, nullptr);
     case algorithm::deflate:
-        co_return compressor::deflate;
+        co_return std::make_unique<deflate_processor>();
     case algorithm::snappy:
-        co_return compressor::snappy;
-    case algorithm::zstd:
-        co_return seastar::make_shared<zstd_processor>(params, nullptr, nullptr);
+        co_return std::make_unique<snappy_processor>();
+    case algorithm::zstd: {
+        co_return std::make_unique<zstd_processor>(params, nullptr, nullptr);
+    }
     case algorithm::none:
         co_return nullptr;
     }
