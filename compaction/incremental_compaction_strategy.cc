@@ -11,9 +11,6 @@
 #include "compaction_manager.hh"
 #include "incremental_compaction_strategy.hh"
 #include "incremental_backlog_tracker.hh"
-#include <boost/range/numeric.hpp>
-#include <boost/range/algorithm.hpp>
-#include <boost/range/adaptors.hpp>
 #include <ranges>
 
 namespace sstables {
@@ -417,11 +414,10 @@ int64_t incremental_compaction_strategy::estimated_pending_compactions(table_sta
 
 std::vector<shared_sstable>
 incremental_compaction_strategy::runs_to_sstables(std::vector<frozen_sstable_run> runs) {
-    return boost::accumulate(runs, std::vector<shared_sstable>(), [&] (std::vector<shared_sstable>&& v, const frozen_sstable_run& run_ptr) {
-        auto& run = *run_ptr;
-        v.insert(v.end(), run.all().begin(), run.all().end());
-        return std::move(v);
-    });
+    return runs
+        | std::views::transform([] (auto& run) -> auto& { return run->all(); })
+        | std::views::join
+        | std::ranges::to<std::vector>();
 }
 
 std::vector<frozen_sstable_run>
