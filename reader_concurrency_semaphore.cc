@@ -25,8 +25,6 @@
 #include "utils/human_readable.hh"
 #include "utils/memory_limit_reached.hh"
 
-#include <boost/range/algorithm/for_each.hpp>
-
 logger rcslog("reader_concurrency_semaphore");
 
 struct reader_concurrency_semaphore::inactive_read {
@@ -1676,11 +1674,11 @@ std::string reader_concurrency_semaphore::dump_diagnostics(unsigned max_lines) c
 }
 
 void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit::impl&)> func) const {
-    boost::for_each(_permit_list, std::ref(func));
-    boost::for_each(_wait_list._admission_queue, std::ref(func));
-    boost::for_each(_wait_list._memory_queue, std::ref(func));
-    boost::for_each(_ready_list, std::ref(func));
-    boost::for_each(_inactive_reads, std::ref(func));
+    std::ranges::for_each(_permit_list, std::ref(func));
+    std::ranges::for_each(_wait_list._admission_queue, std::ref(func));
+    std::ranges::for_each(_wait_list._memory_queue, std::ref(func));
+    std::ranges::for_each(_ready_list, std::ref(func));
+    std::ranges::for_each(_inactive_reads, std::ref(func));
 }
 
 void reader_concurrency_semaphore::foreach_permit(noncopyable_function<void(const reader_permit&)> func) const {
