@@ -1484,6 +1484,9 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
                                 ss::named_maps nm;
                                 nm.group = "compression_parameters";
                                 for (auto& p : cp.options()) {
+                                    if (compressor::is_hidden_option_name(p.first)) {
+                                        continue;
+                                    }
                                     ss::mapper e;
                                     e.key = p.first;
                                     e.value = p.second;
