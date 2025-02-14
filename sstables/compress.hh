@@ -303,6 +303,7 @@ public:
     // Set the compressor algorithm, please check the definition of enum compressor.
     void set_compressor(compressor_ptr c);
     compressor& get_compressor() const;
+    void discard_hidden_options();
     // After changing _compression, update() must be called to update
     // additional variables depending on it.    
     void update(uint64_t compressed_file_length);
