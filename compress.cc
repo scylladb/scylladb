@@ -173,9 +173,25 @@ public:
 
 static const sstring COMPRESSION_LEVEL = "compression_level";
 
+// A Zstd compressor for SSTables.
+//
+// Compression and decompression dicts can be passed to it via the constructor,
+// and they will be used for compression and decompression respectively.
+//
+// If only the decompression dict is passed, calling `compress()` is illegal.
+// If only the compression dict is passed, calling `decompress()` is illegal.
+// If both dicts or none are passed, both `compress()` and `decompress()` are legal.
+//
+// (The reason we want to allow passing only one dict is that we want to discard
+// compression dicts after the SSTable is written. They are much bigger then decompression
+// dicts, and they won't be useful anymore, so it makes sense to free them.)
 class zstd_processor : public compressor {
     int _compression_level = 3;
     size_t _cctx_size;
+    using cdict_ptr = foreign_ptr<lw_shared_ptr<const zstd_cdict>>;
+    using ddict_ptr = foreign_ptr<lw_shared_ptr<const zstd_ddict>>;
+    cdict_ptr _cdict;
+    ddict_ptr _ddict;
 
     static auto with_dctx(std::invocable<ZSTD_DCtx*> auto f) {
         static const size_t DCTX_SIZE = ZSTD_estimateDCtxSize();
@@ -224,10 +240,12 @@ class zstd_processor : public compressor {
     }
 
 public:
-    zstd_processor(const compression_parameters&);
+    zstd_processor(const compression_parameters&, cdict_ptr, ddict_ptr);
 
+    // Legal if `(_ddict || !_cdict)`.
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
+    // Legal if `(_cdict || !_ddict)`.
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
@@ -235,22 +253,31 @@ public:
     std::map<sstring, sstring> options() const override;
 };
 
-zstd_processor::zstd_processor(const compression_parameters& opts) {
+zstd_processor::zstd_processor(const compression_parameters& opts, cdict_ptr cdict, ddict_ptr ddict) {
+    _cdict = std::move(cdict);
+    _ddict = std::move(ddict);
     if (auto level = opts.zstd_compression_level()) {
         _compression_level = *level;
     }
 
-    auto chunk_len = opts.chunk_length();
-
+    // The memory needed by the compression context depends both on the input
+    // size and on the dictionary size.
+    size_t dict_len = _cdict ? _cdict->raw().size() : 0;
     // We assume that the uncompressed input length is always <= chunk_len.
-    auto cparams = ZSTD_getCParams(_compression_level, chunk_len, 0);
+    auto chunk_len = opts.chunk_length();
+    auto cparams = ZSTD_getCParams(_compression_level, chunk_len, dict_len);
     _cctx_size = ZSTD_estimateCCtxSize_usingCParams(cparams);
 
 }
 
 size_t zstd_processor::uncompress(const char* input, size_t input_len, char* output, size_t output_len) const {
     auto ret = with_dctx([&] (ZSTD_DCtx* dctx) {
-        return ZSTD_decompressDCtx(dctx, output, output_len, input, input_len);
+        if (_ddict) {
+            return ZSTD_decompress_usingDDict(dctx, output, output_len, input, input_len, _ddict->dict());
+        } else {
+            SCYLLA_ASSERT(!_cdict && "Write-only compressor used for reading");
+            return ZSTD_decompressDCtx(dctx, output, output_len, input, input_len);
+        }
     });
     if (ZSTD_isError(ret)) {
         throw std::runtime_error( format("ZSTD decompression failure: {}", ZSTD_getErrorName(ret)));
@@ -258,10 +285,14 @@ size_t zstd_processor::uncompress(const char* input, size_t input_len, char* out
     return ret;
 }
 
-
 size_t zstd_processor::compress(const char* input, size_t input_len, char* output, size_t output_len) const {
     auto ret = with_cctx(_cctx_size, [&] (ZSTD_CCtx* cctx) {
-        return ZSTD_compressCCtx(cctx, output, output_len, input, input_len, _compression_level);
+        if (_cdict) {
+            return ZSTD_compress_usingCDict(cctx, output, output_len, input, input_len, _cdict->dict());
+        } else {
+            SCYLLA_ASSERT(!_ddict && "Read-only compressor used for writing");
+            return ZSTD_compressCCtx(cctx, output, output_len, input, input_len, _compression_level);
+        }
     });
     if (ZSTD_isError(ret)) {
         throw std::runtime_error( format("ZSTD compression failure: {}", ZSTD_getErrorName(ret)));
@@ -279,7 +310,6 @@ auto zstd_processor::get_algorithm() const -> algorithm {
 
 const std::string_view DICTIONARY_OPTION = ".dictionary.";
 
-[[maybe_unused]]
 static std::map<sstring, sstring> dict_as_options(std::span<const std::byte> d) {
     std::map<sstring, sstring> result;
     const size_t max_part_size = std::numeric_limits<uint16_t>::max() - 1;
@@ -323,7 +353,17 @@ static std::optional<std::vector<std::byte>> dict_from_options(const sstables::c
 }
 
 std::map<sstring, sstring> zstd_processor::options() const {
-    return {{COMPRESSION_LEVEL, std::to_string(_compression_level)}};
+    std::map<sstring, sstring> result = {{COMPRESSION_LEVEL, std::to_string(_compression_level)}};
+    std::optional<std::span<const std::byte>> dict_blob;
+    if (_cdict) {
+        dict_blob = _cdict->raw();
+    } else if (_ddict) {
+        dict_blob = _ddict->raw();
+    }
+    if (dict_blob) {
+        result.merge(dict_as_options(*dict_blob));
+    }
+    return result;
 }
 
 std::map<sstring, sstring> compressor::options() const {
@@ -879,9 +919,8 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_writ
         co_return compressor::deflate;
     case algorithm::snappy:
         co_return compressor::snappy;
-    case algorithm::zstd: {
-        co_return seastar::make_shared<zstd_processor>(params);
-    }
+    case algorithm::zstd:
+        co_return seastar::make_shared<zstd_processor>(params, nullptr, nullptr);
     case algorithm::none:
         co_return nullptr;
     }
@@ -899,7 +938,7 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_read
     case algorithm::snappy:
         co_return compressor::snappy;
     case algorithm::zstd:
-        co_return seastar::make_shared<zstd_processor>(params);
+        co_return seastar::make_shared<zstd_processor>(params, nullptr, nullptr);
     case algorithm::none:
         co_return nullptr;
     }
