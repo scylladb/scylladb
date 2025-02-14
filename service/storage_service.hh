@@ -330,6 +330,10 @@ public:
         return _abort_source;
     }
 
+    gms::feature_service& get_feature_service() noexcept {
+        return _feature_service;
+    }
+
 private:
     inet_address get_broadcast_address() const noexcept {
         return get_token_metadata_ptr()->get_topology().my_address();

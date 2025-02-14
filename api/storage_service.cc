@@ -14,6 +14,7 @@
 #include "api/scrub_status.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/hash.hh"
 #include <optional>
 #include <sstream>
@@ -29,6 +30,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_service.hh"
 #include "service/load_meter.hh"
+#include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
 #include <seastar/http/exception.hh>
@@ -1420,6 +1422,29 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
 
 static
 future<json::json_return_type>
+rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().sstable_compression_dicts) {
+        apilog.warn("retrain_dict: called before the cluster feature was enabled");
+        throw std::runtime_error("retrain_dict requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
+    }
+    auto ticket = get_units(ss.local().get_do_sample_sstables_concurrency_limiter(), 1);
+    auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
+    auto cf = api::req_param<sstring>(*req, "cf", {}).value;
+    apilog.debug("retrain_dict: called with ks={} cf={}", ks, cf);
+    const auto t_id = ctx.db.local().find_column_family(ks, cf).schema()->id();
+    constexpr uint64_t chunk_size = 4096;
+    constexpr uint64_t n_chunks = 4096;
+    auto sample = co_await ss.local().do_sample_sstables(t_id, chunk_size, n_chunks);
+    apilog.debug("retrain_dict: got sample with {} blocks", sample.size());
+    auto dict = co_await ss.local().train_dict(std::move(sample));
+    apilog.debug("retrain_dict: got dict of size {}", dict.size());
+    co_await ss.local().publish_new_sstable_dict(t_id, dict, group0_client);
+    apilog.debug("retrain_dict: published new dict");
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
 rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
         auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
         auto cf = api::req_param<sstring>(*req, "cf", {}).value;
@@ -1813,6 +1838,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
     ss::get_ownership.set(r, rest_bind(rest_get_ownership, ctx, ss));
     ss::get_effective_ownership.set(r, rest_bind(rest_get_effective_ownership, ctx, ss));
+    ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client));
     ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
     ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
     ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));

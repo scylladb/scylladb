@@ -3028,6 +3028,38 @@
          ]
       },
       {
+         "path":"/storage_service/retrain_dict",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Retrain the SSTable compression dictionary for the target table.",
+               "type":"void",
+               "nickname":"retrain_dict",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"Name of the keyspace containing the target table.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Name of the target table.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/raft_topology/reload",
          "operations":[
             {
