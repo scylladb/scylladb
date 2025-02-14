@@ -322,6 +322,14 @@ public:
         return *_shared_token_metadata.get();
     }
 
+    abort_source& get_abort_source() noexcept {
+        return _abort_source;
+    }
+
+    gms::feature_service& get_feature_service() noexcept {
+        return _feature_service;
+    }
+
 private:
     inet_address get_broadcast_address() const noexcept {
         return get_token_metadata_ptr()->get_topology().my_address();
@@ -998,6 +1006,8 @@ private:
     abort_source _group0_as;
 
     std::function<future<void>(std::string_view)> _compression_dictionary_updated_callback;
+public:
+    std::function<future<std::vector<std::byte>>(std::vector<std::vector<std::byte>>)> _train_dict;
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;

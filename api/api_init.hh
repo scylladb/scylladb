@@ -96,7 +96,7 @@ future<> set_server_config(http_context& ctx, db::config& cfg);
 future<> unset_server_config(http_context& ctx);
 future<> set_server_snitch(http_context& ctx, sharded<locator::snitch_ptr>& snitch);
 future<> unset_server_snitch(http_context& ctx);
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client&);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client&, sharded<db::system_keyspace>&);
 future<> unset_server_storage_service(http_context& ctx);
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader);
 future<> unset_server_sstables_loader(http_context& ctx);

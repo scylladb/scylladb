@@ -14,6 +14,7 @@
 #include "api/scrub_status.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/hash.hh"
 #include <optional>
 #include <sstream>
@@ -1452,6 +1453,55 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
 
 static
 future<json::json_return_type>
+rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sys_ks, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().sstable_compression_dicts) {
+        apilog.warn("retrain_dict: called before the cluster feature was enabled");
+        throw std::runtime_error("retrain_dict requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
+    }
+    auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
+    auto cf = api::req_param<sstring>(*req, "cf", {}).value;
+    apilog.debug("retrain_dict: called with ks={} cf={}", ks, cf);
+    const auto& t = ctx.db.local().find_column_family(ks, cf);
+    const auto t_id = t.schema()->id();
+    auto sample = co_await ss.local().do_sample_sstables(t_id, 4096, 4096);
+    apilog.debug("retrain_dict: got sample with {} blocks", sample.size());
+    co_await ss.invoke_on(0, coroutine::lambda([&sample, &sys_ks, &group0_client, &ctx, t_id] (auto& ss_local) -> future<> {
+        std::vector<std::vector<std::byte>> tmp;
+        for (const auto& s : sample) {
+            auto v = std::as_bytes(std::span(s));
+            tmp.push_back(std::vector<std::byte>(v.begin(), v.end()));
+        }
+        if (!ss_local._train_dict) {
+            on_internal_error(apilog, "retrain_dict: _train_dict not plugged");
+        }
+        auto dict = co_await ss_local._train_dict(std::move(tmp));
+        apilog.debug("retrain_dict: got dict of size {}", dict.size());
+        // Publish the dict to system.dicts.
+        while (true) {
+            try {
+                auto name = fmt::format("sstables/{}", t_id);
+                utils::dict_trainer_logger.debug("retrain_dict: trying to publish the dict as {}", name);
+                auto batch = service::group0_batch(co_await group0_client.start_operation(ss_local.get_abort_source()));
+                auto write_ts = batch.write_timestamp();
+                auto new_dict_ts = db_clock::now();
+                auto data = bytes(reinterpret_cast<const bytes::value_type*>(dict.data()), dict.size());
+                auto this_host_id = ctx.db.local().get_token_metadata().get_topology().get_config().this_host_id;
+                mutation publish_new_dict = co_await sys_ks.local().get_insert_dict_mutation(name, std::move(data), this_host_id, new_dict_ts, write_ts);
+                batch.add_mutation(std::move(publish_new_dict), "publish new SSTable compression dictionary");
+                utils::dict_trainer_logger.debug("retrain_dict: committing");
+                co_await std::move(batch).commit(group0_client, ss_local.get_abort_source(), {});
+                utils::dict_trainer_logger.debug("retrain_dict: finished");
+                break;
+            } catch (const service::group0_concurrent_modification&) {
+                utils::dict_trainer_logger.debug("group0_concurrent_modification in retrain_dict, retrying");
+            }
+        }
+    }));
+    co_return json_void();
+}
+
+static
+future<json::json_return_type>
 rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
         auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
         auto cf = api::req_param<sstring>(*req, "cf", {}).value;
@@ -1779,7 +1829,7 @@ rest_bind(ks_cf_func func, http_context& ctx) {
     return wrap_ks_cf(ctx, func);
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sys_ks) {
     ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
     ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
     ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
@@ -1847,6 +1897,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
     ss::get_ownership.set(r, rest_bind(rest_get_ownership, ctx, ss));
     ss::get_effective_ownership.set(r, rest_bind(rest_get_effective_ownership, ctx, ss));
+    ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client, sys_ks));
     ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
     ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
     ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));

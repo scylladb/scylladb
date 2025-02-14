@@ -1755,11 +1755,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 compression_dict_updated_callback
             ).get();
 
+            ss.local()._train_dict = [&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
+                return rpc_dict_training_worker.submit<std::vector<std::byte>>([sample = std::move(sample)] {
+                    return utils::zdict_train(sample, {});
+                });
+            };
+
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
             });
 
-            api::set_server_storage_service(ctx, ss, group0_client).get();
+            api::set_server_storage_service(ctx, ss, group0_client, sys_ks).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
                 api::unset_server_storage_service(ctx).get();
             });
