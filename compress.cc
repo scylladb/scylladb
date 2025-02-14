@@ -15,10 +15,131 @@
 #include "utils/reusable_buffer.hh"
 #include "sstables/compress.hh"
 #include "sstables/exceptions.hh"
+#include "utils/hashers.hh"
 
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
+#include "sstables/sstable_compressor_factory.hh"
+#include "gms/feature_service.hh"
+#include "seastar/core/metrics.hh"
+#include "seastar/core/sharded.hh"
+
+// SHA256
+using dict_id = std::array<std::byte, 32>;
+class sstable_compressor_factory_impl;
+
+static seastar::logger compressor_factory_logger("compressor_factory");
+
+// Holds a raw dictionary blob (without algorithm-specific hash tables).
+// raw dicts might be used (and kept alive) directly by compressors (in particular, lz4 decompressor)
+// or referenced by algorithm-specific dicts.
+class raw_dict : public enable_lw_shared_from_this<raw_dict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    dict_id _id;
+    std::vector<std::byte> _dict;
+public:
+    raw_dict(sstable_compressor_factory_impl& owner, dict_id key, std::span<const std::byte> dict);
+    ~raw_dict();
+    const std::span<const std::byte> raw() const {
+        return _dict;
+    }
+    dict_id id() const {
+        return _id;
+    }
+    void disown() const noexcept;
+};
+
+// A custom allocator for zstd, so that we can track its memory usage.
+struct zstd_callback_allocator {
+    using callback_type = std::function<void(ssize_t)>;
+    callback_type _callback;
+    using self = zstd_callback_allocator;
+    zstd_callback_allocator(callback_type cb) : _callback(std::move(cb)) {}
+    zstd_callback_allocator(self&&) = delete;
+    ZSTD_customMem as_zstd_custommem() & {
+        return ZSTD_customMem{
+            .customAlloc = [] (void* opaque, size_t n) -> void* {
+                auto addr = malloc(n);
+                static_cast<self*>(opaque)->_callback(static_cast<ssize_t>(malloc_usable_size(addr)));
+                return addr;
+            },
+            .customFree = [] (void* opaque, void* addr) {
+                static_cast<self*>(opaque)->_callback(-malloc_usable_size(addr));
+                free(addr);
+                return;
+            },
+            .opaque = static_cast<void*>(this),
+        };
+    }
+};
+
+// Holds a zstd-specific decompression dictionary
+// (which internally holds a pointer to the raw dictionary blob
+// and parsed entropy tables).
+class zstd_ddict : public enable_lw_shared_from_this<zstd_ddict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    lw_shared_ptr<const raw_dict> _raw;
+    size_t _used_memory = 0;
+    zstd_callback_allocator _alloc;
+    std::unique_ptr<ZSTD_DDict, decltype(&ZSTD_freeDDict)> _dict;
+public:
+    zstd_ddict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw);
+    ~zstd_ddict();
+    void disown() const noexcept;
+    auto dict() const {
+        return _dict.get();
+    }
+    auto raw() const {
+        return _raw->raw();
+    }
+};
+
+// Holds a zstd-specific decompression dictionary
+// (which internally holds a pointer to the raw dictionary blob,
+// indices over the blob, and entropy tables).
+//
+// Note that the index stored inside this dict is level-specific,
+// so the level of compression is decided at the time of construction
+// of this dict.
+class zstd_cdict : public enable_lw_shared_from_this<zstd_cdict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    lw_shared_ptr<const raw_dict> _raw;
+    int _level;
+    size_t _used_memory = 0;
+    zstd_callback_allocator _alloc;
+    std::unique_ptr<ZSTD_CDict, decltype(&ZSTD_freeCDict)> _dict;
+public:
+    zstd_cdict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw, int level);
+    ~zstd_cdict();
+    void disown() const noexcept;
+    auto dict() const {
+        return _dict.get();
+    }
+    auto raw() const {
+        return _raw->raw();
+    }
+};
+
+// Holds a lz4-specific compression dictionary
+// (which internally holds a pointer to the raw dictionary blob,
+// and a hash index over the substrings of the blob).
+//
+class lz4_cdict : public enable_lw_shared_from_this<lz4_cdict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    lw_shared_ptr<const raw_dict> _raw;
+    std::unique_ptr<LZ4_stream_t, decltype(&LZ4_freeStream)> _dict;
+public:
+    lz4_cdict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw);
+    ~lz4_cdict();
+    void disown() const noexcept;
+    auto dict() const {
+        return _dict.get();
+    }
+    auto raw() const {
+        return _raw->raw();
+    }
+};
 
 class lz4_processor: public compressor {
 public:
@@ -531,3 +652,391 @@ size_t snappy_processor::compress_max_size(size_t input_len) const {
     return snappy_max_compressed_length(input_len);
 }
 
+// Constructs compressors and decompressors for SSTables,
+// making sure that the expensive identical parts (dictionaries) are shared
+// across nodes.
+//
+// Holds weak pointers to all live dictionaries
+// (so that they can be cheaply shared with new SSTables if an identical dict is requested),
+// and shared (lifetime-extending) pointers to the current writer ("recommended")
+// dict for each table (so that they can be shared with new SSTables without consulting
+// `system.dicts`).
+//
+// To make coordination work without resorting to std::mutex and such, dicts have owner shards,
+// (and are borrowed by foreign shared pointers) and all requests for a given dict ID go through its owner.
+// (Note: this shouldn't pose a performance problem because a dict is only requested once per an opening of an SSTable).
+// (Note: at the moment of this writing, one shard owns all. Later we can spread the ownership. (E.g. shard it by dict hash)).
+//
+// Whenever a dictionary dies (because its refcount reaches 0), its weak pointer
+// is removed from the factory.
+//
+// Tracks the total memory usage of existing dicts.
+//
+// Has a configurable memory budget for live dicts. If the budget is exceeded,
+// will return null dicts to new writers (to avoid making the memory usage even worse)
+// and print warnings.
+class sstable_compressor_factory_impl : public sstable_compressor_factory {
+    mutable logger::rate_limit budget_warning_rate_limit{std::chrono::minutes(10)};
+    shard_id _owner_shard;
+    config _cfg;
+    uint64_t _total_live_dict_memory = 0;
+    metrics::metric_groups _metrics;
+    struct zstd_cdict_id {
+        dict_id id;
+        int level;
+        std::strong_ordering operator<=>(const zstd_cdict_id&) const = default;
+    };
+    std::map<dict_id, const raw_dict*> _raw_dicts;
+    std::map<zstd_cdict_id, const zstd_cdict*> _zstd_cdicts;
+    std::map<dict_id, const zstd_ddict*> _zstd_ddicts;
+    std::map<dict_id, const lz4_cdict*> _lz4_cdicts;
+    std::map<table_id, lw_shared_ptr<const raw_dict>> _recommended;
+
+    size_t memory_budget() const {
+        return _cfg.memory_fraction_starting_at_which_we_stop_writing_dicts() * seastar::memory::stats().total_memory();
+    }
+    bool memory_budget_exceeded() const {
+        return _total_live_dict_memory >= memory_budget();
+    }
+    void warn_budget_exceeded() const {
+        compressor_factory_logger.log(
+            log_level::warn,
+            budget_warning_rate_limit,
+            "Memory usage by live compression dicts ({} bytes) exceeds configured memory budget ({} bytes). Some new SSTables will fall back to compression without dictionaries.",
+            _total_live_dict_memory,
+            memory_budget()
+        );
+    }
+    lw_shared_ptr<const raw_dict> get_canonical_ptr(std::span<const std::byte> dict) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        auto id = get_sha256(dict);
+        if (auto it = _raw_dicts.find(id); it != _raw_dicts.end()) {
+            return it->second->shared_from_this();
+        } else {
+            auto p = make_lw_shared<const raw_dict>(*this, id, dict);
+            _raw_dicts.emplace(id, p.get());
+            return p;
+        }
+    }
+    using foreign_zstd_ddict = foreign_ptr<lw_shared_ptr<const zstd_ddict>>;
+    foreign_zstd_ddict get_zstd_dict_for_reading(lw_shared_ptr<const raw_dict> raw, int level) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        lw_shared_ptr<const zstd_ddict> ddict;
+        // Fo reading, we must allocate a new dict, even if memory budget is exceeded. We have no other choice.
+        // In any case, if the budget is exceeded after we print a rate-limited warning about it.
+        if (auto it = _zstd_ddicts.find(raw->id()); it != _zstd_ddicts.end()) {
+            ddict = it->second->shared_from_this();
+        } else {
+            ddict = make_lw_shared<zstd_ddict>(*this, raw);
+            _zstd_ddicts.emplace(raw->id(), ddict.get());
+        }
+        if (memory_budget_exceeded()) {
+            warn_budget_exceeded();
+        }
+        return make_foreign(std::move(ddict));
+    }
+    future<foreign_zstd_ddict> get_zstd_dict_for_reading(std::span<const std::byte> dict, int level) {
+        return smp::submit_to(_owner_shard, [this, dict, level] -> foreign_zstd_ddict {
+            auto raw = get_canonical_ptr(dict);
+            return get_zstd_dict_for_reading(raw, level);
+        });
+    }
+    using foreign_zstd_cdict = foreign_ptr<lw_shared_ptr<const zstd_cdict>>;
+    foreign_zstd_cdict get_zstd_dict_for_writing(lw_shared_ptr<const raw_dict> raw, int level) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        lw_shared_ptr<const zstd_cdict> cdict;
+        // If we can share an already-allocated dict, we do that regardless of memory budget.
+        // If we would have to allocate a new dict for writing, we only do that if we haven't exceeded
+        // the budget yet. Otherwise we return null.
+        if (auto it = _zstd_cdicts.find({raw->id(), level}); it != _zstd_cdicts.end()) {
+            cdict = it->second->shared_from_this();
+        } else if (memory_budget_exceeded()) {
+            warn_budget_exceeded();
+        } else {
+            cdict = make_lw_shared<zstd_cdict>(*this, raw, level);
+            _zstd_cdicts.emplace(zstd_cdict_id{raw->id(), level}, cdict.get());
+        }
+        return make_foreign(std::move(cdict));
+    }
+    future<foreign_zstd_cdict> get_zstd_dict_for_writing(table_id t, int level) {
+        return smp::submit_to(_owner_shard, [this, t, level] -> foreign_zstd_cdict {
+            if (!_cfg.enable_writing_dictionaries()) {
+                return {};
+            }
+            auto rec_it = _recommended.find(t);
+            if (rec_it != _recommended.end()) {
+                return get_zstd_dict_for_writing(rec_it->second, level);
+            } else {
+                return {};
+            }
+        });
+    }
+    using lz4_dicts = std::pair<
+        foreign_ptr<lw_shared_ptr<const raw_dict>>,
+        foreign_ptr<lw_shared_ptr<const lz4_cdict>>
+    >;
+    using foreign_lz4_ddict = foreign_ptr<lw_shared_ptr<const raw_dict>>;
+    using foreign_lz4_cdict = foreign_ptr<lw_shared_ptr<const lz4_cdict>>;
+    foreign_lz4_ddict get_lz4_dict_for_reading(lw_shared_ptr<const raw_dict> raw) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        lw_shared_ptr<const raw_dict> ddict;
+        return make_foreign(std::move(raw));
+    }
+    future<foreign_lz4_ddict> get_lz4_dicts_for_reading(std::span<const std::byte> dict) {
+        return smp::submit_to(_owner_shard, [this, dict] -> foreign_lz4_ddict {
+            auto raw = get_canonical_ptr(dict);
+            return get_lz4_dict_for_reading(raw);
+        });
+    }
+    foreign_lz4_cdict get_lz4_dict_for_writing(lw_shared_ptr<const raw_dict> raw) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        lw_shared_ptr<const lz4_cdict> cdict;
+        // If we can share an already-allocated dict, we do that regardless of memory budget.
+        // If we would have to allocate a new dict for writing, we only do that if we haven't exceeded
+        // the budget yet. Otherwise we return null.
+        if (auto it = _lz4_cdicts.find(raw->id()); it != _lz4_cdicts.end()) {
+            cdict = it->second->shared_from_this();
+        } else if (memory_budget_exceeded()) {
+            warn_budget_exceeded();
+        } else {
+            cdict = make_lw_shared<lz4_cdict>(*this, raw);
+            _lz4_cdicts.emplace(raw->id(), cdict.get());
+        }
+        return make_foreign(std::move(cdict));
+    }
+    future<foreign_lz4_cdict> get_lz4_dicts_for_writing(table_id t) {
+        return smp::submit_to(_owner_shard, [this, t] -> foreign_lz4_cdict {
+            if (!_cfg.enable_writing_dictionaries()) {
+                return {};
+            }
+            auto rec_it = _recommended.find(t);
+            if (rec_it != _recommended.end()) {
+                return get_lz4_dict_for_writing(rec_it->second);
+            } else {
+                return {};
+            }
+        });
+    }
+
+public:
+    sstable_compressor_factory_impl(config cfg)
+        : _owner_shard(this_shard_id())
+        , _cfg(std::move(cfg))
+    {
+        if (_cfg.register_metrics) {
+            namespace sm = seastar::metrics;
+            _metrics.add_group("sstable_compression_dicts", {
+                sm::make_counter("total_live_memory_bytes", _total_live_dict_memory, sm::description("Total amount of memory consumed by SSTable compression dictionaries in RAM")),
+            });
+        }
+    }
+    sstable_compressor_factory_impl(sstable_compressor_factory_impl&&) = delete;
+    ~sstable_compressor_factory_impl() {
+        // The factory is only needed for creating compressors, but the compressors are allowed to outlive it.
+        // Therefore we need to detach all compressors from the factory.
+        for (auto& [k, v] : _raw_dicts) {
+            v->disown();
+        }
+        _raw_dicts.clear();
+        for (auto& [k, v] : _zstd_cdicts) {
+            v->disown();
+        }
+        _zstd_cdicts.clear();
+        for (auto& [k, v] : _zstd_ddicts) {
+            v->disown();
+        }
+        _zstd_ddicts.clear();
+        for (auto& [k, v] : _lz4_cdicts) {
+            v->disown();
+        }
+        _lz4_cdicts.clear();
+    }
+    void forget_raw_dict(dict_id id) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _raw_dicts.erase(id);
+    }
+    void forget_zstd_cdict(dict_id id, int level) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _zstd_cdicts.erase({id, level});
+    }
+    void forget_zstd_ddict(dict_id id) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _zstd_ddicts.erase(id);
+    }
+    void forget_lz4_cdict(dict_id id) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _lz4_cdicts.erase(id);
+    }
+    future<> set_recommended_dict(table_id t, std::span<const std::byte> dict) override {
+        return smp::submit_to(_owner_shard, [this, t, dict] {
+            _recommended.erase(t);
+            if (dict.size()) {
+                auto canonical_ptr = get_canonical_ptr(dict);
+                _recommended.emplace(t, canonical_ptr);
+            }
+        });
+    }
+    future<compressor_ptr> make_compressor_for_writing(schema_ptr) override;
+    future<compressor_ptr> make_compressor_for_reading(sstables::compression&) override;
+
+    void account_memory_delta(ssize_t n) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _total_live_dict_memory += n;
+    }
+};
+
+
+future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_writing(schema_ptr s) {
+    auto params = s->get_compressor_params();
+    using algorithm = compression_parameters::algorithm;
+    switch (params.get_algorithm()) {
+    case algorithm::lz4:
+        co_return compressor::lz4;
+    case algorithm::deflate:
+        co_return compressor::deflate;
+    case algorithm::snappy:
+        co_return compressor::snappy;
+    case algorithm::zstd: {
+        co_return seastar::make_shared<zstd_processor>(params);
+    }
+    case algorithm::none:
+        co_return nullptr;
+    }
+    abort();
+}
+
+future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_reading(sstables::compression& c) {
+    auto params = compression_parameters(sstables::options_from_compression(c));
+    using algorithm = compression_parameters::algorithm;
+    switch (params.get_algorithm()) {
+    case algorithm::lz4:
+        co_return compressor::lz4;
+    case algorithm::deflate:
+        co_return compressor::deflate;
+    case algorithm::snappy:
+        co_return compressor::snappy;
+    case algorithm::zstd:
+        co_return seastar::make_shared<zstd_processor>(params);
+    case algorithm::none:
+        co_return nullptr;
+    }
+}
+
+raw_dict::raw_dict(sstable_compressor_factory_impl& owner, dict_id key, std::span<const std::byte> dict)
+    : _owner(&owner)
+    , _id(key)
+    , _dict(dict.begin(), dict.end())
+{
+    _owner->account_memory_delta(malloc_usable_size(const_cast<std::byte*>(_dict.data())));
+}
+
+raw_dict::~raw_dict() {
+    if (_owner) {
+        disown();
+    }
+}
+
+void raw_dict::disown() const noexcept {
+    _owner->forget_raw_dict(_id);
+    _owner->account_memory_delta(-malloc_usable_size(const_cast<std::byte*>(_dict.data())));
+    _owner = nullptr;
+}
+
+zstd_cdict::zstd_cdict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw, int level)
+    : _owner(&owner)
+    , _raw(raw)
+    , _level(level)
+    , _alloc([this] (ssize_t n) {
+        _used_memory += n;
+        if (_owner) {
+            _owner->account_memory_delta(n);
+        }})
+    , _dict(
+        ZSTD_createCDict_advanced(
+            _raw->raw().data(),
+            _raw->raw().size(),
+            ZSTD_dlm_byRef,
+            ZSTD_dct_auto,
+            ZSTD_getCParams(level, 4096, _raw->raw().size()),
+            _alloc.as_zstd_custommem()),
+        ZSTD_freeCDict)
+{
+    if (!_dict) {
+        throw std::bad_alloc();
+    }
+}
+
+
+zstd_cdict::~zstd_cdict() {
+    if (_owner) {
+        disown();
+    }
+}
+
+void zstd_cdict::disown() const noexcept {
+    _owner->forget_zstd_cdict(_raw->id(), _level);
+    _owner->account_memory_delta(-_used_memory);
+    _owner = nullptr;
+}
+
+zstd_ddict::zstd_ddict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw)
+    : _owner(&owner)
+    , _raw(raw)
+    , _alloc([this] (ssize_t n) {
+        _used_memory += n;
+        if (_owner) {
+            _owner->account_memory_delta(n);
+        }})
+    , _dict(
+        ZSTD_createDDict_advanced(
+            _raw->raw().data(),
+            _raw->raw().size(),
+            ZSTD_dlm_byRef,
+            ZSTD_dct_auto,
+            _alloc.as_zstd_custommem()),
+        ZSTD_freeDDict)
+{
+    if (!_dict) {
+        throw std::bad_alloc();
+    }
+}
+
+zstd_ddict::~zstd_ddict() {
+    if (_owner) {
+        disown();
+    }
+}
+
+void zstd_ddict::disown() const noexcept {
+    _owner->forget_zstd_ddict(_raw->id());
+    _owner->account_memory_delta(-_used_memory);
+    _owner = nullptr;
+}
+
+lz4_cdict::lz4_cdict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw)
+    : _owner(&owner)
+    , _raw(raw)
+    , _dict(LZ4_createStream(), LZ4_freeStream)
+{
+    if (!_dict) {
+        throw std::bad_alloc();
+    }
+    LZ4_loadDictSlow(_dict.get(), reinterpret_cast<const char*>(_raw->raw().data()), _raw->raw().size());
+    _owner->account_memory_delta(malloc_usable_size(_dict.get()));
+}
+
+lz4_cdict::~lz4_cdict() {
+    if (_owner) {
+        disown();
+    }
+}
+
+void lz4_cdict::disown() const noexcept {
+    _owner->account_memory_delta(-malloc_usable_size(_dict.get()));
+    _owner->forget_lz4_cdict(_raw->id());
+    _owner = nullptr;
+}
+
+std::unique_ptr<sstable_compressor_factory> make_sstable_compressor_factory(sstable_compressor_factory::config cfg) {
+    return std::make_unique<sstable_compressor_factory_impl>(std::move(cfg));
+}
