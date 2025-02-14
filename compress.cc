@@ -303,23 +303,6 @@ std::map<sstring, sstring> compressor::options() const {
     return {};
 }
 
-compressor_ptr compressor::create(const compression_parameters& params) {
-    using algorithm = compression_parameters::algorithm;
-    switch (params.get_algorithm()) {
-    case algorithm::lz4:
-        return lz4;
-    case algorithm::deflate:
-        return deflate;
-    case algorithm::snappy:
-        return snappy;
-    case algorithm::zstd: {
-        return seastar::make_shared<zstd_processor>(params);
-    }
-    case algorithm::none:
-        return nullptr;
-    }
-}
-
 thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>(make_name("LZ4Compressor"));
 thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>(make_name("SnappyCompressor"));
 thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>(make_name("DeflateCompressor"));
