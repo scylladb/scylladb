@@ -7,7 +7,7 @@
  */
 
 #include "replica/database.hh"
-#include "repair/table_check.hh"
+#include "streaming/table_check.hh"
 #include "service/migration_manager.hh"
 
 namespace repair {
