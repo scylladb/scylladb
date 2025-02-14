@@ -34,7 +34,11 @@ struct stream_progress {
     float completed = 0.;
 
     virtual ~stream_progress() = default;
-
+    stream_progress& operator+=(const stream_progress& p) {
+        total += p.total;
+        completed += p.completed;
+        return *this;
+    }
     void start(float amount) {
         assert(amount >= 0);
         total = amount;

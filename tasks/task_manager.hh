@@ -213,7 +213,9 @@ public:
             virtual void abort() noexcept;
             bool is_complete() const noexcept;
             bool is_done() const noexcept;
-            virtual void release_resources() noexcept {}
+            virtual future<> release_resources() noexcept {
+                return make_ready_future();
+            }
             future<std::vector<task_essentials>> get_failed_children() const;
             void set_virtual_parent() noexcept;
         protected:
