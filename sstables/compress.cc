@@ -236,6 +236,20 @@ void compression::set_compressor(compressor_ptr c) {
     _compressor = std::move(c);
 }
 
+void compression::discard_hidden_options() {
+    auto is_hidden_option = [] (const option& o) -> bool {
+        auto k_str = std::string_view(reinterpret_cast<const char*>(o.key.value.data()), o.key.value.size());
+        return compressor::is_hidden_option_name(k_str);
+    };
+    decltype(options) filtered_options;
+    for (auto& e : options.elements) {
+        if (!is_hidden_option(e)) {
+            filtered_options.elements.emplace_back(std::move(e));
+        }
+    }
+    options = std::move(filtered_options);
+}
+
 compressor& compression::get_compressor() const {
     SCYLLA_ASSERT(_compressor);
     return *_compressor.get();

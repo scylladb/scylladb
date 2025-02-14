@@ -1055,6 +1055,7 @@ future<> sstable::read_compression() {
     co_await read_simple<component_type::CompressionInfo>(_components->compression);
     auto compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
     _components->compression.set_compressor(std::move(compressor));
+    _components->compression.discard_hidden_options();
 }
 
 void sstable::write_compression() {
