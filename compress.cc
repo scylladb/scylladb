@@ -352,10 +352,6 @@ std::map<sstring, sstring> compressor::options() const {
     return {};
 }
 
-thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>();
-thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>();
-thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>();
-
 const sstring compression_parameters::SSTABLE_COMPRESSION = "sstable_compression";
 const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_in_kb";
 const sstring compression_parameters::CHUNK_LENGTH_KB_ERR = "chunk_length_kb";
@@ -582,6 +578,10 @@ std::map<sstring, sstring> lz4_processor::options() const {
 
 std::string_view lz4_processor::name() const {
     return compression_parameters::algorithm_to_name(compression_parameters::algorithm::lz4);
+}
+
+compressor_ptr make_lz4_sstable_compressor_for_tests() {
+    return std::make_unique<lz4_processor>();
 }
 
 size_t deflate_processor::uncompress(const char* input,
@@ -847,15 +847,15 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_writ
     switch (params.get_algorithm()) {
     case algorithm::lz4: {
         auto [ddict, cdict] = co_await get_lz4_dicts(s->id());
-        co_return seastar::make_shared<lz4_processor>(std::move(cdict), std::move(ddict));
+        co_return std::make_unique<lz4_processor>(std::move(cdict), std::move(ddict));
     }
     case algorithm::deflate:
-        co_return compressor::deflate;
+        co_return std::make_unique<deflate_processor>();
     case algorithm::snappy:
-        co_return compressor::snappy;
+        co_return std::make_unique<snappy_processor>();
     case algorithm::zstd: {
         auto [ddict, cdict] = co_await get_zstd_dicts(s->id(), params.zstd_compression_level().value_or(ZSTD_defaultCLevel()));
-        co_return seastar::make_shared<zstd_processor>(params, std::move(cdict), std::move(ddict));
+        co_return std::make_unique<zstd_processor>(params, std::move(cdict), std::move(ddict));
     }
     case algorithm::none:
         co_return nullptr;
@@ -872,22 +872,22 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_read
     case algorithm::lz4: {
         if (dict) {
             auto [ddict, cdict] = co_await get_lz4_dicts(std::as_bytes(std::span(*dict)));
-            co_return seastar::make_shared<lz4_processor>(std::move(cdict), std::move(ddict));
+            co_return std::make_unique<lz4_processor>(std::move(cdict), std::move(ddict));
         } else {
-            co_return seastar::make_shared<lz4_processor>(nullptr, nullptr);
+            co_return std::make_unique<lz4_processor>(nullptr, nullptr);
         }
     }
     case algorithm::deflate:
-        co_return compressor::deflate;
+        co_return std::make_unique<deflate_processor>();
     case algorithm::snappy:
-        co_return compressor::snappy;
+        co_return std::make_unique<snappy_processor>();
     case algorithm::zstd: {
         if (dict) {
             auto level = params.zstd_compression_level().value_or(ZSTD_defaultCLevel());
             auto [ddict, cdict] = co_await get_zstd_dicts(std::as_bytes(std::span(*dict)), level);
-            co_return seastar::make_shared<zstd_processor>(params, std::move(cdict), std::move(ddict));
+            co_return std::make_unique<zstd_processor>(params, std::move(cdict), std::move(ddict));
         } else {
-            co_return seastar::make_shared<zstd_processor>(params, nullptr, nullptr);
+            co_return std::make_unique<zstd_processor>(params, nullptr, nullptr);
         }
         break;
     }
