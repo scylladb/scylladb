@@ -44,6 +44,7 @@ class dictionary_service {
     void maybe_toggle_dict_training();
     future<> publish_dict(utils::dict_sampler::dict_type);
 public:
+    constexpr static std::string_view rpc_compression_dict_name = "general";
     // This template trick forces the user of `config` to initialize all fields explicitly.
     template <typename Uninitialized = void>
     struct config {

@@ -3461,17 +3461,17 @@ future<system_keyspace::topology_requests_entries> system_keyspace::get_node_ops
 }
 
 future<mutation> system_keyspace::get_insert_dict_mutation(
+    std::string_view name,
     bytes data,
     locator::host_id host_id,
     db_clock::time_point dict_ts,
     api::timestamp_type write_ts
 ) const {
-    const char* dict_name = "general";
-    slogger.debug("Publishing new compression dictionary: {} {} {}", dict_name, dict_ts, host_id);
+    slogger.debug("Publishing new compression dictionary: {} {} {}", name, dict_ts, host_id);
 
     static sstring insert_new = format("INSERT INTO {}.{} (name, timestamp, origin, data) VALUES (?, ?, ?, ?);", NAME, DICTS);
     auto muts = co_await _qp.get_mutations_internal(insert_new, internal_system_query_state(), write_ts, {
-        data_value(dict_name),
+        data_value(name),
         data_value(dict_ts),
         data_value(host_id.uuid()),
         data_value(std::move(data)),
@@ -3493,10 +3493,10 @@ future<std::vector<sstring>> system_keyspace::query_all_dict_names() const {
     co_return result;
 }
 
-future<utils::shared_dict> system_keyspace::query_dict() const {
+future<utils::shared_dict> system_keyspace::query_dict(std::string_view name) const {
     static sstring query = format("SELECT * FROM {}.{} WHERE name = ?;", NAME, DICTS);
     auto result_set = co_await _qp.execute_internal(
-        query, db::consistency_level::ONE, internal_system_query_state(), {"general"}, cql3::query_processor::cache_internal::yes);
+        query, db::consistency_level::ONE, internal_system_query_state(), {name}, cql3::query_processor::cache_internal::yes);
     if (!result_set->empty()) {
         auto &&row = result_set->one();
         auto content = row.get_as<bytes>("data");
