@@ -11,6 +11,7 @@
 #include <seastar/core/abort_source.hh>
 
 #include "data_dictionary/data_dictionary.hh"
+#include "keys.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "service/raft/group0_state_id_handler.hh"
@@ -94,9 +95,11 @@ struct group0_command {
 // NOTE: group 0 raft server is always instantiated on shard 0.
 class group0_state_machine : public raft_state_machine {
     struct modules_to_reload {
-        bool service_levels_cache = false;
-        bool service_levels_effective_cache = false;
-        bool compression_dictionary = false;
+        struct entry {
+            partition_key pk;
+            table_id table;
+        };
+        std::vector<entry> entries;
     };
 
     raft_group0_client& _client;

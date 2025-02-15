@@ -664,6 +664,7 @@ public:
             bytes dict, locator::host_id self, db_clock::time_point dict_ts, api::timestamp_type write_ts) const;
     // Queries `dicts` for the most recent compression dictionary.
     future<utils::shared_dict> query_dict() const;
+    future<std::vector<sstring>> query_all_dict_names() const;
 
 private:
     static std::optional<service::topology_features> decode_topology_features_state(::shared_ptr<cql3::untyped_result_set> rs);
