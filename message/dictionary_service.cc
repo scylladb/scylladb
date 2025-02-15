@@ -80,7 +80,7 @@ future<> dictionary_service::publish_dict(utils::dict_sampler::dict_type d) {
             auto write_ts = batch.write_timestamp();
             auto new_dict_ts = db_clock::now();
             auto data = bytes(reinterpret_cast<const bytes::value_type*>(d.data()), d.size());
-            mutation publish_new_dict = co_await _sys_ks.get_insert_dict_mutation(std::move(data), _our_host_id, new_dict_ts, write_ts);
+            mutation publish_new_dict = co_await _sys_ks.get_insert_dict_mutation(rpc_compression_dict_name, std::move(data), _our_host_id, new_dict_ts, write_ts);
             batch.add_mutation(std::move(publish_new_dict), "publish new compression dictionary");
             utils::dict_trainer_logger.debug("dictionary_service::publish_dict(), committing");
             co_await std::move(batch).commit(_raft_group0_client, _as, {});

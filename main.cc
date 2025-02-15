@@ -1702,7 +1702,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
 
             auto compression_dict_updated_callback = [] (std::string_view) -> future<> {
-                auto dict = co_await sys_ks.local().query_dict();
+                auto dict = co_await sys_ks.local().query_dict(dictionary_service::rpc_compression_dict_name);
                 co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
             };
 
