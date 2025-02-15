@@ -3482,6 +3482,17 @@ future<mutation> system_keyspace::get_insert_dict_mutation(
     co_return std::move(muts[0]);
 }
 
+future<std::vector<sstring>> system_keyspace::query_all_dict_names() const {
+    std::vector<sstring> result;
+    sstring query = format("SELECT name from {}.{}", NAME, DICTS);
+    auto rs = co_await _qp.execute_internal(
+        query, db::consistency_level::ONE, internal_system_query_state(), {}, cql3::query_processor::cache_internal::yes);
+    for (const auto& row : *rs) {
+        result.push_back(row.get_as<sstring>("name"));
+    }
+    co_return result;
+}
+
 future<utils::shared_dict> system_keyspace::query_dict() const {
     static sstring query = format("SELECT * FROM {}.{} WHERE name = ?;", NAME, DICTS);
     auto result_set = co_await _qp.execute_internal(

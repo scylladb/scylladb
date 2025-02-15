@@ -242,7 +242,7 @@ public:
         topology_state_machine& topology_state_machine,
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
-        std::function<future<void>()> compression_dictionary_updated_callback,
+        std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
         utils::disk_space_monitor* disk_space_minitor);
     ~storage_service();
 
@@ -908,7 +908,8 @@ public:
     // but its intended usage is to set up the RPC connections to use the new dictionaries.
     //
     // Must be called on shard 0.
-    future<> compression_dictionary_updated_callback();
+    future<> compression_dictionary_updated_callback(std::string_view name);
+    future<> compression_dictionary_updated_callback_all();
 
     future<> do_cluster_cleanup();
 
@@ -998,7 +999,7 @@ private:
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;
 
-    std::function<future<void>()> _compression_dictionary_updated_callback;
+    std::function<future<void>(std::string_view)> _compression_dictionary_updated_callback;
 
     utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 

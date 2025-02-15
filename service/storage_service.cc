@@ -185,7 +185,7 @@ storage_service::storage_service(abort_source& abort_source,
     topology_state_machine& topology_state_machine,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
-    std::function<future<void>()> compression_dictionary_updated_callback,
+    std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
     utils::disk_space_monitor* disk_space_monitor
     )
         : _abort_source(abort_source)
@@ -890,9 +890,16 @@ future<> storage_service::update_service_levels_cache(qos::update_both_cache_lev
     co_await _sl_controller.local().update_cache(update_only_effective_cache, ctx);
 }
 
-future<> storage_service::compression_dictionary_updated_callback() {
+future<> storage_service::compression_dictionary_updated_callback_all() {
+    auto all_dict_names = co_await _sys_ks.local().query_all_dict_names();
+    for (const auto& x : all_dict_names) {
+        co_await _compression_dictionary_updated_callback(x);
+    }
+}
+
+future<> storage_service::compression_dictionary_updated_callback(std::string_view name) {
     assert(this_shard_id() == 0);
-    return _compression_dictionary_updated_callback();
+    return _compression_dictionary_updated_callback(name);
 }
 
 // Moves the coroutine lambda onto the heap and extends its
