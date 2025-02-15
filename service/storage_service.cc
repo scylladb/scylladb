@@ -4780,6 +4780,77 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
+    return _do_sample_sstables_concurrency_limiter;
+}
+
+future<utils::chunked_vector<bytes>> storage_service::do_sample_sstables(table_id t, uint64_t chunk_size, uint64_t n_chunks) {
+    uint64_t max_chunks_per_round = 16 * 1024 * 1024 / chunk_size;
+    uint64_t chunks_done = 0;
+    auto result = utils::chunked_vector<bytes>();
+    result.reserve(n_chunks);
+    while (chunks_done < n_chunks) {
+        auto chunks_this_round = std::min(max_chunks_per_round, n_chunks - chunks_done);
+        auto round_result = co_await do_sample_sstables_oneshot(t, chunk_size, chunks_this_round);
+        std::move(round_result.begin(), round_result.end(), std::back_inserter(result));
+        if (round_result.size() < chunks_this_round) {
+            break;
+        }
+        chunks_done += chunks_this_round;
+    }
+    co_return result;
+}
+
+future<utils::chunked_vector<bytes>> storage_service::do_sample_sstables_oneshot(table_id t, uint64_t chunk_size, uint64_t n_chunks) {
+    slogger.debug("do_sample_sstables(): called with table_id={} chunk_size={} n_chunks={}", t, chunk_size, n_chunks);
+    auto& db = _db.local();
+    auto& ms = _messaging.local();
+    std::unordered_map<locator::host_id, uint64_t> estimated_sizes;
+    co_await coroutine::parallel_for_each(
+        db.get_token_metadata().get_host_ids(),
+        [&] (auto h) -> future<> {
+            auto est = co_await ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&ms, h, t);
+            if (est) {
+                estimated_sizes.emplace(h, est);
+            }
+        }
+    );
+    const auto total_size = std::ranges::fold_left(estimated_sizes | std::ranges::views::values, uint64_t(0), std::plus());
+    slogger.debug("do_sample_sstables(): estimate_sstable_volume returned {}, total={}", estimated_sizes, total_size);
+    std::unordered_map<locator::host_id, uint64_t> chunks_per_host;
+    {
+        uint64_t partial_sum = 0;
+        uint64_t covered_samples = 0;
+        for (const auto& [k, v] : estimated_sizes) {
+            partial_sum += v;
+            uint64_t next_covered = static_cast<double>(partial_sum) / total_size * n_chunks;
+            chunks_per_host.emplace(k, next_covered - covered_samples);
+            covered_samples = next_covered;
+        }
+
+        // Just a sanity check
+        auto covered = std::ranges::fold_left(chunks_per_host | std::ranges::views::values, uint64_t(0), std::plus());
+        if (total_size > 0 && covered != n_chunks) {
+            on_internal_error(slogger, "do_sample_sstables(): something went wrong with the sample distribution algorithm");
+        }
+    }
+    slogger.debug("do_sample_sstables(): sending out send_sample_sstables with proportions {}", chunks_per_host);
+    auto samples = co_await seastar::map_reduce(
+        chunks_per_host,
+        [&] (std::pair<locator::host_id, uint64_t> h_s) -> future<utils::chunked_vector<bytes>> {
+            const auto& [h, sz] = h_s;
+            return ser::storage_service_rpc_verbs::send_sample_sstables(&ms, h, t, chunk_size, sz);
+        },
+        utils::chunked_vector<bytes>(),
+        [] (auto v, auto some_samples) {
+            std::ranges::move(some_samples, std::back_inserter(v));
+            return v;
+        }
+    );
+    slogger.debug("do_sample_sstables(): returned {} chunks", samples.size());
+    co_return samples;
+}
+
 future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
     auto& raft_server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
