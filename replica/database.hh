@@ -1957,6 +1957,24 @@ public:
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`
     //   must contain a complete list of racks and data centers in the cluster.
     void check_rf_rack_validity(const locator::token_metadata_ptr) const;
+private:
+    // SSTable sampling might require considerable amounts of memory,
+    // so we want to limit the number of concurrent sampling operations.
+    //
+    // The `sharded` semaphore serializes the number of SSTable sampling operations
+    // for which this shard is the coordinator.
+    // The `local` semaphore serializes the number of SSTable sampling operations
+    // in which this shard is a participant.
+    size_t _memory_for_data_file_samples = 16*1024*1024;
+    semaphore _sample_data_files_memory_limiter{_memory_for_data_file_samples};
+    semaphore _sample_data_files_local_concurrency_limiter{1};
+public:
+    // Returns a vector of file chunks randomly sampled from all Data.db files of this table.
+    future<utils::chunked_vector<temporary_buffer<char>>> sample_data_files(
+        table_id id,
+        uint64_t chunk_size,
+        uint64_t n_chunks
+    );
 };
 
 // A helper function to parse the directory name back
