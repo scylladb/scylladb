@@ -875,7 +875,7 @@ private:
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
-            auto compression_dict_updated_callback = [] { return make_ready_future<>(); };
+            auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
 
             _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
 
