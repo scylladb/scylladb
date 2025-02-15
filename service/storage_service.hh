@@ -955,6 +955,19 @@ public:
     future<> wait_for_topology_not_busy();
 
 private:
+    semaphore _do_sample_sstables_concurrency_limiter{1};
+    // To avoid overly-large RPC messages, `do_sample_sstables` is broken up into several rounds.
+    // This implements a single round.
+    future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables_oneshot(table_id, uint64_t chunk_size, uint64_t n_chunks);
+public:
+    // SSTable sampling results can occupy a considerable amount of memory.
+    // Callers of `do_sample_sstables` should hold this semaphore until they are done with the sample,
+    // to ensure that there's only one sample around.
+    semaphore& get_do_sample_sstables_concurrency_limiter();
+    // Gathers a randomly-selected sample of chunks of (decompressed) Data files for the given table,
+    // from across the entire cluster.
+    future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables(table_id, uint64_t chunk_size, uint64_t n_chunks);
+private:
     future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
