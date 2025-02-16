@@ -59,6 +59,7 @@ public:
     class consumer;
 private:
     future<> build_views_range(table_id base_id, dht::token_range range, std::vector<table_id> views);
+    future<> register_staging_sstables(table_id base_id, dht::token_range_vector ranges);
 
     future<> start_staging_detector();
     future<> detect_staging_sstables();
