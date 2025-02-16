@@ -2863,57 +2863,6 @@ public:
         }
     };
 
-    class sibling_tablets_replicas_processor {
-        const tablet_desc _t1;
-        const std::optional<tablet_desc> _t2;
-        tablet_replica_set _t1_replicas;
-        tablet_replica_set _t2_replicas;
-        tablet_replica_set::iterator _current_t1;
-        tablet_replica_set::iterator _current_t2;
-    public:
-        sibling_tablets_replicas_processor(const tablet_desc t1, const std::optional<tablet_desc> t2,
-                                           tablet_replica_set t1_replicas, tablet_replica_set t2_replicas)
-            : _t1(std::move(t1))
-            , _t2(std::move(t2))
-            , _t1_replicas(std::move(t1_replicas))
-            , _t2_replicas(std::move(t2_replicas))
-            , _current_t1(_t1_replicas.begin())
-            , _current_t2(_t2_replicas.begin()) {
-        }
-
-        using tablet_ids = utils::small_vector<tablet_id, 2>;
-
-        // Produces the next replica from sets of sibling tablets. If a given replica has
-        // the sibling tablets co-located in it, the ids of both tablets will be returned
-        // for that replica.
-        // Given replica sets of sibling tablets:
-        //  t1 {A, B, C},
-        //  t2 {A, C, D},
-        // it will yield
-        //  {A, {t1, t2}}, {B, {t1}}, {C, {t1, t2}}, {D, {t2}}
-        // Invariant: if return value is engaged, size of tablet_ids will be 1 or 2.
-        std::optional<std::pair<tablet_replica, tablet_ids>> next_replica() {
-            if (_current_t1 == _t1_replicas.end() && _current_t2 == _t2_replicas.end()) {
-                return std::nullopt;
-            }
-            if (_current_t1 == _t1_replicas.end()) {
-                return std::make_pair(*_current_t2++, tablet_ids{_t2->tid});
-            }
-            if (_current_t2 == _t2_replicas.end()) {
-                return std::make_pair(*_current_t1++, tablet_ids{_t1.tid});
-            }
-            // Detect co-located replicas of sibling tablets.
-            if (*_current_t1 == *_current_t2) {
-                _current_t1++;
-                return std::make_pair(*_current_t2++, tablet_ids{_t1.tid, _t2->tid});
-            }
-            if (*_current_t1 < *_current_t2) {
-                return std::make_pair(*_current_t1++, tablet_ids{_t1.tid});
-            }
-            return std::make_pair(*_current_t2++, tablet_ids{_t2->tid});
-        }
-    };
-
     void for_each_table_group(seastar::noncopyable_function<void(const table_group&, table_group_processor)> func) {
         for (const auto& table_ids : _table_grouping.groups()) {
             func(table_ids, table_group_processor(_tm->tablets(), table_ids));
