@@ -1700,7 +1700,7 @@ public:
         co_return *best_candidate;
     }
 
-    void erase_candidate(shard_load& shard_info, migration_tablet_set tablets) {
+    void erase_candidate(shard_load& shard_info, const migration_tablet_set& tablets) {
         if (_use_table_aware_balancing) {
             auto table = tablets.table();
             shard_info.candidates[table].erase(tablets);
@@ -1712,29 +1712,31 @@ public:
         }
     }
 
-    void maybe_erase_colocated_candidate(shard_load& shard_info, const tablet_map& tmap, global_tablet_id tablet) {
-        if (!tmap.needs_merge()) {
-            return;
-        }
-        auto siblings = tmap.sibling_tablets(tablet.tablet);
-        if (!siblings) {
-            on_internal_error(lblogger, format("Unable to find sibling tablet of {} during merge", tablet));
-        }
-        auto left_sibling = global_tablet_id{tablet.table, siblings->first};
-        auto right_sibling = global_tablet_id{tablet.table, siblings->second};
-        erase_candidate(shard_info, migration_tablet_set{sibling_tablets{left_sibling, right_sibling}});
-    }
-
     void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
         for (auto tablet : tablets.tablets()) {
             auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
             for (auto&& r : src_tinfo.replicas) {
                 if (nodes.contains(r.host)) {
                     lblogger.trace("Erasing tablet {} from {}", tablet, r);
-                    // Not necessarily all replicas of sibling tablets are co-located, and so we need to
-                    // remove them from candidate list using global_tablet_id.
-                    erase_candidate(nodes[r.host].shards[r.shard], migration_tablet_set{tablet});
-                    maybe_erase_colocated_candidate(nodes[r.host].shards[r.shard], tmap, tablet);
+
+                    auto& shard_info = nodes[r.host].shards[r.shard];
+
+                    if (_use_table_aware_balancing) {
+                        for (auto table : tablets.tables()) {
+                            std::erase_if(shard_info.candidates[table],
+                                    [&tablet] (const migration_tablet_set& c) {
+                                        return std::ranges::any_of(c.tablets(), [&tablet] (const auto& c_tablet) { return c_tablet == tablet; });
+                                    });
+                            if (shard_info.candidates[table].empty()) {
+                                shard_info.candidates.erase(table);
+                            }
+                        }
+                    } else {
+                        std::erase_if(shard_info.candidates_all_tables,
+                                [&tablet] (const migration_tablet_set& c) {
+                                    return std::ranges::any_of(c.tablets(), [&tablet] (const auto& c_tablet) { return c_tablet == tablet; });
+                                });
+                    }
                 }
             }
         }
