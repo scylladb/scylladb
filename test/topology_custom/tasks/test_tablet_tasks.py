@@ -15,8 +15,9 @@ from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_ta
 from test.pylib.tablets import get_all_tablet_replicas
 from test.topology.conftest import skip_mode
 from test.topology_custom.test_tablets2 import inject_error_on
-from test.topology_tasks.task_manager_client import TaskManagerClient
-from test.topology_tasks.task_manager_types import TaskStatus, TaskStats
+from test.topology_custom.tasks.task_manager_client import TaskManagerClient
+from test.topology_custom.tasks.task_manager_types import TaskStatus, TaskStats
+from test.topology_custom.tasks import extra_scylla_cmdline_options
 
 async def enable_injection(manager: ManagerClient, servers: list[ServerInfo], injection: str):
     for server in servers:
@@ -191,7 +192,7 @@ async def prepare_migration_test(manager: ManagerClient):
     host_ids = []
 
     async def make_server():
-        s = await manager.server_add()
+        s = await manager.server_add(cmdline=extra_scylla_cmdline_options)
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
         await manager.api.disable_tablet_balancing(s.ip_addr)
@@ -384,14 +385,16 @@ async def enable_tablet_balancing_and_wait(manager: ManagerClient, server: Serve
 
     await s1_log.wait_for(message, from_mark=s1_mark)
 
+#common cmdline for server_add command in all tests below
+cmdline = ['--target-tablet-size-in-bytes', '30000', ]
+cmdline.extend(extra_scylla_cmdline_options)
+
+
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_resize_task(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
-    cmdline = [
-        '--target-tablet-size-in-bytes', '30000',
-    ]
     servers = [await manager.server_add(cmdline=cmdline, config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
     })]
@@ -433,9 +436,6 @@ async def test_tablet_resize_task(manager: ManagerClient):
 async def test_tablet_resize_list(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
-    cmdline = [
-        '--target-tablet-size-in-bytes', '30000',
-    ]
     servers = [await manager.server_add(cmdline=cmdline, config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
     })]
@@ -495,9 +495,6 @@ async def test_tablet_resize_list(manager: ManagerClient):
 async def test_tablet_resize_revoked(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
-    cmdline = [
-        '--target-tablet-size-in-bytes', '30000',
-    ]
     servers = [await manager.server_add(cmdline=cmdline, config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
     })]
