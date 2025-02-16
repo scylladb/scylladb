@@ -4044,6 +4044,27 @@ future<> view_building_worker::detect_staging_sstables() {
     }
 }
 
+future<> view_building_worker::register_staging_sstables(table_id base_id, dht::token_range_vector ranges) {
+    auto& table = _db.find_column_family(base_id);
+    std::unordered_set<dht::token_range> ranges_set(ranges.begin(), ranges.end());
+
+    sstables::sstable_directory dir(table, sstables::sstable_state::staging, default_io_error_handler_gen());
+    co_await dir.process_sstable_dir(sstables::sstable_directory::process_flags{ .sort_sstables_according_to_owner = true });
+    auto& local_sstables = dir.get_unshared_local_sstables();
+
+    auto table_ptr = table.shared_from_this();
+    std::vector<future<>> futs;
+    for (auto& sst: local_sstables) {
+        auto range = dht::token_range::make({sst->get_first_decorated_key().token(), true}, {sst->get_last_decorated_key().token(), true});   
+        if (ranges_set.contains(range)) {
+            promise<> p;
+            futs.push_back(p.get_future());
+            co_await _vug.register_staging_sstable(sst, table_ptr, std::move(p));
+        }
+    }
+    co_await when_all_succeed(futs.begin(), futs.end());
+}
+
 void view_building_worker::init_messaging_service() {
     ser::view_rpc_verbs::register_build_views_range(&_messaging.local(), [this] (table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views, raft::term_t term) -> future<std::vector<table_id>> {
         return container().invoke_on(shard, [base_id, range = std::move(range), views = std::move(views), term] (auto& vbw) -> future<std::vector<table_id>> {
@@ -4053,6 +4074,11 @@ void view_building_worker::init_messaging_service() {
     ser::view_rpc_verbs::register_abort_view_building_work(&_messaging.local(), [this] (unsigned shard, raft::term_t term) -> future<> {
         return container().invoke_on(shard, [term] (auto& vbw) {
             return vbw.maybe_abort_current_operation(term);
+        });
+    });
+    ser::view_rpc_verbs::register_register_staging_sstables(&_messaging.local(), [this] (table_id base_id, unsigned shard, dht::token_range_vector ranges) -> future<> {
+        return container().invoke_on(shard, [base_id, ranges = std::move(ranges)] (auto& vbw) {
+            return vbw.register_staging_sstables(base_id, std::move(ranges));
         });
     });
 }

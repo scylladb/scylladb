@@ -207,7 +207,8 @@ enum class messaging_verb : int32_t {
     SAMPLE_SSTABLES = 79,
     BUILD_VIEWS_RANGE = 80,
     ABORT_VIEW_BUILDING_WORK = 81,
-    LAST = 82,
+    REGISTER_STAGING_SSTABLES = 82,
+    LAST = 83,
 };
 
 } // namespace netw

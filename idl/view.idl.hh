@@ -17,5 +17,6 @@ class update_backlog {
 
 verb [[cancellable]] build_views_range(table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views, raft::term_t term) -> std::vector<table_id>;
 verb abort_view_building_work(unsigned shard, raft::term_t term);
+verb [[cancellable]] register_staging_sstables(table_id base_id, unsigned shard, dht::token_range_vector ranges);
 }
 }

@@ -87,6 +87,7 @@ private:
     future<std::vector<table_id>> do_build_operation(table_id base_id, dht::token_range range, std::vector<table_id> views, raft::term_t term);
     future<std::vector<table_id>> build_views_range(vb_parameters& params, abort_source& as);
     future<> maybe_abort_current_operation(raft::term_t term);
+    future<> register_staging_sstables(table_id base_id, dht::token_range_vector ranges);
 
     future<> start_staging_detector();
     future<> detect_staging_sstables();
