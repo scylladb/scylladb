@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from test.pylib.tablets import get_all_tablet_replicas
 from test.topology.util import get_coordinator_host, get_non_coordinator_host
-from test.topology_random_failures.error_injections import ERROR_INJECTIONS
+from test.topology_custom.random_failures.error_injections import ERROR_INJECTIONS
 
 if TYPE_CHECKING:
     from typing import ParamSpec, TypeAlias, TypeVar
