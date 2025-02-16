@@ -13,8 +13,13 @@ class composite_abort_source {
     utils::small_vector<abort_source::subscription, 2> _subscriptions;
 public:
     void add(abort_source& as) {
-        as.check();
-        auto sub = as.subscribe([this]() noexcept { _as.request_abort(); });
+        if (as.abort_requested()) {
+            _as.request_abort_ex(as.abort_requested_exception_ptr());
+            return;
+        }
+        auto sub = as.subscribe([this, &as](const std::optional<std::exception_ptr>& ex) noexcept {
+            _as.request_abort_ex(ex.value_or(as.get_default_exception()));
+        });
         SCYLLA_ASSERT(sub);
         _subscriptions.push_back(std::move(*sub));
     }
