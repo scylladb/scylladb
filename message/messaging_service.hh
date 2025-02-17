@@ -205,7 +205,8 @@ enum class messaging_verb : int32_t {
     BUILD_VIEWS_RANGE = 77,
     ABORT_VBC_WORK = 78,
     REGISTER_STAGING_SSTABLES = 79,
-    LAST = 80,
+    NOTIFY_STAGING_DETECTOR = 80,
+    LAST = 81,
 };
 
 } // namespace netw
