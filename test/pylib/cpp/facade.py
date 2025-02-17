@@ -25,11 +25,8 @@
 #
 from __future__ import annotations
 
-import shlex
-import subprocess
 from abc import ABC
 from pathlib import Path
-from subprocess import TimeoutExpired
 from typing import Sequence
 
 from pytest import Config
@@ -53,28 +50,13 @@ class CppTestFailureList(Exception):
         self.failures = list(failures)
 
 class CppTestFacade(ABC):
-    def __init__(self, config: Config, combined_tests: dict[str, list[str]] = None):
-        self.temp_dir: Path = Path(config.getoption('tmpdir'))
+    def __init__(self, config: Config, combined_tests: dict[str, list[str]] = None, gather_metrics: bool = False):
+        self.temp_dir: Path = Path(config.getoption('tmpdir')).absolute()
         self.combined_suites: dict[str, list[str]] = combined_tests
+        self.gather_metrics = gather_metrics
 
     def list_tests(self, executable: Path , no_parallel: bool) -> tuple[bool,list[str]]:
         raise NotImplementedError
 
-    def run_test(self, executable: Path, original_name: str, test_id: str, mode:str, file_name: Path, test_args: Sequence[str] = ()) -> tuple[Sequence[CppTestFailure] | None, str]:
+    def run_test(self, executable: Path, original_name: str, test_id: str, mode:str, file_name: Path, test_args: Sequence[str] = (), env: dict = None) -> tuple[Sequence[CppTestFailure] | None, str]:
          raise NotImplementedError
-
-
-def run_process(args: list[str], timeout):
-    args = shlex.split(' '.join(args))
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    try:
-        stdout, stderr = p.communicate(timeout=timeout)
-    except TimeoutExpired:
-        print('Timeout reached')
-        p.kill()
-        stdout = p.stdout.read()
-        stderr = p.stderr.read()
-    except KeyboardInterrupt:
-        p.kill()
-        raise
-    return p, stderr, stdout

@@ -1,3 +1,0 @@
-type: ldap
-# Custom command line arguments for some of the tests
-custom_args: {}

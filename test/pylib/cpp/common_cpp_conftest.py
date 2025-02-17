@@ -3,19 +3,19 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-import collections
-import subprocess
+from __future__ import annotations
+
+import os
+import pathlib
 from copy import copy
-from functools import cache
 from pathlib import Path, PosixPath
 
 import yaml
 from pytest import Collector
 
-from test.pylib.cpp.boost.boost_facade import COMBINED_TESTS
 from test.pylib.cpp.facade import CppTestFacade
 from test.pylib.cpp.item import CppFile
-from test.pylib.util import get_modes_to_run
+from test.pylib.util import get_configured_modes
 
 ALL_MODES = {
     'debug': 'Debug',
@@ -29,12 +29,25 @@ DEBUG_MODES = {
     'sanitize': 'Sanitize',
 }
 DEFAULT_ARGS = [
+    '--reactor-backend linux-aio',
     '--overprovisioned',
     '--unsafe-bypass-fsync 1',
     '--kernel-page-cache 1',
     '--blocked-reactor-notify-ms 2000000',
     '--collectd 0',
     '--max-networking-io-control-blocks=100',
+]
+UBSAN_OPTIONS = [
+            "halt_on_error=1",
+            "abort_on_error=1",
+            f"suppressions={os.getcwd()}/ubsan-suppressions.supp",
+            os.getenv("UBSAN_OPTIONS"),
+        ]
+ASAN_OPTIONS = [
+    "disable_coredump=0",
+    "abort_on_error=1",
+    "detect_stack_use_after_return=1",
+    os.getenv("ASAN_OPTIONS"),
 ]
 
 
@@ -71,25 +84,29 @@ def get_disabled_tests(config: dict, modes: list[str]) -> dict[str, set[str]]:
 
 def read_suite_config(directory: Path) -> dict[str, str]:
     """
-    Helper method that will return the configuration from the suite.yaml file
+    Helper method that will return the configuration from the test_config.yaml file
     """
-    with open(directory / 'suite.yaml', 'r') as cfg_file:
-        cfg = yaml.safe_load(cfg_file.read())
-        if not isinstance(cfg, dict):
-            raise RuntimeError('Failed to load tests: suite.yaml is empty')
-        return cfg
+    config = directory / 'test_config.yaml'
+    if config.exists():
+        with open(directory / 'test_config.yaml', 'r') as cfg_file:
+            cfg = yaml.safe_load(cfg_file.read())
+            return cfg
+    else:
+        return {}
 
-def get_root_path(session) -> Path:
-    return Path(session.config.rootpath).parent
 
 def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade) -> object:
     """
     Collect c++ test based on the .cc files. C++ test binaries are located in different directory, so the method will take care
     to provide the correct path to the binary based on the file name and mode.
     """
+    test_env = dict(
+        UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
+        ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
+        SCYLLA_TEST_ENV='yes',
+    )
     run_id = parent.config.getoption('run_id')
     modes = get_modes_to_run(parent.session)
-    project_root = Path(parent.session.config.rootpath).parent
     suite_config = read_suite_config(file_path.parent)
     no_parallel_cases = suite_config.get('no_parallel_cases', [])
     disabled_tests = get_disabled_tests(suite_config, modes)
@@ -102,30 +119,17 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     if len(custom_args) > 1:
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, parameters=custom_args,
                                    no_parallel_run=no_parallel_run, modes=modes, disabled_tests=disabled_tests,
-                                   run_id=run_id, facade=facade, project_root=project_root)
+                                   run_id=run_id, facade=facade, env=test_env)
     else:
         args.extend(custom_args)
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, no_parallel_run=no_parallel_run,
-                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, project_root=project_root)
+                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, env=test_env)
 
 
-@cache
-def get_combined_tests(session):
-    suites = collections.defaultdict()
-    executable = get_root_path(session) / COMBINED_TESTS
-    args = [executable, '--list_content']
-
-    output = subprocess.check_output(
-        args,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-    )
-    current_suite = ''
-    for line in output.splitlines():
-        if not line.startswith('    '):
-            current_suite = line.strip().rstrip('*')
-            suites[current_suite] = []
-        else:
-            case_name = line.strip().rstrip('*')
-            suites[current_suite].append(case_name)
-    return suites
+def get_modes_to_run(session) -> list[str]:
+    modes = session.config.getoption('modes')
+    if not modes:
+        modes = get_configured_modes(root_dir=pathlib.Path(session.config.rootpath).parent)
+    if not modes:
+        raise RuntimeError('No modes configured. Please run ./configure.py first')
+    return modes
