@@ -46,6 +46,8 @@
 
 static logging::logger vbc_logger("view_building_coordinator");
 
+static const int RPC_RESPONSE_RETRIES_NUM = 3;
+
 namespace service {
 
 view_building_coordinator::view_building_coordinator(abort_source& as, replica::database& db, raft::server& raft, raft_group0& group0, db::system_keyspace& sys_ks, netw::messaging_service& messaging, const topology_state_machine& topo_sm, const raft::term_t term) 
@@ -76,17 +78,20 @@ future<> view_building_coordinator::await_event() {
 future<view_building_coordinator::vbc_state> view_building_coordinator::load_coordinator_state() {
     auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
     auto currently_processed_base_table = co_await _sys_ks.get_vbc_processing_base();
+    auto targets_with_staging_sstables = co_await _sys_ks.get_view_building_coordinator_staging_sstables_targets();
     auto status_map = co_await _sys_ks.get_view_build_status_map() | std::views::transform([this] (auto entry) {
         return std::make_pair(table_name_to_id(entry.first), entry.second);
     }) | std::ranges::to<view_build_status_map>();
 
     vbc_logger.debug("Loaded state: {}", tasks);
     vbc_logger.debug("Processing base: {}", currently_processed_base_table);
+    vbc_logger.debug("Targets with staging sstables: {}", targets_with_staging_sstables);
     vbc_logger.debug("Status map: {}", status_map);
 
     co_return vbc_state {
         .tasks = std::move(tasks),
         .currently_processed_base_table = std::move(currently_processed_base_table),
+        .targets_with_staging_sstables = std::move(targets_with_staging_sstables),
         .status_map = std::move(status_map)
     };
 }
@@ -196,7 +201,7 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
             // the base table if all views were dropped.
             auto base_id = *state.currently_processed_base_table;
 
-            if (state.tasks.contains(base_id) && state.tasks.at(base_id).empty()) {
+            if ((!state.tasks.contains(base_id) || state.tasks.at(base_id).empty()) && state.targets_with_staging_sstables.empty()) {
                 vbc_logger.info("Base table {} no longer has any views to build.", base_id);
                 auto mut = co_await _sys_ks.make_vbc_delete_processing_base_mutation(guard.write_timestamp());
                 cmuts.emplace_back(std::move(mut));
@@ -273,13 +278,36 @@ static std::pair<std::vector<table_id>, dht::token_range> get_views_and_range_fo
     return {std::move(views), *range};
 }
 
+static dht::token_range_vector get_staging_sstables_ranges_for_target(replica::database& db, table_id base_id, const base_building_tasks& base_tasks, const view_building_target& target, const dht::token_range_vector& ranges) {
+    auto& tmap = db.get_token_metadata().tablets().get_tablet_map(base_id);
+
+    auto is_range_built_for_all_views = [&base_tasks, &target] (const dht::token_range& range) {
+        return std::ranges::all_of(base_tasks | std::views::values, [&] (const view_building_tasks& view_tasks) {
+            return !contains_range(view_tasks.at(target), range);
+        });
+    };
+    
+    dht::token_range_vector sstables_to_register;
+    for (auto& range: ranges) {
+        // The range represents data within staging sstable.
+        // Since the sstable is for tablet-based table, the data belongs to only one tablet.
+        auto tid = tmap.get_tablet_id(range.end()->value());
+        auto trinfo = tmap.get_tablet_transition_info(tid);
+
+        if (!trinfo && is_range_built_for_all_views(range)) {
+            sstables_to_register.push_back(range);
+        }
+    }
+    return sstables_to_register;
+}
+
 future<> view_building_coordinator::build_view(vbc_state state) {
     if (!state.currently_processed_base_table) {
         vbc_logger.info("No view to process");
         co_return;
     }
 
-    if (!state.tasks.contains(*state.currently_processed_base_table)) {
+    if (!state.tasks.contains(*state.currently_processed_base_table) && state.targets_with_staging_sstables.empty()) {
         on_internal_error(vbc_logger, "No tasks for currently processed base table");
     }
     auto& base_tasks = state.tasks[*state.currently_processed_base_table];
@@ -297,19 +325,23 @@ future<> view_building_coordinator::build_view(vbc_state state) {
                 co_await std::move(_remote_work_map.extract(target).mapped());
             }
 
-            auto [views, range] = get_views_and_range_for_target(_db, *state.currently_processed_base_table, base_tasks, target);
-            if (views.empty()) {
-                vbc_logger.debug("No views to build for target {}", target);
-                continue;
+            std::optional<future<>> task_rpc_opt;
+            if (auto [views, range] = get_views_and_range_for_target(_db, *state.currently_processed_base_table, base_tasks, target); !views.empty()) {
+                task_rpc_opt = send_building_task(target, *state.currently_processed_base_table, range, std::move(views));
+            } else if (auto sstables_to_register = get_staging_sstables_ranges_for_target(_db, *state.currently_processed_base_table, base_tasks, target, state.targets_with_staging_sstables[target]); !sstables_to_register.empty()) {
+                task_rpc_opt = send_register_staging_task(target, *state.currently_processed_base_table, std::move(sstables_to_register));
             }
 
-            future<> rpc = send_task(target, *state.currently_processed_base_table, range, std::move(views));
-            _remote_work_map.insert({target, std::move(rpc)});
+            if (task_rpc_opt) {
+                _remote_work_map.insert({target, std::move(*task_rpc_opt)});
+            } else {
+                vbc_logger.debug("No work for target {}", target);
+            }
         }
     }
 }
 
-future<> view_building_coordinator::send_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views) {
+future<> view_building_coordinator::send_building_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views) {
     vbc_logger.info("Sending view building task to node {}, shard {} (token range: {} | views: {})", target.host, target.shard, range, views);
 
     std::vector<table_id> rpc_result;
@@ -323,11 +355,11 @@ future<> view_building_coordinator::send_task(view_building_target target, table
         co_return;
     }
 
-    int retries = 3;
+    int retries = RPC_RESPONSE_RETRIES_NUM;
     while (retries-- > 0) {
         bool sleep = false;
         try {
-            co_await mark_task_completed(target, base_id, range, std::move(rpc_result));
+            co_await mark_building_task_completed(target, base_id, range, std::move(rpc_result));
             break;
         } catch (...) {
             sleep = handle_error(std::current_exception());
@@ -344,7 +376,38 @@ future<> view_building_coordinator::send_task(view_building_target target, table
     _cond.broadcast();
 }
 
-future<> view_building_coordinator::mark_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views) {
+future<> view_building_coordinator::send_register_staging_task(view_building_target target, table_id base_id, dht::token_range_vector ranges) {
+    vbc_logger.info("Sending register staging sstables task to node {}, shard {} (ranges: {})", target.host, target.shard, ranges);
+
+    try {
+        co_await ser::view_rpc_verbs::send_register_staging_sstables(&_messaging, target.host, _as, base_id, target.shard, ranges);
+    } catch (...) {
+        vbc_logger.warn("Processing staging sstable on {} failed: {}", target, std::current_exception());
+        _cond.broadcast();
+        co_return;
+    }
+
+    int retires = RPC_RESPONSE_RETRIES_NUM;
+    while (retires-- > 0) {
+        bool sleep = false;
+        try {
+            co_await mark_staging_task_completed(target, base_id, ranges);
+            break;
+        } catch (...) {
+            sleep = handle_error(std::current_exception());
+        }
+        if (sleep) {
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            } catch (...) {
+                vbc_logger.debug("sleep failed: {}", std::current_exception());
+            }
+        }
+    }
+    _cond.broadcast();
+}
+
+future<> view_building_coordinator::mark_building_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views) {
     auto guard = co_await _group0.client().start_operation(_as);
     auto state = co_await load_coordinator_state();
 
@@ -360,7 +423,7 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
         if (ranges.empty()) {
             // This means the view was built on the target.
             base_tasks[view].erase(target);
-            auto status_mut_opt = co_await maybe_mark_build_status_success(guard, base_tasks[view], view, target.host);
+            auto status_mut_opt = co_await maybe_mark_build_status_success(guard, base_tasks[view], state.targets_with_staging_sstables, view, target.host);
             if (status_mut_opt) {
                 muts.emplace_back(std::move(*status_mut_opt));
             }
@@ -368,7 +431,7 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
         vbc_logger.trace("Token range {} (view: {} | base_id: {}) was built on node {}, shard {}", range, view, base_id, target.host, target.shard);
 
         // Mark view as built if all tasks were completed
-        if (base_tasks[view].empty()) {
+        if (base_tasks[view].empty() && state.targets_with_staging_sstables.empty()) {
             auto view_name = table_id_to_name(view);
             auto mut = co_await _sys_ks.make_mark_view_as_built_mutation(guard.write_timestamp(), view_name.first, view_name.second);
             auto status_muts = co_await mark_build_status_success_on_remaining_nodes(guard, state, view);
@@ -381,13 +444,74 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
     }
 
     // Unset currently processing base if all views were built
-    if (base_tasks.empty()) {
+    if (base_tasks.empty() && state.targets_with_staging_sstables.empty()) {
         auto mut = co_await _sys_ks.make_vbc_delete_processing_base_mutation(guard.write_timestamp());
         muts.emplace_back(std::move(mut));
         vbc_logger.info("All views for base {} were built", base_id);
     }
 
     auto cmd = _group0.client().prepare_command(write_mutations{.mutations = std::move(muts)}, guard, "finished view building step");
+    co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
+}
+
+future<> view_building_coordinator::mark_staging_task_completed(view_building_target target, table_id base_id, dht::token_range_vector ranges) {
+    auto guard = co_await _group0.client().start_operation(_as);
+    auto state = co_await load_coordinator_state();
+
+    std::vector<canonical_mutation> muts;
+    for (auto& range: ranges) {
+        auto mut = co_await _sys_ks.make_vbc_staging_sstable_done_mutation(guard.write_timestamp(), target.host, target.shard, range);
+        muts.emplace_back(std::move(mut));
+        std::erase(state.targets_with_staging_sstables[target], range);
+        vbc_logger.trace("Staging sstable corresponding to range {} was processed on node {}, shard {}", range, target.host, target.shard);
+    }
+
+    bool no_views_to_build = !state.tasks.contains(base_id); // We may modity `state.tasks` locally by inserting empty objects. Save information if there are no views to build for this base_id for later.
+    auto no_building_task_left = [&] (table_id view_id) {
+        return no_views_to_build || !state.tasks[base_id].contains(view_id) || state.tasks[base_id][view_id].empty();
+    };
+    auto host_has_any_task_left = [&] (table_id view_id) {
+        return !no_building_task_left(view_id) && std::any_of(state.tasks[base_id][view_id].begin(), state.tasks[base_id][view_id].end(), [&] (auto& e) {
+            return e.first.host == target.host;
+        });
+    };
+
+    if (state.targets_with_staging_sstables[target].empty()) {
+        state.targets_with_staging_sstables.erase(target);
+
+        // If all ranges were built, there is no entry in `state.tasks`, so check `state.status_map` instead.
+        for (auto& [view_id, statuses]: state.status_map) {
+            if (base_id != get_base_table_id(view_id) || host_has_any_task_left(view_id)) {
+                continue;
+            }
+
+            // Mark build status `SUCCESS` if all staging sstables were processed and all view ranges were built on given host.
+            //
+            // `state.tasks[base_id][view_id]` may insert an objects in the maps but they will be empty entries and that's ok.
+            auto status_mut_opt = co_await maybe_mark_build_status_success(guard, state.tasks[base_id][view_id], state.targets_with_staging_sstables, view_id, target.host);
+            if (status_mut_opt) {
+                muts.emplace_back(std::move(*status_mut_opt));
+            }
+            
+            // If the view was built on all targets and there are no staging sstables to process on all targets, mark the view as built.
+            if (no_building_task_left(view_id) && state.targets_with_staging_sstables.empty()) {
+                auto view_name = table_id_to_name(view_id);
+                auto mut = co_await _sys_ks.make_mark_view_as_built_mutation(guard.write_timestamp(), view_name.first, view_name.second);
+                auto status_muts = co_await mark_build_status_success_on_remaining_nodes(guard, state, view_id);
+                muts.emplace_back(std::move(mut));
+                muts.insert(muts.end(), std::make_move_iterator(status_muts.begin()), std::make_move_iterator(status_muts.end()));
+                vbc_logger.info("View {}.{} was built", view_name.first, view_name.second);
+            }
+        }
+    }
+
+    if (no_views_to_build && state.targets_with_staging_sstables.empty()) {
+        auto mut = co_await _sys_ks.make_vbc_delete_processing_base_mutation(guard.write_timestamp());
+        muts.emplace_back(std::move(mut));
+        vbc_logger.info("All views for base {} were built", base_id);
+    }
+
+    auto cmd = _group0.client().prepare_command(write_mutations{.mutations = std::move(muts)}, guard, "finished staging sstables processing step");
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
 }
 
@@ -413,11 +537,11 @@ future<std::vector<canonical_mutation>> view_building_coordinator::mark_build_st
     co_return muts;
 }
 
-future<std::optional<mutation>> view_building_coordinator::maybe_mark_build_status_success(const group0_guard& guard, const view_building_tasks& view_tasks, table_id view, locator::host_id host_id) {
+future<std::optional<mutation>> view_building_coordinator::maybe_mark_build_status_success(const group0_guard& guard, const view_building_tasks& view_tasks, const view_building_staging_sstables_map& staging_tasks, table_id view, locator::host_id host_id) {
     bool host_has_any_tasks = std::any_of(view_tasks.begin(), view_tasks.end(), [&] (auto& e) {
         return e.first.host == host_id;
     });
-    if (host_has_any_tasks) {
+    if (host_has_any_tasks || !staging_tasks.empty()) {
         co_return std::nullopt;
     }
     co_return co_await _sys_ks.make_view_build_status_update_mutation(guard.write_timestamp(), table_id_to_name(view), host_id, db::view::build_status::SUCCESS);
@@ -439,7 +563,7 @@ future<std::vector<canonical_mutation>> view_building_coordinator::mark_build_st
 std::set<table_id> view_building_coordinator::get_views_to_add(const vbc_state& state, const std::vector<table_id>& views, const std::vector<table_id>& built) {
     std::set<table_id> views_to_add;
     for (auto& view_id: views) {
-        if (std::find(built.begin(), built.end(), view_id) == built.end()) {
+        if (!state.status_map.contains(view_id) && std::find(built.begin(), built.end(), view_id) == built.end()) {
             auto base_id = get_base_table_id(view_id);
             if (!state.tasks.contains(base_id) || !state.tasks.at(base_id).contains(view_id)) {
                 views_to_add.insert(view_id);

@@ -56,6 +56,7 @@ class view_building_coordinator : public migration_listener::only_view_notificat
     struct vbc_state {
         view_building_coordinator_tasks tasks;
         std::optional<table_id> currently_processed_base_table;
+        view_building_staging_sstables_map targets_with_staging_sstables;
         view_build_status_map status_map;
     };
 
@@ -112,12 +113,14 @@ private:
     future<std::vector<mutation>> get_merge_mutations(const group0_guard& guard, const locator::tablet_map& tablet_map, const locator::tablet_map& new_tablet_map, table_id view, const view_building_target& target, const std::vector<dht::token_range>& tasks);
 
     future<> build_view(vbc_state state);
-    future<> send_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
-    future<> mark_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
+    future<> send_building_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
+    future<> send_register_staging_task(view_building_target target, table_id base_id, dht::token_range_vector ranges);
+    future<> mark_building_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
+    future<> mark_staging_task_completed(view_building_target target, table_id base_id, dht::token_range_vector ranges);
     future<> abort_work(const view_building_target& target);
 
     future<std::vector<canonical_mutation>> mark_build_status_started_on_all_nodes(const group0_guard& guard, const std::vector<table_id>& views);
-    future<std::optional<mutation>> maybe_mark_build_status_success(const group0_guard& guard, const view_building_tasks& view_tasks, table_id view, locator::host_id host_id);
+    future<std::optional<mutation>> maybe_mark_build_status_success(const group0_guard& guard, const view_building_tasks& view_tasks, const view_building_staging_sstables_map& staging_tasks, table_id view, locator::host_id host_id);
     future<std::vector<canonical_mutation>> mark_build_status_success_on_remaining_nodes(const group0_guard& guard, vbc_state& state, table_id view);
 };
 
