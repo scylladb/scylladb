@@ -67,12 +67,25 @@ static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
     try {
         std::rethrow_exception(ep);
     } catch (const std::system_error& e) {
-        return (e.code().category() == std::system_category()
-            && (e.code().value() == EPIPE || e.code().value() == ECONNRESET))
-            // tls version:
-            || (e.code().category() == tls::error_category()
-            && (e.code().value() == tls::ERROR_PREMATURE_TERMINATION))
-            ;
+        auto& code = e.code();
+        if (code.category() == std::system_category() && (code.value() == EPIPE || code.value() == ECONNRESET)) {
+            return true;
+        }
+        if (code.category() == tls::error_category()) {
+            // Typically ECONNRESET
+            if (code.value() == tls::ERROR_PREMATURE_TERMINATION) {
+                return true;
+            }
+            // If we got an actual EPIPE in push/pull of gnutls, it is _not_ translated
+            // to anything more useful than generic push/pull error. Need to look at
+            // nested exception.
+            if (code.value() == tls::ERROR_PULL || code.value() == tls::ERROR_PUSH) {
+                if (auto p = dynamic_cast<const std::nested_exception*>(std::addressof(e))) {
+                    return is_broken_pipe_or_connection_reset(p->nested_ptr());
+                }
+            }
+        }
+        return false;
     } catch (...) {}
     return false;
 }
