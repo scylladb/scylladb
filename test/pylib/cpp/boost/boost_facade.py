@@ -25,18 +25,31 @@
 #
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import subprocess
+import time
+from asyncio import AbstractEventLoopPolicy
 from collections.abc import Sequence
 from pathlib import Path
+from time import sleep
+from types import SimpleNamespace
 from xml.etree import ElementTree
 
+import allure
+
+from scripts.get_description import metric
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
+from test.pylib.cpp.util import make_test_object
+from test.pylib.resource_gather import get_resource_gather
 
 TIMEOUT_DEBUG = 60 * 5 # seconds
 TIMEOUT = 60 * 2 # seconds
-COMBINED_TESTS = Path('build', 'dev', 'test', 'boost', 'combined_tests')
+COMBINED_TESTS = Path('test/boost/combined_tests')
+
+def get_combined_tests_path(mode: str) -> Path:
+    return Path('build', mode) / COMBINED_TESTS
 
 class BoostTestFacade(CppTestFacade):
     """
@@ -85,7 +98,14 @@ class BoostTestFacade(CppTestFacade):
         mode: str,
         file_name: Path,
         test_args:Sequence[str] = (),
+        env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
+
+        test = make_test_object(test_name, file_name.parent.name, mode, original_name)
+
+        resource_gather = get_resource_gather(self.gather_metrics, test=test, tmpdir=str(self.temp_dir))
+        resource_gather.make_cgroup()
+        test_running_event = asyncio.Event()
         def read_file(name: Path) -> str:
             try:
                 with io.open(name) as f:
@@ -97,10 +117,10 @@ class BoostTestFacade(CppTestFacade):
         root_log_dir = self.temp_dir / mode / 'pytest'
         log_xml = root_log_dir / f"{test_name}.log"
         stdout_file_path = root_log_dir/ f"{test_name}_stdout.log"
-        stderr_file_path = root_log_dir / f"{test_name}_stderr.log"
         report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
                  '--output_format=XML',
+                 '--report_level=no',
                  f"--report_sink={report_xml}",
                  f"--log_sink={log_xml}",
                  '--catch_system_errors=no',
@@ -115,24 +135,35 @@ class BoostTestFacade(CppTestFacade):
         args.append('--')
         args.extend(test_args)
         os.chdir(self.temp_dir.parent)
-        p, stderr, stdout = run_process(args, timeout)
+        test_resource_watcher = resource_gather.cgroup_monitor(test_event=test_running_event)
+        test.time_start = time.time()
+        if self.gather_metrics:
+            p, out = run_process(args, timeout, env, preexec_fn=resource_gather.set_sid(), cgroup=resource_gather.cgroup_path)
+        else:
+            p, out = run_process(args, timeout, env, preexec_fn=resource_gather.set_sid())
+        test_running_event.set()
+        test.time_end = time.time()
+        loop = test_resource_watcher.get_loop()
+        loop.run_until_complete(asyncio.gather(test_resource_watcher))
 
         with open(stdout_file_path, 'w') as fd:
-            fd.write(stdout)
-        with open(stderr_file_path, 'w') as fd:
-            fd.write(stderr)
+            fd.write(out)
         log = read_file(log_xml)
         report = read_file(report_xml)
 
         results = self._parse_log(log=log)
 
         if p.returncode != 0:
+            allure.attach(out, name='output', attachment_type=allure.attachment_type.TEXT)
+            metrics = resource_gather.get_test_metrics()
+
+            resource_gather.write_metrics_to_db(metrics)
+            resource_gather.remove_cgroup()
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
                 'for test {test_id} failed (return_code={return_code}):\n'
                 'output file:{stdout}\n'
-                'std error file:{stderr}\n'
                 'log:{log}\n'
                 'report:{report}\n'
                 'command to repeat:{command}'
@@ -145,19 +176,24 @@ class BoostTestFacade(CppTestFacade):
                     executable=executable,
                     test_id=test_name,
                     stdout=stdout_file_path.absolute(),
-                    stderr=stderr_file_path.absolute(),
                     log=log,
                     report=report,
                     command=' '.join(p.args),
                     return_code=p.returncode,
                 ),
             )
-            return [failure], stdout
+            return [failure], out
+
+        metrics = resource_gather.get_test_metrics()
+        resource_gather.write_metrics_to_db(metrics, success=True)
+        resource_gather.remove_cgroup()
+        report_xml.unlink()
+        log_xml.unlink()
 
         if results:
-            return results, stdout
+            return results, out
 
-        return None, stdout
+        return None, out
 
     def _parse_log(self, log: str) -> list[CppTestFailure]:
         """

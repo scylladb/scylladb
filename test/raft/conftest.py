@@ -16,5 +16,4 @@ def pytest_collect_file(file_path: PosixPath, parent: Collector):
     Method triggered automatically by pytest to collect files from a directory.
     """
     if file_path.suffix == '.cc' and file_path.stem.endswith('test'):
-        return collect_items(file_path, parent, facade=BoostTestFacade(parent.config))
-
+        return collect_items(file_path, parent, facade=BoostTestFacade(parent.config, gather_metrics=parent.config.getoption('gather_metrics')))
