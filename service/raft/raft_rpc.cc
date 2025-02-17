@@ -7,6 +7,7 @@
  */
 #include "service/raft/raft_rpc.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/units.hh>
 #include "gms/inet_address.hh"
 #include "serializer_impl.hh"
 #include "message/msg_addr.hh"
@@ -21,6 +22,8 @@ static seastar::logger rlogger("raft_rpc");
 
 using sloc = seastar::compat::source_location;
 
+static constexpr size_t append_entries_semaphore_limit_bytes = 10_MiB;
+
 raft_ticker_type::time_point timeout() {
     return raft_ticker_type::clock::now() + raft_tick_interval * (raft::ELECTION_TIMEOUT.count() / 2);
 }
@@ -29,6 +32,7 @@ raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
           shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id)
     : _sm(sm), _group_id(std::move(gid)), _my_id(my_id), _messaging(ms)
     , _failure_detector(std::move(failure_detector))
+    , _append_entries_semaphore(append_entries_semaphore_limit_bytes)
 {}
 
 
@@ -81,6 +85,17 @@ future<> raft_rpc::send_append_entries(raft::server_id id, const raft::append_re
         rlogger.debug("Failed to send append_entires to {}: node is not seen as alive by the failure detector", id);
         co_return;
     }
+
+    // Serializing raft::append_request for transmission requires approximately the same amount of memory
+    // as its size. This means when the Raft library replicates a log item to M servers, the log
+    // item is effectively copied M times. To prevent excessive memory usage and potential out-of-memory
+    // issues, we limit the total memory consumption of in-flight raft::append_request messages.
+    size_t req_size = 0;
+    for (const auto& e: append_request.entries) {
+        req_size += e->get_size();
+    }
+    const auto guard = co_await get_units(_append_entries_semaphore, std::min(req_size, append_entries_semaphore_limit_bytes));
+
     co_return co_await ser::raft_rpc_verbs::send_raft_append_entries(&_messaging, locator::host_id{id.uuid()},
             db::no_timeout, _group_id, _my_id, id, append_request);
 }

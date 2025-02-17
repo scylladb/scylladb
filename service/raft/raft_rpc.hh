@@ -31,6 +31,9 @@ protected:
     shared_ptr<raft::failure_detector> _failure_detector;
     seastar::gate _shutdown_gate;
 
+    // Limits the total memory usage of raft::append_request messages that are currently being sent
+    seastar::semaphore _append_entries_semaphore;
+
     explicit raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
              shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id);
 

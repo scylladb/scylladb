@@ -855,27 +855,6 @@ void fsm::request_vote_reply(server_id from, vote_reply&& reply) {
     }
 }
 
-static size_t entry_size(const log_entry& e) {
-    struct overloaded {
-        size_t operator()(const command& c) {
-            return c.size();
-        }
-        size_t operator()(const configuration& c) {
-            size_t size = 0;
-            for (auto& s : c.current) {
-                size += sizeof(s.addr.id);
-                size += s.addr.info.size();
-                size += sizeof(s.can_vote);
-            }
-            return size;
-        }
-        size_t operator()(const log_entry::dummy& d) {
-            return 0;
-        }
-    };
-    return std::visit(overloaded{}, e.data) + sizeof(e);
-}
-
 void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
 
     logger.trace("replicate_to[{}->{}]: called next={} match={}",
@@ -935,7 +914,7 @@ void fsm::replicate_to(follower_progress& progress, bool allow_empty) {
                 req.entries.push_back(entry);
                 logger.trace("replicate_to[{}->{}]: send entry idx={}, term={}",
                              _my_id, progress.id, entry->idx, entry->term);
-                size += entry_size(*entry);
+                size += entry->get_size();
                 next_idx++;
                 if (progress.state == follower_progress::state::PROBE) {
                     break; // in PROBE mode send only one entry
