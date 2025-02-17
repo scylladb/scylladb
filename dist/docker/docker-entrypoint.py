@@ -11,7 +11,7 @@ sys.path.append('/opt/scylladb/scripts')
 from scylla_util import sysconfig_parser
 
 def extract_args_from_conf(arguments):
-    scylla_server_conf = sysconfig_parser('/etc/default/scylla-server')
+    scylla_server_conf = sysconfig_parser('/etc/sysconfig/scylla-server')
     scylla_args = scylla_server_conf.get('SCYLLA_ARGS')
     extracted_args = scylla_args.split()
     if arguments.developerMode == '0' and arguments.io_setup == '1':
