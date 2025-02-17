@@ -27,15 +27,15 @@ public:
     using mybase::mybase;
 };
 
-class service_error : public base_error {
-public:
-    using base_error::base_error;
-};
-
-class missing_resource_error : public db::extension_storage_resource_unavailable {
+class service_error : public db::extension_storage_resource_unavailable {
 public:
     using mybase = db::extension_storage_resource_unavailable;
     using mybase::mybase;
+};
+
+class missing_resource_error : public service_error {
+public:
+    using service_error::service_error;
 };
 
 // #4970 - not 100% correct, but network errors are 
