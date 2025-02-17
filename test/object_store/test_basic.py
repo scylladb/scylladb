@@ -13,6 +13,7 @@ from test.pylib.manager_client import ManagerClient
 from test.topology.util import reconnect_driver
 from test.object_store.conftest import get_s3_resource
 from test.object_store.conftest import format_tuples
+from test.cqlpy.rest_api import scylla_inject_error
 
 logger = logging.getLogger(__name__)
 
@@ -220,17 +221,15 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
 
-    print(f'Flush keyspace')
-    flush = asyncio.create_task(manager.api.flush_keyspace(server.ip_addr, ks))
-    print(f'Wait few seconds')
-    await asyncio.sleep(8)
-    print(f'Restore and reload config')
-    shutil.copyfile(orig_config, s3_server.config_file)
-    # this option is not live-updateable, and is here just dur to manager client limitations
-    # the actual config is updated with the copyfile above
-    await manager.server_update_config(server.server_id, 'object_storage_config_file', str(s3_server.config_file))
+    with scylla_inject_error(cql, "memtable_flush_should_retry"):
+        print(f'Flush keyspace')
+        flush = asyncio.create_task(manager.api.flush_keyspace(server.ip_addr, ks))
+        print(f'Wait few seconds')
+        await asyncio.sleep(8)
+
     print(f'Wait for flush to finish')
     await flush
+
     print(f'Check the sstables table')
     res = cql.execute("SELECT * FROM system.sstables;")
     ssts = "\n".join(f"{row.owner} {row.generation} {row.status}" for row in res)
