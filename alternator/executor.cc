@@ -856,7 +856,7 @@ static void add_column(schema_builder& builder, const std::string& name, const r
 // the HASH key name, and the second one, if exists, must be a RANGE key name.
 // The function returns the two column names - the first is the hash key
 // and always present, the second is the range key and may be an empty string.
-static std::pair<std::string, std::string> parse_key_schema(const rjson::value& obj) {
+static std::pair<std::string, std::string> parse_key_schema(const rjson::value& obj, std::string_view supplementary_context) {
     const rjson::value *key_schema;
     if (!obj.IsObject() || !(key_schema = rjson::find(obj, "KeySchema"))) {
         throw api_error::validation("Missing KeySchema member");
@@ -875,6 +875,7 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
     if (!v || !v->IsString()) {
         throw api_error::validation("First key in KeySchema must have string AttributeName");
     }
+    validate_attr_name_length(supplementary_context, v->GetStringLength(), true, "HASH key in KeySchema - ");
     std::string hash_key = v->GetString();
     std::string range_key;
     if (key_schema->Size() == 2) {
@@ -889,6 +890,7 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
         if (!v || !v->IsString()) {
             throw api_error::validation("Second key in KeySchema must have string AttributeName");
         }
+        validate_attr_name_length(supplementary_context, v->GetStringLength(), true, "RANGE key in KeySchema - ");
         range_key = v->GetString();
     }
     return {hash_key, range_key};
@@ -1155,7 +1157,7 @@ static billing_mode_type verify_billing_mode(const rjson::value& request) {
 // Return the set of attribute names defined in AttributeDefinitions - this
 // set is useful for later verifying that all of them are used by some
 // KeySchema (issue #19784)
-static std::unordered_set<std::string> validate_attribute_definitions(const rjson::value& attribute_definitions){
+static std::unordered_set<std::string> validate_attribute_definitions(std::string_view supplementary_context, const rjson::value& attribute_definitions) {
     if (!attribute_definitions.IsArray()) {
         throw api_error::validation("AttributeDefinitions must be an array");
     }
@@ -1168,6 +1170,7 @@ static std::unordered_set<std::string> validate_attribute_definitions(const rjso
         if (!attribute_name->IsString()) {
             throw api_error::validation("AttributeName in AttributeDefinitions must be a string");
         }
+        validate_attr_name_length(supplementary_context, attribute_name->GetStringLength(), true, "in AttributeDefinitions - ");
         auto [it2, added] = seen_attribute_names.emplace(rjson::to_string_view(*attribute_name));
         if (!added) {
             throw api_error::validation(fmt::format("Duplicate AttributeName={} in AttributeDefinitions",
@@ -1288,12 +1291,12 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     // any of its GSIs or LSIs. If anything remains in this set at the end of
     // this function, it's an error.
     std::unordered_set<std::string> unused_attribute_definitions =
-        validate_attribute_definitions(*attribute_definitions);
+        validate_attribute_definitions("", *attribute_definitions);
 
     tracing::add_table_name(trace_state, keyspace_name, table_name);
 
     schema_builder builder(keyspace_name, table_name);
-    auto [hash_key, range_key] = parse_key_schema(request);
+    auto [hash_key, range_key] = parse_key_schema(request, "");
     add_column(builder, hash_key, *attribute_definitions, column_kind::partition_key);
     unused_attribute_definitions.erase(hash_key);
     if (!range_key.empty()) {
@@ -1339,7 +1342,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(keyspace_name, vname);
-            auto [view_hash_key, view_range_key] = parse_key_schema(l);
+            auto [view_hash_key, view_range_key] = parse_key_schema(l, "Local Secondary Index");
             if (view_hash_key != hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex hash key must match the base table hash key");
             }
@@ -1396,7 +1399,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             // FIXME: read and handle "Projection" parameter. This will
             // require the MV code to copy just parts of the attrs map.
             schema_builder view_builder(keyspace_name, vname);
-            auto [view_hash_key, view_range_key] = parse_key_schema(g);
+            auto [view_hash_key, view_range_key] = parse_key_schema(g, "GlobalSecondaryIndexes");
 
             // If an attribute is already a real column in the base table
             // (i.e., a key attribute) or we already made it a real column
@@ -1703,7 +1706,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         co_return api_error::validation("GlobalSecondaryIndexUpdates Create needs AttributeDefinitions");
                     }
                     std::unordered_set<std::string> unused_attribute_definitions =
-                        validate_attribute_definitions(*attribute_definitions);
+                        validate_attribute_definitions("GlobalSecondaryIndexUpdates", *attribute_definitions);
                     check_attribute_definitions_conflicts(*attribute_definitions, *schema);
                     for (auto& view : p.local().data_dictionary().find_column_family(tab).views()) {
                         check_attribute_definitions_conflicts(*attribute_definitions, *view);
@@ -1723,7 +1726,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     // FIXME: read and handle "Projection" parameter. This will
                     // require the MV code to copy just parts of the attrs map.
                     schema_builder view_builder(keyspace_name, vname);
-                    auto [view_hash_key, view_range_key] = parse_key_schema(it->value);
+                    auto [view_hash_key, view_range_key] = parse_key_schema(it->value, "GlobalSecondaryIndexUpdates");
                     // If an attribute is already a real column in the base
                     // table (i.e., a key attribute in the base table or LSI),
                     // we can use it directly as a view key. Otherwise, we
@@ -2049,6 +2052,7 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         bytes column_name = to_bytes(it->name.GetString());
         validate_value(it->value, "PutItem");
         const column_definition* cdef = find_attribute(*schema, column_name);
+        validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
         _length_in_bytes += column_name.size();
         if (!cdef) {
             // This attribute may be a key column of one of the GSI, in which
@@ -3087,6 +3091,7 @@ static std::optional<attrs_to_get> calculate_attrs_to_get(const rjson::value& re
         attrs_to_get ret;
         for (auto it = attributes_to_get.Begin(); it != attributes_to_get.End(); ++it) {
             attribute_path_map_add("AttributesToGet", ret, it->GetString());
+            validate_attr_name_length("AttributesToGet", it->GetStringLength(), false);
         }
         if (ret.empty()) {
             throw api_error::validation("Empty AttributesToGet is not allowed. Consider using Select=COUNT instead.");
@@ -3393,6 +3398,9 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
     if (_attribute_updates) {
         if (!_attribute_updates->IsObject()) {
             throw api_error::validation("AttributeUpdates must be an object");
+        }
+        for (auto it = std::as_const(*_attribute_updates).MemberBegin(); it != std::as_const(*_attribute_updates).MemberEnd(); ++it) {
+            validate_attr_name_length("AttributeUpdates", it->name.GetStringLength(), false);
         }
     }
 

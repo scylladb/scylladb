@@ -91,5 +91,7 @@ rjson::value calculate_value(const parsed::value& v,
 rjson::value calculate_value(const parsed::set_rhs& rhs,
         const rjson::value* previous_item);
 
+void validate_attr_name_length(std::string_view supplementary_context, size_t attr_name_length, bool is_key, std::string_view error_msg_prefix = {});
+
 
 } /* namespace alternator */
