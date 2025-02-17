@@ -11,6 +11,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/fstream.hh>
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "utils/s3/client.hh"
@@ -84,6 +85,8 @@ public:
     future<> start() {
         if (_object_name.empty()) {
             co_await make_temporary_file();
+        } else {
+            _object_size = co_await _client->get_object_size(_object_name);
         }
     }
 
@@ -101,6 +104,20 @@ public:
                 _errors++;
             }
         } while (now() < until);
+    }
+
+    future<> run_download() {
+        plog.info("Downloading with input_stream");
+        auto in = input_stream<char>(_client->make_download_source(_object_name, s3::range{0, _object_size}));
+        co_await in.consume([] (auto buf) {
+            if (buf.empty()) {
+                return make_ready_future<consumption_result<char>>(stop_consuming(std::move(buf)));
+            }
+
+            plog.info("Got {}-bytes buffer", buf.size());
+            return make_ready_future<consumption_result<char>>(continue_consuming());
+        });
+        co_await in.close();
     }
 
     future<> run_upload() {
@@ -140,7 +157,7 @@ int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
-        ("operation", bpo::value<sstring>()->required(), "which test to perform (options: upload, get)")
+        ("operation", bpo::value<sstring>()->required(), "which test to perform (options: upload, get, download)")
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
         ("sockets", bpo::value<unsigned>()->default_value(1), "maximum number of socket for http client")
         ("part_size_mb", bpo::value<unsigned>()->default_value(5), "part size")
@@ -166,6 +183,8 @@ int main(int argc, char** argv) {
                 co_await test.invoke_on_all(&tester::run_upload);
             } else if (operation == "get") {
                 co_await test.invoke_on_all(&tester::run_contiguous_get);
+            } else if (operation == "download") {
+                co_await test.invoke_on_all(&tester::run_download);
             } else {
                 throw std::runtime_error(format("Unknown operation {}", operation));
             }
