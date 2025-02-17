@@ -3,25 +3,33 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from __future__ import annotations
 
 import asyncio
 import getpass
 import logging
 import os
 import platform
+import shlex
 import subprocess
+import time
 from abc import ABC
 from asyncio import Task, Event
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from subprocess import TimeoutExpired
 from typing import TextIO
 
 import psutil
+from psutil import cpu_stats
 
+from test.alternator.test_metrics import metrics
 from test.pylib.db.model import Metric, SystemResourceMetric, CgroupMetric, Test
-from test.pylib.db.writer import DATE_TIME_TEMPLATE, SQLiteWriter, SYSTEM_RESOURCE_METRICS_TABLE, METRICS_TABLE, \
+from test.pylib.db.writer import SQLiteWriter, SYSTEM_RESOURCE_METRICS_TABLE, METRICS_TABLE, \
     DEFAULT_DB_NAME, CGROUP_MEMORY_METRICS_TABLE, TESTS_TABLE
+
+logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=None)
 def get_cgroup() -> Path:
@@ -31,15 +39,21 @@ def get_cgroup() -> Path:
     # Extract the relative cgroup for the process and make it absolute and add where the test.py process should be
     # placed in.
     # This can be used to manipulate the cgroup's controllers
-    return Path(f"/sys/fs/cgroup/{cgroup_info[0].strip().split(':')[-1]}/initial")
+    cgroup_name = Path(f'/sys/fs/cgroup/{cgroup_info[0].strip().split(":")[-1]}')
+    if cgroup_name.stem != 'initial':
+        cgroup_name = cgroup_name / 'initial'
+    return cgroup_name
 
 CGROUP_INITIAL: Path = get_cgroup()
 CGROUP_TESTS: Path = CGROUP_INITIAL.parent / 'tests'
-cancel_event_global = None
-stop_event_global = None
+
 
 class ResourceGather(ABC):
     def __init__(self, test, tmp_dir: str):
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
         self.test = test
         self.db_path = Path(tmp_dir) / DEFAULT_DB_NAME
         standardized_name = self.test.shortname.replace("/", "_")
@@ -47,6 +61,23 @@ class ResourceGather(ABC):
             f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.suite.mode}.{self.test.id}"
         )
         self.logger = logging.getLogger(__name__)
+
+    def  run_process(self, args: list[str], timeout, env: dict = None):
+
+        args = shlex.split(' '.join(args))
+        if env:
+            env.update(os.environ)
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        try:
+            stdout, stderr = p.communicate(timeout=timeout)
+        except TimeoutExpired:
+            print('Timeout reached')
+            p.kill()
+            stdout = p.stdout.read()
+        except KeyboardInterrupt:
+            p.kill()
+            raise
+        return p, stdout
 
     def make_cgroup(self):
         pass
@@ -60,7 +91,7 @@ class ResourceGather(ABC):
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         pass
 
-    def cgroup_monitor(self, test_event: Event):
+    def cgroup_monitor(self, test_event: Event) -> Task:
         pass
 
     def remove_cgroup(self):
@@ -69,7 +100,7 @@ class ResourceGather(ABC):
 
 class ResourceGatherOff(ResourceGather):
     def cgroup_monitor(self, test_event) -> Task:
-        return asyncio.create_task(no_monitor())
+        return self.loop.create_task(no_monitor(test_event))
 
 
 class ResourceGatherOn(ResourceGather):
@@ -92,16 +123,47 @@ class ResourceGatherOn(ResourceGather):
     def get_test_metrics(self) -> Metric:
         test_metrics: Metric = Metric(test_id=self.test_id)
         test_metrics.time_taken = self.test.time_end - self.test.time_start
-        test_metrics.time_start = datetime.fromtimestamp(self.test.time_start).strftime(DATE_TIME_TEMPLATE)
-        test_metrics.time_end = datetime.fromtimestamp(self.test.time_end).strftime(DATE_TIME_TEMPLATE)
+        test_metrics.time_start = datetime.fromtimestamp(self.test.time_start)
+        test_metrics.time_end = datetime.fromtimestamp(self.test.time_end)
         test_metrics.success = self.test.success
-        with open(self.cgroup_path / 'memory.peak', 'r') as file:
-            test_metrics.memory_peak = file.read()
+        memory_peak = self.cgroup_path / 'memory.peak'
+        if memory_peak.exists():
+            with open(memory_peak, 'r') as file:
+                test_metrics.memory_peak = file.read()
 
-        if (self.cgroup_path / 'cpu.stat').exists():
-            with open(self.cgroup_path / 'cpu.stat', 'r', ) as file:
+        cpu_stat = self.cgroup_path / 'cpu.stat'
+        if cpu_stat.exists():
+            with open(cpu_stat, 'r', ) as file:
                 self._parse_cpu_stat(file, test_metrics)
         return test_metrics
+
+    def run_process(self, args: list[str], timeout, env: dict = None):
+        stop_monitoring = asyncio.Event()
+
+        args = shlex.split(' '.join(args))
+        if env:
+            env.update(os.environ)
+        self.test.time_start = time.time()
+        test_resource_watcher = self.cgroup_monitor(test_event=stop_monitoring)
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+                             preexec_fn=self.preexec_testpy)
+        # with open(self.cgroup_path / 'cgroup.procs', "a") as cgroup:
+        #     cgroup.write(str(p.pid))
+        try:
+            stdout, stderr = p.communicate(timeout=timeout)
+        except TimeoutExpired:
+            print('Timeout reached')
+            p.kill()
+            stdout = p.stdout.read()
+        except KeyboardInterrupt:
+            p.kill()
+            raise
+        finally:
+            stop_monitoring.set()
+            self.test.time_end = time.time()
+            loop = test_resource_watcher.get_loop()
+            loop.run_until_complete(asyncio.gather(test_resource_watcher))
+        return p, stdout
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         metrics.success = success
@@ -115,10 +177,13 @@ class ResourceGatherOn(ResourceGather):
             cgroup.write(str(pid))
 
     def remove_cgroup(self):
-        os.rmdir(self.cgroup_path)
+        try:
+            os.rmdir(self.cgroup_path)
+        except OSError as e:
+            logger.warning(f'Can\'t delete cgroup directory: {e.strerror}' )
 
     def cgroup_monitor(self, test_event: Event) -> Task:
-        return asyncio.create_task(self._monitor_cgroup(test_event))
+        return self.loop.create_task(self._monitor_cgroup(test_event))
 
     async def _monitor_cgroup(self, test_event: Event) -> None:
         """Continuously monitors CPU and memory utilization."""
@@ -187,28 +252,31 @@ def setup_cgroup(is_required: bool) -> None:
             subprocess.run(['sudo', 'chown', '-R', f"{getpass.getuser()}:{getpass.getuser()}", '/sys/fs/cgroup'],
                            check=True)
 
+        configured = False
         for directory in [CGROUP_INITIAL, CGROUP_TESTS]:
-            if directory.exists():
-                os.rmdir(directory)
-            directory.mkdir()
-
-        with open(CGROUP_INITIAL.parent / 'cgroup.procs') as f:
-            processes = [x.strip() for x in f.readlines()]
-
-        for process in processes:
-            with open(CGROUP_INITIAL / 'cgroup.procs', "w") as f:
-                f.write(str(process))
+            if not directory.exists():
+                directory.mkdir()
+            else:
+                configured = True
 
 
-        with open(CGROUP_INITIAL.parent / 'cgroup.controllers', "r") as f:
-            controllers = f.readline()
-        controllers = " ".join(map(lambda x: f"+{x}", controllers.split(" ")))
+        if not configured:
+            with open(CGROUP_INITIAL.parent / 'cgroup.procs') as f:
+                processes = [x.strip() for x in f.readlines()]
 
-        with open(CGROUP_INITIAL.parent / 'cgroup.subtree_control', "w") as f:
-            f.write(controllers)
+            for process in processes:
+                with open(CGROUP_INITIAL / 'cgroup.procs', "w") as f:
+                    f.write(str(process))
 
-        with open(CGROUP_TESTS / 'cgroup.subtree_control', "w") as f:
-            f.write(controllers)
+            with open(CGROUP_INITIAL.parent / 'cgroup.controllers', "r") as f:
+                controllers = f.readline()
+            controllers = " ".join(map(lambda x: f"+{x}", controllers.split(" ")))
+
+            with open(CGROUP_INITIAL.parent / 'cgroup.subtree_control', "w") as f:
+                f.write(controllers)
+
+            with open(CGROUP_TESTS / 'cgroup.subtree_control', "w") as f:
+                f.write(controllers)
 
 
 async def monitor_resources(cancel_event: asyncio.Event, stop_event: asyncio.Event, tmpdir: Path) -> None:
@@ -227,11 +295,15 @@ async def monitor_resources(cancel_event: asyncio.Event, stop_event: asyncio.Eve
         await asyncio.sleep(2)
 
 
-async def no_monitor():
-    pass
+async def no_monitor(stop_event: Event):
+    try:
+        while not stop_event.is_set():
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        pass
 
 
 def run_resource_watcher(is_required, cancel_event, stop_event, tmpdir: str) -> Task:
     if is_required:
         return asyncio.create_task(monitor_resources(cancel_event, stop_event, Path(tmpdir)))
-    return asyncio.create_task(no_monitor())
+    return asyncio.create_task(no_monitor(stop_event))

@@ -3,7 +3,11 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from __future__ import annotations
+
+import glob
 import re
+import shutil
 import subprocess
 from collections.abc import Coroutine
 import threading
@@ -16,16 +20,26 @@ from functools import cache
 
 import random
 import string
+from pathlib import Path
 
 from typing import Callable, Awaitable, Optional, TypeVar, Any
 
+import universalasync
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
-from test.pylib.internal_types import ServerInfo
+from test.pylib.ldap_server import can_connect, try_something_backoff, setup
 
+from test.pylib.host_registry import HostRegistry
+
+from test.pylib.internal_types import ServerInfo
+from test.pylib.minio_server import MinioServer
+from test.pylib.resource_gather import setup_cgroup
+from test.pylib.s3_proxy import S3ProxyServer
+from test.pylib.s3_server_mock import MockS3Server
+from test.pylib.suite.base import TestSuite
 
 logger = logging.getLogger(__name__)
 
@@ -280,15 +294,6 @@ def get_configured_modes(root_dir=None):
                             out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
 
 
-def get_modes_to_run(session) -> list[str]:
-    modes = session.config.getoption('modes')
-    if not modes:
-        modes = get_configured_modes(root_dir=pathlib.Path(session.config.rootpath).parent)
-    if not modes:
-        raise RuntimeError('No modes configured. Please run ./configure.py first')
-    return modes
-
-
 async def gather_safely(*awaitables: Awaitable):
     """
     Developers using asyncio.gather() often assume that it waits for all futures (awaitables) givens.
@@ -304,3 +309,76 @@ async def gather_safely(*awaitables: Awaitable):
         if isinstance(result, BaseException):
             raise result from None
     return results
+
+
+@universalasync.async_to_sync_wraps
+async def start_3rd_party_services(tempdir_base: Path, byte_limit: int):
+    tp_server = subprocess.Popen('toxiproxy-server', stderr=subprocess.DEVNULL)
+    ms = MinioServer(
+        tempdir_base=str(tempdir_base),
+        address="127.0.0.1",
+        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
+    )
+    await ms.start()
+    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
+    hosts = HostRegistry()
+    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
+
+    mock_s3_server = MockS3Server(
+        host=await hosts.lease_host(),
+        port=2012,
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
+    )
+    await mock_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
+
+    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
+    proxy_s3_server = S3ProxyServer(
+        host=await hosts.lease_host(),
+        port=9002,
+        minio_uri=minio_uri,
+        max_retries=3,
+        seed=int(time.time()),
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
+    )
+    await proxy_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+
+    def can_connect_to_toxiproxy():
+        return can_connect(('127.0.0.1', 8474))
+
+    if not try_something_backoff(can_connect_to_toxiproxy):
+        raise Exception('Could not connect to toxiproxy')
+
+
+    finalize =  setup(5000, tempdir_base /'ldap_instances', byte_limit)
+    # TestSuite.artifacts.add_exit_artifact(None, finalize)
+    return tp_server, finalize
+
+
+def prepare_dirs(tempdir_base: Path, modes: list[str], gather_metrics: bool, is_pytest_runner: bool = False) -> None:
+    prepare_dir(tempdir_base, "*.log")
+    setup_cgroup(gather_metrics)
+    for directory in ['report', 'ldap_instances']:
+        full_path_directory = tempdir_base / directory
+        shutil.rmtree(full_path_directory, ignore_errors=True)
+        prepare_dir(full_path_directory, '*')
+    for mode in modes:
+        prepare_dir(tempdir_base / mode, "*.log")
+        prepare_dir(tempdir_base / mode, "*.reject")
+        prepare_dir(tempdir_base / mode / "xml", "*.xml")
+        shutil.rmtree(tempdir_base / mode /"failed_test", ignore_errors=True)
+        prepare_dir(tempdir_base / mode / "failed_test", "*")
+        prepare_dir(tempdir_base / mode / "allure", "*.xml")
+        if is_pytest_runner:
+            shutil.rmtree(tempdir_base / mode / "pytest", ignore_errors=True)
+            prepare_dir(tempdir_base / mode / "pytest", "*")
+
+
+def prepare_dir(dirname: Path, pattern: str) -> None:
+    # Ensure the dir exists
+    dirname.mkdir(parents=True, exist_ok=True)
+    # Remove old artifacts
+    for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
+        pathlib.Path(p).unlink()
