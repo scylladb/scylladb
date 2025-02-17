@@ -2326,7 +2326,7 @@ if __name__ == "__main__":
     if "SCYLLA_HOME" in os.environ:
         del os.environ["SCYLLA_HOME"]
 
-    if sys.version_info < (3, 10):
-        print("Python 3.10 or newer is required to run this program")
+    if sys.version_info < (3, 11):
+        print("Python 3.11 or newer is required to run this program")
         sys.exit(-1)
     sys.exit(asyncio.run(main()))
