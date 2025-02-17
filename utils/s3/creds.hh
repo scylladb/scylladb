@@ -32,6 +32,8 @@ struct endpoint_config {
     std::string region;
     // Amazon Resource Names (ARNs) to access AWS resources
     std::string role_arn;
+    std::optional<unsigned> max_connections;
+
     std::strong_ordering operator<=>(const endpoint_config& o) const = default;
 };
 
