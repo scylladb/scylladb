@@ -844,9 +844,6 @@ private:
                 std::ref(_ms), std::ref(_fd)).get();
             auto stop_raft_gr = deferred_stop(_group0_registry);
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
-            auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
-
             _feature_service.invoke_on_all([] (auto& fs) {
                 return fs.enable(fs.supported_feature_set());
             }).get();
@@ -875,6 +872,18 @@ private:
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
             auto compression_dict_updated_callback = [] { return make_ready_future<>(); };
+
+            _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
+
+            _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [this] {
+                _view_update_generator.stop().get();
+            });
+
+            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [this] {
+                _view_builder.stop().get();
+            });
 
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
@@ -963,18 +972,7 @@ private:
                 _group0_registry.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
             });
 
-            _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
-            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [this] {
-                _view_update_generator.stop().get();
-            });
-
-            _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
-
-            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
-            auto stop_view_builder = defer_verbose_shutdown("view builder", [this] {
-                _view_builder.stop().get();
-            });
 
             if (cfg_in.need_remote_proxy) {
                 _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(group0_client), std::ref(_topology_state_machine)).get();
@@ -984,6 +982,9 @@ private:
                     _proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
                 }
             });
+
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _sl_controller.invoke_on_all([this, &group0_client] (qos::service_level_controller& service) {
                 qos::service_level_controller::service_level_distributed_data_accessor_ptr service_level_data_accessor =
