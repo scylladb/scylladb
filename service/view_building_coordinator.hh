@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <memory>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
@@ -17,8 +18,17 @@
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/topology_state_machine.hh"
+#include "service/migration_listener.hh"
+
+namespace replica {
+class database;
+}
 
 namespace service {
+
+class group0_guard;
+class group0_batch;
+
 
 namespace vbc {
 struct view_building_target {
@@ -66,6 +76,7 @@ private:
     future<group0_guard> start_operation();
     future<> await_event();
     future<vbc_state> load_coordinator_state();
+    bool handle_view_building_coordinator_error(std::exception_ptr eptr) noexcept;
     
     future<std::optional<vbc_state>> update_coordinator_state();
     future<std::vector<canonical_mutation>> add_view(const group0_guard& guard, const view_name& view_name);
@@ -86,3 +97,9 @@ future<> run_view_building_coordinator(std::unique_ptr<view_building_coordinator
 }
 
 }
+
+template <> struct fmt::formatter<service::vbc::view_building_target> : fmt::formatter<string_view> {
+    auto format(const service::vbc::view_building_target& target, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{host={}, shard={}}}", target.host, target.shard);
+    }
+};
