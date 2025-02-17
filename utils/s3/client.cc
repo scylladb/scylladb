@@ -38,7 +38,6 @@
 #include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/credentials_providers/environment_aws_credentials_provider.hh"
-#include "utils/s3/credentials_providers/config_file_aws_credentials_provider.hh"
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
@@ -115,7 +114,6 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
         , _memory(mem)
         , _retry_strategy(std::move(rs)) {
     _creds_provider_chain
-        .add_credentials_provider(std::make_unique<aws::config_file_aws_credentials_provider>(db::config::get_conf_sub("object_storage.yaml").native()))
         .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
         .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn))
         .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>());
@@ -307,6 +305,12 @@ future<> client::do_retryable_request(group_client& gc, http::request req, http:
     aws::aws_exception request_ex{aws::aws_error{aws::aws_error_type::OK, aws::retryable::yes}};
     while (true) {
         try {
+            // We need to be able to simulate a retry in s3 tests
+            if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
+                throw aws::aws_exception(aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED,
+                    "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
+            }
+
             e = {};
             co_return co_await (as ? gc.http.make_request(req, handler, *as, std::nullopt) : gc.http.make_request(req, handler, std::nullopt));
         } catch (const aws::aws_exception& ex) {
