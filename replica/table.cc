@@ -1479,6 +1479,10 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         for (;;) {
             std::exception_ptr ex;
             try {
+                // We need to be able to simulate a retry in s3 tests
+                if (utils::get_local_injector().enter("memtable_flush_should_retry")) {
+                    throw storage_io_error(EPERM, "EPERM fault injected to simulate retry");
+                }
                 co_return co_await func();
             } catch (...) {
                 ex = std::current_exception();
