@@ -91,5 +91,11 @@ rjson::value calculate_value(const parsed::value& v,
 rjson::value calculate_value(const parsed::set_rhs& rhs,
         const rjson::value* previous_item);
 
+constexpr const std::string_view CONTEXT_NAME_MAIN_TABLE = "";
+constexpr const std::string_view CONTEXT_NAME_GSI = "Global Secondary Index";
+constexpr const std::string_view CONTEXT_NAME_LSI = "Local Secondary Index";
+
+void validate_attr_name_length(std::string_view context_name, size_t attr_name_length, bool is_key, std::string_view error_msg_prefix = {});
+
 
 } /* namespace alternator */
