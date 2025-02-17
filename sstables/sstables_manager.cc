@@ -43,7 +43,7 @@ sstables_manager::sstables_manager(
     , _maintenance_sg(std::move(maintenance_sg))
     , _abort(abort)
 {
-    _components_reloader_status = components_reloader_fiber();
+    _components_reloader_status = components_reclaim_reload_fiber();
 }
 
 sstables_manager::~sstables_manager() {
@@ -152,78 +152,98 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     return cfg;
 }
 
-void sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(sstable* sst) {
+void sstables_manager::increment_total_reclaimable_memory(sstable* sst) {
     _total_reclaimable_memory += sst->total_reclaimable_memory_size();
+    _components_memory_change_event.signal();
+}
 
-    size_t memory_reclaim_threshold = _available_memory * _db_config.components_memory_reclaim_threshold();
-    if (_total_reclaimable_memory <= memory_reclaim_threshold) {
-        // total memory used is within limit; no need to reclaim.
-        return;
-    }
+future<> sstables_manager::maybe_reclaim_components() {
+    while(_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
+        // Memory consumption is above threshold. Reclaim from the SSTable that
+        // has the most reclaimable memory to get the total consumption under limit.
+        // FIXME: Take SSTable usage into account during reclaim - see https://github.com/scylladb/scylladb/issues/21897
+        auto sst_with_max_memory = std::max_element(_active.begin(), _active.end(), [](const sstable& sst1, const sstable& sst2) {
+            return sst1.total_reclaimable_memory_size() < sst2.total_reclaimable_memory_size();
+        });
 
-    // Memory consumption has crossed threshold. Reclaim from the SSTable that
-    // has the most reclaimable memory to get the total consumption under limit.
-    auto sst_with_max_memory = std::max_element(_active.begin(), _active.end(), [](const sstable& sst1, const sstable& sst2) {
-        return sst1.total_reclaimable_memory_size() < sst2.total_reclaimable_memory_size();
+        auto memory_reclaimed = sst_with_max_memory->reclaim_memory_from_components();
+        _total_memory_reclaimed += memory_reclaimed;
+        _total_reclaimable_memory -= memory_reclaimed;
+        _reclaimed.insert(*sst_with_max_memory);
+        // TODO: As of now only bloom filter is reclaimed. Print actual component names when adding support for more components.
+        smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
+                memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
+        }
+        co_await coroutine::maybe_yield();
+}
+
+size_t sstables_manager::get_components_memory_reclaim_threshold() const {
+    return _available_memory * _db_config.components_memory_reclaim_threshold();
+}
+
+size_t sstables_manager::get_memory_available_for_reclaimable_components() const {
+    return get_components_memory_reclaim_threshold() - _total_reclaimable_memory;
+}
+
+future<> sstables_manager::components_reclaim_reload_fiber() {
+    auto components_memory_reclaim_threshold_observer = _db_config.components_memory_reclaim_threshold.observe([&] (double) {
+        // any change to the components_memory_reclaim_threshold config should trigger reload/reclaim
+        _components_memory_change_event.signal();
     });
 
-    auto memory_reclaimed = sst_with_max_memory->reclaim_memory_from_components();
-    _total_memory_reclaimed += memory_reclaimed;
-    _total_reclaimable_memory -= memory_reclaimed;
-    _reclaimed.insert(*sst_with_max_memory);
-    // TODO: As of now only bloom filter is reclaimed. Print actual component names when adding support for more components.
-    smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
-            memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
-}
-
-size_t sstables_manager::get_memory_available_for_reclaimable_components() {
-    size_t memory_reclaim_threshold = _available_memory * _db_config.components_memory_reclaim_threshold();
-    return memory_reclaim_threshold - _total_reclaimable_memory;
-}
-
-future<> sstables_manager::components_reloader_fiber() {
     co_await coroutine::switch_to(_maintenance_sg);
 
     sstlog.trace("components_reloader_fiber start");
+
     while (true) {
-        co_await _sstable_deleted_event.when();
+        co_await _components_memory_change_event.when();
 
         if (_closing) {
             co_return;
         }
 
-        // Reload bloom filters from the smallest to largest so as to maximize
-        // the number of bloom filters being reloaded.
-        auto memory_available = get_memory_available_for_reclaimable_components();
-        while (!_reclaimed.empty() && memory_available > 0) {
-            auto sstable_to_reload = _reclaimed.begin();
-            const size_t reclaimed_memory = sstable_to_reload->total_memory_reclaimed();
-            if (reclaimed_memory > memory_available) {
-                // cannot reload anymore sstables
-                break;
-            }
-
-            // Increment the total memory before reloading to prevent any parallel
-            // fibers from loading new bloom filters into memory.
-            _total_reclaimable_memory += reclaimed_memory;
-            _reclaimed.erase(sstable_to_reload);
-            // Use a lw_shared_ptr to prevent the sstable from getting deleted when
-            // the components are being reloaded.
-            auto sstable_ptr = sstable_to_reload->shared_from_this();
-            try {
-                co_await sstable_ptr->reload_reclaimed_components();
-            } catch (...) {
-                // reload failed due to some reason
-                sstlog.warn("Failed to reload reclaimed SSTable components : {}", std::current_exception());
-                // revert back changes made before the reload
-                _total_reclaimable_memory -= reclaimed_memory;
-                _reclaimed.insert(*sstable_to_reload);
-                break;
-            }
-
-            _total_memory_reclaimed -= reclaimed_memory;
-            memory_available = get_memory_available_for_reclaimable_components();
+        if (_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
+            // reclaim memory to bring total memory usage under threshold
+            co_await maybe_reclaim_components();
+        } else {
+            // memory available for reloading components of previously reclaimed SSTables
+            co_await maybe_reload_components();
         }
+    }
+}
+
+future<> sstables_manager::maybe_reload_components() {
+    // Reload bloom filters from the smallest to largest so as to maximize
+    // the number of bloom filters being reloaded.
+    auto memory_available = get_memory_available_for_reclaimable_components();
+    while (!_reclaimed.empty() && memory_available > 0) {
+        auto sstable_to_reload = _reclaimed.begin();
+        const size_t reclaimed_memory = sstable_to_reload->total_memory_reclaimed();
+        if (reclaimed_memory > memory_available) {
+            // cannot reload anymore sstables
+            break;
+        }
+
+        // Increment the total memory before reloading to prevent any parallel
+        // fibers from loading new bloom filters into memory.
+        _total_reclaimable_memory += reclaimed_memory;
+        _reclaimed.erase(sstable_to_reload);
+        // Use a lw_shared_ptr to prevent the sstable from getting deleted when
+        // the components are being reloaded.
+        auto sstable_ptr = sstable_to_reload->shared_from_this();
+        try {
+            co_await sstable_ptr->reload_reclaimed_components();
+        } catch (...) {
+            // reload failed due to some reason
+            sstlog.warn("Failed to reload reclaimed SSTable components : {}", std::current_exception());
+            // revert back changes made before the reload
+            _total_reclaimable_memory -= reclaimed_memory;
+            _reclaimed.insert(*sstable_to_reload);
+            break;
+        }
+
+        _total_memory_reclaimed -= reclaimed_memory;
+        memory_available = get_memory_available_for_reclaimable_components();
     }
 }
 
@@ -262,7 +282,7 @@ void sstables_manager::deactivate(sstable* sst) {
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
     delete sst;
-    _sstable_deleted_event.signal();
+    _components_memory_change_event.signal();
     maybe_done();
 }
 
@@ -297,7 +317,7 @@ future<> sstables_manager::close() {
     co_await _done.get_future();
     co_await _sstable_metadata_concurrency_sem.stop();
     // stop the components reload fiber
-    _sstable_deleted_event.signal();
+    _components_memory_change_event.signal();
     co_await std::move(_components_reloader_status);
 }
 

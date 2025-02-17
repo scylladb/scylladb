@@ -53,7 +53,7 @@ public:
     }
 
     void increment_total_reclaimable_memory_and_maybe_reclaim(sstable *sst) {
-        sstables_manager::increment_total_reclaimable_memory_and_maybe_reclaim(sst);
+        sstables_manager::increment_total_reclaimable_memory(sst);
     }
 
     size_t get_total_memory_reclaimed() {
