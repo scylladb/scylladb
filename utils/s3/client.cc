@@ -438,6 +438,14 @@ future<> client::delete_object_tagging(sstring object_name, seastar::abort_sourc
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
+static sstring format_range_header(const range& range) {
+    auto end_bytes = range.off + range.len - 1;
+    if (end_bytes < range.off) {
+        throw std::overflow_error("End of the range exceeds 64-bits");
+    }
+    return format("bytes={}-{}", range.off, end_bytes);
+}
+
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
@@ -445,11 +453,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
         if (range->len == 0) {
             co_return temporary_buffer<char>();
         }
-        auto end_bytes = range->off + range->len - 1;
-        if (end_bytes < range->off) {
-            throw std::overflow_error("End of the range exceeds 64-bits");
-        }
-        auto range_header = format("bytes={}-{}", range->off, end_bytes);
+        auto range_header = format_range_header(*range);
         s3l.trace("GET {} contiguous range='{}'", object_name, range_header);
         req._headers["Range"] = std::move(range_header);
         expected = http::reply::status_type::partial_content;
