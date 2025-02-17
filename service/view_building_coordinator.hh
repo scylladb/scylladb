@@ -9,6 +9,7 @@
 #pragma once
 
 #include <compare>
+#include <memory>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
@@ -21,8 +22,16 @@
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/topology_state_machine.hh"
+#include "service/migration_listener.hh"
+
+namespace replica {
+class database;
+}
 
 namespace service {
+
+class group0_guard;
+class group0_batch;
 
 struct view_building_target {
     locator::host_id host;
@@ -70,6 +79,8 @@ private:
     future<group0_guard> start_operation();
     future<> await_event();
     future<vbc_state> load_coordinator_state();
+    // Returns true if the coordinator should sleep after handling the error.
+    bool handle_error(std::exception_ptr eptr) noexcept;
 
     table_id get_base_table_id(table_id view_id);
     table_id table_name_to_id(const std::pair<sstring, sstring>& table_name);
@@ -91,3 +102,9 @@ private:
 };
 
 }
+
+template <> struct fmt::formatter<service::view_building_target> : fmt::formatter<string_view> {
+    auto format(const service::view_building_target& target, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{host={}, shard={}}}", target.host, target.shard);
+    }
+};

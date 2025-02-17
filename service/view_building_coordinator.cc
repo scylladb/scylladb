@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <chrono>
 #include <exception>
 #include <iterator>
 #include <ranges>
@@ -13,6 +14,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/sleep.hh>
 #include <fmt/ranges.h>
 
 #include "cql3/query_processor.hh"
@@ -71,6 +73,9 @@ future<view_building_coordinator::vbc_state> view_building_coordinator::load_coo
     auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
     auto currently_processed_base_table = co_await _sys_ks.get_vbc_processing_base();
 
+    vbc_logger.debug("Loaded state: {}", tasks);
+    vbc_logger.debug("Processing base: {}", currently_processed_base_table);
+
     co_return vbc_state {
         .tasks = std::move(tasks),
         .currently_processed_base_table = std::move(currently_processed_base_table),
@@ -90,12 +95,33 @@ std::pair<sstring, sstring> view_building_coordinator::table_id_to_name(table_id
     return {schema->ks_name(), schema->cf_name()};
 }
 
+bool view_building_coordinator::handle_error(std::exception_ptr eptr) noexcept {
+    try {
+        std::rethrow_exception(std::move(eptr));
+    } catch (group0_concurrent_modification&) {
+        vbc_logger.info("view building coordinator got group0_concurrent_modification");
+    } catch (term_changed_error&) {
+        vbc_logger.debug("view building coordinator got term_changed_error");
+    } catch (seastar::abort_requested_exception&) {
+        vbc_logger.debug("view building coordinator aborted");
+    } catch (raft::request_aborted&) {
+        vbc_logger.debug("view building coordinator aborted");
+    } catch (raft::commit_status_unknown&) {
+        vbc_logger.debug("view building coordinator got commit_status_unknown");
+    } catch (...) {
+        vbc_logger.error("view building coordinator got error: {}", std::current_exception());
+        return true;
+    }
+    return false;
+}
+
 future<> view_building_coordinator::run() {
     auto abort = _as.subscribe([this] noexcept {
         _cond.broadcast();
     });
 
     while (!_as.abort_requested()) {
+        bool sleep = false;
         vbc_logger.debug("coordinator loop iteration");
         try {
             auto state_opt = co_await update_coordinator_state();
@@ -106,7 +132,15 @@ future<> view_building_coordinator::run() {
             co_await build_view(std::move(*state_opt));
             co_await await_event();
         } catch (...) {
-            // TODO: error handling
+            sleep = handle_error(std::current_exception());
+        }
+
+        if (sleep) {
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            } catch (...) {
+                vbc_logger.debug("sleep failed: {}", std::current_exception());
+            }
         }
     }
 }
@@ -177,6 +211,7 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
         co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
         co_return std::nullopt;
     }
+    vbc_logger.debug("no updates to process, returning current state...");
     co_return state;
 }
 
@@ -239,6 +274,7 @@ future<> view_building_coordinator::build_view(vbc_state state) {
         for (size_t shard = 0; shard < replica_state.shard_count; ++shard) {
             view_building_target target{host_id, shard};
             if (_remote_work_map.contains(target) && !_remote_work_map.at(target).available()) {
+                vbc_logger.debug("Target {} is still processing request.", target);
                 continue;
             }
             if (_remote_work_map.contains(target)) {
@@ -247,6 +283,7 @@ future<> view_building_coordinator::build_view(vbc_state state) {
 
             auto [views, range] = get_views_and_range_for_target(_db, *state.currently_processed_base_table, base_tasks, target);
             if (views.empty()) {
+                vbc_logger.debug("No views to build for target {}", target);
                 continue;
             }
 
@@ -268,7 +305,23 @@ future<> view_building_coordinator::send_task(view_building_target target, table
         co_return;
     }
 
-    co_await mark_task_completed(target, base_id, range, std::move(rpc_result));
+    int retries = 3;
+    while (retries-- > 0) {
+        bool sleep = false;
+        try {
+            co_await mark_task_completed(target, base_id, range, std::move(rpc_result));
+            break;
+        } catch (...) {
+            sleep = handle_error(std::current_exception());
+        }
+        if (sleep) {
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            } catch (...) {
+                vbc_logger.debug("sleep failed: {}", std::current_exception());
+            }
+        }
+    }
     _cond.broadcast();
 }
 
