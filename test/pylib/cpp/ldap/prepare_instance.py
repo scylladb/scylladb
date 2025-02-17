@@ -16,6 +16,8 @@ from tempfile import TemporaryDirectory
 from time import sleep
 from typing import Any, Generator
 
+from test.pylib.resource_gather import setup_cgroup
+
 LDAP_SERVER_CONFIGURATION_FILE = Path('test', 'resource', 'slapd.conf')
 DEFAULT_ENTRIES = ["""dn: dc=example,dc=com
 objectClass: dcObject
@@ -139,14 +141,18 @@ class PrepareMainProcessEnv:
     The environment settings are saved to a file for later consumption by child processes.
     """
 
-    def __init__(self, root_dir, temp_dir: Path, modes: list[str], env_file: Path, byte_limit: int):
+    def __init__(self,
+                 root_dir: Path,
+                 temp_dir: Path,
+                 modes: list[str],
+                 env_file: Path,
+                 byte_limit: int,
+                 gather_metrics: bool = True,
+                 ):
         self.temp_dir = temp_dir
         self.modes = modes
         self.root_dir = root_dir
-        pytest_dirs = [self.temp_dir / mode / 'pytest' for mode in modes]
-        for directory in [self.temp_dir, *pytest_dirs]:
-            if not directory.exists():
-                os.makedirs(directory, exist_ok=True)
+
         self.env_file = env_file
         self.tp_server = subprocess.Popen('toxiproxy-server', stderr=subprocess.DEVNULL)
 
@@ -158,6 +164,7 @@ class PrepareMainProcessEnv:
         self.ldap_port = 5000
         self.byte_limit = byte_limit
         self.finalize = None
+        # setup_cgroup(gather_metrics)
 
     def prepare(self) -> None:
         """
@@ -198,8 +205,13 @@ class PrepareMainProcessEnv:
 
 
 @contextmanager
-def get_env_manager(root_dir: Path, temp_dir: Path, worker_id: str, modes: list[str],
-                    byte_limit: int) -> Generator[None, Any, None]:
+def get_env_manager(root_dir: Path,
+                    temp_dir: Path,
+                    worker_id: str,
+                    modes: list[str],
+                    byte_limit: int,
+                    gather_metrics: bool = True
+                    ) -> Generator[None, Any, None]:
     """
     xdist helps to execute test in parallel.
     For that purpose it creates one main controller and workers.
@@ -217,7 +229,7 @@ def get_env_manager(root_dir: Path, temp_dir: Path, worker_id: str, modes: list[
         with PrepareChildProcessEnv(root_dir, temp_dir, modes, env_file, byte_limit, worker_id):
             yield
     else:
-        with PrepareMainProcessEnv(root_dir, temp_dir, modes, env_file, byte_limit):
+        with PrepareMainProcessEnv(root_dir, temp_dir, modes, env_file, byte_limit, gather_metrics):
             yield
 
 
@@ -257,7 +269,7 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
     instance_path = instance_root / str(port)
     slapd_pid_file = instance_path / 'slapd.pid'
     saslauthd_socket_path = TemporaryDirectory()
-    os.makedirs(instance_path, exist_ok=True)
+    os.makedirs(instance_path)
     # This will always fail because it lacks the permissions to read the default slapd data
     # folder but it does create the instance folder so we don't want to fail here.
     try:
@@ -303,7 +315,7 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
         slapd_proc.terminate()
         slapd_proc.wait()  # Wait for slapd to remove slapd.pid, so it doesn't race with rmtree below.
         saslauthd_proc.kill()  # Somehow, invoking terminate() here also terminates toxiproxy-server. o_O
-        shutil.rmtree(instance_path)
+        # shutil.rmtree(instance_path)
         saslauthd_socket_path.cleanup()
         subprocess.check_output(['toxiproxy-cli', 'd', proxy_name])
 

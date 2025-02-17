@@ -3,9 +3,11 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-import asyncio
 import sqlite3
+import os
 from typing import List
+from multiprocessing import Lock
+from contextlib import contextmanager
 
 from attr import AttrsInstance, asdict
 
@@ -65,18 +67,8 @@ create_table = [
 ]
 
 
-class SingletonMeta(type):
-    _instances = {}
-
-    def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            instance = super().__call__(*args, **kwargs)
-            cls._instances[cls] = instance
-        return cls._instances[cls]
-
-
-class SQLiteWriter(metaclass=SingletonMeta):
-    __instance = None
+class SQLiteWriter:
+    _lock = Lock()
 
     def __init__(self, database_path):
         """
@@ -85,14 +77,63 @@ class SQLiteWriter(metaclass=SingletonMeta):
         Args:
             database_path: Path to the SQLite database file.
         """
-        self.lock = asyncio.Lock()
-        self.conn = sqlite3.connect(database_path)
-        self.cursor = self.conn.cursor()
-        self.cursor.execute('PRAGMA foreign_keys=ON')
-        self.cursor.execute('PRAGMA sychronous=off')
-        for table in create_table:
-            self.cursor.execute(table).connection.commit()
-        SQLiteWriter.__instance = self
+        self.database_path = database_path
+        self.pid = os.getpid()
+        self._connection = None
+        self._cursor = None
+
+        # Initialize database with tables
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('PRAGMA foreign_keys=ON')
+            cursor.execute('PRAGMA journal_mode=WAL')
+            cursor.execute('PRAGMA locking_mode=NORMAL')
+            cursor.execute('pragma temp_store = memory')
+            # cursor.execute('PRAGMA busy_timeout = 30000')
+            cursor.execute('PRAGMA synchronous=NORMAL')
+            for table in create_table:
+                cursor.execute(table)
+            conn.commit()
+
+    @contextmanager
+    def get_connection(self):
+        """
+        Context manager for getting a database connection.
+        Ensures proper handling of connections per process and automatic closing.
+        """
+        current_pid = os.getpid()
+
+        # If we're in a new process or don't have a connection, create one
+        if self._connection is None or self.pid != current_pid:
+            if self._connection is not None:
+                self._connection.close()
+            self._connection = sqlite3.connect(
+                self.database_path,
+                detect_types=sqlite3.PARSE_DECLTYPES,
+                timeout=30
+            )
+            self.pid = current_pid
+
+        try:
+            yield self._connection
+        except Exception as e:
+            self._connection.rollback()
+            raise e
+
+    @contextmanager
+    def get_cursor(self):
+        """
+        Context manager for getting a database cursor.
+        Ensures proper transaction handling and automatic commits.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                yield cursor
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                raise e
 
     def write_row(self, model, table_name: str) -> int:
         """
@@ -103,18 +144,18 @@ class SQLiteWriter(metaclass=SingletonMeta):
             table_name: Name of the table where data is being written.
 
         Return:
-            str: Returns the ID of the inserted record
+            int: Returns the ID of the inserted record
         """
-        data = asdict(model)
-        columns = ', '.join(data.keys())
-        placeholders = ', '.join(['?'] * len(data))
-        values = tuple(data.values())
+        with self._lock:
+            with self.get_cursor() as cursor:
+                data = asdict(model)
+                columns = ', '.join(data.keys())
+                placeholders = ', '.join(['?'] * len(data))
+                values = tuple(data.values())
 
-        sql_query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
-        self.cursor.execute(sql_query, values)
-        last_row_id = self.cursor.lastrowid
-        self.conn.commit()
-        return last_row_id
+                sql_query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
+                cursor.execute(sql_query, values)
+                return cursor.lastrowid
 
     def write_multiple_rows(self, data_list: List[AttrsInstance], table_name: str) -> None:
         """
@@ -124,32 +165,54 @@ class SQLiteWriter(metaclass=SingletonMeta):
             data_list: A list of AttrsInstance objects, each representing a row of data.
             table_name: Name of the table where data is being written.
         """
-        for model in data_list:
-            self.write_row(model, table_name)
+        with self._lock:
+            with self.get_cursor() as cursor:
+                for model in data_list:
+                    data = asdict(model)
+                    columns = ', '.join(data.keys())
+                    placeholders = ', '.join(['?'] * len(data))
+                    values = tuple(data.values())
+                    sql_query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
+                    cursor.execute(sql_query, values)
+
+    def write_row_if_not_exist(self, model, table_name: str) -> int:
+        """
+        Writes a row to the table if it doesn't exist, otherwise returns the existing row's ID.
+
+        Args:
+            model: A AttrsInstance object with a data to insert.
+            table_name: Name of the table where data is being written.
+
+        Return:
+            int: Returns the ID of the existing or newly inserted record
+        """
+        with self._lock:
+            with self.get_cursor() as cursor:
+                data = asdict(model)
+                values = tuple(data.values())
+
+                # Construct the SQL query to retrieve the ID if the record exists
+                select_query = f"""
+                    SELECT id FROM {table_name} WHERE {
+                    ' AND '.join([f"{col} = ?" for col in data.keys()])
+                    }
+                """
+
+                cursor.execute(select_query, values)
+                existing_row = cursor.fetchone()
+
+                if existing_row:
+                    return existing_row[0]
+                else:
+                    columns = ', '.join(data.keys())
+                    placeholders = ', '.join(['?'] * len(data))
+                    insert_query = f'INSERT INTO {table_name} ({columns}) VALUES ({placeholders})'
+                    cursor.execute(insert_query, values)
+                    return cursor.lastrowid
 
     def __del__(self):
         """
         Closes the database connection when the object is deleted.
         """
-        self.conn.close()
-
-    def write_row_if_not_exist(self, model, table_name: str):
-        data = asdict(model)
-        values = tuple(data.values())
-
-        # Construct the SQL query to retrieve the ID if the record exists
-        select_query = f"""
-                SELECT id FROM {table_name} WHERE {
-        ' AND '.join([f"{col} = ?" for col in data.keys()])
-        }
-        """
-
-        # Execute the select query first
-        cursor = self.conn.execute(select_query, values)
-        existing_row = cursor.fetchone()
-
-        if existing_row:
-            # Record exists, return its ID
-            return existing_row[0]
-        else:
-            return self.write_row(model, table_name)
+        if self._connection is not None:
+            self._connection.close()

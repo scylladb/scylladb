@@ -1,5 +1,4 @@
-# Suite test type. Supported types: unit, boost, cql
-type: unit
+type: dummy
 # A list of tests that are only run in dev and release modes
 skip_in_debug_modes:
     - lsa_async_eviction_test

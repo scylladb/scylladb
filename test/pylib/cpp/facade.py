@@ -25,6 +25,7 @@
 #
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from abc import ABC
@@ -33,6 +34,8 @@ from subprocess import TimeoutExpired
 from typing import Sequence
 
 from pytest import Config
+
+from test.pylib.db.writer import SQLiteWriter
 
 
 class CppTestFailure(Exception):
@@ -53,28 +56,34 @@ class CppTestFailureList(Exception):
         self.failures = list(failures)
 
 class CppTestFacade(ABC):
-    def __init__(self, config: Config, combined_tests: dict[str, list[str]] = None):
+    def __init__(self, config: Config, combined_tests: dict[str, list[str]] = None, gather_metrics: bool = False):
         self.temp_dir: Path = Path(config.getoption('tmpdir'))
         self.combined_suites: dict[str, list[str]] = combined_tests
+        self.gather_metrics = gather_metrics
 
     def list_tests(self, executable: Path , no_parallel: bool) -> tuple[bool,list[str]]:
         raise NotImplementedError
 
-    def run_test(self, executable: Path, original_name: str, test_id: str, mode:str, file_name: Path, test_args: Sequence[str] = ()) -> tuple[Sequence[CppTestFailure] | None, str]:
+    def run_test(self, executable: Path, original_name: str, test_id: str, mode:str, file_name: Path, test_args: Sequence[str] = (), env: dict = None) -> tuple[Sequence[CppTestFailure] | None, str]:
          raise NotImplementedError
 
 
-def run_process(args: list[str], timeout):
+def run_process(args: list[str], timeout, env:dict=None, preexec_fn=None, cgroup: Path = None):
+
     args = shlex.split(' '.join(args))
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if env:
+        env.update(os.environ)
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, preexec_fn=preexec_fn)
+    if cgroup:
+        with open(cgroup / 'cgroup.procs', "a") as cgroup:
+            cgroup.write(str(p.pid))
     try:
         stdout, stderr = p.communicate(timeout=timeout)
     except TimeoutExpired:
         print('Timeout reached')
         p.kill()
         stdout = p.stdout.read()
-        stderr = p.stderr.read()
     except KeyboardInterrupt:
         p.kill()
         raise
-    return p, stderr, stdout
+    return p, stdout
