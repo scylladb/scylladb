@@ -1271,47 +1271,47 @@ public:
 };
 
 future<> storage_service::raft_initialize_discovery_leader(const join_node_request_params& params) {
-        if (params.replaced_id.has_value()) {
-            throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
-        }
+    if (params.replaced_id.has_value()) {
+        throw std::runtime_error(::format("Cannot perform a replace operation because this is the first node in the cluster"));
+    }
 
-        if (params.num_tokens == 0 && params.tokens_string.empty()) {
-            throw std::runtime_error("Cannot start the first node in the cluster as zero-token");
-        }
+    if (params.num_tokens == 0 && params.tokens_string.empty()) {
+        throw std::runtime_error("Cannot start the first node in the cluster as zero-token");
+    }
 
-        const auto new_group0_state_id = raft_group0_client::generate_group0_state_id(utils::UUID{});
-        auto write_timestamp = utils::UUID_gen::micros_timestamp(new_group0_state_id);
+    const auto new_group0_state_id = raft_group0_client::generate_group0_state_id(utils::UUID{});
+    auto write_timestamp = utils::UUID_gen::micros_timestamp(new_group0_state_id);
 
-        rtlogger.info("adding myself as the first node to the topology");
+    rtlogger.info("adding myself as the first node to the topology");
 
-        auto insert_join_request_mutations = build_mutation_from_join_params(params, write_timestamp);
+    auto insert_join_request_mutations = build_mutation_from_join_params(params, write_timestamp);
 
-        // We are the first node and we define the cluster.
-        // Set the enabled_features field to our features.
-        topology_mutation_builder builder(write_timestamp);
-        builder.add_enabled_features(params.supported_features | std::ranges::to<std::set<sstring>>())
-                .set_upgrade_state(topology::upgrade_state_type::done); // Skip upgrade, start right in the topology-on-raft mode
-        auto enable_features_mutation = builder.build();
-        insert_join_request_mutations.push_back(std::move(enable_features_mutation));
+    // We are the first node and we define the cluster.
+    // Set the enabled_features field to our features.
+    topology_mutation_builder builder(write_timestamp);
+    builder.add_enabled_features(params.supported_features | std::ranges::to<std::set<sstring>>())
+            .set_upgrade_state(topology::upgrade_state_type::done); // Skip upgrade, start right in the topology-on-raft mode
+    auto enable_features_mutation = builder.build();
+    insert_join_request_mutations.push_back(std::move(enable_features_mutation));
 
-        auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(2, write_timestamp);
-        insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
+    auto sl_status_mutation = co_await _sys_ks.local().make_service_levels_version_mutation(2, write_timestamp);
+    insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
 
-        insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_auth_version_mutation(write_timestamp, db::system_keyspace::auth_version_t::v2));
+    insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_auth_version_mutation(write_timestamp, db::system_keyspace::auth_version_t::v2));
 
-        if (!utils::get_local_injector().is_enabled("skip_vb_v2_version_mut")) {
-            insert_join_request_mutations.emplace_back(
-                    co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
-        }
+    if (!utils::get_local_injector().is_enabled("skip_vb_v2_version_mut")) {
+        insert_join_request_mutations.emplace_back(
+                co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
+    }
 
-        topology_change change{std::move(insert_join_request_mutations)};
-        
-        auto history_append = db::system_keyspace::make_group0_history_state_id_mutation(new_group0_state_id,
-                _migration_manager.local().get_group0_client().get_history_gc_duration(), "bootstrap: adding myself as the first node to the topology");
-        auto mutation_creator_addr = _sys_ks.local().local_db().get_token_metadata().get_topology().my_address();
+    topology_change change{std::move(insert_join_request_mutations)};
+    
+    auto history_append = db::system_keyspace::make_group0_history_state_id_mutation(new_group0_state_id,
+            _migration_manager.local().get_group0_client().get_history_gc_duration(), "bootstrap: adding myself as the first node to the topology");
+    auto mutation_creator_addr = _sys_ks.local().local_db().get_token_metadata().get_topology().my_address();
 
-        co_await write_mutations_to_database(_qp.proxy(), mutation_creator_addr, std::move(change.mutations));
-        co_await _qp.proxy().mutate_locally({history_append}, nullptr);
+    co_await write_mutations_to_database(_qp.proxy(), mutation_creator_addr, std::move(change.mutations));
+    co_await _qp.proxy().mutate_locally({history_append}, nullptr);
 }
 
 future<> storage_service::initialize_done_topology_upgrade_state() {
