@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <chrono>
 #include <exception>
 #include <iterator>
 #include <ranges>
@@ -22,6 +23,7 @@
 #include "mutation/canonical_mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "seastar/core/loop.hh"
+#include "seastar/core/sleep.hh"
 #include "seastar/coroutine/maybe_yield.hh"
 #include "seastar/coroutine/parallel_for_each.hh"
 #include "service/raft/group0_state_machine.hh"
@@ -68,6 +70,9 @@ future<view_building_coordinator::vbc_state> view_building_coordinator::load_coo
     auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
     auto processing_base = co_await _sys_ks.get_vbc_processing_base();
 
+    vbc_logger.debug("Loaded state: {}", tasks);
+    vbc_logger.debug("Processing base: {}", processing_base);
+
     co_return vbc_state {
         .tasks = std::move(tasks),
         .processing_base = std::move(processing_base),
@@ -78,12 +83,27 @@ table_id view_building_coordinator::get_base_id(const view_name& view_name) {
     return _db.find_schema(view_name.first, view_name.second)->view_info()->base_id();
 }
 
+bool view_building_coordinator::handle_view_building_coordinator_error(std::exception_ptr eptr) noexcept {
+    try {
+        std::rethrow_exception(std::move(eptr));
+    } catch (group0_concurrent_modification&) {
+        vbc_logger.info("view building coordinator got group0_concurrent_modification");
+    } catch (seastar::abort_requested_exception&) {
+        vbc_logger.debug("view building coordinator aborted");
+    } catch (...) {
+        vbc_logger.error("view building coordinator got error: {}", std::current_exception());
+        return true;
+    }
+    return false;
+}
+
 future<> view_building_coordinator::run() {
     auto abort = _as.subscribe([this] noexcept {
         _cond.broadcast();
     });
 
     while (!_as.abort_requested()) {
+        bool sleep = false;
         vbc_logger.debug("coordinator loop iteration");
         try {
             auto state_opt = co_await update_coordinator_state();
@@ -94,7 +114,15 @@ future<> view_building_coordinator::run() {
             co_await build_view(std::move(*state_opt));
             co_await await_event();
         } catch (...) {
-            
+            sleep = handle_view_building_coordinator_error(std::current_exception());
+        }
+
+        if (sleep) {
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            } catch (...) {
+                vbc_logger.debug("sleep failed: {}", std::current_exception());
+            }
         }
         co_await coroutine::maybe_yield();
     }
@@ -144,6 +172,7 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
         co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
         co_return std::nullopt;
     }
+    vbc_logger.debug("no updates to process, returning current state...");
     co_return state;
 }
 
@@ -204,6 +233,7 @@ future<> view_building_coordinator::build_view(vbc_state state) {
         for (size_t shard = 0; shard < replica_state.shard_count; ++shard) {
             view_building_target target{host_id, shard};
             if (_rpc_handlers.contains(target) && !_rpc_handlers.at(target).available()) {
+                vbc_logger.debug("Target {} is still processing request.", target);
                 continue;
             }
             if (_rpc_handlers.contains(target)) {
@@ -212,6 +242,7 @@ future<> view_building_coordinator::build_view(vbc_state state) {
 
             auto [views, range] = get_views_and_range_for_target(_db, *state.processing_base, base_tasks, target);
             if (views.empty()) {
+                vbc_logger.debug("No views to build for target {}", target);
                 continue;
             }
 
@@ -236,7 +267,23 @@ future<> view_building_coordinator::send_task(view_building_target target, table
         co_return;
     }
 
-    co_await mark_task_completed(target, base_id, range, std::move(views));
+    int retires = 3;
+    while (retires-- > 0) {
+        bool sleep = false;
+        try {
+            co_await mark_task_completed(target, base_id, range, std::move(views));
+        } catch (...) {
+            sleep = handle_view_building_coordinator_error(std::current_exception());
+        }
+        if (sleep) {
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            } catch (...) {
+                vbc_logger.debug("sleep failed: {}", std::current_exception());
+            }
+        }
+        co_await coroutine::maybe_yield();
+    }
     _cond.broadcast();
 }
 
