@@ -165,7 +165,10 @@ static std::optional<std::string> resolve_path_component(const std::string& colu
                     fmt::format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
         }
         used_attribute_names.emplace(column_name);
-        return std::string(rjson::to_string_view(*value));
+        auto result = std::string(rjson::to_string_view(*value));
+        validate_attr_name_length(schema_context::context::main_table, result.size(), false, "ExpressionAttributeNames contains invalid value: ",
+                std::string(" for key ") + column_name);
+        return result;
     }
     return std::nullopt;
 }
@@ -735,6 +738,31 @@ rjson::value calculate_value(const parsed::set_rhs& rhs,
     }
     // Can't happen
     return rjson::null_value();
+}
+
+const std::map<schema_context::context, std::string> schema_context::index_str_map = {
+    { context::main_table, "" },
+    { context::gsi, "Global Secondary Index" },
+    { context::lsi, "Local Secondary Index" },
+};
+
+void validate_attr_name_length(const schema_context& context, const size_t &attr_name_length, const bool &is_key,
+            const std::string &error_msg_prefix, const std::string &error_msg_postfix) {
+    constexpr size_t DYNAMODB_INDEX_NAME_SIZE_MAX = 255;
+    constexpr size_t DYNAMODB_ATTR_NAME_SIZE_MAX = 65535;
+
+    if (const size_t max_length = is_key ? DYNAMODB_INDEX_NAME_SIZE_MAX : DYNAMODB_ATTR_NAME_SIZE_MAX; attr_name_length > max_length) {
+        std::string error_msg;
+        if (!error_msg_prefix.empty()) {
+            if (context.index_str().empty()) {
+                error_msg += error_msg_prefix;
+            } else {
+                error_msg += error_msg_prefix + "in " + context.index_str() + " - ";
+            }
+        }
+        error_msg += fmt::format("Attribute name is too large, must be less than {} bytes{}", std::to_string(max_length + 1), error_msg_postfix);
+        throw api_error::validation(error_msg);
+    }
 }
 
 } // namespace alternator

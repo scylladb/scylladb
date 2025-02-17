@@ -91,5 +91,22 @@ rjson::value calculate_value(const parsed::value& v,
 rjson::value calculate_value(const parsed::set_rhs& rhs,
         const rjson::value* previous_item);
 
+class schema_context {
+public:
+  enum class context { main_table, gsi, lsi } _context;
+
+  schema_context(const context& ctx) : _context(ctx) {}
+
+  const std::string& index_str() const {
+    return index_str_map.at(_context);
+  }
+
+private:
+  static const std::map<context, std::string> index_str_map;
+};
+
+void validate_attr_name_length(const schema_context& context, const size_t &attr_name_length, const bool &is_key,
+        const std::string &error_msg_prefix = {}, const std::string &error_msg_postfix = {});
+
 
 } /* namespace alternator */
