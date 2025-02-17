@@ -54,6 +54,7 @@ class view_building_coordinator : public migration_listener::only_view_notificat
     struct vbc_state {
         vbc_tasks tasks;
         std::optional<table_id> processing_base;
+        vbc_target_staging_sstables_map targets_with_staging_sstables;
         view_build_status_map status_map;
     };
 
@@ -102,8 +103,10 @@ private:
     table_id get_base_id(const view_name& view_name);
 
     future<> build_view(group0_guard guard, vbc_state state);
-    future<> send_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
-    future<> mark_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
+    future<> send_building_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
+    future<> send_register_staging_task(view_building_target target, table_id base_id, dht::token_range_vector ranges);
+    future<> mark_building_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<view_name> views);
+    future<> mark_staging_task_completed(view_building_target target, table_id base_id, dht::token_range_vector ranges);
     future<> abort_work(locator::host_id host, unsigned shard);
 
     future<std::vector<canonical_mutation>> maybe_mark_build_status_started(const group0_guard& guard, vbc_state& state, const std::vector<view_name>& views, locator::host_id host_id);
