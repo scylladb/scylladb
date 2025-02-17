@@ -1726,19 +1726,18 @@ public:
     }
 
     void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
-      // FIXME: indentation.
-      for (auto tablet : tablets.tablets()) {
-        auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
-        for (auto&& r : src_tinfo.replicas) {
-            if (nodes.contains(r.host)) {
-                lblogger.trace("Erasing tablet {} from {}", tablet, r);
-                // Not necessarily all replicas of sibling tablets are co-located, and so we need to
-                // remove them from candidate list using global_tablet_id.
-                erase_candidate(nodes[r.host].shards[r.shard], migration_tablet_set{tablet});
-                maybe_erase_colocated_candidate(nodes[r.host].shards[r.shard], tmap, tablet);
+        for (auto tablet : tablets.tablets()) {
+            auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
+            for (auto&& r : src_tinfo.replicas) {
+                if (nodes.contains(r.host)) {
+                    lblogger.trace("Erasing tablet {} from {}", tablet, r);
+                    // Not necessarily all replicas of sibling tablets are co-located, and so we need to
+                    // remove them from candidate list using global_tablet_id.
+                    erase_candidate(nodes[r.host].shards[r.shard], migration_tablet_set{tablet});
+                    maybe_erase_colocated_candidate(nodes[r.host].shards[r.shard], tmap, tablet);
+                }
             }
         }
-      }
     }
 
     void add_candidate(shard_load& shard_info, migration_tablet_set tablets) {
