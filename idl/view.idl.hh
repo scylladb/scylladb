@@ -18,5 +18,6 @@ class update_backlog {
 verb [[cancellable]] build_views_range(table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views);
 verb [[one_way]] abort_vbc_work(unsigned shard);
 verb [[cancellable]] register_staging_sstables(table_id base_id, unsigned shard, dht::token_range_vector ranges);
+verb [[one_way]] notify_staging_detector();
 }
 }

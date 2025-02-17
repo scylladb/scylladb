@@ -3867,6 +3867,10 @@ void view_building_worker::init_messaging_service() {
             return vbw.register_staging_sstables(base_id, std::move(ranges));
         });
     });
+    ser::view_rpc_verbs::register_notify_staging_detector(&_messaging.local(), [this] () -> future<rpc::no_wait_type> {
+        co_await notify();
+        co_return rpc::no_wait_type{};
+    });
 }
 
 future<> view_building_worker::uninit_messaging_service() {

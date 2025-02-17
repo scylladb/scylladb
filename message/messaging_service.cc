@@ -694,6 +694,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::BUILD_VIEWS_RANGE:
     case messaging_verb::ABORT_VBC_WORK:
     case messaging_verb::REGISTER_STAGING_SSTABLES:
+    case messaging_verb::NOTIFY_STAGING_DETECTOR:
         return 1;
     case messaging_verb::CLIENT_ID:
     case messaging_verb::MUTATION:
