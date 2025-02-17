@@ -62,24 +62,23 @@ def test_limit_attribute_length_nonkey_good(test_table_s):
 # documentation suggests, the length 64KB itself is not allowed - 65535
 # (which we tested above) is the last accepted size.
 # Reproduces issue #9169.
-@pytest.mark.xfail(reason="issue #9169: attribute name limits not enforced")
 def test_limit_attribute_length_nonkey_bad(test_table_s):
     p = random_string()
     too_long_name = random_string(64)*1024
-    with pytest.raises(ClientError, match='ValidationException.*Attribute name'):
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
         test_table_s.put_item(Item={'p': p, too_long_name: 1})
-    with pytest.raises(ClientError, match='ValidationException.*Attribute name'):
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
         test_table_s.get_item(Key={'p': p}, ProjectionExpression='#name',
             ExpressionAttributeNames={'#name': too_long_name})
-    with pytest.raises(ClientError, match='ValidationException.*Attribute name'):
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
         test_table_s.get_item(Key={'p': p}, AttributesToGet=[too_long_name])
-    with pytest.raises(ClientError, match='ValidationException.*Attribute name'):
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
         test_table_s.update_item(Key={'p': p}, AttributeUpdates={too_long_name: {'Value': 2, 'Action': 'PUT'}})
-    with pytest.raises(ClientError, match='ValidationException.*Attribute name'):
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET #name = :val',
             ExpressionAttributeNames={'#name': too_long_name},
             ExpressionAttributeValues={':val': 3})
-    with pytest.raises(ClientError, match='ValidationException.*Attribute name'):
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
         test_table_s.update_item(Key={'p': p}, UpdateExpression='SET a = :val',
             ConditionExpression='#name = :val',
             ExpressionAttributeNames={'#name': too_long_name},
@@ -106,18 +105,61 @@ def test_limit_attribute_length_key_good(dynamodb):
 # documentation - which only mentions that SI keys are limited to 255 bytes,
 # but forgets to mention base-table keys.
 # Reproduces issue #9169.
-@pytest.mark.xfail(reason="issue #9169: attribute name limits not enforced")
 def test_limit_attribute_length_key_bad(dynamodb):
     too_long_name = random_string(256)
-    with pytest.raises(ClientError, match='ValidationException.*length'):
+
+    # Test with HASH-type or non-RANGE-type key name too long
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
         with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': too_long_name, 'KeyType': 'HASH' } ],
             AttributeDefinitions=[ { 'AttributeName': too_long_name, 'AttributeType': 'S' } ]) as table:
             pass
-    with pytest.raises(ClientError, match='ValidationException.*length'):
+
+    # Test with RANGE-type (or non-HASH-type key) name too long
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
         with new_test_table(dynamodb,
-            KeySchema=[ { 'AttributeName': 'x', 'KeyType': 'HASH',
-                          'AttributeName': too_long_name, 'KeyType': 'RANGE' }, ],
+            KeySchema=[ { 'AttributeName': 'x', 'KeyType': 'HASH', },
+                        { 'AttributeName': too_long_name, 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': too_long_name, 'AttributeType': 'S' },
+                                   { 'AttributeName': 'x', 'AttributeType': 'S' } ]) as table:
+            pass
+
+# Test that *key* attribute names more than 255 characters are not allowed,
+# not for hash key and not for range key. Strangely, this limitation is not
+# explicitly mentioned in the DynamoDB documentation.
+# The tests here cover the cases of too long names in incorrect (incoherent)
+# user requests. The incoherence here means that AttributeDefinitions should
+# refer to AttributeName value that is used inside KeySchema as well.
+# In all the cases, DynamoDB returns attrribute name length-related errors,
+# ignoring the issues with the consistency.
+# Reproduces issue #9169.
+def test_limit_attribute_length_key_bad_incoherent_names(dynamodb):
+    too_long_name = random_string(256)
+
+    # Tests with HASH-type or non-RANGE-type key name too long
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': too_long_name, 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': "incoherent-short-name", 'AttributeType': 'S' } ]) as table:
+            pass
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': "incoherent-short-name", 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': too_long_name, 'AttributeType': 'S' } ]) as table:
+            pass
+
+    # Tests with RANGE-type (or non-HASH-type key) name too long
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'x', 'KeyType': 'HASH', },
+                        { 'AttributeName': too_long_name, 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[ { 'AttributeName': "incoherent-short-name", 'AttributeType': 'S' },
+                                   { 'AttributeName': 'x', 'AttributeType': 'S' } ]) as table:
+            pass
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'x', 'KeyType': 'HASH', },
+                        { 'AttributeName': "incoherent-short-name", 'KeyType': 'RANGE' } ],
             AttributeDefinitions=[ { 'AttributeName': too_long_name, 'AttributeType': 'S' },
                                    { 'AttributeName': 'x', 'AttributeType': 'S' } ]) as table:
             pass
@@ -169,10 +211,11 @@ def test_limit_attribute_length_gsi_lsi_good(dynamodb):
             })
 
 # Reproduces issue #9169.
-@pytest.mark.xfail(reason="issue #9169: attribute name limits not enforced")
 def test_limit_attribute_length_gsi_lsi_bad(dynamodb):
     too_long_name = random_string(256)
-    with pytest.raises(ClientError, match='ValidationException.*length'):
+
+    # GSI attr. name length test
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
         with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
                         { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
@@ -187,7 +230,9 @@ def test_limit_attribute_length_gsi_lsi_bad(dynamodb):
                  }
             ]) as table:
             pass
-    with pytest.raises(ClientError, match='ValidationException.*length'):
+
+    # LSI attr. name length test
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
         with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
                         { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
@@ -204,6 +249,84 @@ def test_limit_attribute_length_gsi_lsi_bad(dynamodb):
             ]) as table:
             pass
 
+# The tests here cover the cases of too long names in incorrect (incoherent)
+# user requests. The incoherence here means:
+#   1. GlobalSecondaryIndexes should refer to AttributeName value that is used
+#      inside AttributeDefinitions as well.
+#   2. LocalSecondaryIndexes should refer to AttributeName value that is used
+#      inside AttributeDefinitions as well.
+# In all the cases, DynamoDB returns attribute name length-related errors,
+# ignoring the issues with the consistency.
+# Reproduces issue #9169.
+def test_limit_attribute_length_gsi_lsi_bad_incoherent_names(dynamodb):
+    too_long_name = random_string(256)
+
+    # GSI attr. name length tests
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[
+                 { 'AttributeName': 'a', 'AttributeType': 'S' },
+                 { 'AttributeName': 'b', 'AttributeType': 'S' },
+                 { 'AttributeName': too_long_name, 'AttributeType': 'S' } ],
+            GlobalSecondaryIndexes=[
+                 { 'IndexName': 'gsi', 'KeySchema': [
+                      { 'AttributeName': "incoherent-short-name", 'KeyType': 'HASH' },
+                   ], 'Projection': { 'ProjectionType': 'ALL' }
+                 }
+            ]) as table:
+            pass
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[
+                 { 'AttributeName': 'a', 'AttributeType': 'S' },
+                 { 'AttributeName': 'b', 'AttributeType': 'S' },
+                 { 'AttributeName': "incoherent-short-name", 'AttributeType': 'S' } ],
+            GlobalSecondaryIndexes=[
+                 { 'IndexName': 'gsi', 'KeySchema': [
+                      { 'AttributeName': too_long_name, 'KeyType': 'HASH' },
+                   ], 'Projection': { 'ProjectionType': 'ALL' }
+                 }
+            ]) as table:
+            pass
+
+    # LSI attr. name length tests
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[
+                 { 'AttributeName': 'a', 'AttributeType': 'S' },
+                 { 'AttributeName': 'b', 'AttributeType': 'S' },
+                 { 'AttributeName': too_long_name, 'AttributeType': 'S' } ],
+            LocalSecondaryIndexes=[
+                 { 'IndexName': 'lsi', 'KeySchema': [
+                      { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                      { 'AttributeName': "incoherent-short-name", 'KeyType': 'RANGE' },
+                   ], 'Projection': { 'ProjectionType': 'ALL' }
+                 }
+            ]) as table:
+            pass
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
+            AttributeDefinitions=[
+                 { 'AttributeName': 'a', 'AttributeType': 'S' },
+                 { 'AttributeName': 'b', 'AttributeType': 'S' },
+                 { 'AttributeName': "incoherent-short-name", 'AttributeType': 'S' } ],
+            LocalSecondaryIndexes=[
+                 { 'IndexName': 'lsi', 'KeySchema': [
+                      { 'AttributeName': 'a', 'KeyType': 'HASH' },
+                      { 'AttributeName': too_long_name, 'KeyType': 'RANGE' },
+                   ], 'Projection': { 'ProjectionType': 'ALL' }
+                 }
+            ]) as table:
+            pass
+
 # Attribute length tests 7,8: In an LSI, projected attribute names are also
 # limited to 255 bytes. This is explicitly mentioned in the DynamoDB
 # documentation. For GSI this is also true (but not explicitly mentioned).
@@ -211,10 +334,10 @@ def test_limit_attribute_length_gsi_lsi_bad(dynamodb):
 # attributes projected as part as ALL can be bigger (up to the usual 64KB
 # limit).
 # Reproduces issue #9169.
-@pytest.mark.xfail(reason="issue #9169: attribute name limits not enforced")
+@pytest.mark.xfail(reason="issue #5036: projection in GSI and LSI not supported")
 def test_limit_attribute_length_gsi_lsi_projection_bad(dynamodb):
     too_long_name = random_string(256)
-    with pytest.raises(ClientError, match='ValidationException.*length'):
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
         with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
                         { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
@@ -230,7 +353,7 @@ def test_limit_attribute_length_gsi_lsi_projection_bad(dynamodb):
                  }
             ]) as table:
             pass
-    with pytest.raises(ClientError, match='ValidationException.*length'):
+    with pytest.raises(ClientError, match='ValidationException.*25[56]'):
         with new_test_table(dynamodb,
             KeySchema=[ { 'AttributeName': 'a', 'KeyType': 'HASH' },
                         { 'AttributeName': 'b', 'KeyType': 'RANGE' } ],
@@ -759,3 +882,57 @@ def test_limit_partition_key_len(test_table_s, test_table_b):
         test_table_b.put_item(Item=key)
     with pytest.raises(ClientError, match='ValidationException.*limit'):
         test_table_b.get_item(Key=key, ConsistentRead=True)
+
+# Test attr name limit of UpdateTable's GlobalSecondaryIndexUpdates.
+# Reproduces issue #9169.
+def test_limit_gsiu_key_len_bad(dynamodb):
+    too_long_name = random_string(256)
+
+    with pytest.raises(ClientError, match='ValidationException..*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+            # Now use UpdateTable to create the GSI
+            dynamodb.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{ 'AttributeName': too_long_name, 'AttributeType': 'S' }],
+                GlobalSecondaryIndexUpdates=[ {  'Create':
+                    {  'IndexName': 'hello',
+                        'KeySchema': [{ 'AttributeName': too_long_name, 'KeyType': 'HASH' }],
+                        'Projection': { 'ProjectionType': 'ALL' }
+                    }}])
+
+# Test attr name limit of UpdateTable with GlobalSecondaryIndexUpdates.
+# The tests here cover the cases of too long names in incorrect (incoherent)
+# user requests. The incoherence here means that AttributeDefinitions should
+# refer to AttributeName value that is used inside GlobalSecondaryIndexUpdates
+# as well. In all the cases, DynamoDB returns attrribute name length-related
+# errors, ignoring the issues with the consistency.
+# Reproduces issue #9169.
+def test_limit_gsiu_key_len_bad_incoherent_names(dynamodb):
+    too_long_name = random_string(256)
+
+    with pytest.raises(ClientError, match='ValidationException..*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+            # Now use UpdateTable to create the GSI
+            dynamodb.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{ 'AttributeName': too_long_name, 'AttributeType': 'S' }],
+                GlobalSecondaryIndexUpdates=[ {  'Create':
+                    {  'IndexName': 'hello',
+                        'KeySchema': [{ 'AttributeName': "incoherent-short-name", 'KeyType': 'HASH' }],
+                        'Projection': { 'ProjectionType': 'ALL' }
+                    }}])
+
+    with pytest.raises(ClientError, match='ValidationException..*25[56]'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+            # Now use UpdateTable to create the GSI
+            dynamodb.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{ 'AttributeName': "incoherent-short-name", 'AttributeType': 'S' }],
+                GlobalSecondaryIndexUpdates=[ {  'Create':
+                    {  'IndexName': 'hello',
+                        'KeySchema': [{ 'AttributeName': too_long_name, 'KeyType': 'HASH' }],
+                        'Projection': { 'ProjectionType': 'ALL' }
+                    }}])
