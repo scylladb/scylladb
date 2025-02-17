@@ -110,6 +110,7 @@ private:
     future<> mark_staging_task_completed(view_building_target target, table_id base_id, dht::token_range_vector ranges);
     future<> abort_work(locator::host_id host, unsigned shard);
     future<> abort_previous_coordinator();
+    future<> notify_others_to_detect_staging_sstables();
 
     future<std::vector<canonical_mutation>> maybe_mark_build_status_started(const group0_guard& guard, vbc_state& state, const std::vector<view_name>& views, locator::host_id host_id);
     future<std::optional<mutation>> maybe_mark_build_status_success(const group0_guard& guard, const view_tasks& view_tasks, const view_name& view, locator::host_id host_id);

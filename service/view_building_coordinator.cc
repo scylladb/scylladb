@@ -158,6 +158,7 @@ future<std::optional<std::pair<group0_guard, view_building_coordinator::vbc_stat
             | std::views::transform([] (view_ptr& v) { return view_name{v->ks_name(), v->cf_name()}; })
             | std::ranges::to<std::vector>();
     auto built_views = co_await _sys_ks.load_built_tablet_views();
+    bool notify_others_to_detect_staging = false;
 
     if (auto to_add = get_views_to_add(state, views, built_views); !to_add.empty()) {
         for (auto& view: to_add) {
@@ -176,12 +177,15 @@ future<std::optional<std::pair<group0_guard, view_building_coordinator::vbc_stat
             }
         }
     } else if (!state.currently_processed_base_table && !state.tasks.empty()) {
+        SCYLLA_ASSERT(state.targets_with_staging_sstables.empty());
+
         // select base table to process
         auto& base_id = state.tasks.cbegin()->first;
         vbc_logger.info("Start building views for base table: {}", base_id);
 
         auto mut = co_await _sys_ks.make_vbc_processing_base_mutation(guard.write_timestamp(), base_id);
         cmuts.emplace_back(std::move(mut));
+        notify_others_to_detect_staging = true;
     }
 
     if (!cmuts.empty()) {
@@ -189,6 +193,10 @@ future<std::optional<std::pair<group0_guard, view_building_coordinator::vbc_stat
             .mutations{std::move(cmuts)},
         }, guard, "update view building coordinator state");
         co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
+
+        if (notify_others_to_detect_staging) {
+            co_await notify_others_to_detect_staging_sstables();
+        }
         co_return std::nullopt;
     }
     vbc_logger.debug("no updates to process, returning current state...");
@@ -455,6 +463,13 @@ future<> view_building_coordinator::abort_previous_coordinator() {
         co_await coroutine::parallel_for_each(std::views::iota(0u, node.second.shard_count), [this, id] (auto shard) -> future<> {
             co_await abort_work(locator::host_id{id.uuid()}, shard);
         });
+    });
+}
+
+future<> view_building_coordinator::notify_others_to_detect_staging_sstables() {
+    co_await coroutine::parallel_for_each(_topo_sm._topology.normal_nodes, [this] (auto& node) {
+        locator::host_id host_id{node.first.uuid()};
+        return ser::view_rpc_verbs::send_notify_staging_detector(&_messaging, host_id);
     });
 }
 
