@@ -225,7 +225,9 @@ CREATE TYPE system.tablet_task_info (
     tablet_task_id uuid,
     request_time timestamp,
     sched_nr bigint,
-    sched_time timestamp
+    sched_time timestamp,
+    repair_hosts_filter text,
+    repair_dcs_filter text,
 )
 ~~~
 
@@ -255,6 +257,8 @@ Only tables which use tablet-based replication strategy have an entry here.
   * `request_time` - The time the request is created.
   * `sched_nr` - Number of times the request has been scheduled by the repair scheduler.
   * `sched_time` - The time the request has been scheduled by the repair scheduler.
+  * `repair_hosts_filter` - Repair replicas listed in the comma-separated host_id list.
+  * `repair_dcs_filter` - Repair replicas listed in the comma-separated DC list.
 
 `repair_scheduler_config` contains configuration for the repair scheduler. It contains the following values:
   * `auto_repair_enabled` - When set to true, auto repair is enabled. Disabled by default.
