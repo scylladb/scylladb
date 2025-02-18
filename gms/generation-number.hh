@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "build_mode.hh"
 #include "utils/tagged_integer.hh"
 
 namespace gms {

@@ -48,6 +48,7 @@
 #include "service/raft/group0_state_machine_merger.hh"
 #include "gms/feature_service.hh"
 #include "idl/migration_manager.dist.hh"
+#include "build_mode.hh"
 
 namespace service {
 
@@ -217,6 +218,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
     co_await _sp.mutate_locally({std::move(history)}, nullptr);
 }
 
+#ifndef SCYLLA_BUILD_MODE_RELEASE
 static void ensure_group0_schema(const group0_command& cmd, const replica::database& db) {
     auto validate_schema = [&db](const std::vector<canonical_mutation>& mutations) {
         for (const auto& mut : mutations) {
@@ -250,6 +252,7 @@ static void ensure_group0_schema(const group0_command& cmd, const replica::datab
             },
         }, cmd.change);
 }
+#endif
 
 future<> group0_state_machine::apply(std::vector<raft::command_cref> command) {
     slogger.trace("apply() is called with {} commands", command.size());
