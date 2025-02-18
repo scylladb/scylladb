@@ -37,8 +37,8 @@ The compilation instructions are described at https://github.com/scylladb/scylla
 
 .. code-block:: bash
 
-    cargo build --target=wasm32-wasi
-    wasm2wat target/wasm32-wasi/debug/flatten.wasm > flatten.wat
+    cargo build --target=wasm32-wasip1
+    wasm2wat target/wasm32-wasip1/debug/flatten.wasm > flatten.wat
 
 
 C
@@ -103,7 +103,7 @@ And compile it with:
 
 .. code-block:: bash
 
-    /path/to/wasm/supporting/c/compiler --sysroot=/path/to/wasi/sysroot -O2  --target=wasm32-wasi -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--export=_scylla_malloc -Wl,--export=_scylla_free -Wl,--no-entry fibnull.c -o fibnull.wasm
+    /path/to/wasm/supporting/c/compiler --sysroot=/path/to/wasi/sysroot -O2  --target=wasm32-wasip1 -Wl,--export=fib -Wl,--export=_scylla_abi -Wl,--export=_scylla_malloc -Wl,--export=_scylla_free -Wl,--no-entry fibnull.c -o fibnull.wasm
     wasm2wat fibnull.wasm > fibnull.wat
 
 The example above is particularly complicated, because it handles NULL values, which causes even integers to be serialized. Because the UDF only takes Wasm-compatible types (ints/doubles) as parameters and return values, 
