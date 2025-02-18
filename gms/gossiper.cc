@@ -46,6 +46,7 @@
 #include "utils/error_injection.hh"
 #include "idl/gossip.dist.hh"
 #include <csignal>
+#include "build_mode.hh"
 
 namespace gms {
 
