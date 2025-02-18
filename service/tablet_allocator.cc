@@ -765,7 +765,8 @@ public:
             load_balancer_stats_manager& stats,
             uint64_t target_tablet_size,
             unsigned tablets_per_shard_goal,
-            std::unordered_set<host_id> skiplist)
+            std::unordered_set<host_id> skiplist,
+            std::vector<std::vector<table_id>> colocated_tables)
         : _target_tablet_size(target_tablet_size)
         , _tablets_per_shard_goal(tablets_per_shard_goal)
         , _db(db)
@@ -773,7 +774,7 @@ public:
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
         , _skiplist(std::move(skiplist))
-        , _table_grouping({})
+        , _table_grouping(std::move(colocated_tables))
     { }
 
     future<migration_plan> make_plan() {
@@ -3221,11 +3222,13 @@ class tablet_allocator_impl : public tablet_allocator::impl
 private:
     load_balancer make_load_balancer(token_metadata_ptr tm,
             locator::load_stats_ptr table_load_stats,
-            std::unordered_set<host_id> skiplist) {
+            std::unordered_set<host_id> skiplist,
+            std::vector<std::vector<table_id>> colocated_tables) {
         load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
-            std::move(skiplist));
+            std::move(skiplist),
+            std::move(colocated_tables));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
         lb.set_initial_scale(_db.get_config().tablets_initial_scale_factor());
         return lb;
@@ -3249,8 +3252,8 @@ public:
         _stopped = true;
     }
 
-    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
-        auto lb = make_load_balancer(tm, std::move(table_load_stats), std::move(skiplist));
+    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist, std::vector<std::vector<table_id>> colocated_tables) {
+        auto lb = make_load_balancer(tm, std::move(table_load_stats), std::move(skiplist), std::move(colocated_tables));
         co_return co_await lb.make_plan();
     }
 
@@ -3264,7 +3267,7 @@ public:
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
             lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
-            auto lb = make_load_balancer(tm, nullptr, {});
+            auto lb = make_load_balancer(tm, nullptr, {}, {});
             auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
             auto& table_plan = plan.tables[s.id()];
             if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
@@ -3408,8 +3411,8 @@ future<> tablet_allocator::stop() {
     return impl().stop();
 }
 
-future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist) {
-    return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist));
+future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist, std::vector<std::vector<table_id>> colocated_tables) {
+    return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist), std::move(colocated_tables));
 }
 
 void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balancing) {

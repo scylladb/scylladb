@@ -1494,7 +1494,8 @@ void do_rebalance_tablets(cql_test_env& e,
                           shared_load_stats* load_stats = nullptr,
                           std::unordered_set<host_id> skiplist = {},
                           std::function<bool(const migration_plan&)> stop = nullptr,
-                          bool auto_split = false)
+                          bool auto_split = false,
+                          std::vector<std::vector<table_id>> colocated_tables = {})
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -1504,7 +1505,7 @@ void do_rebalance_tablets(cql_test_env& e,
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto plan = talloc.balance_tablets(stm.get(), load_stats ? load_stats->get() : nullptr, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats ? load_stats->get() : nullptr, skiplist, colocated_tables).get();
         if (plan.empty()) {
             return;
         }
@@ -1539,14 +1540,15 @@ void rebalance_tablets(cql_test_env& e,
                        shared_load_stats* load_stats = nullptr,
                        std::unordered_set<host_id> skiplist = {},
                        std::function<bool(const migration_plan&)> stop = nullptr,
-                       bool auto_split = true) {
+                       bool auto_split = true,
+                       std::vector<std::vector<table_id>> colocated_tables = {}) {
     abort_source as;
     testlog.debug("rebalance_tablets(): start");
 
     auto guard = e.get_raft_group0_client().start_operation(as).get();
     testlog.debug("rebalance_tablets(): took group0 guard");
 
-    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split);
+    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split, std::move(colocated_tables));
     testlog.debug("rebalance_tablets(): rebalanced");
 
     // We should not introduce inconsistency between on-disk state and in-memory state

@@ -296,7 +296,7 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
     return do_make_replication_map(table, shared_from_this(), std::move(tm), _rep_factor);
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count, std::optional<table_id> colocated_table = std::nullopt) const {
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count, std::optional<table_id> colocated_table) const {
     if (colocated_table) {
         // The tablet count of the new table must be a multiple of the
         // colocated_table in order for colocation to be possible.
