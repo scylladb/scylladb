@@ -1119,7 +1119,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     paging_state_copy->set_remaining(internal_paging_size);
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
-    return std::move(paging_state_copy);
+    return paging_state_copy;
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
