@@ -1720,6 +1720,11 @@ void gossiper::mark_alive(inet_address addr) {
         // ping an old gossip entry.
         return;
     }
+    if (_address_map.find(id) != addr) {
+        // We are here because id has now different ip but we
+        // try to ping the old one
+        return;
+    }
     auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
