@@ -702,10 +702,10 @@ private:
 
     using migration_streaming_info_vector = utils::small_vector<tablet_migration_streaming_info, 2>;
     static migration_streaming_info_vector
-    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
+    get_migration_streaming_infos(const locator::topology& topology, const tablet_metadata& tmeta, const migration_vector& infos) {
         migration_streaming_info_vector streaming_infos;
         for (auto& info : infos) {
-            auto& ti = tmap.get_tablet_info(info.tablet.tablet);
+            auto& ti = tmeta.get_tablet_map(info.tablet.table).get_tablet_info(info.tablet.tablet);
             streaming_infos.push_back(get_migration_streaming_info(topology, ti, info));
         }
         return streaming_infos;
@@ -1712,9 +1712,10 @@ public:
         }
     }
 
-    void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
+    void erase_candidates(node_load_map& nodes, const migration_tablet_set& tablets) {
+        auto& tmeta = _tm->tablets();
         for (auto tablet : tablets.tablets()) {
-            auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
+            auto& src_tinfo = tmeta.get_tablet_map(tablet.table).get_tablet_info(tablet.tablet);
             for (auto&& r : src_tinfo.replicas) {
                 if (nodes.contains(r.host)) {
                     lblogger.trace("Erasing tablet {} from {}", tablet, r);
@@ -1850,7 +1851,6 @@ public:
 
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
         migration_plan plan;
-        const tablet_metadata& tmeta = _tm->tablets();
         bool shuffle = in_shuffle_mode();
 
         if (node_load.shard_count <= 1) {
@@ -1935,8 +1935,7 @@ public:
 
             auto mig = get_migration_info(tablets, tablet_transition_kind::intranode_migration,
                                           tablet_replica{host, src}, tablet_replica{host, dst});
-            auto& tmap = tmeta.get_tablet_map(tablets.table());
-            auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
+            auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), _tm->tablets(), mig);
 
             if (!can_accept_load(nodes, mig_streaming_info)) {
                 _stats.for_dc(node_load.dc()).migrations_skipped++;
@@ -1950,7 +1949,7 @@ public:
             _stats.for_dc(node_load.dc()).intranode_migrations_produced++;
             plan.add(std::move(mig));
 
-            erase_candidates(nodes, tmap, tablets);
+            erase_candidates(nodes, tablets);
 
             update_node_load_on_migration(node_load, host, src, dst, tablets);
             sketch.pick(host, dst);
@@ -2079,7 +2078,6 @@ public:
     using skip_info_vector = std::vector<std::pair<skip_info, migration_tablet_set>>;
     std::optional<skip_info_vector>
     check_constraints(node_load_map& nodes,
-                      const locator::tablet_map& tmap,
                       node_load& src_info,
                       node_load& dst_info,
                       migration_tablet_set tablet_set,
@@ -2090,6 +2088,7 @@ public:
         const size_t tablet_count = tablet_set.tablets().size();
 
         for (auto tablet : tablet_set.tablets()) {
+            auto& tmap = _tm->tablets().get_tablet_map(tablet.table);
             auto skip = check_constraints(nodes, tmap, src_info, dst_info, tablet, need_viable_targets);
             if (!skip) {
                 continue;
@@ -2547,7 +2546,6 @@ public:
             src = candidate.src;
             dst = candidate.dst;
 
-            auto& tmap = tmeta.get_tablet_map(source_tablets.table());
             // If best candidate is co-located sibling tablets, then convergence is re-checked to avoid oscillations.
             if (can_check_convergence && !check_convergence(src_node_info, target_info, source_tablets)) {
                 lblogger.debug("No more candidates. Load would be inverted.");
@@ -2562,7 +2560,7 @@ public:
                 auto process_skip_info = [&] (migration_tablet_set tablets, skip_info skip) {
                     if (src_node_info.drained && skip.viable_targets.empty()) {
                         auto tablet = tablets.tablets().front();
-                        auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
+                        auto replicas = tmeta.get_tablet_map(tablet.table).get_tablet_info(tablet.tablet).replicas;
                         throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
                                                         tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
@@ -2570,7 +2568,7 @@ public:
                     src_node_info.skipped_candidates.emplace_back(src, tablets, std::move(skip.viable_targets));
                 };
 
-                auto skip = check_constraints(nodes, tmap, src_node_info, nodes[dst.host], source_tablets, src_node_info.drained);
+                auto skip = check_constraints(nodes, src_node_info, nodes[dst.host], source_tablets, src_node_info.drained);
                 if (skip) {
                     for (auto&& [skip_info, tablets] : *skip) {
                         process_skip_info(tablets, skip_info);
@@ -2590,7 +2588,7 @@ public:
                                            || src_node_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
             auto mig = get_migration_info(source_tablets, kind, src, dst);
-            auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
+            auto mig_streaming_info = get_migration_streaming_infos(topo, _tm->tablets(), mig);
 
             pick(*_load_sketch, dst.host, dst.shard, source_tablets);
 
@@ -2615,7 +2613,7 @@ public:
                 }
             }
 
-            erase_candidates(nodes, tmap, source_tablets);
+            erase_candidates(nodes, source_tablets);
 
             update_node_load_on_migration(nodes, src, dst, source_tablets);
             if (src_node_info.tablet_count == 0) {
