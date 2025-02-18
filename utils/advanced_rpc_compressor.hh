@@ -10,6 +10,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/rpc/rpc_types.hh>
+#include <utility>
 #include "utils/refcounted.hh"
 #include "utils/updateable_value.hh"
 #include "utils/enum_option.hh"
@@ -41,13 +42,13 @@ struct compression_algorithm {
     // Construct from an integer.
     // Used to deserialize the algorithm from the first byte of the frame.
     constexpr compression_algorithm(underlying x) {
-        if (x < 0 || x >= static_cast<underlying>(type::COUNT)) {
+        if (x < std::to_underlying(type::RAW) || x >= std::to_underlying(type::COUNT)) {
             throw std::runtime_error(fmt::format("Invalid value {} for enum compression_algorithm", static_cast<int>(x)));
         }
         _value = static_cast<type>(x);
     }
     // Construct from `type`. Makes sure that `type` has a valid value.
-    constexpr compression_algorithm(type x) : compression_algorithm(static_cast<underlying>(x)) {}
+    constexpr compression_algorithm(type x) : compression_algorithm(std::to_underlying(x)) {}
 
     // These names are used in multiple places:
     // RPC negotiation, in metric labels, and config.
@@ -68,7 +69,7 @@ struct compression_algorithm {
     }
 
     constexpr std::string_view name() const noexcept { return names[idx()]; }
-    constexpr underlying idx() const noexcept { return static_cast<underlying>(_value); }
+    constexpr underlying idx() const noexcept { return std::to_underlying(_value); }
     constexpr type get() const noexcept { return _value; }
     constexpr static size_t count() { return static_cast<size_t>(type::COUNT); };
     bool operator<=>(const compression_algorithm &) const = default;
