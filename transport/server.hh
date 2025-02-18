@@ -221,7 +221,6 @@ private:
         timer<lowres_clock> _shedding_timer;
         scheduling_group _current_scheduling_group;
         bool _shed_incoming_requests = false;
-        unsigned _request_cpu = 0;
         bool _ready = false;
         bool _authenticating = false;
         bool _tenant_switch = false;
