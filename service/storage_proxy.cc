@@ -239,7 +239,8 @@ class storage_proxy::remote {
     raft_group0_client& _group0_client;
     topology_state_machine& _topology_state_machine;
     abort_source _group0_as;
-    future<> _truncate_table_fiber = make_ready_future<>();
+
+    seastar::gate _truncate_gate;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -277,7 +278,7 @@ public:
     // Must call before destroying the `remote` object.
     future<> stop() {
         _group0_as.request_abort();
-        co_await std::move(_truncate_table_fiber);
+        co_await _truncate_gate.close();
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
         _stopped = true;
     }
@@ -452,20 +453,13 @@ public:
     }
 
     future<> truncate_with_tablets(sstring ks_name, sstring cf_name, std::chrono::milliseconds timeout_in_ms) {
-        if (!_truncate_table_fiber.available()) {
-            throw std::runtime_error("Another TRUNCATE TABLE is ongoing, please retry.");
-        }
-        auto sem = make_lw_shared<seastar::semaphore>(0);
-        _truncate_table_fiber = request_truncate_with_tablets(ks_name, cf_name).then_wrapped([sem] (auto f) {
-            if (f.failed()) {
-                sem->broken(f.get_exception());
-            } else {
-                sem->signal(1);
-            }
-        });
+        // We want timeout on truncate to return an error to the client, but the truncate fiber to continue running
         try {
-            co_await sem->wait(timeout_in_ms, 1);
-        } catch (seastar::semaphore_timed_out&) {
+            co_await with_timeout(std::chrono::steady_clock::now() + timeout_in_ms, seastar::with_gate(_truncate_gate, [=, this] () -> future<> {
+                co_await request_truncate_with_tablets(ks_name, cf_name);
+            }));
+        } catch (seastar::timed_out_error&) {
+            slogger.warn("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name);
             throw std::runtime_error(format("Timeout during TRUNCATE TABLE of {}.{}", ks_name, cf_name));
         }
     }
@@ -1081,13 +1075,35 @@ private:
         while (true) {
             group0_guard guard = co_await _group0_client.start_operation(_group0_as, raft_timeout{});
 
-            if (_topology_state_machine._topology.global_request.has_value()) {
-                throw exceptions::invalid_request_exception("Another global topology request is ongoing, please retry.");
+            const table_id table_id = _sp.local_db().find_uuid(ks_name, cf_name);
+
+            // Check if we already have a truncate queued for the same table. This can happen when a truncate has timed out
+            // and the client retried by issuing the same truncate again. In this case, instead of failing the request with
+            // an "Another global topology request is ongoing" error, we can wait for the already queued request to complete.
+            // Note that we can not do this for a truncate which the topology coordinator has already started processing,
+            // only for a truncate which is still waiting.
+            std::optional<global_topology_request>& global_request = _topology_state_machine._topology.global_request;
+            if (global_request.has_value()) {
+                if (*global_request == global_topology_request::truncate_table) {
+                    std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
+                    if (!tstate || *tstate != topology::transition_state::truncate_table) {
+                        const utils::UUID& ongoing_global_request_id = *_topology_state_machine._topology.global_request_id;
+                        const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id, true);
+                        if (topology_requests_entry.truncate_table_id == table_id) {
+                            global_request_id = ongoing_global_request_id;
+                            slogger.info("Ongoing TRUNCATE for table {}.{} (global request ID {}) detected; waiting for it to complete",
+                                                ks_name, cf_name, global_request_id);
+                            break;
+                        }
+                    }
+                }
+                slogger.warn("Another global topology request ({}) is ongoing during attempt to TRUNCATE table {}.{}",
+                                *global_request, ks_name, cf_name);
+                throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to TRUNCATE table {}.{}, please retry.",
+                                                                        ks_name, cf_name));
             }
 
             global_request_id = guard.new_group0_state_id();
-
-            const table_id table_id = _sp.local_db().find_uuid(ks_name, cf_name);
 
             std::vector<canonical_mutation> updates;
             updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
@@ -1100,6 +1116,8 @@ private:
                                     .set("done", false)
                                     .set("start_time", db_clock::now())
                                     .build());
+
+            slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
 
             topology_change change{std::move(updates)};
             sstring reason = "Truncating table";
