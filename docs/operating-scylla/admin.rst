@@ -284,6 +284,24 @@ Before creating keyspaces with object storage, you also need to
 :ref:`configure <object-storage-configuration>` the object storage
 credentials and endpoint.
 
+.. _admin-views-with-tablets:
+
+Views with tablets
+------------------
+
+By default, Materialized Views (MV) and Secondary Indexes (SI)
+are disabled in keyspaces that use tablets.
+
+Support for MV and SI with tablets is experimental and must be explicitly
+enabled in the ``scylla.yaml`` configuration file by specifying
+the ``views-with-tablets`` option:
+
+.. code-block:: yaml
+
+   experimental_features:
+     - views-with-tablets
+
+
 Monitoring
 ==========
 ScyllaDB exposes interfaces for online monitoring, as described below.
