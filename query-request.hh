@@ -48,6 +48,13 @@ using range = wrapping_interval<T>;
 
 using ring_position = dht::ring_position;
 
+// WARNING: interval<clustering_key_prefix> is unsafe - refer to scylladb#22817, scylladb#21604, and scylladb#8157.
+// Due to the note below, methods such as intersection() and deoverlap() returns unexpected (i.e. incorrect) results.
+// If only possible, do not use interval<clustering_key_prefix> in new code. Instead, use position_range,
+// which is an alternative class well-suited to keep clustering_key_prefix ranges. Also refer to
+// optional<clustering_range> intersection(const clustering_range&, const clustering_range&, const prefix_equal_tri_compare&)
+// in statement_restrictions.cc for a correct (but overcomplicated) implementation of intersection().
+//
 // Note: the bounds of a  clustering range don't necessarily satisfy `rb.end()->value() >= lb.end()->value()`,
 // where `lb`, `rb` are the left and right bound respectively, if the bounds use non-full clustering
 // key prefixes. Inclusiveness of the range's bounds must be taken into account during comparisons.

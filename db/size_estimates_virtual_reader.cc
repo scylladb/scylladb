@@ -319,6 +319,7 @@ size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token
         auto rows = std::ranges::subrange(
                 virtual_row_iterator(cf_names, local_ranges),
                 virtual_row_iterator(cf_names, local_ranges, virtual_row_iterator::end_iterator_tag()));
+        // WARNING: interval<clustering_key_prefix> is unsafe - refer to scylladb#21604 and scylladb#8157
         auto rows_to_estimate = range.slice(rows, virtual_row_comparator(_schema));
         for (auto&& r : rows_to_estimate) {
             auto& cf = _db.find_column_family(*_current_partition, utf8_type->to_string(r.cf_name));
