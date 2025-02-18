@@ -2,6 +2,7 @@ import subprocess
 import logging
 import yaml
 import os
+import socket
 
 
 class ScyllaSetup:
@@ -74,7 +75,7 @@ class ScyllaSetup:
         elif self._listenAddress:
             hostname = self._listenAddress
         else:
-            hostname = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+            hostname = socket.gethostbyname(socket.gethostname())
         self._run(["mkdir", "-p",  "%s/.cassandra" % home])
         with open("%s/.cassandra/cqlshrc" % home, "w") as cqlshrc:
             cqlshrc.write("[connection]\nhostname = %s\n" % hostname)
@@ -102,7 +103,7 @@ class ScyllaSetup:
             args += ["--overprovisioned"]
 
         if self._listenAddress is None:
-            self._listenAddress = subprocess.check_output(['hostname', '-i']).decode('ascii').strip()
+            self._listenAddress = socket.gethostbyname(socket.gethostname())
 
         if self._rpcAddress is None:
             self._rpcAddress = self._listenAddress
