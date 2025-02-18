@@ -75,6 +75,7 @@ query_processor::query_processor(service::storage_proxy& proxy, data_dictionary:
         , _mnotifier(mn)
         , _mcfg(mcfg)
         , _cql_config(cql_cfg)
+        , _pending_operations("query_processor::pending_operations")
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
         , _authorized_prepared_cache(std::move(auth_prep_cache_cfg), authorized_prepared_statements_cache_log)
         , _auth_prepared_cache_cfg_cb([this] (uint32_t) { (void) _authorized_prepared_cache_config_action.trigger_later(); })
@@ -524,6 +525,7 @@ future<> query_processor::stop_remote() {
 
 future<> query_processor::stop() {
     co_await _mnotifier.unregister_listener(_migration_subscriber.get());
+    co_await _pending_operations.close();
     co_await _authorized_prepared_cache.stop();
     co_await _prepared_cache.stop();
 }
