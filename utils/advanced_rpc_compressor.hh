@@ -81,7 +81,7 @@ struct compression_algorithm {
 class compression_algorithm_set {
     uint8_t _bitset;
     static_assert(std::numeric_limits<decltype(_bitset)>::digits > compression_algorithm::count());
-    constexpr compression_algorithm_set(uint8_t v) noexcept : _bitset(v) {}
+    constexpr compression_algorithm_set(int v) noexcept : _bitset(static_cast<uint8_t>(v)) {}
 public:
     // Returns a set containing the given algorithm and all algorithms weaker (smaller in the enum order)
     // than it.
@@ -91,7 +91,7 @@ public:
     }
     // Returns the strongest (greatest in the enum order) algorithm in the set.
     constexpr compression_algorithm heaviest() const {
-        return {std::bit_width(_bitset) - 1};
+        return {static_cast<uint8_t>(std::bit_width(_bitset) - 1)};
     }
     // The usual set operations.
     constexpr static compression_algorithm_set singleton(compression_algorithm algo) noexcept {
