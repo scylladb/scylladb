@@ -1009,7 +1009,7 @@ private:
     }
 };
 
-void repair::shard_repair_task_impl::release_resources() noexcept {
+future<> repair::shard_repair_task_impl::release_resources() noexcept {
     erm = {};
     cfs = {};
     data_centers = {};
@@ -1018,6 +1018,7 @@ void repair::shard_repair_task_impl::release_resources() noexcept {
     neighbors = {};
     dropped_tables = {};
     nodes_down = {};
+    return make_ready_future();
 }
 
 future<> repair::shard_repair_task_impl::do_repair_ranges() {
@@ -2470,10 +2471,11 @@ tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexce
     return tasks::is_user_task::yes;
 }
 
-void repair::tablet_repair_task_impl::release_resources() noexcept {
+future<> repair::tablet_repair_task_impl::release_resources() noexcept {
     _metas_size = _metas.size();
     _metas = {};
     _tables = {};
+    return make_ready_future();
 }
 
 size_t repair::tablet_repair_task_impl::get_metas_size() const noexcept {

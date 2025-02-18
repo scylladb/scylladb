@@ -133,7 +133,7 @@ public:
     gc_clock::time_point get_flush_time() const { return _flush_time; }
 
     tasks::is_user_task is_user_task() const noexcept override;
-    virtual void release_resources() noexcept override;
+    virtual future<> release_resources() noexcept override;
 private:
     size_t get_metas_size() const noexcept;
 protected:
@@ -220,7 +220,7 @@ public:
 
     size_t ranges_size() const noexcept;
 
-    virtual void release_resources() noexcept override;
+    virtual future<> release_resources() noexcept override;
 protected:
     future<> do_repair_ranges();
     virtual future<tasks::task_manager::task::progress> get_progress() const override;
