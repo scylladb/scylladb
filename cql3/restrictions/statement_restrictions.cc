@@ -8,8 +8,7 @@
  */
 
 #include <algorithm>
-#include <boost/range/algorithm.hpp>
-#include <boost/range/numeric.hpp>
+#include <boost/range/algorithm/set_algorithm.hpp>
 #include <functional>
 #include <ranges>
 #include <stdexcept>
@@ -256,11 +255,10 @@ static value_set possible_lhs_values(const column_definition* cdef,
                     "possible_lhs_values: a constant that is not a bool value cannot serve as a restriction by itself");
             },
             [&] (const conjunction& conj) {
-                return boost::accumulate(conj.children, unbounded_value_set,
-                        [&] (const value_set& acc, const expression& child) {
-                            return intersection(
-                                    std::move(acc), possible_lhs_values(cdef, child, options, table_schema_opt), type);
-                        });
+                return std::ranges::fold_left(conj.children, unbounded_value_set, [&](value_set&& acc, const expression& child) {
+                    return intersection(
+                        std::move(acc), possible_lhs_values(cdef, child, options, table_schema_opt), type);
+                });
             },
             [&] (const binary_operator& oper) -> value_set {
                 return expr::visit(overloaded_functor{
