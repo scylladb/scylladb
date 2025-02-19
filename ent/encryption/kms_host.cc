@@ -20,7 +20,6 @@
 #include <seastar/json/formatter.hh>
 #include <seastar/http/url.hh>
 
-#include <boost/beast/http.hpp>
 #include <rapidxml.h>
 
 #include <fmt/chrono.h>
@@ -32,6 +31,7 @@
 #include "encryption.hh"
 #include "encryption_exceptions.hh"
 #include "symmetric_key.hh"
+#include "utils.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 #include "utils/UUID.hh"
@@ -39,9 +39,6 @@
 #include "utils/rjson.hh"
 #include "marshal_exception.hh"
 #include "db/config.hh"
-
-template <bool B, typename T> struct fmt::formatter<boost::beast::http::message<B, T>> : fmt::ostream_formatter {};
-template <> struct fmt::formatter<boost::beast::http::status> : fmt::ostream_formatter {};
 
 using namespace std::chrono_literals;
 using namespace std::string_literals;
@@ -89,9 +86,6 @@ namespace kms_errors {
     [[maybe_unused]] static const char* AlreadyExistsException = "AlreadyExistsException";
 }
 
-namespace beast = boost::beast;     // from <boost/beast.hpp>
-// Note: switch http -> bhttp to deal with namespace ambiguity.
-namespace bhttp = beast::http;       // from <boost/beast/http.hpp>
 namespace shttp = seastar::http;
 
 static std::string to_lower(std::string_view s) {
@@ -167,7 +161,6 @@ public:
     future<std::tuple<shared_ptr<symmetric_key>, id_type>> get_or_create_key(const key_info&, const option_override* = nullptr);
     future<shared_ptr<symmetric_key>> get_key_by_id(const id_type&, const key_info&, const option_override* = nullptr);
 private:
-    class httpclient;
     using key_and_id_type = std::tuple<shared_ptr<symmetric_key>, id_type>;
 
     struct attr_cache_key {
@@ -205,7 +198,7 @@ private:
     };
 
     struct aws_query;
-    using result_type = bhttp::response<bhttp::string_body>;
+    using result_type = httpclient::result_type;
 
     future<result_type> post(aws_query);
     future<rjson::value> post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query);
@@ -227,167 +220,6 @@ private:
 
 template <> struct fmt::formatter<encryption::kms_host::impl::attr_cache_key> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<encryption::kms_host::impl::id_cache_key> : fmt::ostream_formatter {};
-
-/**
- * Not in seastar. Because nowhere near complete, thought through or
- * capable of dealing with anything but tiny aws messages.
- * 
- * TODO: formalize and move to seastar
- */
-class encryption::kms_host::impl::httpclient {
-public:
-    httpclient(std::string host, uint16_t port, shared_ptr<seastar::tls::certificate_credentials> = {});
-
-    httpclient& add_header(std::string_view key, std::string_view value);
-    void clear_headers();
-
-    using result_type = kms_host::impl::result_type;
-    using request_type = bhttp::request<bhttp::string_body>;
-
-    future<result_type> send();
-
-    using method_type = bhttp::verb;
-
-    void method(method_type);
-    void content(std::string_view);
-    void target(std::string_view);
-
-    request_type& request() {
-        return _req;
-    }
-    const request_type& request() const {
-        return _req;
-    }
-    const std::string& host() const {
-        return _host;
-    }
-    uint16_t port() const {
-        return _port;
-    }
-private:
-
-    std::string _host;
-    uint16_t _port;
-    shared_ptr<seastar::tls::certificate_credentials> _creds;
-    request_type _req;
-};
-
-encryption::kms_host::impl::httpclient::httpclient(std::string host, uint16_t port, shared_ptr<seastar::tls::certificate_credentials> creds)
-    : _host(std::move(host))
-    , _port(port)
-    , _creds(std::move(creds))
-{}
-
-encryption::kms_host::impl::httpclient& encryption::kms_host::impl::httpclient::add_header(std::string_view key, std::string_view value) {
-    _req.set(beast::string_view(key.data(), key.size()), beast::string_view(value.data(), value.size()));
-    return *this;
-}
-
-void encryption::kms_host::impl::httpclient::clear_headers() {
-    _req.clear();
-}
-
-future<encryption::kms_host::impl::httpclient::result_type> encryption::kms_host::impl::httpclient::send() {
-    auto addr = co_await net::dns::resolve_name(_host);
-    socket_address sa(addr, _port);
-    connected_socket s = co_await (_creds 
-        ? tls::connect(_creds, sa)
-        : seastar::connect(sa)
-    );
-
-    s.set_keepalive(true);
-    s.set_nodelay(true);
-
-    auto out = s.output();
-    auto in = s.input();
-
-    bhttp::serializer<true, bhttp::string_body, typename decltype(_req)::fields_type> ser(_req);
-
-    beast::error_code ec;
-    std::exception_ptr ex;
-
-    bhttp::parser<false, bhttp::string_body> p(result_type{});
-
-    try {
-        while (!ser.is_done()) {
-            future<> f = make_ready_future<>();
-            ser.next(ec, [&](beast::error_code& ec, auto&& buffers) {
-                for (auto const buffer : beast::buffers_range (buffers)) {
-                    f = f.then([&out, data = buffer.data(), size = buffer.size()] {
-                        return out.write(static_cast<const char*>(data), size);
-                    });
-                }
-                ser.consume(beast::buffer_bytes(buffers));
-            });
-
-            co_await std::move(f);
-
-            if (ec.failed()) {
-                break;
-            }
-        }
-
-        co_await out.flush();
-
-        p.eager(true);
-        p.skip(false);
-
-        if (!ec.failed()) {
-            while (!p.is_done()) {
-                auto buf = co_await in.read();
-                if (buf.empty()) {
-                    break;
-                }
-                // parse
-                boost::asio::const_buffer wrap(buf.get(), buf.size());
-                p.put(wrap, ec);
-                if (ec.failed() && ec != bhttp::error::need_more) {
-                    break;
-                }
-                ec.clear();
-            }
-        }
-    } catch (...) {
-        ex = std::current_exception();
-    }
-
-    try {
-        co_await out.close();
-    } catch (...) {
-        if (!ex) {
-            ex = std::current_exception();
-        }
-    }
-    try {
-        co_await in.close();
-    } catch (...) {
-        if (!ex) {
-            ex = std::current_exception();
-        }
-    }
-
-    if (ec.failed()) {
-        throw std::system_error(ec);
-    }
-    if (ex) {
-        std::rethrow_exception(ex);
-    }
-
-    co_return p.release();
-}
-
-void encryption::kms_host::impl::httpclient::method(method_type m) {
-    _req.method(m);
-}
-
-void encryption::kms_host::impl::httpclient::content(std::string_view body) {
-    _req.body().assign(body.begin(), body.end());
-    _req.set(bhttp::field::content_length, std::to_string(_req.body().size()));
-}
-
-void encryption::kms_host::impl::httpclient::target(std::string_view target) {
-    _req.target(std::string(target));
-}
 
 static std::string get_option(const encryption::kms_host::option_override* oov, std::optional<std::string> encryption::kms_host::option_override::* f, const std::string& def) {
     if (oov) {
@@ -508,13 +340,13 @@ struct encryption::kms_host::impl::aws_query {
 future<rjson::value> encryption::kms_host::impl::post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query) {
     static auto get_response_error = [](const result_type& res) -> std::string {
         switch (res.result()) {
-        case bhttp::status::unauthorized: case bhttp::status::forbidden: return "AccessDenied";
-        case bhttp::status::not_found: return "ResourceNotFound";
-        case bhttp::status::too_many_requests: return "SlowDown";
-        case bhttp::status::internal_server_error: return "InternalError";
-        case bhttp::status::service_unavailable: return "ServiceUnavailable";
-        case bhttp::status::request_timeout: case bhttp::status::gateway_timeout:
-        case bhttp::status::network_connect_timeout_error:
+        case httpclient::reply_status::unauthorized: case httpclient::reply_status::forbidden: return "AccessDenied";
+        case httpclient::reply_status::not_found: return "ResourceNotFound";
+        case httpclient::reply_status::too_many_requests: return "SlowDown";
+        case httpclient::reply_status::internal_server_error: return "InternalError";
+        case httpclient::reply_status::service_unavailable: return "ServiceUnavailable";
+        case httpclient::reply_status::request_timeout: case httpclient::reply_status::gateway_timeout:
+        case httpclient::reply_status::network_connect_timeout: case httpclient::reply_status::network_read_timeout:
             return "RequestTimeout";
         default:
             return format("{}", res.result());
@@ -549,7 +381,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
                 std::throw_with_nested(service_error(fmt::format("Error sending to host {}:{}: {}", client.host(), client.port(), e.what())));
             }
             kms_log.trace("Result: status={}, response={}", res.result_int(), res);
-            if (res.result() != bhttp::status::ok) {
+            if (res.result() != httpclient::reply_status::ok) {
                 throw kms_error(get_response_error(res), "EC2 metadata query");
             }
             co_return res;
@@ -559,13 +391,13 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
 
         if (token.empty()) {
             client.add_header(X_AWS_EC2_METADATA_TOKEN_TTL_SECONDS, "21600");
-            client.method(httpclient::method_type::put);
+            client.method(httpclient::method_type::PUT);
             client.target("/latest/api/token");
 
 
             auto res = co_await logged_send(client);
 
-            if (res.result() != bhttp::status::ok) {
+            if (res.result() != httpclient::reply_status::ok) {
                 throw kms_error(get_response_error(res), "EC2 metadata token query");
             }
 
@@ -575,7 +407,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
 
         client.add_header(X_AWS_EC2_METADATA_TOKEN, token);
         client.add_header(HOST_HEADER, ec2_meta_host);
-        client.method(httpclient::method_type::get);
+        client.method(httpclient::method_type::GET);
         client.target(target);
 
         auto res = co_await logged_send(client);
@@ -681,7 +513,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
 
     if (_options.aws_use_ec2_credentials) {
         auto [res, token] = co_await query_ec2_meta("/latest/meta-data/iam/security-credentials/", gtoken);
-        auto role = res.body();
+        auto role = std::string(res.body());
 
         std::tie(res, std::ignore) = co_await query_ec2_meta("/latest/meta-data/iam/security-credentials/" + role, token);
         auto body = rjson::parse(std::string_view(res.body().data(), res.body().size()));
@@ -722,13 +554,15 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             .port = _options.port,
         });
 
-        if (res.result() != bhttp::status::ok) {
+        if (res.result() != httpclient::reply_status::ok) {
             throw kms_error(get_response_error(res), "AssumeRole");
         }
 
         rapidxml::xml_document<> doc;
         try {
-            doc.parse<0>(res.body().data());
+            auto body = std::string(res.body());
+
+            doc.parse<0>(body.data());
 
             using node_type = rapidxml::xml_node<char>;
             static auto get_xml_node = [](node_type* node, const char* what) {
@@ -773,14 +607,14 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
         try {
             body = rjson::parse(std::string_view(res.body().data(), res.body().size()));
         } catch (...) {
-            if (res.result() == bhttp::status::ok) {
+            if (res.result() == httpclient::reply_status::ok) {
                 throw;
             }
             // assume non-json formatted error. fall back to parsing below
         }
     } 
 
-    if (res.result() != bhttp::status::ok) {
+    if (res.result() != httpclient::reply_status::ok) {
         // try to format as good an error as we can.
         static const char* message_lc_header = "message";
         static const char* message_cc_header = "Message";
@@ -957,7 +791,7 @@ future<encryption::kms_host::impl::result_type> encryption::kms_host::impl::post
     client.add_header(AWS_AUTHORIZATION_HEADER, awsAuthString);
     client.target("/");
     client.content(query.content);
-    client.method(httpclient::method_type::post);
+    client.method(httpclient::method_type::POST);
 
     kms_log.trace("Request: {}", client.request());
 
