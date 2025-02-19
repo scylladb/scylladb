@@ -6051,7 +6051,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
-        locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
+        locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo, _db.local().features());
 
         streaming::stream_reason reason = std::invoke([&] {
             switch (trinfo->transition) {

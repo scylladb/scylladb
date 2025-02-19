@@ -1253,7 +1253,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             };
 
             auto check_excluded_replicas = [&] {
-                    auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo);
+                    auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo, _db.features());
                     for (auto r : tsi.read_from) {
                         if (is_excluded(raft::server_id(r.host.uuid()))) {
                             rtlogger.debug("Aborting streaming of {} because read-from {} is marked as ignored", gid, r);

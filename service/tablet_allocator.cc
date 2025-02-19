@@ -695,11 +695,11 @@ private:
 
     using migration_streaming_info_vector = utils::small_vector<tablet_migration_streaming_info, 2>;
     static migration_streaming_info_vector
-    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
+    get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos, const gms::feature_service& features) {
         migration_streaming_info_vector streaming_infos;
         for (auto& info : infos) {
             auto& ti = tmap.get_tablet_info(info.tablet.tablet);
-            streaming_infos.push_back(get_migration_streaming_info(topology, ti, info));
+            streaming_infos.push_back(get_migration_streaming_info(topology, ti, info, features));
         }
         return streaming_infos;
     }
@@ -811,7 +811,7 @@ public:
                 co_await coroutine::maybe_yield();
                 if (is_streaming(&trinfo)) {
                     auto& tinfo = tmap.get_tablet_info(tid);
-                    apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo));
+                    apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo, _db.features()));
                 }
             }
         }
@@ -822,7 +822,7 @@ public:
             co_await coroutine::maybe_yield();
             auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
             auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
-            auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
+            auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi, _db.features());
             apply_load(nodes, streaming_info);
         }
 
@@ -897,7 +897,7 @@ public:
         for (auto& plan : plans) {
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
-            tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
+            tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo, _db.features());
             if (can_accept_load(nodes, tmsi)) {
                 apply_load(nodes, tmsi);
                 ret.add(plan.gid);
@@ -1064,7 +1064,7 @@ public:
                 }
 
                 auto mig = create_migration_info(t2_id, src, dst);
-                auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), *t2.info, mig);
+                auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), *t2.info, mig, _db.features());
                 if (!can_accept_load(nodes, mig_streaming_info)) {
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
@@ -1939,7 +1939,7 @@ public:
             auto mig = get_migration_info(tablets, tablet_transition_kind::intranode_migration,
                                           tablet_replica{host, src}, tablet_replica{host, dst});
             auto& tmap = tmeta.get_tablet_map(tablets.table());
-            auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig);
+            auto mig_streaming_info = get_migration_streaming_infos(_tm->get_topology(), tmap, mig, _db.features());
 
             if (!can_accept_load(nodes, mig_streaming_info)) {
                 _stats.for_dc(node_load.dc()).migrations_skipped++;
@@ -2598,7 +2598,7 @@ public:
                                            || src_node_info.state() == locator::node::state::left)
                        ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
             auto mig = get_migration_info(source_tablets, kind, src, dst);
-            auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
+            auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig, _db.features());
 
             pick(*_load_sketch, dst.host, dst.shard, source_tablets);
 
@@ -2935,7 +2935,7 @@ public:
             };
             auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
                 if (t && is_streaming(t->transition)) {
-                    apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition));
+                    apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition, _db.features()));
                 }
             };
 

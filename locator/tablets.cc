@@ -116,11 +116,11 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
     , reads(get_selector_for_reads(stage))
 { }
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_migration_info& trinfo) {
-    return get_migration_streaming_info(topo, tinfo, migration_to_transition_info(tinfo, trinfo));
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_migration_info& trinfo, const gms::feature_service& features) {
+    return get_migration_streaming_info(topo, tinfo, migration_to_transition_info(tinfo, trinfo), features);
 }
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo, const gms::feature_service& features) {
     tablet_migration_streaming_info result;
     switch (trinfo.transition) {
         case tablet_transition_kind::intranode_migration:
