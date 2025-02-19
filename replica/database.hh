@@ -1360,6 +1360,8 @@ public:
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
 
+    tombstone_gc_state get_tombstone_gc_state() const;
+
     friend class compaction_group;
     friend class compaction::compaction_task_impl;
 
