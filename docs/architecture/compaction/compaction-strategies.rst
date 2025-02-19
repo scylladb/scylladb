@@ -70,8 +70,6 @@ Set the parameters for :ref:`Leveled Compaction <leveled-compaction-strategy-lcs
 Incremental Compaction Strategy (ICS)
 =====================================
 
-.. versionadded:: 2019.1.4 Scylla Enterprise
-
 ICS principles of operation are similar to those of STCS, merely replacing the increasingly larger SSTables in each tier, by increasingly longer SSTable runs, modeled after LCS runs, but using larger fragment size of 1 GB, by default.
 
 Compaction is triggered when there are two or more runs of roughly the same size. These runs are incrementally compacted with each other, producing a new SSTable run, while incrementally releasing space as soon as each SSTable in the input run is processed and compacted. This method eliminates the high temporary space amplification problem of STCS by limiting the overhead to twice the (constant) fragment size, per shard.

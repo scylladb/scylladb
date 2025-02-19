@@ -5,7 +5,7 @@ Advanced Internode (RPC) Compression
 Internode (RPC) compression controls whether traffic between nodes is
 compressed. If enabled, it reduces network bandwidth usage.
 
-To further reduce network traffic, you can configure ScyllaDB Enterprise to use
+To further reduce network traffic, you can configure ScyllaDB to use
 ZSTD-based compression and shared dictionary compression. You can enable one or
 both of these features to limit network throughput and reduce network transfer costs.
 
