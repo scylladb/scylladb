@@ -452,10 +452,6 @@ public:
 
     compaction::strategy_control& get_strategy_control() const noexcept;
 
-    tombstone_gc_state get_tombstone_gc_state() const noexcept {
-        return tombstone_gc_state(_shared_tombstone_gc_state);
-    };
-
     shared_tombstone_gc_state& get_shared_tombstone_gc_state() noexcept {
         return _shared_tombstone_gc_state;
     };
