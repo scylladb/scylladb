@@ -2370,9 +2370,6 @@ public:
     bool tombstone_gc_enabled() const noexcept override {
         return _t.tombstone_gc_enabled()  &&  _cg.tombstone_gc_enabled();
     }
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
-        return _t.get_compaction_manager().get_tombstone_gc_state();
-    }
     tombstone_gc_before_getter get_tombstone_gc_before_getter() const noexcept override {
         return tombstone_gc_before_getter(_t.get_compaction_manager().get_tombstone_gc_state());
     }
