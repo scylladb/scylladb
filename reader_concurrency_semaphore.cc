@@ -482,7 +482,7 @@ public:
         _trace_ptr = std::move(trace_ptr);
     }
 
-    void check_abort() {
+    void check_abort() const {
         if (_ex) {
             std::rethrow_exception(_ex);
         }
@@ -631,7 +631,7 @@ void reader_permit::set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept
     _impl->set_trace_state(std::move(trace_ptr));
 }
 
-void reader_permit::check_abort() {
+void reader_permit::check_abort() const {
     return _impl->check_abort();
 }
 
@@ -1121,6 +1121,7 @@ void reader_concurrency_semaphore::set_notify_handler(inactive_read_handle& irh,
     auto& ir = *(*irh._permit)->aux_data().ir;
     ir.notify_handler = std::move(notify_handler);
     if (ttl_opt) {
+        irh._permit->set_timeout(db::no_timeout);
         ir.ttl_timer.set_callback([this, permit = *irh._permit] () mutable {
             evict(*permit, evict_reason::time);
         });
