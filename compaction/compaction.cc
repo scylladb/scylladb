@@ -849,8 +849,7 @@ private:
                 reader.consume_in_thread(std::move(cfc));
             });
         });
-        const auto& gc_state = get_tombstone_gc_state();
-        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
+        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), get_tombstone_gc_before_getter()));
     }
 
     future<> consume() {
@@ -870,7 +869,7 @@ private:
                     using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
-                        get_tombstone_gc_state(),
+                        get_tombstone_gc_before_getter(),
                         get_compacted_fragments_writer(),
                         get_gc_compacted_fragments_writer());
 
@@ -880,7 +879,7 @@ private:
                 using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
-                    get_tombstone_gc_state(),
+                    get_tombstone_gc_before_getter(),
                     get_compacted_fragments_writer(),
                     noop_compacted_fragments_consumer());
                 reader.consume_in_thread(std::move(cfc));

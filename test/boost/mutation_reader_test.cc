@@ -2591,7 +2591,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                 }
                 auto mr = make_compacting_reader(std::move(source), query_time,
                         can_never_purge,
-                        tombstone_gc_state(nullptr), fwd_sm);
+                        {}, fwd_sm);
                 if (single_fragment_buffer) {
                     mr.set_max_buffer_size(1);
                 }
@@ -2648,7 +2648,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_next_partition) {
         auto mr = make_compacting_reader(make_mutation_reader_from_fragments(ss.schema(), permit, std::move(mfs)),
                 gc_clock::now(),
                 can_never_purge,
-                tombstone_gc_state(nullptr));
+                {});
         mr.set_max_buffer_size(buffer_size);
 
         return mr;
@@ -2693,7 +2693,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
         .produces_range_tombstone_change({position_in_partition::for_range_end(r), {}})
         .produces_partition_end();
 
-    assert_that(make_compacting_reader(read_m(), gc_clock::time_point::min(), can_never_purge, tombstone_gc_state(nullptr)))
+    assert_that(make_compacting_reader(read_m(), gc_clock::time_point::min(), can_never_purge, {}))
             .exact()
             .produces_partition_start(m.decorated_key(), p_tomb)
             .produces_partition_end();
