@@ -110,7 +110,7 @@ Google Compute Engine (GCE)
 -----------------------------------
 
 Pick a zone where Haswell CPUs are found. Local SSD performance offers, according to Google, less than 1 ms of latency and up to 680,000 read IOPS and 360,000 write IOPS.
-Image with NVMe disk interface is recommended, CentOS 7 for ScyllaDB Enterprise 2020.1 and older, and Ubuntu 20 for 2021.1 and later.  
+Image with NVMe disk interface is recommended.
 (`More info <https://cloud.google.com/compute/docs/disks/local-ssd>`_)
 
 Recommended instances types are `n1-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n1_machines>`_ and `n2-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines>`_
