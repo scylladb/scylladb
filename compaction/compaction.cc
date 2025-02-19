@@ -776,6 +776,14 @@ private:
         return _tombstone_gc_state_with_commitlog_check_disabled ? _tombstone_gc_state_with_commitlog_check_disabled.value() : _table_s.get_tombstone_gc_state();
     }
 
+    tombstone_gc_before_getter get_tombstone_gc_before_getter() const {
+        auto getter = _table_s.get_tombstone_gc_before_getter();
+        if (_tombstone_gc_state_with_commitlog_check_disabled) {
+            return getter.with_commitlog_check_disabled();
+        }
+        return getter;
+    }
+
     future<> setup() {
         auto ssts = make_lw_shared<sstables::sstable_set>(make_sstable_set_for_input());
         auto fully_expired = _table_s.fully_expired_sstables(_sstables, gc_clock::now());

@@ -115,6 +115,9 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
     }
+    tombstone_gc_before_getter get_tombstone_gc_before_getter() const noexcept override {
+        return tombstone_gc_before_getter(_tombstone_gc_state);
+    }
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
