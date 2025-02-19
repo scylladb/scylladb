@@ -225,17 +225,22 @@ public:
     // `wait_for_raft` must've also been called earlier and returned `true`.
     future<> become_nonvoter(abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
 
-    // Set the voter status of the given server, other than us, in group 0.
+    // Make the given server, other than us, a non-voter in group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // `wait_for_raft` must've also been called earlier and returned `true`.
-    future<> set_voter_status(raft::server_id, can_vote, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
+    future<> make_nonvoter(raft::server_id, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
 
-    // Set the voter status of the given servers, other than us, in group 0.
+    // Modify the voter status of the given servers in group 0.
+    //
+    // The `voters_add` are changed to voters, the `voters_del` are changed to non-voters.
+    //
+    // The `voters_add` and `voters_del` sets must not intersect.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // `wait_for_raft` must've also been called earlier and returned `true`.
-    future<> set_voters_status(const std::unordered_set<raft::server_id>&, can_vote, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
+    future<> modify_voters(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del, abort_source& as,
+            std::optional<raft_timeout> timeout = std::nullopt);
 
     // Remove ourselves from group 0.
     //
@@ -383,8 +388,8 @@ private:
 
     // Modify the given server voter status in Raft group 0 configuration.
     // Retries on raft::commit_status_unknown.
-    future<> modify_raft_voter_status(
-            const std::unordered_set<raft::server_id>&, can_vote, abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
+    future<> modify_raft_voter_status(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
+            abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
 
     // Returns true if raft is enabled
     future<bool> use_raft();
