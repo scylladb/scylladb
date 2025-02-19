@@ -817,7 +817,7 @@ private:
             // for a better estimate for the number of partitions in the merged
             // sstable than just adding up the lengths of individual sstables.
             _estimated_partitions += sst->get_estimated_key_count();
-            sum_of_estimated_droppable_tombstone_ratio += sst->estimate_droppable_tombstone_ratio(gc_clock::now(), get_tombstone_gc_state(), _schema);
+            sum_of_estimated_droppable_tombstone_ratio += sst->estimate_droppable_tombstone_ratio(gc_clock::now(), get_tombstone_gc_before_getter(), _schema);
             _compacting_data_file_size += sst->ondisk_data_size();
             _compacting_max_timestamp = std::max(_compacting_max_timestamp, sst->get_stats_metadata().max_timestamp);
             if (sst->originated_on_this_node().value_or(false) && sst_stats.position.shard_id() == this_shard_id()) {
@@ -1966,7 +1966,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
     int64_t min_timestamp = std::numeric_limits<int64_t>::max();
 
     for (auto& sstable : overlapping) {
-        auto gc_before = sstable->get_gc_before_for_fully_expire(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+        auto gc_before = sstable->get_gc_before_for_fully_expire(compaction_time, table_s.get_tombstone_gc_before_getter(), table_s.schema());
         if (sstable->get_max_local_deletion_time() >= gc_before) {
             min_timestamp = std::min(min_timestamp, sstable->get_stats_metadata().min_timestamp);
         }
@@ -1986,7 +1986,7 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
 
     // SStables that do not contain live data is added to list of possibly expired sstables.
     for (auto& candidate : compacting) {
-        auto gc_before = candidate->get_gc_before_for_fully_expire(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+        auto gc_before = candidate->get_gc_before_for_fully_expire(compaction_time, table_s.get_tombstone_gc_before_getter(), table_s.schema());
         clogger.debug("Checking if candidate of generation {} and max_deletion_time {} is expired, gc_before is {}",
                     candidate->generation(), candidate->get_stats_metadata().max_local_deletion_time, gc_before);
         // A fully expired sstable which has an ancestor undeleted shouldn't be compacted because
