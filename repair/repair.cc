@@ -2273,21 +2273,34 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
             continue;
         }
-        locator::effective_replication_map_ptr erm;
-        while (true) {
-            _repair_module->check_in_shutdown();
-            erm = t->get_effective_replication_map();
-            const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
-            if (!tmap.has_transitions()) {
-                break;
+        std::vector<foreign_ptr<locator::effective_replication_map_ptr>> erms;
+        try {
+            while (true) {
+                _repair_module->check_in_shutdown();
+                erms = co_await container().map([tid] (repair_service& rs) {
+                    auto& t = rs._db.local().find_column_family(tid);
+                    return make_foreign(t.get_effective_replication_map());
+                });
+
+                if (std::all_of(erms.cbegin(), erms.cend(), [tid] (const auto& erm) {
+                    const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+                    return !tmap.has_transitions();
+                })) {
+                    break;
+                }
+
+                rlogger.info("repair[{}] Table {}.{} has tablet transitions, waiting for topology to quiesce", rid.uuid(), keyspace_name, table_name);
+                erms.clear();
+                co_await container().invoke_on(0, [] (repair_service& rs) {
+                    return rs._tsm.local().await_not_busy();
+                });
+                rlogger.info("repair[{}] Topology quiesced", rid.uuid());
             }
-            rlogger.info("repair[{}] Table {}.{} has tablet transitions, waiting for topology to quiesce", rid.uuid(), keyspace_name, table_name);
-            erm = nullptr;
-            co_await container().invoke_on(0, [] (repair_service& rs) {
-                return rs._tsm.local().await_not_busy();
-            });
-            rlogger.info("repair[{}] Topology quiesced", rid.uuid());
+        } catch (replica::no_such_column_family& e) {
+            rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
+            continue;
         }
+        auto erm = (co_await erms[this_shard_id()].copy()).release();
         auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
         struct repair_tablet_meta {
             locator::tablet_id id;
@@ -2415,7 +2428,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             for (auto& r : intersection_ranges) {
                 rlogger.debug("repair[{}] Repair tablet task table={}.{} master_shard_id={} range={} neighbors={} replicas={}",
                         rid.uuid(), keyspace_name, table_name, master_shard_id, r, repair_neighbors(nodes, shards).shard_map, m.replicas);
-                task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas, erm});
+                task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas, co_await erms[master_shard_id].copy()});
                 co_await coroutine::maybe_yield();
             }
         }
