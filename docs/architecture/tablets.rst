@@ -135,6 +135,8 @@ You can create a keyspace with tablets enabled with the ``tablets = {'enabled': 
     the keyspace schema with ``tablets = { 'enabled': false }`` or 
     ``tablets = { 'enabled': true }``.
 
+.. _tablets-limitations:
+
 Limitations and Unsupported Features
 --------------------------------------
 

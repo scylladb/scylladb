@@ -202,14 +202,6 @@ An example that excludes a datacenter while using ``replication_factor``::
 
     DESCRIBE KEYSPACE excalibur
         CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3'} AND durable_writes = true;
-  
-Keyspace storage options :label-caution:`Experimental`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-By default, SStables of a keyspace are stored locally.
-As an alternative, you can configure your keyspace to be stored
-on Amazon S3 or another S3-compatible object store.
-See :ref:`Keyspace storage options <admin-keyspace-storage-options>` for details.
 
 .. _tablets:
 
@@ -228,7 +220,14 @@ sub-option                             type  description
 ``'initial'``                          int   The number of tablets to start with (deprecated)
 ===================================== ====== =============================================
 
-.. scylladb_include_flag:: tablets-default.rst
+By default, a keyspace is created with tablets enabled. You can use the ``tablets`` option 
+to opt out a keyspace from tablets-based distribution.
+
+You may want to opt out if you plan to use features that are not supported for keyspaces
+with tablets enabled. See :ref:`Limitations and Unsupported Features <tablets-limitations>`
+for details.
+
+**The ``initial`` sub-option (deprecated)**
 
 A good rule of thumb to calculate initial tablets is to divide the expected total storage used
 by tables in this keyspace by (``replication_factor`` * 5GB). For example, if you expect a 30TB
@@ -250,6 +249,14 @@ Note that the ``initial`` tablets option was deprecated.
 Please use :ref:`Per-table tablet options <cql-per-table-tablet-options>` instead.
 
 See :doc:`Data Distribution with Tablets </architecture/tablets>` for more information about tablets.
+
+Keyspace storage options :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default, SStables of a keyspace are stored locally.
+As an alternative, you can configure your keyspace to be stored
+on Amazon S3 or another S3-compatible object store.
+See :ref:`Keyspace storage options <admin-keyspace-storage-options>` for details.
 
 .. _use-statement:        
         
