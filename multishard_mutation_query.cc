@@ -770,7 +770,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
 
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {
-        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, table.get_compaction_manager().get_tombstone_gc_state(), std::move(result_builder_factory));
+        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, table.get_tombstone_gc_state(), std::move(result_builder_factory));
     }).then([&] (page_consume_result<ResultBuilder> r) -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
             // Must call before calling `detach_state()`.
