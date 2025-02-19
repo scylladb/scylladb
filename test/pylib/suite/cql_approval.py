@@ -48,10 +48,10 @@ class CQLApprovalTest(Test):
         super().__init__(test_no, shortname, suite)
         # Path to cql_repl driver, in the given build mode
         self.path = "pytest"
-        self.cql = suite.suite_path / (self.shortname + ".cql")
-        self.result = suite.suite_path / (self.shortname + ".result")
-        self.tmpfile = os.path.join(suite.options.tmpdir, self.mode, self.uname + ".reject")
-        self.reject = suite.suite_path / (self.shortname + ".reject")
+        self.cql = self.suite.suite_path / f"{self.shortname}.cql"
+        self.result = self.suite.suite_path / f"{self.shortname}.result"
+        self.tmpfile = self.suite.log_dir / f"{self.uname}.reject"
+        self.reject = self.suite.suite_path / f"{self.shortname}.reject"
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
         self.is_before_test_ok = False
@@ -64,7 +64,7 @@ class CQLApprovalTest(Test):
         self.server_log = None
         self.server_log_filename = None
         self.env: Dict[str, str] = dict()
-        self._prepare_args(suite.options)
+        self._prepare_args(self.suite.options)
 
     def reset(self) -> None:
         """Reset the test before a retry, if it is retried as flaky"""

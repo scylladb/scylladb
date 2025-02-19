@@ -7,11 +7,10 @@
 from __future__ import annotations
 
 import logging
-import os
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
-from test.pylib.suite.base import  Test, TestSuite,run_test
+from test.pylib.suite.base import Test, TestSuite, run_test
 from test.pylib.util import LogPrefixAdapter
 
 if TYPE_CHECKING:
@@ -46,7 +45,7 @@ class ToolTest(Test):
         super().__init__(test_no, shortname, suite)
         launcher = self.suite.cfg.get("launcher", "pytest")
         self.path = launcher.split(maxsplit=1)[0]
-        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.xmlout = self.suite.log_dir / "xml" / f"{self.uname}.xunit.xml"
 
     def _prepare_pytest_params(self, options: argparse.Namespace):
         launcher = self.suite.cfg.get("launcher", "pytest")

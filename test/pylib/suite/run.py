@@ -7,11 +7,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING
 
 from scripts import coverage
-from test.pylib.suite.base import Test, TestSuite, path_to, read_log, run_test
+from test import path_to
+from test.pylib.suite.base import Test, TestSuite, read_log, run_test
 
 if TYPE_CHECKING:
     import argparse
@@ -44,7 +44,7 @@ class RunTest(Test):
     def __init__(self, test_no: int, shortname: str, suite) -> None:
         super().__init__(test_no, shortname, suite)
         self.path = suite.suite_path / shortname
-        self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.xmlout = self.suite.log_dir / "xml" / f"{self.uname}.xunit.xml"
         self.args = [
             "--junit-xml={}".format(self.xmlout),
             "-vv",
