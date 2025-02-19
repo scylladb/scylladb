@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 import pytest
 import universalasync
 
+from test import ALL_MODES, TOP_SRCDIR
 from test.pylib.host_registry import HostRegistry
 from test.pylib.minio_server import MinioServer
 from test.pylib.report_plugin import ReportPlugin
@@ -32,17 +33,12 @@ if TYPE_CHECKING:
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
 
-ALL_MODES = {'debug': 'Debug',
-             'release': 'RelWithDebInfo',
-             'dev': 'Dev',
-             'sanitize': 'Sanitize',
-             'coverage': 'Coverage'}
 
-def pytest_addoption(parser):
-    parser.addoption('--mode', choices=ALL_MODES.keys(), action="append", dest="modes",
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
                      help="Run only tests for given build mode(s)")
-    parser.addoption('--tmpdir', action='store', default='testlog', help='''Path to temporary test data and log files. The data is
-            further segregated per build mode. Default: ./testlog.''', )
+    parser.addoption('--tmpdir', action='store', default=str(TOP_SRCDIR / 'testlog'),
+                     help='Path to temporary test data and log files.  The data is further segregated per build mode.')
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
 
     # Following option is to use with bare pytest command.
@@ -171,9 +167,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     # Run stuff just once for the pytest session even running under xdist.
     if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
-        temp_dir = os.path.join(session.config.rootpath, "..", session.config.getoption("--tmpdir"))
-        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes())
-        start_s3_mock_services(minio_tempdir_base=temp_dir)
+        prepare_dirs(
+            tempdir_base=session.config.getoption("--tmpdir"),
+            modes=session.config.getoption("--mode") or get_configured_modes(),
+        )
+        start_s3_mock_services(minio_tempdir_base=session.config.getoption("--tmpdir"))
 
 
 def pytest_sessionfinish() -> None:
