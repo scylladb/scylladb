@@ -53,8 +53,6 @@
 #include "replica/global_table_ptr.hh"
 #include "locator/tablets.hh"
 
-#include <boost/range/algorithm.hpp>
-#include <boost/range/numeric.hpp>
 #include "utils/error_injection.hh"
 #include "readers/reversing_v2.hh"
 #include "readers/empty_v2.hh"
@@ -473,7 +471,7 @@ table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function
 }
 
 static bool belongs_to_current_shard(const std::vector<shard_id>& shards) {
-    return boost::find(shards, this_shard_id()) != shards.end();
+    return std::ranges::contains(shards, this_shard_id());
 }
 
 static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
