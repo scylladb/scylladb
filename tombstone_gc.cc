@@ -243,6 +243,18 @@ future<> tombstone_gc_state::flush_pending_repair_time_update(replica::database&
     });
 };
 
+bool tombstone_gc_before_getter::cheap_to_get_gc_before(const schema& s) const noexcept {
+    return _tombstone_gc.cheap_to_get_gc_before(s);
+}
+
+tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_before_getter::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
+    return _tombstone_gc.get_gc_before_for_range(std::move(s), range, query_time);
+}
+
+gc_clock::time_point tombstone_gc_before_getter::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
+    return _tombstone_gc.get_gc_before_for_key(std::move(s), dk, query_time);
+}
+
 void tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh_time) {
     auto m = get_or_create_group0_gc_time();
     if (!m) {
