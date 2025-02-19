@@ -6,11 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/range/algorithm/find.hpp>
 #include "test/lib/dummy_sharder.hh"
 
 unsigned dummy_sharder::shard_of(const dht::token& t) const {
-    auto it = boost::find(_tokens, t);
+    auto it = std::ranges::find(_tokens, t);
     // Unknown tokens are assigned to shard 0
     return it == _tokens.end() ? 0 : std::distance(_tokens.begin(), it) % sharder::shard_count();
 }

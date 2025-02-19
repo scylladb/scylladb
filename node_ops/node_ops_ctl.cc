@@ -18,8 +18,6 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "idl/node_ops.dist.hh"
 
-#include <boost/range/algorithm/find.hpp>
-
 static logging::logger nlogger("node_ops");
 
 node_ops_ctl::node_ops_ctl(const service::storage_service& ss_, node_ops_cmd cmd, locator::host_id id, gms::inet_address ep, node_ops_id uuid)
@@ -109,7 +107,7 @@ future<> node_ops_ctl::query_pending_op() {
     co_await coroutine::parallel_for_each(sync_nodes, [this] (const locator::host_id& node) -> future<> {
         auto resp = co_await ser::node_ops_rpc_verbs::send_node_ops_cmd(&ss._messaging.local(), node, req);
         nlogger.debug("{}[{}]: Got query_pending_ops response from node={}, resp.pending_ops={}", desc, uuid(), node, resp.pending_ops);
-        if (boost::find(resp.pending_ops, uuid()) == resp.pending_ops.end()) {
+        if (std::ranges::find(resp.pending_ops, uuid()) == resp.pending_ops.end()) {
             throw std::runtime_error(::format("{}[{}]: Node {} no longer tracks the operation", desc, uuid(), node));
         }
     });
