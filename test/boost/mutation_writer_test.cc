@@ -403,12 +403,12 @@ static void assert_that_segregator_produces_correct_data(const bucket_map_t& buc
 
     const auto now = gc_clock::now();
     for (auto& m : muts) {
-        m.partition().compact_for_compaction(*random_schema.schema(), always_gc, m.decorated_key(), now, tombstone_gc_state(nullptr));
+        m.partition().compact_for_compaction(*random_schema.schema(), always_gc, m.decorated_key(), now, {});
     }
 
     std::vector<mutation> combined_mutations;
     while (auto m = read_mutation_from_mutation_reader(reader).get()) {
-        m->partition().compact_for_compaction(*random_schema.schema(), always_gc, m->decorated_key(), now, tombstone_gc_state(nullptr));
+        m->partition().compact_for_compaction(*random_schema.schema(), always_gc, m->decorated_key(), now, {});
         combined_mutations.emplace_back(std::move(*m));
     }
 

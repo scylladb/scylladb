@@ -1437,7 +1437,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
 
 static mutation compacted(const mutation& m, gc_clock::time_point now) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, tombstone_gc_state(nullptr));
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, {});
     return result;
 }
 
@@ -1829,7 +1829,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());
-    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
+    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now(), {});
     // Check that row was covered by tombstone.
     BOOST_REQUIRE(m.partition().empty());
     // Check that tombstone was purged after compact_for_compaction().
@@ -2029,8 +2029,8 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             if (s != m2.schema()) {
                 return;
             }
-            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now, tombstone_gc_state(nullptr));
-            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now, tombstone_gc_state(nullptr));
+            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now, {});
+            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now, {});
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
@@ -2869,7 +2869,7 @@ using purged_compacted_fragments_consumer = basic_compacted_fragments_consumer_b
 void run_compaction_data_stream_split_test(const schema& schema, reader_permit permit, gc_clock::time_point query_time,
         std::vector<mutation> mutations) {
     for (auto& mut : mutations) {
-        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
+        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, {});
     }
 
     auto reader = make_mutation_reader_from_mutations(schema.shared_from_this(), std::move(permit), mutations);

@@ -1030,7 +1030,7 @@ SEASTAR_TEST_CASE(reader_selector_fast_forwarding_test) {
 
 static mutation compacted(const mutation& m) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), gc_clock::now(), {});
     return result;
 }
 
