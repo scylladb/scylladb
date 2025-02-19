@@ -18,12 +18,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/json/formatter.hh>
-#include <seastar/http/url.hh>
-#include <seastar/http/client.hh>
-#include <seastar/http/request.hh>
-#include <seastar/http/reply.hh>
 #include <seastar/http/exception.hh>
-#include <seastar/util/short_streams.hh>
 
 #include <rapidxml.h>
 #include <openssl/evp.h>
@@ -43,6 +38,7 @@
 #include "encryption.hh"
 #include "encryption_exceptions.hh"
 #include "symmetric_key.hh"
+#include "utils.hh"
 #include "utils/hash.hh"
 #include "utils/loading_cache.hh"
 #include "utils/UUID.hh"
@@ -110,7 +106,6 @@ public:
 
     using scopes_type = std::string; // space separated. avoids some transforms. makes other easy.
 private:
-    class httpclient;
     using key_and_id_type = std::tuple<shared_ptr<symmetric_key>, id_type>;
 
     struct attr_cache_key {
@@ -612,7 +607,6 @@ future<> encryption::gcp_host::impl::send_request(std::string_view uri, std::str
     auto port = m[3].str();
     auto path = m[4].str();
 
-    auto addr = co_await net::dns::resolve_name(host, net::inet_address::family::INET /* CMH our client does not handle ipv6 well?*/);
     auto certs = scheme == "https"
         ? ::make_shared<tls::certificate_credentials>()
         : shared_ptr<tls::certificate_credentials>()
@@ -634,41 +628,30 @@ future<> encryption::gcp_host::impl::send_request(std::string_view uri, std::str
     }
 
     uint16_t pi = port.empty() ? (certs ? 443 : 80) : uint16_t(std::stoi(port.substr(1)));
-    auto client = certs 
-        ? http::experimental::client(socket_address(addr, pi), std::move(certs), host)
-        : http::experimental::client(socket_address(addr, pi))
-        ;
-    if (path.empty()) {
-        path = "/";
-    }
 
-    gcp_log.trace("Resolved {} -> {}:{}{}", uri, addr, pi, path);
+    httpclient client(host, pi, std::move(certs));
 
-    auto req = http::request::make(op, host, path);
+    client.target(path);
+    client.method(op);
 
     for (auto& [k, v] : headers) {
-        req._headers[sstring(k)] = sstring(v);
+        client.add_header(k, v);
     }
 
     if (!body.empty()) {
         if (content_type.empty()) {
             content_type = "application/x-www-form-urlencoded";
         }
-        req.write_body("", std::move(body));
-        req.set_mime_type(sstring(content_type));
+        client.content(std::move(body));
+        client.add_header(httpclient::CONTENT_TYPE_HEADER, content_type);
     }
 
     gcp_log.trace("Sending {} request to {} ({}): {}", content_type, uri, headers, body);
 
-    co_await client.make_request(std::move(req), [&] (const http::reply& rep, input_stream<char>&& in) -> future<> {
-        auto&lh = handler;
-        auto lin = std::move(in);
-        auto result = co_await util::read_entire_stream_contiguous(lin);
+    co_await client.send([&] (const http::reply& rep, std::string_view result) {
         gcp_log.trace("Got response {}: {}", int(rep._status), result);
-        lh(rep, result);
+        handler(rep, result);
     });
-
-    co_await client.close();
 }
 
 
