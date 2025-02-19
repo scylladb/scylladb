@@ -393,6 +393,11 @@ struct tablet_desc {
     const tablet_transition_info* transition; // null if there's no transition.
 };
 
+class no_such_tablet_map : public std::runtime_error {
+public:
+    no_such_tablet_map(const table_id& id);
+};
+
 /// Stores information about tablets of a single table.
 ///
 /// The map contains a constant number of tablets, tablet_count().

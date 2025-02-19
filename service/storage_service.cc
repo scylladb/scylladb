@@ -5454,6 +5454,12 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
                 release_guard(std::move(guard));
                 co_await split_all_compaction_groups();
             }
+        } catch (const locator::no_such_tablet_map& ex) {
+            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            break;
+        } catch (const replica::no_such_column_family& ex) {
+            slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
+            break;
         } catch (const seastar::abort_requested_exception& ex) {
             slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
             break;
