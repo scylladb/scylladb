@@ -4176,7 +4176,7 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
                 // but before removing it group 0, group 0's availability won't be reduced.
                 if (is_group0_member && ss._group0->is_member(raft_id, true)) {
                     slogger.info("removenode[{}]: making node {} a non-voter in group 0", uuid, raft_id);
-                    ss._group0->set_voter_status(raft_id, can_vote::no, ss._group0_as).get();
+                    ss._group0->make_nonvoter(raft_id, ss._group0_as).get();
                     slogger.info("removenode[{}]: made node {} a non-voter in group 0", uuid, raft_id);
                 }
 
