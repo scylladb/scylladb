@@ -1488,8 +1488,8 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
-    auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
+    const auto gc_before_getter = tombstone_gc_before_getter(_base.get_compaction_manager().get_tombstone_gc_state());
+    auto gc_before = gc_before_getter.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {
@@ -1517,8 +1517,8 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
-    const auto& gc_state = _base.get_compaction_manager().get_tombstone_gc_state();
-    auto gc_before = gc_state.get_gc_before_for_key(_schema, dk, _now);
+    const auto gc_before_getter = tombstone_gc_before_getter(_base.get_compaction_manager().get_tombstone_gc_state());
+    auto gc_before = gc_before_getter.get_gc_before_for_key(_schema, dk, _now);
 
     // We allow existing to be disengaged, which we treat the same as an empty row.
     if (existing) {
