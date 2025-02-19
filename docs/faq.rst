@@ -193,6 +193,8 @@ ScyllaDB comes with its own version of the Apache Cassandra client tools, in the
 
 We recommend uninstalling Apache Cassandra before installing :code:`scylla-tools`.
 
+ .. TODO Update the example below then a patch release for 2025.1 is available
+
 .. _faq-pinning:
 
 Can I install or upgrade to a patch release other than latest on Debian or Ubuntu?

@@ -187,8 +187,8 @@ ATTACH SERVICE_LEVEL oltp TO bob;
 Note that `alternator_enforce_authorization` has to be enabled in Scylla configuration.
 
 See [Authorization](##Authorization) section to learn more about roles and authorization.
-See <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>
-to read about **Workload Prioritization** in detail.
+See [Workload Prioritization](../features/workload-prioritization)
+to read about Workload Prioritization in detail.
 
 ## Metrics
 
@@ -313,7 +313,7 @@ they should be easy to detect. Here is a list of these unimplemented features:
   RestoreTableToPointInTime
 
 * DynamoDB's encryption-at-rest settings are not supported. The Encryption-
-  at-rest feature is available in Scylla Enterprise, but needs to be
+  at-rest feature is available in ScyllaDB, but needs to be
   enabled and configured separately, not through the DynamoDB API.
 
 * No support for throughput accounting or capping. As mentioned above, the
