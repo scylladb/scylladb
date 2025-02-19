@@ -1106,6 +1106,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "* priority_string: (Default: not set, use default) GnuTLS priority string controlling TLS algorithms used/allowed.\n"
         "* require_client_auth: (Default: false) Enables or disables certificate authentication.\n"
+        "* enable_session_tickets: (Default: false) Enables or disables TLS1.3 session tickets.\n"
         "\n"
         "Related information: Client-to-node encryption")
     , alternator_encryption_options(this, "alternator_encryption_options", value_status::Used, {/*none*/},
@@ -1115,7 +1116,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "The advanced settings are:\n"
         "\n"
-        "* priority_string: GnuTLS priority string controlling TLS algorithms used/allowed.")
+        "* priority_string: GnuTLS priority string controlling TLS algorithms used/allowed.\n"
+        "* enable_session_tickets: (Default: false) Enables or disables TLS1.3 session tickets.")
     , ssl_storage_port(this, "ssl_storage_port", value_status::Used, 7001,
         "The SSL port for encrypted communication. Unused unless enabled in encryption_options.")
     , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted).")
@@ -1634,6 +1636,9 @@ future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, d
     }
     if (is_true(get_or_default(options, "require_client_auth", "false"))) {
         creds.set_client_auth(seastar::tls::client_auth::REQUIRE);
+    }
+    if (is_true(get_or_default(options, "enable_session_tickets", "false"))) {
+        creds.set_session_resume_mode(seastar::tls::session_resume_mode::TLS13_SESSION_TICKET);
     }
 
     auto cert = get_or_default(options, "certificate", db::config::get_conf_sub("scylla.crt").string());
