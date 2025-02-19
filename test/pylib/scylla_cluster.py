@@ -24,6 +24,8 @@ from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterato
     Awaitable
 import uuid
 from io import BufferedWriter
+
+from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
@@ -264,7 +266,7 @@ class ScyllaServer:
     host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
-    def __init__(self, mode: str, exe: str, vardir: str,
+    def __init__(self, mode: str, exe: str, vardir: str | pathlib.Path,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
@@ -292,13 +294,13 @@ class ScyllaServer:
         self.control_connection: Optional[Session] = None
         shortname = f"scylla-{self.server_id}"
         self.workdir = self.vardir / shortname
-        self.log_filename = (self.vardir / shortname).with_suffix(".log")
+        self.log_filename = self.workdir.with_suffix(".log")
         self.config_filename = self.workdir / "conf/scylla.yaml"
         self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
         self.certificate_filename = self.workdir / "conf/scylla.crt"
         self.keyfile_filename = self.workdir / "conf/scylla.key"
         self.truststore_filename = self.workdir / "conf/scyllacadb.pem"
-        self.resourcesdir = pathlib.Path.cwd() / "test/pylib/resources"
+        self.resourcesdir = TEST_DIR / "pylib/resources"
         self.resources_certificate_file = self.resourcesdir / "scylla.crt"
         self.resources_keyfile_file = self.resourcesdir / "scylla.key"
 
@@ -590,7 +592,7 @@ class ScyllaServer:
         # remove from env to make sure user's SCYLLA_HOME has no impact
         env.pop('SCYLLA_HOME', None)
         env.update(self.append_env)
-        env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={os.getcwd()}/ubsan-suppressions.supp'
+        env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
         env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
 
         self.cmd = await asyncio.create_subprocess_exec(

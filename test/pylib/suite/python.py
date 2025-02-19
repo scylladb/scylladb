@@ -14,9 +14,10 @@ import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
 from scripts import coverage
+from test import path_to
 from test.pylib.pool import Pool
 from test.pylib.scylla_cluster import ScyllaCluster, ScyllaServer, merge_cmdline_options
-from test.pylib.suite.base import Test, TestSuite, path_to, read_log, run_test
+from test.pylib.suite.base import Test, TestSuite, read_log, run_test
 from test.pylib.util import LogPrefixAdapter
 
 if TYPE_CHECKING:
@@ -85,7 +86,7 @@ class PythonTestSuite(TestSuite):
             server = ScyllaServer(
                 mode=self.mode,
                 exe=self.scylla_exe,
-                vardir=os.path.join(self.options.tmpdir, self.mode),
+                vardir=self.log_dir,
                 logger=create_cfg.logger,
                 cluster_name=create_cfg.cluster_name,
                 ip_addr=create_cfg.ip_addr,
@@ -144,7 +145,7 @@ class PythonTest(Test):
         self.path = "python"
         self.core_args = ["-m", "pytest"]
         self.casename = casename
-        self.xmlout = os.path.join(self.suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.xmlout = self.suite.log_dir / "xml" / f"{self.uname}.xunit.xml"
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
         self.is_before_test_ok = False

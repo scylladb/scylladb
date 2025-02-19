@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from test.pylib.scylla_cluster import get_cluster_manager
@@ -46,8 +45,7 @@ class TopologyTest(PythonTest):
 
         self._prepare_pytest_params(options)
 
-        test_path = os.path.join(self.suite.options.tmpdir, self.mode)
-        async with get_cluster_manager(self.uname, self.suite.clusters, test_path) as manager:
+        async with get_cluster_manager(self.uname, self.suite.clusters, str(self.suite.log_dir)) as manager:
             self.args.insert(0, "--tmpdir={}".format(options.tmpdir))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
             if options.artifacts_dir_url:
