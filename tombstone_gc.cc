@@ -36,7 +36,7 @@ repair_history_map_ptr tombstone_gc_state::get_or_create_repair_history_for_tabl
     return reconcile_history_maps[id];
 }
 
-repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const table_id& id) const {
+repair_history_map_ptr tombstone_gc_before_getter::get_repair_history_for_table(const table_id& id) const {
     if (!_reconcile_history_maps) {
         return {};
     }
@@ -58,7 +58,7 @@ seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_or_create_g
     return _reconcile_history_maps->_group0_gc_time;
 }
 
-seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_group0_gc_time() const {
+seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_before_getter::get_group0_gc_time() const {
     if (!_reconcile_history_maps) {
         return {};
     }
@@ -68,7 +68,7 @@ seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_group0_gc_t
     return _reconcile_history_maps->_group0_gc_time;
 }
 
-gc_clock::time_point tombstone_gc_state::get_gc_before_for_group0(schema_ptr s) const {
+gc_clock::time_point tombstone_gc_before_getter::get_gc_before_for_group0(schema_ptr s) const {
     // use the reconcile mode for group0 tables with 0 propagation delay
     auto gc_before = gc_clock::time_point::min();
     auto m = get_group0_gc_time();
@@ -90,7 +90,8 @@ void tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
 // The knows_entire_range is set to true:
 // 1) if the tombstone_gc_mode is not repair, since we have the same value for all the keys in the ranges.
 // 2) if the tombstone_gc_mode is repair, and the range is a sub range of a range in the repair history map.
-tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
+tombstone_gc_before_getter::get_gc_before_for_range_result
+tombstone_gc_before_getter::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
     bool knows_entire_range = true;
 
     if (s->static_props().is_group0_table) {
@@ -156,18 +157,18 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
     std::abort();
 }
 
-bool tombstone_gc_state::cheap_to_get_gc_before(const schema& s) const noexcept {
+bool tombstone_gc_before_getter::cheap_to_get_gc_before(const schema& s) const noexcept {
     return s.tombstone_gc_options().mode() != tombstone_gc_mode::repair;
 }
 
-gc_clock::time_point tombstone_gc_state::check_min(schema_ptr s, gc_clock::time_point t) const {
-    if (_gc_min_source && t != gc_clock::time_point::min()) {
-        return std::min(t, _gc_min_source(s->id()));
+gc_clock::time_point tombstone_gc_before_getter::check_min(schema_ptr s, gc_clock::time_point t) const {
+    if (_gc_min_source && *_gc_min_source && t != gc_clock::time_point::min()) {
+        return std::min(t, (*_gc_min_source)(s->id()));
     }
     return t;
 }
 
-gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
+gc_clock::time_point tombstone_gc_before_getter::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
     if (s->static_props().is_group0_table) {
         const auto gc_before = get_gc_before_for_group0(s);
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=reconcile, gc_before={}", s->ks_name(), s->cf_name(), dk, gc_before);
@@ -242,18 +243,6 @@ future<> tombstone_gc_state::flush_pending_repair_time_update(replica::database&
         }
     });
 };
-
-bool tombstone_gc_before_getter::cheap_to_get_gc_before(const schema& s) const noexcept {
-    return _tombstone_gc.cheap_to_get_gc_before(s);
-}
-
-tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_before_getter::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
-    return _tombstone_gc.get_gc_before_for_range(std::move(s), range, query_time);
-}
-
-gc_clock::time_point tombstone_gc_before_getter::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
-    return _tombstone_gc.get_gc_before_for_key(std::move(s), dk, query_time);
-}
 
 void tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh_time) {
     auto m = get_or_create_group0_gc_time();
