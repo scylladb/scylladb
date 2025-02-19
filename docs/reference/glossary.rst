@@ -187,8 +187,8 @@ Glossary
        Cache dummy rows are entries in the row set, which have a clustering position, although they do not represent CQL rows written by users.  ScyllaDB cache uses them to mark boundaries of population ranges, to represent the information that the whole range is complete, and there is no need to go to sstables to read the gaps between existing row entries when scanning.
       
     Workload
-      A database category that allows you to manage different sources of database activities, such as requests or administrative activities. By defining workloads, you can specify how ScyllaDB will process those activities. For example, `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_
-      ships with a feature that allows you to prioritize one workload over another (e.g., user requests over administrative activities). See `Workload Prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_.
+      A database category that allows you to manage different sources of database activities, such as requests or administrative activities. By defining workloads, you can specify how ScyllaDB will process those activities. For example, ScyllaDB
+      ships with a feature that allows you to prioritize one workload over another (e.g., user requests over administrative activities). See :doc:`Workload Prioritization </features/workload-prioritization/>`.
 
     MurmurHash3
        A hash function `created by Austin Appleby <https://en.wikipedia.org/wiki/MurmurHash>`_, and used by the :term:`Partitioner` to distribute the partitions between nodes.

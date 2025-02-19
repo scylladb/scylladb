@@ -22,7 +22,7 @@ In the same manner, should someone leave the organization, all you would have to
 Should someone change positions at the company, just assign the new employee to the new role and revoke roles no longer required for the new position.
    
 To build an RBAC environment, you need to create the roles and their associated permissions and then assign or grant the roles to the individual users. Roles inherit the permissions of any other roles that they are granted. The hierarchy of roles can be either simple or extremely complex. This gives great flexibility to database administrators, where they can  create specific permission conditions without incurring a huge administrative burden.
-In addition to standard roles, ScyllaDB Enterprise users can implement :doc:`Workload Prioritization </features/workload-prioritization/>`, which allows you to attach roles to Service Levels, thus granting resources to roles as the role demands.
+In addition to standard roles, ScyllaDB users can implement :doc:`Workload Prioritization </features/workload-prioritization/>`, which allows you to attach roles to Service Levels, thus granting resources to roles as the role demands.
 
 .. _rbac-usecase-grant-roles-and-permissions:
 

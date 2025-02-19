@@ -75,15 +75,7 @@ to a new node.
 File-based Streaming
 ========================
 
-:label-tip:`ScyllaDB Enterprise`
-
-File-based streaming is a ScyllaDB Enterprise-only feature that optimizes
-tablet migration.
-
-In ScyllaDB Open Source, migrating tablets is performed by streaming mutation
-fragments, which involves deserializing SSTable files into mutation fragments
-and re-serializing them back into SSTables on the other node.
-In ScyllaDB Enterprise, migrating tablets is performed by streaming entire
+Migrating tablets is performed by streaming entire
 SStables, which does not require (de)serializing or processing mutation fragments.
 As a result, less data is streamed over the network, and less CPU is consumed,
 especially for data models that contain small cells.

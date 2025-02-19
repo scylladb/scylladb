@@ -7,8 +7,8 @@ Even though ScyllaDB is a fault-tolerant system, it is recommended to regularly 
 * Backup is a per-node procedure. Make sure to back up each node in your 
   cluster. For cluster-wide backup and restore, see `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/restore/>`_.
 * Backup works the same for non-encrypted and encrypted SStables. You can use 
-  `Encryption at Rest <https://enterprise.docs.scylladb.com/stable/operating-scylla/security/encryption-at-rest.html>`_ 
-  available in ScyllaDB Enterprise without affecting the backup procedure.
+  :doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>` 
+  without affecting the backup procedure.
 
 You can choose one of the following:
 

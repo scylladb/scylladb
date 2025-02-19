@@ -325,8 +325,6 @@ ScyllaDB uses experimental flags to expose non-production-ready features safely.
 In recent ScyllaDB versions, these features are controlled by the ``experimental_features`` list in scylla.yaml, allowing one to choose which experimental to enable.
 Use ``scylla --help`` to get the list of experimental features.
 
-ScyllaDB Enterprise and ScyllaDB Cloud do not officially support experimental Features.
-
 .. _admin-keyspace-storage-options:
 
 Keyspace storage options
