@@ -1356,6 +1356,8 @@ public:
     // If leave_unsealead is set, all the destination sstables will be left unsealed.
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed);
 
+    tombstone_gc_state get_tombstone_gc_state() const;
+
     friend class compaction_group;
     friend class compaction::compaction_task_impl;
 

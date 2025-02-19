@@ -5097,8 +5097,9 @@ void repair_table(cql_test_env& env, table_id tid, gc_clock::time_point repair_t
 
 void check_tombstone_is_gc_candidate(cql_test_env& env, table_id tid, const dht::decorated_key& dk, tombstone tomb) {
     env.db().invoke_on_all([&] (replica::database& db) {
-        auto s = db.find_column_family(tid).schema();
-        const auto gc_state = db.get_compaction_manager().get_tombstone_gc_state();
+        auto& tbl = db.find_column_family(tid);
+        auto s = tbl.schema();
+        const auto gc_state = tbl.get_tombstone_gc_state();
         const auto gc_before = gc_state.get_gc_before_for_key(s, dk, gc_clock::now());
         BOOST_REQUIRE_LE(tomb.deletion_time.time_since_epoch().count(), gc_before.time_since_epoch().count());
     }).get();
