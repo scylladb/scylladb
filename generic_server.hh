@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "db/config.hh"
 #include "utils/log.hh"
 
 #include "seastarx.hh"
@@ -73,6 +74,13 @@ public:
     static execute_under_tenant_type no_tenant();
 };
 
+struct config {
+    utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
+
+    explicit config(const db::config& cfg);
+    explicit config(uint32_t uninitialized_connections_semaphore_cpu_concurrency);
+};
+
 // A generic TCP socket server.
 //
 // This class can be used as a base for a protocol specific TCP socket server
@@ -109,7 +117,7 @@ protected:
     shared_ptr<seastar::tls::server_credentials> _credentials;
 
 public:
-    server(const sstring& server_name, logging::logger& logger);
+    server(const sstring& server_name, logging::logger& logger, config cfg);
 
     virtual ~server();
 

@@ -8,6 +8,7 @@
 
 #include "redis/server.hh"
 
+#include "generic_server.hh"
 #include "redis/request.hh"
 #include "redis/reply.hh"
 
@@ -26,8 +27,8 @@ namespace redis_transport {
 
 static logging::logger logging("redis_server");
 
-redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config)
-    : server("Redis", logging)
+redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, const db::config& cfg, redis_server_config config)
+    : server("Redis", logging, generic_server::config(cfg))
     , _query_processor(qp)
     , _config(std::move(config))
     , _max_request_size(_config._max_request_size)
