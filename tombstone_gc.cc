@@ -148,7 +148,13 @@ tombstone_gc_before_getter::get_gc_before_for_range(schema_ptr s, const dht::tok
             }
             min_gc_before = check_min(s, saturating_subtract(min_repair_timestamp, propagation_delay));
             max_gc_before = check_min(s, saturating_subtract(max_repair_timestamp, propagation_delay));
-        };
+        } else if (_table_replication_factor == 1) {
+            // We don't have repair history, but the table is RF=1 so we return the same as tombstone_gc_mode::immediate would.
+            auto t = check_min(s, query_time);
+            min_gc_before = t;
+            max_gc_before = t;
+            knows_entire_range = true;
+        }
         dblog.trace("Get gc_before for ks={}, table={}, range={}, mode=repair, min_repair_timestamp={}, max_repair_timestamp={}, propagation_delay={}, min_gc_before={}, max_gc_before={}, hits={}, knows_entire_range={}",
                 s->ks_name(), s->cf_name(), range, min_repair_timestamp, max_repair_timestamp, propagation_delay.count(), min_gc_before, max_gc_before, hits, knows_entire_range);
         return {min_gc_before, max_gc_before, knows_entire_range};
@@ -203,6 +209,8 @@ gc_clock::time_point tombstone_gc_before_getter::get_gc_before_for_key(schema_pt
                 repair_timestamp = it->second;
                 gc_before = saturating_subtract(repair_timestamp, propagation_delay);
             }
+        } else if (_table_replication_factor == 1) {
+            gc_before = query_time;
         }
         gc_before = check_min(s, gc_before);
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=repair, repair_timestamp={}, propagation_delay={}, gc_before={}",
