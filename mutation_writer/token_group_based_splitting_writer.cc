@@ -35,6 +35,19 @@ private:
         }
     }
 
+    // Keeps the previous writer alive while closed
+    // and then allocates a new write, if needed.
+    future<> do_switch_to_new_writer() {
+        _current_writer->consume_end_of_stream();
+        // reset _current_writer while closing the previous one
+        // to prevent race with close() after abort()
+        auto wr = std::exchange(_current_writer, std::nullopt);
+        co_await wr->close();
+        allocate_new_writer_if_needed();
+    }
+
+    // Called frequently, hence yields (and allocates)
+    // only on the unlikely slow path.
     future<> maybe_switch_to_new_writer(dht::token t) {
         auto prev_group_id = _current_group_id;
         _current_group_id = _classify(t);
@@ -44,11 +57,7 @@ private:
         }
 
         if (_current_writer && _current_group_id > prev_group_id) [[unlikely]] {
-            _current_writer->consume_end_of_stream();
-            return _current_writer->close().then([this] {
-                _current_writer = std::nullopt;
-                allocate_new_writer_if_needed();
-            });
+            return do_switch_to_new_writer();
         }
         allocate_new_writer_if_needed();
         return make_ready_future<>();
