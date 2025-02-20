@@ -21,6 +21,7 @@
 # Key bindings:
 #
 #  t - toggle display of table tags. Each table has a unique color which is displayed in the bottom part of the tablet.
+#  i - toggle display of tablet ids. Only visible when table tags are visible.
 #
 
 import math
@@ -44,6 +45,7 @@ tablet_h = tablet_w // 2
 tablet_radius = tablet_size // 7
 tablet_frame_size = max(2, min(6, tablet_size // 14))
 show_table_tag = False
+show_tablet_id = False
 
 # Animation settings
 streaming_trace_duration_ms = 300
@@ -577,10 +579,11 @@ def draw_tablet(tablet, x, y):
                              border_top_left_radius=tablet_radius,
                              border_top_right_radius=tablet_radius)
 
-            number_text = str(tablet.id[2])
-            number_image = number_font.render(number_text, True, BLACK)
-            window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
-                                       y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
+            if show_tablet_id:
+                number_text = str(tablet.id[2])
+                number_image = number_font.render(number_text, True, BLACK)
+                window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
+                                           y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
 
 def draw_node_frame(x, y, x2, y2, color):
     pygame.draw.rect(window, color, (x, y, x2 - x, y2 - y), node_frame_thickness,
@@ -678,6 +681,9 @@ while running:
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_t:
                 show_table_tag = not show_table_tag
+                changed = True
+            elif event.key == pygame.K_i:
+                show_tablet_id = not show_tablet_id
                 changed = True
 
     now = float(pygame.time.get_ticks())
