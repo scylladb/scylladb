@@ -137,6 +137,10 @@ public:
     storage_proxy_clock_type::time_point timeout(storage_proxy& sp) const {
         return _timeout;
     }
+
+    service_permit get_permit() const& {
+        return permit;
+    }
 };
 
 struct storage_proxy_coordinator_query_result {

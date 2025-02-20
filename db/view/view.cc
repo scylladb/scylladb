@@ -3483,7 +3483,7 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
         auto& row = m.partition().clustered_row(*_view, ck);
         row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
         timeout = db::timeout_clock::now() + _timeout_duration;
-        _proxy.mutate({m}, db::consistency_level::ALL, timeout, _state.get_trace_state(), empty_service_permit(), db::allow_per_partition_rate_limit::no).get();
+        _proxy.mutate({m}, db::consistency_level::ALL, timeout, _state.get_trace_state(), opts.get_permit(), db::allow_per_partition_rate_limit::no).get();
     }
 }
 
