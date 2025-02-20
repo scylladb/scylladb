@@ -861,7 +861,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             const auto t = 5min;
             const timeout_config tc{t, t, t, t, t, t, t};
             ::service::client_state cs(::service::client_state::internal_tag{}, tc);
-            ::service::query_state qs(cs, empty_service_permit());
+            ::service::query_state qs(cs, make_service_permit(qp.start_operation()));
 
             auto rows = co_await qp.execute_internal(
                     seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
