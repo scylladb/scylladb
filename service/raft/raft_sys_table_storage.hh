@@ -41,7 +41,6 @@ class raft_sys_table_storage : public raft::persistence {
     // `store_log_entries` calls.
     shared_ptr<cql3::statements::modification_statement> _store_entry_stmt;
     cql3::query_processor& _qp;
-    service::query_state _dummy_query_state;
     // The future of the currently executing (or already finished) write operation.
     //
     // Used to linearize write operations to system.raft table.
@@ -89,6 +88,7 @@ private:
     future<> update_snapshot_and_truncate_log_tail(const raft::snapshot_descriptor &snap, size_t preserve_log_entries);
 
     future<> execute_with_linearization_point(std::function<future<>()> f);
+    service::query_state make_query_state() const;
 };
 
 } // end of namespace service
