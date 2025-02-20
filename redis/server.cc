@@ -14,6 +14,8 @@
 
 #include "db/consistency_level_type.hh"
 
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/net/byteorder.hh>
@@ -39,8 +41,8 @@ redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::s
 }
 
 shared_ptr<generic_server::connection>
-redis_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
-    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+redis_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
+    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
     ++_stats._connects;
     ++_stats._connections;
     return conn;
@@ -60,8 +62,8 @@ future<redis_server::result> redis_server::connection::process_request_one(redis
     });
 }
 
-redis_server::connection::connection(redis_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : generic_server::connection(server, std::move(fd))
+redis_server::connection::connection(redis_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
+    : generic_server::connection(server, std::move(fd), sem, std::move(initial_sem_units))
     , _server(server)
     , _server_addr(server_addr)
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)

@@ -432,6 +432,7 @@ public:
     named_value<unsigned> user_defined_function_contiguous_allocation_limit_bytes;
     named_value<uint32_t> schema_registry_grace_period;
     named_value<uint32_t> max_concurrent_requests_per_shard;
+    named_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
     named_value<bool> cdc_dont_rewrite_streams;
     named_value<tri_mode_restriction> strict_allow_filtering;
     named_value<tri_mode_restriction> strict_is_not_null_in_views;

@@ -1254,6 +1254,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Time period in seconds after which unused schema versions will be evicted from the local schema registry cache. Default is 1 second.")
     , max_concurrent_requests_per_shard(this, "max_concurrent_requests_per_shard", liveness::LiveUpdate, value_status::Used, std::numeric_limits<uint32_t>::max(),
         "Maximum number of concurrent requests a single shard can handle before it starts shedding extra load. By default, no requests will be shed.")
+    , uninitialized_connections_semaphore_cpu_concurrency(this, "uninitialized_connections_semaphore_cpu_concurrency", liveness::LiveUpdate, value_status::Used, 8,
+        "Maximum number of new concurrent connections from drivers that a single shard can be processing before it starts throttling incomming connections. This limit applies only to new connections excluding the ones blocked on network IO; connections that are ready to serve requests are not affected. By default the limit is 8.")
     , cdc_dont_rewrite_streams(this, "cdc_dont_rewrite_streams", value_status::Used, false,
             "Disable rewriting streams from cdc_streams_descriptions to cdc_streams_descriptions_v2. Should not be necessary, but the procedure is expensive and prone to failures; this config option is left as a backdoor in case some user requires manual intervention.")
     , strict_allow_filtering(this, "strict_allow_filtering", liveness::LiveUpdate, value_status::Used, strict_allow_filtering_default(), "Match Cassandra in requiring ALLOW FILTERING on slow queries. Can be true, false, or warn. When false, Scylla accepts some slow queries even without ALLOW FILTERING that Cassandra rejects. Warn is same as false, but with warning.")
