@@ -12,7 +12,6 @@
 #include <seastar/util/defer.hh>
 
 #include <boost/icl/interval_map.hpp>
-#include <boost/range/numeric.hpp>
 
 #include "sstables.hh"
 

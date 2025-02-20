@@ -7,8 +7,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/filesystem.hpp>
-
 #include "db/config.hh"
 #include "utils/config_file_impl.hh"
 

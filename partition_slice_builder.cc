@@ -6,9 +6,6 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/algorithm_ext/push_back.hpp>
-
 #include "partition_slice_builder.hh"
 
 partition_slice_builder::partition_slice_builder(const schema& schema, query::partition_slice slice)

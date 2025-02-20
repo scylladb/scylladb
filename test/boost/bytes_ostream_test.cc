@@ -9,7 +9,6 @@
 #define BOOST_TEST_MODULE core
 
 #include "utils/assert.hh"
-#include <boost/range/algorithm/for_each.hpp>
 
 #include <seastar/util/variant_utils.hh>
 

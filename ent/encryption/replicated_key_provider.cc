@@ -11,8 +11,6 @@
 #include <regex>
 #include <tuple>
 
-#include <boost/filesystem.hpp>
-
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
