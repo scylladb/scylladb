@@ -13,7 +13,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from cassandra.cluster import ConsistencyLevel
-from test.topology_custom.util import wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
+from test.cluster.util import wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
 
 def auth_data():

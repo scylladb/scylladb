@@ -9,7 +9,7 @@ import logging
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from test.pylib.manager_client import ManagerClient
-from test.topology_custom.util import reconnect_driver
+from test.cluster.util import reconnect_driver
 from test.object_store.conftest import get_s3_resource
 from test.object_store.conftest import format_tuples
 
