@@ -934,6 +934,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
         }
     } else {
         _ready = true;
+        on_connection_ready();
         res = make_ready(stream, trace_state);
     }
 
@@ -967,6 +968,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
                 return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
                     _authenticating = false;
                     _ready = true;
+                    on_connection_ready();
                     return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
                 });
             });
@@ -1324,6 +1326,7 @@ cql_server::connection::process_register(uint16_t stream, request_reader in, ser
         _server._notifier->register_event(et, this);
     }
     _ready = true;
+    on_connection_ready();
     return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, std::move(trace_state)));
 }
 
