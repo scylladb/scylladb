@@ -9,6 +9,7 @@
 #include "generic_server.hh"
 
 
+#include <exception>
 #include <fmt/ranges.h>
 #include <seastar/core/when_all.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -112,8 +113,8 @@ connection::connection(server& server, connected_socket&& fd, named_semaphore& s
     : _conns_cpu_concurrency{sem, std::move(initial_sem_units), false}
     , _server{server}
     , _fd{std::move(fd)}
-    , _read_buf(_fd.input())
-    , _write_buf(_fd.output())
+    , _read_buf(data_source(std::make_unique<counted_data_source_impl>(_fd.input().detach(), _conns_cpu_concurrency)))
+    , _write_buf(output_stream<char>(data_sink(std::make_unique<counted_data_sink_impl>(_fd.output().detach(), _conns_cpu_concurrency)), 8192, output_stream_options{.batch_flushes = true}))
     , _hold_server(_server._gate)
 {
     ++_server._total_connections;
@@ -223,6 +224,8 @@ future<> connection::process()
 
 void connection::on_connection_ready()
 {
+    _conns_cpu_concurrency.stopped = true;
+    _conns_cpu_concurrency.units.return_all();
 }
 
 void connection::on_connection_close()
@@ -352,7 +355,21 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     for (;;) {
         seastar::gate::holder holder(_gate);
+        bool shed = false;
         try {
+            semaphore_units<named_semaphore_exception_factory> units(_conns_cpu_concurrency_semaphore, 0);
+            if (_conns_cpu_concurrency != std::numeric_limits<uint32_t>::max()) {
+                auto u = try_get_units(_conns_cpu_concurrency_semaphore, 1);
+                if (u) {
+                    units = std::move(*u);
+                } else {
+                    try {
+                        units = co_await get_units(_conns_cpu_concurrency_semaphore, 1, std::chrono::minutes(1));
+                    } catch (const semaphore_timed_out&) {
+                        shed = true;
+                    }
+                }
+            }
             accept_result cs_sa = co_await _listeners[which].accept();
             if (_gate.is_closed()) {
                 break;
@@ -362,7 +379,15 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
-                    _conns_cpu_concurrency_semaphore, {});
+                    _conns_cpu_concurrency_semaphore, std::move(units));
+            if (shed) {
+                static thread_local logger::rate_limit rate_limit{std::chrono::seconds(10)};
+                _logger.log(log_level::warn, rate_limit,
+                        "too many in-flight connection attempts: {}, connection dropped",
+                        _conns_cpu_concurrency_semaphore.waiters());
+                conn->on_connection_close();
+                conn->shutdown().ignore_ready_future();
+            }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
                 return advertise_new_connection(conn); // Notify any listeners about new connection.
