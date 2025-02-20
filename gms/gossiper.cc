@@ -1380,33 +1380,33 @@ future<> gossiper::assassinate_endpoint(sstring address) {
         std::vector<dht::token> tokens;
         logger.warn("Assassinating {} via gossip", endpoint);
 
-            const auto host_id = gossiper.get_host_id(endpoint);
-            tokens = gossiper.get_token_metadata_ptr()->get_tokens(host_id);
-            if (tokens.empty()) {
-                logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
-                throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
-            }
+        const auto host_id = gossiper.get_host_id(endpoint);
+        tokens = gossiper.get_token_metadata_ptr()->get_tokens(host_id);
+        if (tokens.empty()) {
+            logger.warn("Unable to calculate tokens for {}.  Will use a random one", address);
+            throw std::runtime_error(format("Unable to calculate tokens for {}", endpoint));
+        }
 
-            auto generation = ep_state.get_heart_beat_state().get_generation();
-            auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
-            auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
-            logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
-            // make sure it did not change
-            co_await sleep_abortable(ring_delay, gossiper._abort_source);
+        auto generation = ep_state.get_heart_beat_state().get_generation();
+        auto heartbeat = ep_state.get_heart_beat_state().get_heart_beat_version();
+        auto ring_delay = std::chrono::milliseconds(gossiper._gcfg.ring_delay_ms);
+        logger.info("Sleeping for {} ms to ensure {} does not change", ring_delay.count(), endpoint);
+        // make sure it did not change
+        co_await sleep_abortable(ring_delay, gossiper._abort_source);
 
-            es = gossiper.get_endpoint_state_ptr(endpoint);
-            if (!es) {
-                logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
-            } else {
-                auto& new_state = *es;
-                if (new_state.get_heart_beat_state().get_generation() != generation) {
-                    throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
-                } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
-                    throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
-                }
+        es = gossiper.get_endpoint_state_ptr(endpoint);
+        if (!es) {
+            logger.warn("Endpoint {} disappeared while trying to assassinate, continuing anyway", endpoint);
+        } else {
+            auto& new_state = *es;
+            if (new_state.get_heart_beat_state().get_generation() != generation) {
+                throw std::runtime_error(format("Endpoint still alive: {} generation changed while trying to assassinate it", endpoint));
+            } else if (new_state.get_heart_beat_state().get_heart_beat_version() != heartbeat) {
+                throw std::runtime_error(format("Endpoint still alive: {} heartbeat changed while trying to assassinate it", endpoint));
             }
-            ep_state.update_timestamp(); // make sure we don't evict it too soon
-            ep_state.get_heart_beat_state().force_newer_generation_unsafe();
+        }
+        ep_state.update_timestamp(); // make sure we don't evict it too soon
+        ep_state.get_heart_beat_state().force_newer_generation_unsafe();
 
         // do not pass go, do not collect 200 dollars, just gtfo
         std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
