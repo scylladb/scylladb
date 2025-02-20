@@ -482,20 +482,19 @@ system_distributed_keyspace::read_cdc_topology_description(
             { gen_id.ts },
             cql3::query_processor::cache_internal::no
     );
-    // FIXME: indentation
-        if (cql_result->empty() || !cql_result->one().has("description")) {
-            co_return std::nullopt;
-        }
+    if (cql_result->empty() || !cql_result->one().has("description")) {
+        co_return std::nullopt;
+    }
 
-        utils::chunked_vector<cdc::token_range_description> entries;
+    utils::chunked_vector<cdc::token_range_description> entries;
 
-        auto entries_val = value_cast<list_type_impl::native_type>(
-                cdc_generation_description_type->deserialize(cql_result->one().get_view("description")));
-        for (const auto& e_val: entries_val) {
-            entries.push_back(get_token_range_description_from_value(e_val));
-        }
+    auto entries_val = value_cast<list_type_impl::native_type>(
+            cdc_generation_description_type->deserialize(cql_result->one().get_view("description")));
+    for (const auto& e_val: entries_val) {
+        entries.push_back(get_token_range_description_from_value(e_val));
+    }
 
-        co_return std::make_optional<cdc::topology_description>(std::move(entries));
+    co_return std::make_optional<cdc::topology_description>(std::move(entries));
 }
 
 future<>
