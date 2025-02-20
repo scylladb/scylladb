@@ -1,17 +1,16 @@
 #!/usr/bin/python3
 import os
 import boto3
-
+import logging
+import pytest
+import pathlib
 # use minio_server
 from test.pylib.minio_server import MinioServer
-from test.pylib.cql_repl import conftest
-from test.cluster.conftest import *
 
 
 def pytest_addoption(parser):
     parser.addoption('--keep-tmp', action='store_true',
                      help="keep the whole temp path")
-    conftest.pytest_addoption(parser)
     # reserved for tests with real S3
     s3_options = parser.getgroup("s3-server", description="S3 Server settings")
     s3_options.addoption('--s3-server-address')
@@ -20,16 +19,10 @@ def pytest_addoption(parser):
     s3_options.addoption('--aws-secret-key')
     s3_options.addoption('--aws-region')
     s3_options.addoption('--s3-server-bucket')
-
-    parser.addoption('--manager-api', action='store', required=True,
-                     help='Manager unix socket path')
-    parser.addoption("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
-                     help="Provide the URL to artifacts directory to generate the link to failed tests directory "
-                          "with logs")
-    parser.addoption('--auth_username', action='store', default=None,
-                        help='username for authentication')
-    parser.addoption('--auth_password', action='store', default=None,
-                        help='password for authentication')
+    parser.addoption("--input", action="store", default="",
+                     help="Input file")
+    parser.addoption("--output", action="store", default="",
+                     help="Output file")
 
 
 def format_tuples(tuples=None, **kwargs):
