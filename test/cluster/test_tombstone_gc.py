@@ -25,7 +25,7 @@ def check_tombstone_gc_mode(cql, table, mode):
 
 
 def get_expected_tombstone_gc_mode(rf, tablets):
-    return "repair" if tablets and rf > 1 else "timeout"
+    return "repair" if tablets else "timeout"
 
 
 @pytest.mark.asyncio
