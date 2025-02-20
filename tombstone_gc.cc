@@ -96,8 +96,13 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
         auto max_repair_timestamp = gc_clock::time_point::min();
         int hits = 0;
         knows_entire_range = false;
-        auto m = get_repair_history_for_table(s->id());
-        if (m) {
+        if (_shared_state && _shared_state->is_table_rf_one(s->id())) {
+            // We don't have repair history, but the table is RF=1 so we return the same as tombstone_gc_mode::immediate would.
+            auto t = check_min(s, query_time);
+            min_gc_before = t;
+            max_gc_before = t;
+            knows_entire_range = true;
+        } else if (auto m = get_repair_history_for_table(s->id()); m) {
             auto interval = locator::token_metadata::range_to_interval(range);
             auto min = gc_clock::time_point::max();
             auto max = gc_clock::time_point::min();
@@ -175,8 +180,9 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
         auto gc_before = gc_clock::time_point::min();
         auto repair_timestamp = gc_clock::time_point::min();
-        auto m = get_repair_history_for_table(s->id());
-        if (m) {
+        if (_shared_state && _shared_state->is_table_rf_one(s->id())) {
+            gc_before = query_time;
+        } else if (auto m = get_repair_history_for_table(s->id()); m) {
             const auto it = m->find(dk.token());
             if (it == m->end()) {
                 gc_before = gc_clock::time_point::min();
@@ -203,10 +209,12 @@ shared_tombstone_gc_state::shared_tombstone_gc_state()
     : _reconcile_history_maps(make_lw_shared<const per_table_history_maps>())
  { }
 
-shared_tombstone_gc_state::shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps, gc_clock::time_point group0_gc_time)
+shared_tombstone_gc_state::shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps,
+        gc_clock::time_point group0_gc_time, std::unordered_set<table_id> rf_one_tables)
     : _gc_min_source(std::move(gc_min_source))
     , _reconcile_history_maps(std::move(reconcile_history_maps))
     , _group0_gc_time(group0_gc_time)
+    , _rf_one_tables(std::move(rf_one_tables))
 { }
 
 shared_tombstone_gc_state::shared_tombstone_gc_state(shared_tombstone_gc_state&&) = default;
@@ -264,7 +272,7 @@ void shared_tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point 
 }
 
 tombstone_gc_state_snapshot shared_tombstone_gc_state::snapshot() const noexcept {
-    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _group0_gc_time));
+    return tombstone_gc_state_snapshot(shared_tombstone_gc_state(_gc_min_source, _reconcile_history_maps, _group0_gc_time, _rf_one_tables));
 }
 
 tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(shared_tombstone_gc_state&& shared_state)
