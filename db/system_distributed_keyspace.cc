@@ -370,7 +370,7 @@ static service::query_state& internal_distributed_query_state() {
 
 future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring view_name) const {
     auto host_id = _sp.local_db().get_token_metadata().get_my_id();
-    return _qp.execute_internal(
+    co_await _qp.execute_internal(
             format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
             internal_distributed_query_state(),
@@ -380,7 +380,7 @@ future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring 
 
 future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring view_name) const {
     auto host_id = _sp.local_db().get_token_metadata().get_my_id();
-    return _qp.execute_internal(
+    co_await _qp.execute_internal(
             format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
             internal_distributed_query_state(),
@@ -389,7 +389,7 @@ future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring
 }
 
 future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_name) const {
-    return _qp.execute_internal(
+    co_await _qp.execute_internal(
             format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
             internal_distributed_query_state(),
@@ -462,7 +462,7 @@ system_distributed_keyspace::insert_cdc_topology_description(
         const cdc::topology_description& description,
         context ctx) {
     check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
-    return _qp.execute_internal(
+    co_await _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
@@ -475,15 +475,16 @@ system_distributed_keyspace::read_cdc_topology_description(
         cdc::generation_id_v1 gen_id,
         context ctx) {
     check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
-    return _qp.execute_internal(
+    auto cql_result = co_await _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
             internal_distributed_query_state(),
             { gen_id.ts },
             cql3::query_processor::cache_internal::no
-    ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> std::optional<cdc::topology_description> {
+    );
+    // FIXME: indentation
         if (cql_result->empty() || !cql_result->one().has("description")) {
-            return {};
+            co_return std::nullopt;
         }
 
         utils::chunked_vector<cdc::token_range_description> entries;
@@ -494,8 +495,7 @@ system_distributed_keyspace::read_cdc_topology_description(
             entries.push_back(get_token_range_description_from_value(e_val));
         }
 
-        return { std::move(entries) };
-    });
+        co_return std::make_optional<cdc::topology_description>(std::move(entries));
 }
 
 future<>
