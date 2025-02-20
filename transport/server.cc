@@ -497,10 +497,10 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         });
         --_server._stats.requests_serving;
 
-        return utils::result_into_future<result_with_foreign_response_ptr>(utils::result_try([&] () -> result_with_foreign_response_ptr {
+        return seastar::futurize_invoke([&] () {
             result_with_foreign_response_ptr res = f.get();
             if (!res) {
-                return res;
+                res.assume_error().throw_me();
             }
 
             auto response = std::move(res).assume_value();
@@ -534,52 +534,63 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             tracing::set_response_size(trace_state, response->size());
             cql_stats.response_size += response->size();
             return response;
-        },  utils::result_catch<exceptions::unavailable_exception>([&] (const auto& ex) {
+        }).handle_exception([this, stream, &client_state, trace_state] (std::exception_ptr eptr) {
+            if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in unavailable_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, trace_state);
-        }), utils::result_catch<exceptions::read_timeout_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, trace_state));
+            } else if (auto* exp = try_catch<exceptions::read_timeout_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in read_timeout_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, trace_state);
-        }), utils::result_catch<exceptions::read_failure_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, trace_state));
+            } else if (auto* exp = try_catch<exceptions::read_failure_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in read_failure_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, trace_state);
-        }), utils::result_catch<exceptions::mutation_write_timeout_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, trace_state));
+            } else if (auto* exp = try_catch<exceptions::mutation_write_timeout_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in mutation_write_timeout_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, trace_state);
-        }), utils::result_catch<exceptions::mutation_write_failure_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, trace_state));
+            } else if (auto* exp = try_catch<exceptions::mutation_write_failure_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in mutation_write_failure_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, trace_state);
-        }), utils::result_catch<exceptions::already_exists_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, trace_state));
+            } else if (auto* exp = try_catch<exceptions::already_exists_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in already_exists_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, trace_state);
-        }), utils::result_catch<exceptions::prepared_query_not_found_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, trace_state));
+            } else if (auto* exp = try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in unprepared_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_unprepared_error(stream, ex.code(), ex.what(), ex.id, trace_state);
-        }), utils::result_catch<exceptions::function_execution_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_unprepared_error(stream, ex.code(), ex.what(), ex.id, trace_state));
+            } else if (auto* exp = try_catch<exceptions::function_execution_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in function_failure_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_function_failure_error(stream, ex.code(), ex.what(), ex.ks_name, ex.func_name, ex.args, trace_state);
-        }), utils::result_catch<exceptions::rate_limit_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_function_failure_error(stream, ex.code(), ex.what(), ex.ks_name, ex.func_name, ex.args, trace_state));
+            } else if (auto* exp = try_catch<exceptions::rate_limit_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in rate_limit_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_rate_limit_error(stream, ex.code(), ex.what(), ex.op_type, ex.rejected_by_coordinator, trace_state, client_state);
-        }), utils::result_catch<exceptions::cassandra_exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_rate_limit_error(stream, ex.code(), ex.what(), ex.op_type, ex.rejected_by_coordinator, trace_state, client_state));
+            } else if (auto* exp = try_catch<exceptions::cassandra_exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in cassandra_error, stream {}, code {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.code(), ex.what());
             // Note: the CQL protocol specifies that many types of errors have
@@ -590,8 +601,9 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             // TODO: consider listing those types explicitly, instead of the
             // catch-all type cassandra_exception.
             try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_error(stream, ex.code(), ex.what(), trace_state);
-        }), utils::result_catch<std::exception>([&] (const auto& ex) {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, ex.code(), ex.what(), trace_state));
+            } else if (auto* exp = try_catch<std::exception>(eptr)) {
+            const auto& ex = *exp;
             clogger.debug("{}: request resulted in error, stream {}, message [{}]",
                 _client_state.get_remote_address(), stream, ex.what());
             try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
@@ -603,13 +615,14 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                 ss << msg << ": " << std::current_exception();
                 msg = ss.str();
             }
-            return make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state);
-        }), utils::result_catch_dots([&] () {
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state));
+            } else {
             clogger.debug("{}: request resulted in unknown error, stream {}",
                 _client_state.get_remote_address(), stream);
             try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-            return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
-        })));
+            return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state));
+            }
+        });
     });
 }
 
