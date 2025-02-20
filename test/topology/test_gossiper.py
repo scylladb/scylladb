@@ -7,6 +7,9 @@
 from test.pylib.manager_client import ManagerClient
 import pytest
 
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
+
 @pytest.mark.asyncio
 async def test_gossiper_endpoints(manager: ManagerClient) -> None:
     servers = await manager.running_servers()

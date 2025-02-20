@@ -5,6 +5,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_first_completed
 from test.topology.conftest import skip_mode
 
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
 
 async def validate_status_operation(result: str, live_eps: list, down_eps: list, leaving: list, joining: list,
                                     zero_token_eps: list, host_id_map: dict, num_tokens: object):

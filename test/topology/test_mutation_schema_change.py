@@ -17,6 +17,7 @@ from cassandra.query import SimpleStatement              # type: ignore # pylint
 
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
 @pytest.mark.asyncio

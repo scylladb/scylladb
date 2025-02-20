@@ -18,6 +18,8 @@ from test.topology.conftest import skip_mode
 from test.topology.util import new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
 
 @pytest.mark.asyncio
 @skip_mode("release", "error injections are not supported in release mode")
