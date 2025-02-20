@@ -1687,28 +1687,29 @@ future<> gossiper::notify_nodes_on_up(std::unordered_set<locator::host_id> dsts)
 }
 
 void gossiper::mark_alive(inet_address addr) {
-    // Enter the _background_msg gate so stop() would wait on it
-    auto inserted = _pending_mark_alive_endpoints.insert(addr).second;
-    if (inserted) {
-        // The node is not in the _pending_mark_alive_endpoints
-        logger.debug("Mark Node {} alive with EchoMessage", addr);
-    } else {
-        // We are in the progress of marking this node alive
-        logger.debug("Node {} is being marked as up, ignoring duplicated mark alive operation", addr);
-        return;
-    }
-
-    // unmark addr as pending on exception or after background continuation completes
-    auto unmark_pending = deferred_action([this, addr, g = shared_from_this()] () noexcept {
-        _pending_mark_alive_endpoints.erase(addr);
-    });
-
     auto id = get_host_id(addr);
     if (id == my_host_id()) {
         // We are here because this node changed address and now tries to
         // ping an old gossip entry.
         return;
     }
+
+    // Enter the _background_msg gate so stop() would wait on it
+    auto inserted = _pending_mark_alive_endpoints.insert(id).second;
+    if (inserted) {
+        // The node is not in the _pending_mark_alive_endpoints
+        logger.debug("Mark Node {}/{} alive with EchoMessage", id, addr);
+    } else {
+        // We are in the progress of marking this node alive
+        logger.debug("Node {}/{} is being marked as up, ignoring duplicated mark alive operation", id, addr);
+        return;
+    }
+
+    // unmark addr as pending on exception or after background continuation completes
+    auto unmark_pending = deferred_action([this, id, g = shared_from_this()] () noexcept {
+        _pending_mark_alive_endpoints.erase(id);
+    });
+
     if (_address_map.find(id) != addr) {
         // We are here because id has now different ip but we
         // try to ping the old one

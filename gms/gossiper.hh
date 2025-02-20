@@ -229,7 +229,7 @@ private:
     uint64_t _live_endpoints_version = 0;
 
     /* nodes are being marked as alive */
-    std::unordered_set<inet_address> _pending_mark_alive_endpoints;
+    std::unordered_set<locator::host_id> _pending_mark_alive_endpoints;
 
     /* unreachable member set */
     std::unordered_map<locator::host_id, clk::time_point> _unreachable_endpoints;
