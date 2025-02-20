@@ -92,12 +92,13 @@ bool password_authenticator::legacy_metadata_exists() const {
 future<> password_authenticator::migrate_legacy_metadata() const {
     plogger.info("Starting migration of legacy authentication metadata.");
     static const sstring query = seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
+    auto q_state = internal_distributed_query_state(_qp);
 
     try {
         auto results = co_await _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
-            internal_distributed_query_state(),
+            q_state,
             cql3::query_processor::cache_internal::no);
         for (const auto& row : *results) {
             auto username = row.get_as<sstring>("username");
@@ -106,7 +107,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
             co_await _qp.execute_internal(
                     query,
                     consistency_for_user(username),
-                    internal_distributed_query_state(),
+                    q_state,
                     {std::move(salted_hash), username},
                     cql3::query_processor::cache_internal::no).discard_result();
         }
@@ -128,10 +129,11 @@ future<> password_authenticator::create_default_if_missing() {
     }
     const auto query = update_row_query();
     if (legacy_mode(_qp)) {
+        auto q_state = internal_distributed_query_state(_qp);
         co_await _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
-            internal_distributed_query_state(),
+            q_state,
             {salted_pwd, _superuser},
             cql3::query_processor::cache_internal::no);
         plogger.info("Created default superuser authentication record.");
@@ -267,10 +269,11 @@ future<> password_authenticator::create(std::string_view role_name, const authen
 
     const auto query = update_row_query();
     if (legacy_mode(_qp)) {
+        auto q_state = internal_distributed_query_state(_qp);
         co_await _qp.execute_internal(
                 query,
                 consistency_for_user(role_name),
-                internal_distributed_query_state(),
+                q_state,
                 {std::move(*maybe_hash), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
@@ -291,10 +294,11 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
             SALTED_HASH,
             meta::roles_table::role_col_name);
     if (legacy_mode(_qp)) {
+        auto q_state = internal_distributed_query_state(_qp);
         co_await _qp.execute_internal(
                 query,
                 consistency_for_user(role_name),
-                internal_distributed_query_state(),
+                q_state,
                 {passwords::hash(password, rng_for_salt), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
@@ -310,9 +314,10 @@ future<> password_authenticator::drop(std::string_view name, ::service::group0_b
             meta::roles_table::name,
             meta::roles_table::role_col_name);
     if (legacy_mode(_qp)) {
+        auto q_state = internal_distributed_query_state(_qp);
         co_await _qp.execute_internal(
                 query, consistency_for_user(name),
-                internal_distributed_query_state(),
+                q_state,
                 {sstring(name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
@@ -340,10 +345,11 @@ future<std::optional<sstring>> password_authenticator::get_password_hash(std::st
                 meta::roles_table::name,
                 meta::roles_table::role_col_name);
 
+    auto q_state = internal_distributed_query_state(_qp);
     const auto res = co_await _qp.execute_internal(
             query,
             consistency_for_user(role_name),
-            internal_distributed_query_state(),
+            q_state,
             {role_name},
             cql3::query_processor::cache_internal::yes);
 

@@ -880,6 +880,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             for (size_t i = 1; i < col_names.size(); ++i) {
                 val_binders_str += ", ?";
             }
+            auto q_state = internal_distributed_query_state(qp);
             for (const auto& row : *rows) {
                 std::vector<data_value_or_unset> values;
                 for (const auto& col : schema->all_columns()) {
@@ -896,7 +897,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                                 cf_name,
                                 fmt::join(col_names, ", "),
                                 val_binders_str),
-                        internal_distributed_query_state(),
+                        q_state,
                         ts,
                         std::move(values));
                 if (muts.size() != 1) {
