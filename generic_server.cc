@@ -19,8 +19,9 @@
 
 namespace generic_server {
 
-connection::connection(server& server, connected_socket&& fd)
-    : _server{server}
+connection::connection(server& server, connected_socket&& fd, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
+    : _conns_cpu_concurrency{sem, std::move(initial_sem_units), false}
+    , _server{server}
     , _fd{std::move(fd)}
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
@@ -150,6 +151,8 @@ future<> connection::shutdown()
 }
 
 config::config(const db::config& cfg)
+    : uninitialized_connections_semaphore_cpu_concurrency(
+            cfg.uninitialized_connections_semaphore_cpu_concurrency)
 {
 }
 
@@ -161,7 +164,21 @@ config::config(uint32_t uninitialized_connections_semaphore_cpu_concurrency)
 server::server(const sstring& server_name, logging::logger& logger, config cfg)
     : _server_name{server_name}
     , _logger{logger}
+    , _conns_cpu_concurrency(cfg.uninitialized_connections_semaphore_cpu_concurrency)
+    , _prev_conns_cpu_concurrency(_conns_cpu_concurrency)
+    , _conns_cpu_concurrency_semaphore(_conns_cpu_concurrency, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
 {
+    _conns_cpu_concurrency.observe([this] (const uint32_t &concurrency) {
+        if (concurrency == _prev_conns_cpu_concurrency) {
+            return;
+        }
+        if (concurrency > _prev_conns_cpu_concurrency) {
+            _conns_cpu_concurrency_semaphore.signal(concurrency - _prev_conns_cpu_concurrency);
+        } else {
+            _conns_cpu_concurrency_semaphore.consume(_prev_conns_cpu_concurrency - concurrency);
+        }
+        _prev_conns_cpu_concurrency = concurrency;
+    });
 }
 
 server::~server()
@@ -256,7 +273,9 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             auto addr = std::move(cs_sa.remote_address);
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
-            auto conn = make_connection(server_addr, std::move(fd), std::move(addr));
+            auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
+                    _conns_cpu_concurrency_semaphore, {});
+
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
                 return advertise_new_connection(conn); // Notify any listeners about new connection.
