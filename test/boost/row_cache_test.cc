@@ -4576,7 +4576,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
         }
 
         tombstone_gc_state gc_state(nullptr);
-        tombstone_gc_before_getter gc_before_getter(gc_state);
+        tombstone_gc_before_getter gc_before_getter(gc_state, 0);
 
         // emulate commitlog behaivor
         gc_state.set_gc_time_min_source([&s](const table_id& id) {
@@ -4635,7 +4635,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         cache.populate(m);
 
         tombstone_gc_state gc_state(nullptr);
-        tombstone_gc_before_getter gc_before_getter(gc_state);
+        tombstone_gc_before_getter gc_before_getter(gc_state, 0);
 
         cache_entry& entry = cache.lookup(pk);
         auto& cp = entry.partition().version()->partition();
