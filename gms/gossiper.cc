@@ -1365,6 +1365,9 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
+    if (_topo_sm) {
+        throw std::runtime_error("Assassinating endpoint is not supported in topology over raft mode");
+    }
     co_await container().invoke_on(0, [&] (auto&& gossiper) -> future<> {
         inet_address endpoint(address);
         auto permit = co_await gossiper.lock_endpoint(endpoint, null_permit_id);
