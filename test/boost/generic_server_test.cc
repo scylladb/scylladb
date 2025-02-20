@@ -26,7 +26,7 @@ class test_server : public server {
 public:
     test_server(const db::config& cfg) : server("test_server", test_logger, config(cfg)) {};
 protected:
-    [[noreturn]] shared_ptr<connection> make_connection(socket_address, connected_socket&&, socket_address) override {
+    [[noreturn]] shared_ptr<connection> make_connection(socket_address, connected_socket&&, socket_address, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override {
         SCYLLA_ASSERT(false);
     }
 };
