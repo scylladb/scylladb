@@ -8,6 +8,8 @@ from test.pylib.manager_client import ManagerClient
 import asyncio
 import pytest
 
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
 
 @pytest.mark.asyncio
 async def test_replacing_alive_node_fails(manager: ManagerClient) -> None:

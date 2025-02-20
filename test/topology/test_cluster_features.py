@@ -22,6 +22,8 @@ import pytest
 
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
 
 
 TEST_FEATURE_NAME = "TEST_ONLY_FEATURE"

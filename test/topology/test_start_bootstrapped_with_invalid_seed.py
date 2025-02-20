@@ -12,6 +12,7 @@ from test.pylib.internal_types import IPAddress
 from test.pylib.manager_client import ManagerClient
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
 @pytest.mark.asyncio
