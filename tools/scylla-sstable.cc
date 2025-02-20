@@ -951,7 +951,7 @@ public:
     virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
-    virtual tombstone_gc_before_getter get_tombstone_gc_before_getter() const noexcept override { return tombstone_gc_before_getter(_tombstone_gc_state); }
+    virtual tombstone_gc_before_getter get_tombstone_gc_before_getter() const noexcept override { return tombstone_gc_before_getter(_tombstone_gc_state, 0); }
     virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }

@@ -115,6 +115,8 @@ public:
 private:
     const per_table_history_maps* _reconcile_history_maps{};
     const gc_time_min_source* _gc_min_source{};
+    // 0 is a sentinel value meaning we don't have information on RF.
+    const size_t _table_replication_factor{};
 
 private:
     [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
@@ -125,15 +127,16 @@ private:
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
 
-    tombstone_gc_before_getter(const per_table_history_maps* reconcile_history_maps, const gc_time_min_source* gc_min_source)
+    tombstone_gc_before_getter(const per_table_history_maps* reconcile_history_maps, const gc_time_min_source* gc_min_source, size_t table_replication_factor)
         : _reconcile_history_maps(reconcile_history_maps)
         , _gc_min_source(gc_min_source)
+        , _table_replication_factor(table_replication_factor)
     { }
 
 public:
     tombstone_gc_before_getter() = default;
-    explicit tombstone_gc_before_getter(const tombstone_gc_state& tombstone_gc)
-        : tombstone_gc_before_getter(tombstone_gc._reconcile_history_maps, &tombstone_gc._gc_min_source)
+    explicit tombstone_gc_before_getter(const tombstone_gc_state& tombstone_gc, size_t table_replication_factor)
+        : tombstone_gc_before_getter(tombstone_gc._reconcile_history_maps, &tombstone_gc._gc_min_source, table_replication_factor)
     { }
 
     explicit operator bool() const noexcept {
@@ -141,7 +144,7 @@ public:
     }
 
     // returns a tombstone_gc_before_getter copy with the commitlog check disabled (i.e.) without _gc_min_source.
-    [[nodiscard]] tombstone_gc_before_getter with_commitlog_check_disabled() const { return tombstone_gc_before_getter(_reconcile_history_maps, nullptr); }
+    [[nodiscard]] tombstone_gc_before_getter with_commitlog_check_disabled() const { return tombstone_gc_before_getter(_reconcile_history_maps, nullptr, _table_replication_factor); }
 
     // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
     [[nodiscard]] bool cheap_to_get_gc_before(const schema& s) const noexcept;
