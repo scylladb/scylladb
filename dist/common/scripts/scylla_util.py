@@ -70,6 +70,9 @@ def is_nonroot():
 def is_offline():
     return Path(scylladir_p() / 'SCYLLA-OFFLINE-FILE').exists()
 
+def is_container():
+    return Path(scylladir_p() / 'SCYLLA-CONTAINER-FILE').exists()
+
 def bindir_p():
     if is_nonroot():
         return scylladir_p() / 'bin'

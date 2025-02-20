@@ -13,7 +13,7 @@ import argparse
 from scylla_util import *
 
 if __name__ == '__main__':
-    if os.getuid() > 0:
+    if not is_container() and os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
     parser = argparse.ArgumentParser(description='Configure cpuset configuration for Scylla.')
