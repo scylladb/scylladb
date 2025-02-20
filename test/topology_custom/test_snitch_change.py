@@ -11,7 +11,7 @@ import time
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver
+from test.topology_custom.util import reconnect_driver
 
 logger = logging.getLogger(__name__)
 

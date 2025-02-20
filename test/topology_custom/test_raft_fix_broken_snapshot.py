@@ -10,10 +10,10 @@ import logging
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, enter_recovery_state, \
+from test.topology_custom.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
         wait_for_token_ring_and_group0_consistency, new_test_keyspace
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 
 logger = logging.getLogger(__name__)

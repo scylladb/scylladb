@@ -9,11 +9,11 @@ import logging
 import time
 import asyncio
 import pytest
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for
 from test.topology_custom.mv.tablets.test_mv_tablets import pin_the_only_tablet
 from test.pylib.tablets import get_tablet_replica
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
 

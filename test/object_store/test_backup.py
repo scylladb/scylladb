@@ -10,8 +10,8 @@ import random
 from test.pylib.manager_client import ManagerClient
 from test.object_store.conftest import format_tuples
 from test.object_store.conftest import get_s3_resource
-from test.topology.conftest import skip_mode
-from test.topology.util import wait_for_cql_and_get_hosts
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import wait_for_cql_and_get_hosts
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
 from cassandra.cluster import ConsistencyLevel, Session

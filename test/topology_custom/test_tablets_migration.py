@@ -7,8 +7,8 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.topology.conftest import skip_mode
-from test.topology.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver
 import time
 import pytest
 import logging

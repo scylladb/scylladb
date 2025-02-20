@@ -13,8 +13,8 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.conftest import skip_mode
-from test.topology.util import disable_schema_agreement_wait, new_test_keyspace, new_test_table
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import disable_schema_agreement_wait, new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
 

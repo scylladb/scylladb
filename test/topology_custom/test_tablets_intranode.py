@@ -3,25 +3,19 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.cluster import Session, ConsistencyLevel
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error_one_shot, HTTPError
-from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts, start_writes
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.topology.conftest import skip_mode
-from test.topology.util import new_test_keyspace
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import new_test_keyspace
 
 import pytest
 import asyncio
 import logging
 import time
-import random
 import os
-import glob
-from typing import NamedTuple
 import threading
 
 

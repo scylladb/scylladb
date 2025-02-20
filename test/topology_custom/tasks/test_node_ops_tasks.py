@@ -12,7 +12,7 @@ from test.pylib.rest_client import InjectionHandler, inject_error_one_shot
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 from test.topology_custom.tasks.task_manager_client import TaskManagerClient
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 import asyncio
 import logging

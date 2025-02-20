@@ -9,7 +9,7 @@ import time
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 
 @pytest.mark.asyncio

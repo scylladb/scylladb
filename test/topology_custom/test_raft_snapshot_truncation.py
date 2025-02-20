@@ -11,7 +11,7 @@ import logging
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id, create_new_test_keyspace
+from test.topology_custom.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id, create_new_test_keyspace
 from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)

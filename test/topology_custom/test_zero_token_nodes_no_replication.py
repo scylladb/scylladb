@@ -12,8 +12,8 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name
-from test.topology.conftest import cluster_con
-from test.topology.util import create_new_test_keyspace
+from test.topology_custom.conftest import cluster_con
+from test.topology_custom.util import create_new_test_keyspace
 
 
 @pytest.mark.asyncio

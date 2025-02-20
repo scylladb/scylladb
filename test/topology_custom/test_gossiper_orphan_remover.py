@@ -9,7 +9,7 @@ import time
 import pytest
 import logging
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 

@@ -14,9 +14,9 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 from test.pylib.util import wait_for
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 
 logger = logging.getLogger(__name__)

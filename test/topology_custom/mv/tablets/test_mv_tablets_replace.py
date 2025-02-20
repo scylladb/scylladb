@@ -3,7 +3,6 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-from typing import List
 
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -16,10 +15,10 @@ import pytest
 import asyncio
 import logging
 
-from test.topology.conftest import skip_mode
-from test.topology.util import get_topology_coordinator, find_server_by_host_id
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import get_topology_coordinator, find_server_by_host_id
 from test.topology_custom.mv.tablets.test_mv_tablets import get_tablet_replicas
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
 

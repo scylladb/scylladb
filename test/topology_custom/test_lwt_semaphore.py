@@ -10,9 +10,8 @@ from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts
 import pytest
 from cassandra.protocol import WriteTimeout
-from test.topology.conftest import skip_mode
-from test.topology.util import new_test_keyspace
-
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import new_test_keyspace
 @pytest.mark.asyncio
 @skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_cas_semaphore(manager):

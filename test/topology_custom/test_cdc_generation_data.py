@@ -1,6 +1,6 @@
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
-from test.topology.util import check_token_ring_and_group0_consistency
+from test.topology_custom.util import check_token_ring_and_group0_consistency
 
 import pytest
 

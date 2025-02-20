@@ -9,7 +9,7 @@ import logging
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import unique_name, wait_for_view
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from test.pylib.manager_client import ManagerClient
 from test.pylib.internal_types import ServerInfo, IPAddress
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.conftest import cluster_con
+from test.topology_custom.conftest import cluster_con
 
 logger = logging.getLogger(__name__)
 

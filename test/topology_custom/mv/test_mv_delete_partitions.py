@@ -9,9 +9,9 @@ import asyncio
 import pytest
 import time
 import logging
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 from test.pylib.util import wait_for_view
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 from cassandra.cqltypes import Int32Type
 
 logger = logging.getLogger(__name__)

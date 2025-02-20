@@ -12,8 +12,8 @@ import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.conftest import skip_mode
-from test.topology.util import wait_until_topology_upgrade_finishes, \
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import wait_until_topology_upgrade_finishes, \
         wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
 

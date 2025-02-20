@@ -13,8 +13,8 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import skip_mode
-from test.topology.util import new_test_keyspace
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import new_test_keyspace
 
 
 logger = logging.getLogger(__name__)

@@ -7,7 +7,7 @@ import logging
 
 import pytest
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import check_token_ring_and_group0_consistency
+from test.topology_custom.util import check_token_ring_and_group0_consistency
 
 logger = logging.getLogger(__name__)
 

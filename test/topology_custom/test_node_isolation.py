@@ -14,7 +14,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy  # type: ignore
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.topology.util import create_new_test_keyspace
+from test.topology_custom.util import create_new_test_keyspace
 
 
 logger = logging.getLogger(__name__)

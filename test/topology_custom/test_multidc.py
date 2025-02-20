@@ -15,7 +15,7 @@ from cassandra.query import SimpleStatement
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, TextType, Column
 from test.pylib.util import unique_name
-from test.topology.conftest import cluster_con
+from test.topology_custom.conftest import cluster_con
 
 logger = logging.getLogger(__name__)
 CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch"}

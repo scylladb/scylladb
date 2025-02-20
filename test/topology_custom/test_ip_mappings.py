@@ -9,7 +9,7 @@ import pytest
 import logging
 
 from test.pylib.rest_client import inject_error_one_shot
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
 

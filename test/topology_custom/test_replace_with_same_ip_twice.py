@@ -3,10 +3,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-import time
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import wait_for_token_ring_and_group0_consistency
 from test.pylib.internal_types import ServerInfo
 import pytest
 import logging

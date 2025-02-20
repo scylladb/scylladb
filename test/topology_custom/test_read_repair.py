@@ -25,7 +25,7 @@ from cassandra.murmur3 import murmur3  # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 
 logger = logging.getLogger(__name__)

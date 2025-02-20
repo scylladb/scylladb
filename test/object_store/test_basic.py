@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import requests
 import pytest
 import shutil
 import logging
@@ -10,7 +9,7 @@ import logging
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import reconnect_driver
+from test.topology_custom.util import reconnect_driver
 from test.object_store.conftest import get_s3_resource
 from test.object_store.conftest import format_tuples
 

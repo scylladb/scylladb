@@ -10,11 +10,10 @@ node, and belong in cqlpy. We also have topology_experimental_raft/
 test_mv_tablets.py for tests that each needs a cluster of a different
 size, and/or special Scylla parameters.
 """
-import asyncio
 import logging
 import pytest
 
-from test.topology.util import new_test_keyspace, new_test_table, new_materialized_view
+from test.topology_custom.util import new_test_keyspace, new_test_table, new_materialized_view
 
 ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 } AND TABLETS = {'enabled': false }"
 

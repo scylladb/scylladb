@@ -5,7 +5,7 @@
 #
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 from cassandra.cluster import ConsistencyLevel, NoHostAvailable, Session
 from cassandra.protocol import InvalidRequest

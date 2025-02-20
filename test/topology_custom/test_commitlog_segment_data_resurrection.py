@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 import pytest
 import os
