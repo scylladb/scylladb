@@ -33,6 +33,10 @@ inline service_permit make_service_permit(seastar::semaphore_units<>&& permit, u
     return service_permit(std::move(permit), std::move(op));
 }
 
+inline service_permit make_service_permit(utils::phased_barrier::operation op) {
+    return make_service_permit(seastar::semaphore_units<>(), std::move(op));
+}
+
 inline service_permit empty_service_permit() {
     return make_service_permit(seastar::semaphore_units<>(), utils::phased_barrier::operation());
 }
