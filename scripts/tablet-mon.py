@@ -91,6 +91,7 @@ class Tablet(object):
         self.state = state
         self.insert_time = pygame.time.get_ticks()
         self.streaming = False
+        self.seq = 0 # Tablet index within table
 
         table_id = id[0]
         if table_id not in table_tag_colors:
@@ -447,7 +448,8 @@ def update_from_cql(initial=False):
         return ret
 
     for tablet in session.execute(tablets_query):
-        id = (tablet.table_id, tablet.last_token, tablet_id_for_table(tablet.table_id))
+        tablet_seq = tablet_id_for_table(tablet.table_id)
+        id = (tablet.table_id, tablet.last_token)
         replicas = set(tablet.replicas)
         new_replicas = set(tablet.new_replicas) if tablet.new_replicas else replicas
 
@@ -479,6 +481,7 @@ def update_from_cql(initial=False):
                 inserted = True
                 changed = True
             t = s.tablets[id]
+            t.seq = tablet_seq
             if t.state != state:
                 t.state = state
                 stage_change = True
@@ -580,7 +583,7 @@ def draw_tablet(tablet, x, y):
                              border_top_right_radius=tablet_radius)
 
             if show_tablet_id:
-                number_text = str(tablet.id[2])
+                number_text = str(tablet.seq)
                 number_image = number_font.render(number_text, True, BLACK)
                 window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
                                            y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
