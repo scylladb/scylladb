@@ -34,7 +34,6 @@ raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::
     : _group_id(std::move(gid))
     , _server_id(std::move(server_id))
     , _qp(qp)
-    , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
     , _pending_op_fut(make_ready_future<>())
     // max_mutation_size = 1/2 of commitlog segment size, thus _max_mutation_size is set 1/3 of commitlog segment size to leave space for metadata.
     , _max_mutation_size(_qp.db().get_config().schema_commitlog_segment_size_in_mb() * 1024 * 1024 / 3)
@@ -44,6 +43,10 @@ raft_sys_table_storage::raft_sys_table_storage(cql3::query_processor& qp, raft::
     auto prepared_stmt_ptr = _qp.prepare_internal(store_cql);
     shared_ptr<cql3::cql_statement> cql_stmt = prepared_stmt_ptr->statement;
     _store_entry_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(cql_stmt);
+}
+
+service::query_state raft_sys_table_storage::make_query_state() const {
+    return service::query_state(service::client_state::for_internal_calls(), make_service_permit(_qp.start_operation()));
 }
 
 future<> raft_sys_table_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
@@ -256,7 +259,8 @@ future<size_t> raft_sys_table_storage::do_store_log_entries_one_batch(const std:
         cql3::attributes::none(),
         _qp.get_cql_stats());
 
-    co_await batch.execute(_qp, _dummy_query_state, batch_options, std::nullopt);
+    auto qs = make_query_state();
+    co_await batch.execute(_qp, qs, batch_options, std::nullopt);
 
     if (idx != entries_size) {
         co_return idx;
