@@ -2383,8 +2383,12 @@ select_statement::ordering_comparator_type select_statement::get_ordering_compar
 
 void select_statement::validate_distinct_selection(const schema& schema,
                                                    const selection::selection& selection,
-                                                   const restrictions::statement_restrictions& restrictions)
+                                                   const restrictions::statement_restrictions& restrictions) const
 {
+    if (_per_partition_limit) {
+        throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with SELECT DISTINCT queries");
+    }
+
     if (restrictions.has_non_primary_key_restriction() || restrictions.has_clustering_columns_restriction()) {
         throw exceptions::invalid_request_exception(
             "SELECT DISTINCT with WHERE clause only supports restriction by partition key.");
