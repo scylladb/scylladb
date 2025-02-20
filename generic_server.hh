@@ -23,6 +23,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/net/api.hh>
 #include <seastar/net/tls.hh>
+#include <seastar/core/semaphore.hh>
 
 #include <boost/intrusive/list.hpp>
 
