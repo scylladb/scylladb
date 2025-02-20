@@ -108,6 +108,7 @@ future<> redis_server::connection::process_request() {
         _pending_requests_gate.enter();
         utils::latency_counter lc;
         lc.start();
+        on_connection_ready();
         auto leave = defer([this] () noexcept { _pending_requests_gate.leave(); });
         return process_request_internal().then([this, leave = std::move(leave), lc = std::move(lc)] (auto&& result) mutable {
             --_server._stats._requests_serving;

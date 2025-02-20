@@ -62,6 +62,8 @@ public:
 
     virtual future<> process_request() = 0;
 
+    virtual void on_connection_ready();
+
     virtual void on_connection_close();
 
     virtual future<> shutdown();
