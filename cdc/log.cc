@@ -1688,16 +1688,16 @@ public:
 
         const auto select_cl = adjust_cl(write_cl);
 
-      try {
-        auto qr = co_await _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state));
-        co_return make_lw_shared<cql3::untyped_result_set>(*_schema, std::move(qr.query_result), *selection, std::move(partition_slice));
-      } catch (exceptions::unavailable_exception& e) {
-        // `query` can throw `unavailable_exception`, which is seen by clients as ~ "NoHostAvailable". 
-        // So, we'll translate it to a `read_failure_exception` with custom message.
-        cdc_log.debug("Preimage: translating a (read) `unavailable_exception` to `request_execution_exception` - {}", e);
-        throw exceptions::read_failure_exception("CDC preimage query could not achieve the CL.",
-                e.consistency, e.alive, 0, e.required, false);
-      }
+        try {
+            auto qr = co_await _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state));
+            co_return make_lw_shared<cql3::untyped_result_set>(*_schema, std::move(qr.query_result), *selection, std::move(partition_slice));
+        } catch (exceptions::unavailable_exception& e) {
+            // `query` can throw `unavailable_exception`, which is seen by clients as ~ "NoHostAvailable". 
+            // So, we'll translate it to a `read_failure_exception` with custom message.
+            cdc_log.debug("Preimage: translating a (read) `unavailable_exception` to `request_execution_exception` - {}", e);
+            throw exceptions::read_failure_exception("CDC preimage query could not achieve the CL.",
+                    e.consistency, e.alive, 0, e.required, false);
+        }
     }
 
     // Note: this assumes that the results are from one partition only
