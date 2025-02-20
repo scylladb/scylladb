@@ -363,6 +363,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 if (u) {
                     units = std::move(*u);
                 } else {
+                    _blocked_connections++;
                     try {
                         units = co_await get_units(_conns_cpu_concurrency_semaphore, 1, std::chrono::minutes(1));
                     } catch (const semaphore_timed_out&) {
@@ -381,6 +382,7 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
                     _conns_cpu_concurrency_semaphore, std::move(units));
             if (shed) {
+                _shed_connections++;
                 static thread_local logger::rate_limit rate_limit{std::chrono::seconds(10)};
                 _logger.log(log_level::warn, rate_limit,
                         "too many in-flight connection attempts: {}, connection dropped",

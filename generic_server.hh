@@ -112,6 +112,8 @@ protected:
     seastar::gate _gate;
     future<> _all_connections_stopped = make_ready_future<>();
     uint64_t _total_connections = 0;
+    uint64_t _shed_connections = 0;
+    uint64_t _blocked_connections = 0;
     future<> _listeners_stopped = make_ready_future<>();
     using connections_list_t = boost::intrusive::list<connection>;
     connections_list_t _connections_list;
