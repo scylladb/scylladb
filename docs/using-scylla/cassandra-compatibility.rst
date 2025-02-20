@@ -5,8 +5,8 @@ ScyllaDB and Apache Cassandra Compatibility
 ScyllaDB is a drop-in replacement for Apache Cassandra 3.11, with additional features from Apache Cassandra 4.0.
 This page contains information about ScyllaDB compatibility with Apache Cassandra. 
 
-The tables on this page include information about ScyllaDB Open Source support for Apache Cassandra features. 
-They do not include the ScyllaDB Enterprise-only features or ScyllaDB-specific features with no match in 
+The tables on this page include information about ScyllaDB support for Apache Cassandra features. 
+They do not include the ScyllaDB-specific features with no match in 
 Apache Cassandra.  See :doc:`ScyllaDB Features </features/index>` for more information about ScyllaDB features.
 
 How to Read the Tables on This Page
@@ -36,8 +36,8 @@ Interfaces
        | deprecated in ScyllaDB 5.2 and got dropped in 6.0
    * - SSTable format (all versions)
      - 3.11(mc / md / me), 2.2(la), 2.1.8 (ka)
-     - | ``me`` - supported in ScyllaDB Open Source 5.1 and ScyllaDB Enterprise 2022.2.0 (and later)
-       | ``md`` - supported in ScyllaDB Open Source 4.3 and ScyllaDB Enterprise 2021.1.0 (and later)
+     - | ``me`` - supported in ScyllaDB 2022.2.0 and later
+       | ``md`` - supported in ScyllaDB 2021.1.0 and later
        
 
    * - JMX   

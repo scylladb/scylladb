@@ -61,7 +61,7 @@ QUERY      Logs all queries
 ---------  -----------------------------------------------------------------------------------------
 ADMIN      Logs service level operations: create, alter, drop, attach, detach, list.
            For :ref:`service level <workload-priorization-service-level-management>`
-           auditing, this parameter is available in Scylla Enterprise 2019.1 and later.
+           auditing.
 =========  =========================================================================================
 
 Note that audit for every DML or QUERY might impact performance and consume a lot of storage.

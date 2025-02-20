@@ -170,8 +170,6 @@ LCS options
 Incremental Compaction Strategy (ICS)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. versionadded:: 2019.1.4 Scylla Enterprise
-
 When using ICS, SSTable runs are put in different buckets depending on their size.
 When an SSTable run is bucketed, the average size of the runs in the bucket is compared to the new run, as well as the ``bucket_high`` and ``bucket_low`` levels.
 

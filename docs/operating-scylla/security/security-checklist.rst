@@ -41,7 +41,6 @@ kernel in FIPS mode.
 
 Encryption at Rest
 ~~~~~~~~~~~~~~~~~~
-Encryption at Rest is available in a Scylla Enterprise 2019.1.1.
 
 Encryption at Rest protects the privacy of your user's data, reduces the risk of data breaches, and helps meet regulatory requirements. 
 In particular, it provides an additional level of protection for your data persisted in storage or backup.

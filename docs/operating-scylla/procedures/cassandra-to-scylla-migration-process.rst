@@ -77,7 +77,7 @@ Procedure
 
 .. note::
 
-   ScyllaDB Open Source 3.0 and later and ScyllaDB Enterprise 2019.1 and later support :doc:`Materialized View(MV) </features/materialized-views>` and :doc:`Secondary Index(SI) </features/secondary-indexes>`.
+   ScyllaDB supports :doc:`Materialized View(MV) </features/materialized-views>` and :doc:`Secondary Index(SI) </features/secondary-indexes>`.
 
    When migrating data from Apache Cassandra with MV or SI, you can either:
 

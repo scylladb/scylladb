@@ -181,7 +181,7 @@ Use Workload Prioritization
 In a typical application there are operational workloads that require low latency.
 Sometimes these run in parallel with analytic workloads that process high volumes of data and do not require low latency.
 With workload prioritization, one can prevent that the analytic workloads lead to an unwanted high latency on operational workload.
-`Workload prioritization <https://enterprise.docs.scylladb.com/stable/using-scylla/workload-prioritization.html>`_ is only available with `ScyllaDB Enterprise <https://enterprise.docs.scylladb.com/>`_.
+See :doc:`Workload prioritization </operating-scylla/security/encryption-at-rest>`.
 
 Bypass Cache
 ============
@@ -330,7 +330,7 @@ When records get updated or deleted, the old data eventually needs to be deleted
 The compaction settings can make a huge difference.
 
 * Use the following :ref:`Compaction Strategy Matrix <CSM1>` to use the correct compaction strategy for your workload.
-* ICS is an incremental compaction strategy that combines the low space amplification of LCS with the low write amplification of STCS. It is **only** available with ScyllaDB Enterprise.
+* ICS is an incremental compaction strategy that combines the low space amplification of LCS with the low write amplification of STCS.
 * If you have time series data, the TWCS should be used.
 
 Read more about :doc:`Compaction Strategies </architecture/compaction/compaction-strategies>`

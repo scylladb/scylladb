@@ -15,4 +15,3 @@ Reference
 * :doc:`Limits </reference/limits>`
 * :doc:`API Reference </reference/api-reference>`
 * :doc:`Metrics </reference/metrics>`
-* .. scylladb_include_flag:: enterprise-vs-oss-matrix-link.rst

@@ -18,7 +18,7 @@ For example, consider the following two workloads:
   - Slow queries 
   - In essence - Latency agnostic
 
-Using Service Level CQL commands, database administrators (working on Scylla Enterprise) can set different workload prioritization levels (levels of service) for each workload without sacrificing latency or throughput.
+Using Service Level CQL commands, database administrators (working on ScyllaDB) can set different workload prioritization levels (levels of service) for each workload without sacrificing latency or throughput.
 By assigning each service level to the different roles within your organization, DBAs ensure that each role_ receives the level of service the role requires.
 
 .. _`role` : /operating-scylla/security/rbac_usecase/
@@ -425,7 +425,7 @@ In order for workload prioritization to take effect, application users need to b
 
 Limits
 ======
-Scylla Enterprise is limited to 8 service levels, including the default one; this means you can create up to 7 service levels.
+ScyllaDB is limited to 8 service levels, including the default one; this means you can create up to 7 service levels.
 
 
 Additional References
