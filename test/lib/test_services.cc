@@ -113,7 +113,7 @@ public:
         return table().tombstone_gc_enabled();
     }
     tombstone_gc_before_getter get_tombstone_gc_before_getter() const noexcept override {
-        return tombstone_gc_before_getter(_tombstone_gc_state);
+        return tombstone_gc_before_getter(_tombstone_gc_state, 0);
     }
     compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
