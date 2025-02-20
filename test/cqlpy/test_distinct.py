@@ -74,7 +74,13 @@ def test_distinct_limit(cql, test_keyspace):
             assert n == len(results)
             assert set(results).issubset(set(all))
 
-# Test combination of SELECT DISTINCT, COUNT, GROUP BY and LIMIT. 
+# Test that SELECT DISTINCT and PER PARTITION LIMIT is not allowed in the same query
+# reproduces #15109
+def test_distinct_and_per_partition_limit(cql, table1):
+    with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with SELECT DISTINCT queries'):
+        cql.execute(f"select distinct p from {table1} per partition limit 1")
+
+# Test combination of SELECT DISTINCT, COUNT, GROUP BY and LIMIT.
 # COUNT + GROUP BY means generate one count per partition, and the
 # SELECT DISTINCT simply hands the counter just one row per partition
 # to count, so all the counts come up 1. Adding a LIMIT to all of

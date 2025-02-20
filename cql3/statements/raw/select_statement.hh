@@ -135,9 +135,9 @@ private:
         selection::selection& selection,
         const restrictions::statement_restrictions& restrictions);
 
-    static void validate_distinct_selection(const schema& schema,
+    void validate_distinct_selection(const schema& schema,
         const selection::selection& selection,
-        const restrictions::statement_restrictions& restrictions);
+        const restrictions::statement_restrictions& restrictions) const;
 
     /** If ALLOW FILTERING was not specified, this verifies that it is not needed */
     void check_needs_filtering(

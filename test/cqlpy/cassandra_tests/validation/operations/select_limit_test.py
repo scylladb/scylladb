@@ -16,7 +16,7 @@ def testSparseTable(cql, test_keyspace):
                 execute(cql, table, "INSERT INTO %s (userid, url, day, month, year) VALUES (?, ?, 1, 'jan', 2012)", i, f"http://foo.{tld}")
         assertRowCount(execute(cql, table, "SELECT * FROM %s LIMIT 4"), 4)
 
-@pytest.mark.xfail(reason="issues #9879, #15099, #15109")
+@pytest.mark.xfail(reason="issues #9879, #15099")
 def testPerPartitionLimit(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, c int, PRIMARY KEY (a, b))") as table:
         for i in range(5):
@@ -110,7 +110,7 @@ def testPerPartitionLimit(cql, test_keyspace):
         assertInvalidMessage(cql, table, "PER PARTITION LIMIT is not allowed with aggregate queries.",
                              "SELECT COUNT(*) FROM %s PER PARTITION LIMIT ?", 3)
 
-@pytest.mark.xfail(reason="issues #9879, #15109")
+@pytest.mark.xfail(reason="issues #9879")
 def testPerPartitionLimitWithStaticDataAndPaging(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b int, s int static, c int, PRIMARY KEY (a, b))") as table:
         for i in range(5):
