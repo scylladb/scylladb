@@ -24,14 +24,16 @@ static logger test_logger("test_server");
 
 class test_server : public server {
 public:
-    test_server() : server("test_server", test_logger) {};
+    test_server(const db::config& cfg) : server("test_server", test_logger, config(cfg)) {};
 protected:
-    [[noreturn]] shared_ptr<connection> make_connection(socket_address, connected_socket&&, socket_address) {
+    [[noreturn]] shared_ptr<connection> make_connection(socket_address, connected_socket&&, socket_address) override {
         SCYLLA_ASSERT(false);
     }
 };
 
 SEASTAR_TEST_CASE(stop_without_listening) {
-    test_server srv;
+    db::config cfg;
+    test_server srv(cfg);
     co_await with_timeout(lowres_clock::now() + 5min, srv.stop());
+    co_return;
 }

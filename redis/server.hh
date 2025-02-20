@@ -61,7 +61,7 @@ class redis_server : public generic_server::server {
     size_t _total_redis_db_count;
 
 public:
-    redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, redis_server_config config);
+    redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, const db::config& cfg, redis_server_config config);
 
     struct result {
         result(redis::redis_message&& m) : _data(make_foreign(std::make_unique<redis::redis_message>(std::move(m)))) {}

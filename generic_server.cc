@@ -15,6 +15,8 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/smp.hh>
 
+#include "db/config.hh"
+
 namespace generic_server {
 
 connection::connection(server& server, connected_socket&& fd)
@@ -147,7 +149,16 @@ future<> connection::shutdown()
     return make_ready_future<>();
 }
 
-server::server(const sstring& server_name, logging::logger& logger)
+config::config(const db::config& cfg)
+{
+}
+
+config::config(uint32_t uninitialized_connections_semaphore_cpu_concurrency)
+    : uninitialized_connections_semaphore_cpu_concurrency(
+            uninitialized_connections_semaphore_cpu_concurrency) {
+}
+
+server::server(const sstring& server_name, logging::logger& logger, config cfg)
     : _server_name{server_name}
     , _logger{logger}
 {
