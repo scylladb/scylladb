@@ -4130,7 +4130,7 @@ SEASTAR_TEST_CASE(test_view_with_two_regular_base_columns_in_key) {
                 .with_column(to_bytes("v2"), int32_type, column_kind::clustering_key)
                 .with_column(to_bytes("p"), int32_type, column_kind::clustering_key)
                 .with_column(to_bytes("c"), int32_type, column_kind::clustering_key)
-                .with_view_info(*schema, false, "v1 IS NOT NULL AND v2 IS NOT NULL AND p IS NOT NULL AND c IS NOT NULL");
+                .with_view_info(schema, false, "v1 IS NOT NULL AND v2 IS NOT NULL AND p IS NOT NULL AND c IS NOT NULL");
 
         schema_ptr view_schema = view_builder.build();
         auto& mm = e.migration_manager().local();

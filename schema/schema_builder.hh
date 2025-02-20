@@ -29,6 +29,7 @@ private:
     std::optional<compact_storage> _compact_storage;
     std::variant<from_time, from_hash, table_schema_version> _version = from_time{};
     std::optional<raw_view_info> _view_info;
+    std::optional<schema_ptr> _base_schema;
     schema_builder(const schema::raw_schema&);
     static std::vector<static_configurator>& static_configurators();
 public:
@@ -273,10 +274,7 @@ public:
     // of table_schema_version (even in ABA changes).
     schema_builder& with_hash_version();
 
-    schema_builder& with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause);
-    schema_builder& with_view_info(const schema& base_schema, bool include_all_columns, sstring where_clause) {
-        return with_view_info(base_schema.id(), base_schema.cf_name(), include_all_columns, where_clause);
-    }
+    schema_builder& with_view_info(schema_ptr base_schema, bool include_all_columns, sstring where_clause);
 
     schema_builder& with_index(const index_metadata& im);
     schema_builder& without_index(const sstring& name);
