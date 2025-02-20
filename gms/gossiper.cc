@@ -1372,10 +1372,14 @@ future<> gossiper::assassinate_endpoint(sstring address) {
         auto now = gossiper.now();
         generation_type gen(std::chrono::duration_cast<std::chrono::seconds>((now + std::chrono::seconds(60)).time_since_epoch()).count());
         version_type ver(9999);
-        endpoint_state ep_state = es ? *es : endpoint_state(heart_beat_state(gen, ver));
+        if (!es) {
+            logger.warn("There is no endpoint {} to assassinate", endpoint);
+            throw std::runtime_error(format("There is no endpoint {} to assassinate", endpoint));
+        }
+        endpoint_state ep_state = *es;
         std::vector<dht::token> tokens;
         logger.warn("Assassinating {} via gossip", endpoint);
-        if (es) {
+
             const auto host_id = gossiper.get_host_id(endpoint);
             tokens = gossiper.get_token_metadata_ptr()->get_tokens(host_id);
             if (tokens.empty()) {
@@ -1403,7 +1407,6 @@ future<> gossiper::assassinate_endpoint(sstring address) {
             }
             ep_state.update_timestamp(); // make sure we don't evict it too soon
             ep_state.get_heart_beat_state().force_newer_generation_unsafe();
-        }
 
         // do not pass go, do not collect 200 dollars, just gtfo
         std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
