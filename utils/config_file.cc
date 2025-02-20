@@ -12,7 +12,6 @@
 #include <yaml-cpp/yaml.h>
 
 #include <boost/program_options.hpp>
-#include <boost/any.hpp>
 
 #include <seastar/core/file.hh>
 #include <seastar/core/seastar.hh>

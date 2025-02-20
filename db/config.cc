@@ -12,7 +12,6 @@
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/trim_all.hpp>
-#include <boost/any.hpp>
 #include <boost/program_options.hpp>
 #include <yaml-cpp/yaml.h>
 

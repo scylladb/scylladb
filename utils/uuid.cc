@@ -10,8 +10,7 @@
 #include "UUID.hh"
 #include <seastar/net/byteorder.hh>
 #include <random>
-#include <boost/iterator/function_input_iterator.hpp>
-#include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/erase.hpp>
 #include <string>
 #include <fmt/ostream.h>
 #include <seastar/core/format.hh>

@@ -16,7 +16,6 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include <boost/multiprecision/cpp_int.hpp>
 
 #include "exceptions/exceptions.hh"
 #include "gms/gossiper.hh"
