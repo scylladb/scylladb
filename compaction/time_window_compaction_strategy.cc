@@ -13,8 +13,6 @@
 #include "sstables/sstables.hh"
 #include "compaction_strategy_state.hh"
 
-#include <boost/range/algorithm/find.hpp>
-
 #include <ranges>
 
 namespace sstables {
@@ -165,7 +163,7 @@ public:
     explicit classify_by_timestamp(time_window_compaction_strategy_options options) : _options(std::move(options)) { }
     int64_t operator()(api::timestamp_type ts) {
         const auto window = time_window_compaction_strategy::get_window_for(_options, ts);
-        if (const auto it = boost::range::find(_known_windows, window); it != _known_windows.end()) {
+        if (const auto it = std::ranges::find(_known_windows, window); it != _known_windows.end()) {
             std::swap(*it, _known_windows.front());
             return window;
         }
