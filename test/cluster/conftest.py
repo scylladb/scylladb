@@ -5,15 +5,17 @@
 #
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
-import pathlib
+
+from __future__ import annotations
+
 import ssl
 import platform
 import urllib.parse
 from functools import partial
-from typing import List, Optional, Dict
+from typing import TYPE_CHECKING
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
-from test.pylib.manager_client import ManagerClient, IPAddress
+from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import event_loop, run_async
 import logging
 import pytest
@@ -27,7 +29,11 @@ from cassandra.policies import TokenAwarePolicy                          # type:
 from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
-from cassandra.connection import EndPoint          # type: ignore # pylint: disable=no-name-in-module
+
+if TYPE_CHECKING:
+    from cassandra.connection import EndPoint
+
+    from test.pylib.internal_types import IPAddress
 
 
 Session.run_async = run_async     # patch Session for convenience
@@ -58,7 +64,7 @@ def pytest_addoption(parser):
 
 # This is a constant used in `pytest_runtest_makereport` below to store the full report for the test case
 # in a stash which can then be accessed from fixtures to print the stacktrace for the failed test
-PHASE_REPORT_KEY = pytest.StashKey[Dict[str, pytest.CollectReport]]()
+PHASE_REPORT_KEY = pytest.StashKey[dict[str, pytest.CollectReport]]()
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
@@ -90,7 +96,7 @@ class CustomConnection(Cluster.connection_class):
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: List[IPAddress | EndPoint], port: int, use_ssl: bool, auth_provider=None, load_balancing_policy=RoundRobinPolicy()):
+def cluster_con(hosts: list[IPAddress | EndPoint], port: int, use_ssl: bool, auth_provider=None, load_balancing_policy=RoundRobinPolicy()):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"
@@ -172,18 +178,12 @@ async def manager_internal(event_loop, request):
 
 
 @pytest.fixture(scope="function")
-async def manager(request, manager_internal, record_property, build_mode):
+async def manager(request, manager_internal, record_property, testpy_test):
     """Per test fixture to notify Manager client object when tests begin so it can
     perform checks for cluster state.
     """
     test_case_name = request.node.name
-    run_id = request.config.getoption('run_id')
-    tmp_dir = pathlib.Path(request.config.getoption('tmpdir'))
-    xml_path: pathlib.Path = pathlib.Path(request.config.getoption('xmlpath'))
-    suite_testpy_log = (tmp_dir /
-                        build_mode /
-                        f"{pathlib.Path(xml_path.stem).stem}.log"
-                        )
+    suite_testpy_log = testpy_test.log_filename
     test_log = suite_testpy_log.parent / f"{suite_testpy_log.stem}.{test_case_name}.log"
     # this should be consistent with scylla_cluster.py handler name in _before_test method
     test_py_log_test = suite_testpy_log.parent / f"{suite_testpy_log.stem}_{test_case_name}_cluster.log"
@@ -199,7 +199,7 @@ async def manager(request, manager_internal, record_property, build_mode):
         # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
         # all related logs in one dir.
         # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
-        failed_test_dir_path = tmp_dir / build_mode / "failed_test" / f"{test_case_name}"
+        failed_test_dir_path = testpy_test.suite.log_dir / "failed_test" / test_case_name
         failed_test_dir_path.mkdir(parents=True, exist_ok=True)
         await manager_client.gather_related_logs(
             failed_test_dir_path,
@@ -254,7 +254,7 @@ skipped_funcs = {}
 # The reason to skip a test should be specified, used as a comment only.
 # Additionally, platform_key can be specified to limit the scope of the attribute
 # to the specified platform. Example platform_key-s: [aarch64, x86_64]
-def skip_mode(mode: str, reason: str, platform_key: Optional[str]=None):
+def skip_mode(mode: str, reason: str, platform_key: str | None = None):
     def wrap(func):
         skipped_funcs.setdefault((func, mode), []).append((reason, platform_key))
         return func

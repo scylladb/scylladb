@@ -18,6 +18,7 @@ from test.pylib.report_plugin import ReportPlugin
 from test.pylib.util import get_configured_modes
 from test.pylib.suite.base import (
     TestSuite,
+    find_suite_config,
     init_testsuite_globals,
     prepare_dirs,
     start_3rd_party_services,
@@ -25,6 +26,8 @@ from test.pylib.suite.base import (
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
+    from test.pylib.cpp.item import CppTestFunction
+    from test.pylib.suite.base import Test
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -45,9 +48,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--test-py-init', action='store_true', default=False,
                      help='Run pytest session in test.py-compatible mode.  I.e., start all required services, etc.')
 
+    # Options for compatibility with test.py
+    parser.addoption('--coverage', action='store_true', default=False,
+                      help="When running code instrumented with coverage support"
+                           "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                           "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
+                           "The lcov files can eventually be used for generating coverage reports")
+    parser.addoption("--cluster-pool-size", type=int,
+                     help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
+                          "CLUSTER_POOL_SIZE can be used to achieve the same")
+
 
 @pytest.fixture(scope="session")
-def build_mode(request):
+def build_mode(request: pytest.FixtureRequest) -> str:
     """
     This fixture returns current build mode.
     This is for running tests through the test.py script, where only one mode is passed to the test
@@ -59,10 +72,24 @@ def build_mode(request):
         return mode[0]
     return mode
 
-def pytest_configure(config):
+
+@pytest.fixture(scope="module")
+async def testpy_testsuite(request: pytest.FixtureRequest, build_mode: str) -> TestSuite:
+    suite_config = find_suite_config(path=request.path)
+    return TestSuite.opt_create(path=str(suite_config.parent), options=request.config.option, mode=build_mode)
+
+
+@pytest.fixture(scope="module")
+async def testpy_test(request: pytest.FixtureRequest, testpy_testsuite: TestSuite) -> Test:
+    await testpy_testsuite.add_test(shortname=request.node.name, casename=None)
+    return testpy_testsuite.tests[-1]  # most recent test added to the test suite; i.e., by the previous line.
+
+
+def pytest_configure(config: pytest.Config) -> None:
     config.pluginmanager.register(ReportPlugin())
 
-def pytest_collection_modifyitems(config, items):
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item | CppTestFunction]) -> None:
     """
     This is a standard pytest method.
     This is needed to modify the test names with dev mode and run id to differ them one from another
