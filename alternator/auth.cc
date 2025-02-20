@@ -44,7 +44,7 @@ future<std::string> get_key_from_roles(service::storage_proxy& proxy, auth::serv
 
     service::client_state client_state{service::client_state::internal_tag()};
     service::storage_proxy::coordinator_query_result qr = co_await proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
-            service::storage_proxy::coordinator_query_options(executor::default_timeout(), empty_service_permit(), client_state));
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), make_service_permit(proxy.start_write()), client_state));
 
     cql3::selection::result_set_builder builder(*selection, gc_clock::now());
     query::result_view::consume(*qr.query_result, partition_slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
