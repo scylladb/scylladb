@@ -3521,8 +3521,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             }).get();
             dbcfg.setup_directories();
             sst_log.debug("Successfully read scylla.yaml from {} location of {}", scylla_yaml_path_source, scylla_yaml_path);
-            read_object_storage_config(dbcfg).get();
-            sst_log.debug("Successfully read object storage settings");
         } else {
             dbcfg.experimental_features.set(db::experimental_features_t::all());
             sst_log.debug("Failed to read scylla.yaml from {} location of {}, some functionality may be unavailable", scylla_yaml_path_source, scylla_yaml_path);

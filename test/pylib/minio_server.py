@@ -26,7 +26,6 @@ import yaml
 from io import BufferedWriter
 
 class MinioServer:
-    ENV_CONFFILE = 'S3_CONFFILE_FOR_TEST'
     ENV_ADDRESS = 'S3_SERVER_ADDRESS_FOR_TEST'
     ENV_PORT = 'S3_SERVER_PORT_FOR_TEST'
     ENV_BUCKET = 'S3_BUCKET_FOR_TEST'
@@ -43,7 +42,6 @@ class MinioServer:
         tempdir = tempfile.mkdtemp(dir=tempdir_base, prefix="minio-")
         self.tempdir = pathlib.Path(tempdir)
         self.rootdir = self.tempdir / 'minio_root'
-        self.config_file = self.tempdir / 'object-storage.yaml'
         self.mcdir = self.tempdir / 'mc'
         self.logger = logger
         self.cmd: Optional[Process] = None
@@ -54,9 +52,10 @@ class MinioServer:
         self.secret_key = os.environ.get(self.ENV_SECRET_KEY, ''.join(random.choice(string.hexdigits) for i in range(32)))
         self.log_filename = (self.tempdir / 'minio').with_suffix(".log")
         self.old_env = dict()
+        self.default_config = None
 
     def __repr__(self):
-        return f"[minio] {self.address}:{self.port}/{self.bucket_name}@{self.config_file}"
+        return f"[minio] {self.address}:{self.port}/{self.bucket_name}"
 
     def check_server(self, port):
         s = socket.socket()
@@ -152,18 +151,19 @@ class MinioServer:
             yield random.randint(min_port, max_port)
 
     @staticmethod
-    def create_conf_file(address: str, port: int, acc_key: str, secret_key: str, region: str, path: str):
-        with open(path, 'w', encoding='ascii') as config_file:
-            endpoint = {'name': address,
-                        'port': port,
-                        # don't put credentials here. We're exporing env vars, which should
-                        # be picked up properly by scylla.
-                        # https://github.com/scylladb/scylla-pkg/issues/3845
-                        #'aws_access_key_id': acc_key,
-                        #'aws_secret_access_key': secret_key,
-                        'aws_region': region,
-                        }
-            yaml.dump({'endpoints': [endpoint]}, config_file)
+    def create_conf(address: str, port: int, region: str):
+        endpoint = {'name': address,
+                    'port': port,
+                    # don't put credentials here. We're exporing env vars, which should
+                    # be picked up properly by scylla.
+                    # https://github.com/scylladb/scylla-pkg/issues/3845
+                    #'aws_access_key_id': acc_key,
+                    #'aws_secret_access_key': secret_key,
+                    'aws_region': region,
+                    'iam_role_arn': '',
+                    'use_https': False
+                    }
+        return [endpoint]
 
     async def _run_server(self, port):
         self.logger.info(f'Starting minio server at {self.address}:{port}')
@@ -191,7 +191,6 @@ class MinioServer:
 
     def _set_environ(self):
         self.old_env = dict(os.environ)
-        os.environ[self.ENV_CONFFILE] = f'{self.config_file}'
         os.environ[self.ENV_ADDRESS] = f'{self.address}'
         os.environ[self.ENV_PORT] = f'{self.port}'
         os.environ[self.ENV_BUCKET] = f'{self.bucket_name}'
@@ -199,8 +198,7 @@ class MinioServer:
         os.environ[self.ENV_SECRET_KEY] = f'{self.secret_key}'
 
     def _get_environs(self):
-        return [self.ENV_CONFFILE,
-                self.ENV_ADDRESS,
+        return [self.ENV_ADDRESS,
                 self.ENV_PORT,
                 self.ENV_BUCKET,
                 self.ENV_ACCESS_KEY,
@@ -244,7 +242,6 @@ class MinioServer:
             self.logger.error("Failed to start Minio server")
             return
 
-        self.create_conf_file(self.address, self.port, self.access_key, self.secret_key, self.DEFAULT_REGION, self.config_file)
         self._set_environ()
 
         try:
@@ -298,7 +295,6 @@ async def main():
         server = MinioServer(tempdir, args.host, logging.getLogger('minio'))
         await server.start()
         server.print_environ()
-        print(f'Please run scylla with: --object-storage-config-file {server.config_file}')
         try:
             _ = input('server started. press any key to stop: ')
         except KeyboardInterrupt:

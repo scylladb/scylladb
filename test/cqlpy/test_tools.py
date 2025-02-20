@@ -213,9 +213,6 @@ def test_scylla_sstable_dump_component_with_s3(skip_s3_tests, cql, test_keyspace
                                                scylla_home_dir, what,
                                                where, s3_server):
     scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
-    with open(scylla_yaml_file, "a") as f:
-        f.write(f"\nobject_storage_config_file: {str(s3_server.config_file)}")
-
     with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir, s3_server,
                         False if where == "local" else True, True if where == "mixed" else False) as (
     _, schema_file, sstables):
@@ -234,8 +231,6 @@ def test_scylla_sstable_dump_data_with_s3(skip_s3_tests, cql, test_keyspace, scy
                                           scylla_home_dir, where,
                                           s3_server):
     scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
-    with open(scylla_yaml_file, "a") as f:
-        f.write(f"\nobject_storage_config_file: {str(s3_server.config_file)}")
     with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir, s3_server,
                         False if where == "local" else True, True if where == "mixed" else False) as (
     _, schema_file, sstables):

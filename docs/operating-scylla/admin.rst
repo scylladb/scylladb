@@ -33,8 +33,6 @@ ScyllaDB configuration files are:
 +-------------------------------------------------------+-----------------------------------+
 | :code:`/etc/scylla/cassandra-rackdc.properties`       | Rack & dc configuration file      |
 +-------------------------------------------------------+-----------------------------------+
-| :code:`/etc/scylla/object_storage.yaml`               | Object storage configuration file |
-+-------------------------------------------------------+-----------------------------------+
 
 .. _check-your-current-version-of-scylla:
 
@@ -104,33 +102,34 @@ Scylla has the ability to communicate directly with S3-compatible storage. This
 feature enables various functionalities, but requires proper configuration of
 storage endpoints.
 
-To enable S3-compatible storage features, you need to describe the endpoints and credentials
+To enable S3-compatible storage features, you need to describe the endpoints
 where SSTable files can be stored. This is done using a YAML configuration file.
 
-The ``object_storage.yaml`` file should follow this format:
+The relevant ``scylla.yaml`` section should follow this format:
 
 .. code-block:: yaml
 
-   endpoints:
+   object_storage_endpoints:
      - name: <endpoint_address_or_domain_name>
        port: <port_number>
        https: <true_or_false> # optional
        aws_region: <region_name> # optional, e.g. us-east-1
-       aws_access_key_id: <access_key> # optional
-       aws_secret_access_key: <secret_access_key> # optional
-       aws_session_token: <session_token> # optional
+       iam_role_arn: <iam_role> # optional
 
+The ``aws_region`` option can also be specified using 
+the ``AWS_DEFAULT_REGION`` environment variable.
 
-The AWS-related options (``aws_region``, ``aws_access_key_id``,
-``aws_secret_access_key``, ``aws_session_token``) can be configured in two ways:
+The AWS-related credentials options (``aws_access_key_id``,
+``aws_secret_access_key``, ``aws_session_token``) can be configured using
+the following environment variables:
 
-* Directly in the YAML file (as shown above).
-* Using environment variables:
-
-  - ``AWS_DEFAULT_REGION``
   - ``AWS_ACCESS_KEY_ID``
   - ``AWS_SECRET_ACCESS_KEY``
   - ``AWS_SESSION_TOKEN``
+
+The Scylla S3 client will first attempt to access credentials from environment variables.
+If it fails to obtain credentials, it will then try to retrieve them from the
+AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
 
 .. note::
 
@@ -138,25 +137,16 @@ The AWS-related options (``aws_region``, ``aws_access_key_id``,
    - When set, these values are used by the S3 client to sign requests.
    - If not set, requests are sent unsigned, which may not be accepted by all servers.
 
-By default, Scylla looks for the configuration file named ``object_storage.yaml``
-in the same directory as ``scylla.yaml``. You can override this location using the
-:confval:`object_storage_config_file` option in ``scylla.yaml``:
-
-.. code-block:: yaml
-
-   object_storage_config_file: object_storage.yaml
-
 .. _aws-s3-configuration:
 
 Configuring AWS S3 access
 -------------------------
 
-You can define endpoint details and authentication tokens in the
-``object_storage.yaml`` file. For example:
+You can define endpoint details in the ``scylla.yaml`` file. For example:
 
 .. code:: yaml
 
-   endpoints:
+   object_storage_endpoints:
      - name: s3.us-east-1.amazonaws.com
        port: 443
        https: true
@@ -165,33 +155,22 @@ You can define endpoint details and authentication tokens in the
 Local/Development Environment
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-In a local or development environment, you usually need to add
-authentication tokens to this file to ensure the client works properly.
+In a local or development environment, you usually need to set authentication
+tokens in environment variables to ensure the client works properly.
 For instance:
 
-.. code:: yaml
+.. code-block:: shell
 
-   endpoints:
-     - name: s3.us-east-2.amazonaws.com
-       port: 443
-       https: true
-       aws_region: us-east-2
-       aws_access_key_id: EXAMPLE_ACCESS_KEY_ID
-       aws_secret_access_key: EXAMPLE_SECRET_ACCESS_KEY
+   export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
+   export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
 
-Additionally, you may include an ``aws_session_token``, although this is
-not typically necessary for local or development environments:
+Additionally, you may include an `aws_session_token`, although this is not typically necessary for local or development environments:
 
-.. code:: yaml
-
-   endpoints:
-     - name: s3.us-east-2.amazonaws.com
-       port: 443
-       https: true
-       aws_region: us-east-2
-       aws_access_key_id: EXAMPLE_ACCESS_KEY_ID
-       aws_secret_access_key: EXAMPLE_SECRET_ACCESS_KEY
-       aws_session_token: EXAMPLE_TEMPORARY_SESSION_TOKEN
+.. code-block:: shell
+  
+   export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
+   export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
+   export AWS_SESSION_TOKEN=EXAMPLE_TEMPORARY_SESSION_TOKEN
 
 Important Note
 ^^^^^^^^^^^^^^^
@@ -205,11 +184,11 @@ Instance Metadata Service.
 
 For the EC2 Instance Metadata Service to function correctly, no
 additional configuration is required. However, STS requires the IAM Role
-ARN to be defined in the ``object_storage.yaml`` file, as shown below:
+ARN to be defined in the ``scylla.yaml`` file, as shown below:
 
 .. code:: yaml
 
-   endpoints:
+   object_storage_endpoints:
      - name: s3.us-east-1.amazonaws.com
        port: 443
        https: true
