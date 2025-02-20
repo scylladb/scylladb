@@ -1689,7 +1689,8 @@ public:
         const auto select_cl = adjust_cl(write_cl);
 
         try {
-            auto qr = co_await _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state));
+            auto permit = make_service_permit(_ctx._proxy.start_write());
+            auto qr = co_await _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
             co_return make_lw_shared<cql3::untyped_result_set>(*_schema, std::move(qr.query_result), *selection, std::move(partition_slice));
         } catch (exceptions::unavailable_exception& e) {
             // `query` can throw `unavailable_exception`, which is seen by clients as ~ "NoHostAvailable". 
@@ -1788,7 +1789,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
     mutations.reserve(2 * mutations.size());
 
-    auto qs = service::query_state(service::client_state::for_internal_calls(), empty_service_permit());
+    auto permit = make_service_permit(_ctxt._proxy.start_write());
+    auto qs = service::query_state(service::client_state::for_internal_calls(), std::move(permit));
     auto details = operation_details{};
     co_await transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable -> future<> {
         auto& m = mutations[idx];
