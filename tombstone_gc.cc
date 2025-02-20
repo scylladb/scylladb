@@ -124,8 +124,13 @@ tombstone_gc_before_getter::get_gc_before_for_range(schema_ptr s, const dht::tok
         auto max_repair_timestamp = gc_clock::time_point::min();
         int hits = 0;
         knows_entire_range = false;
-        auto m = get_repair_history_for_table(s->id());
-        if (m) {
+        if (_table_replication_factor == 1) {
+            // We don't have repair history, but the table is RF=1 so we return the same as tombstone_gc_mode::immediate would.
+            auto t = check_min(s, query_time);
+            min_gc_before = t;
+            max_gc_before = t;
+            knows_entire_range = true;
+        } else if (auto m = get_repair_history_for_table(s->id()); m) {
             auto interval = locator::token_metadata::range_to_interval(range);
             auto min = gc_clock::time_point::max();
             auto max = gc_clock::time_point::min();
@@ -194,8 +199,9 @@ gc_clock::time_point tombstone_gc_before_getter::get_gc_before_for_key(schema_pt
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
         auto gc_before = gc_clock::time_point::min();
         auto repair_timestamp = gc_clock::time_point::min();
-        auto m = get_repair_history_for_table(s->id());
-        if (m) {
+        if (_table_replication_factor == 1) {
+            gc_before = query_time;
+        } else if (auto m = get_repair_history_for_table(s->id()); m) {
             const auto it = m->find(dk.token());
             if (it == m->end()) {
                 gc_before = gc_clock::time_point::min();
