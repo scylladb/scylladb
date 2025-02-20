@@ -286,7 +286,7 @@ async def start_writes(cql: Session, rf: int, cl: ConsistencyLevel, concurrency:
     stop_event = asyncio.Event()
 
     ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}}")
     await cql.run_async(f"USE {ks_name}")
     await cql.run_async(f"CREATE TABLE tbl (pk int PRIMARY KEY, v int)")
 
@@ -322,7 +322,7 @@ async def start_writes_to_cdc_table(cql: Session, concurrency: int = 3):
     stop_event = asyncio.Event()
 
     ks_name = unique_name()
-    await cql.run_async(f"CREATE KEYSPACE {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {ks_name} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{ 'enabled': false }}")
     await cql.run_async(f"CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled':true}}")
 
     stmt = cql.prepare(f"INSERT INTO {ks_name}.tbl (pk, v) VALUES (?, 0)")
@@ -469,23 +469,36 @@ async def wait_new_coordinator_elected(manager: ManagerClient, expected_num_of_e
 
     await wait_for(new_coordinator_elected, deadline=deadline)
 
+async def create_new_test_keyspace(cql: Session, opts, host=None):
+    """
+    A utility function for creating a new temporary keyspace with given
+    options.
+    """
+    keyspace = unique_name()
+    # Use CREATE KEYSPACE IF NOT EXISTS as a workaround for
+    # https://github.com/scylladb/python-driver/issues/317
+    await cql.run_async(f"CREATE KEYSPACE IF NOT EXISTS {keyspace} {opts}", host=host)
+    return keyspace
+
 @asynccontextmanager
-async def new_test_keyspace(cql, opts, host=None):
+async def new_test_keyspace(manager: ManagerClient, opts, host=None):
     """
     A utility function for creating a new temporary keyspace with given
     options. It can be used in a "async with", as:
-        async with new_test_keyspace(cql, '...') as keyspace:
+        async with new_test_keyspace(ManagerClient, '...') as keyspace:
     """
-    keyspace = unique_name()
-    await cql.run_async("CREATE KEYSPACE " + keyspace + " " + opts, host=host)
+    keyspace = await create_new_test_keyspace(manager.get_cql(), opts, host)
     try:
         yield keyspace
-    finally:
-        await cql.run_async("DROP KEYSPACE " + keyspace, host=host)
+    except:
+        logger.info(f"Error happened while using keyspace '{keyspace}', the keyspace is left in place for investigation")
+        raise
+    else:
+        await manager.get_cql().run_async("DROP KEYSPACE " + keyspace, host=host)
 
 previously_used_table_names = []
 @asynccontextmanager
-async def new_test_table(cql, keyspace, schema, extra="", host=None, reuse_tables=True):
+async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", host=None, reuse_tables=True):
     """
     A utility function for creating a new temporary table with a given schema.
     Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -503,27 +516,27 @@ async def new_test_table(cql, keyspace, schema, extra="", host=None, reuse_table
     else:
         table_name = unique_name()
     table = keyspace + "." + table_name
-    await cql.run_async("CREATE TABLE " + table + "(" + schema + ")" + extra, host=host)
+    await manager.get_cql().run_async("CREATE TABLE " + table + "(" + schema + ")" + extra, host=host)
     try:
         yield table
     finally:
-        await cql.run_async("DROP TABLE " + table, host=host)
+        await manager.get_cql().run_async("DROP TABLE " + table, host=host)
         if reuse_tables:
             previously_used_table_names.append(table_name)
 
 @asynccontextmanager
-async def new_materialized_view(cql, table, select, pk, where, extra=""):
+async def new_materialized_view(manager: ManagerClient, table, select, pk, where, extra=""):
     """
     A utility function for creating a new temporary materialized view in
     an existing table.
     """
     keyspace = table.split('.')[0]
     mv = keyspace + "." + unique_name()
-    await cql.run_async(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk}) {extra}")
+    await manager.get_cql().run_async(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk}) {extra}")
     try:
         yield mv
     finally:
-        await cql.run_async(f"DROP MATERIALIZED VIEW {mv}")
+        await manager.get_cql().run_async(f"DROP MATERIALIZED VIEW {mv}")
 
 
 async def get_raft_log_size(cql, host) -> int:

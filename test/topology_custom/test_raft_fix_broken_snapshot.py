@@ -12,7 +12,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.topology.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
-        wait_for_token_ring_and_group0_consistency
+        wait_for_token_ring_and_group0_consistency, new_test_keyspace
 from test.topology.conftest import skip_mode
 
 
@@ -49,33 +49,32 @@ async def test_raft_fix_broken_snapshot(manager: ManagerClient):
     await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 
     logger.info(f"Creating keyspace")
-    await cql.run_async(
-        "create keyspace ks with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
-    await cql.run_async("create table ks.t (pk int primary key)")
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
-    logger.info(f"Leaving recovery state")
-    await delete_raft_data_and_upgrade_state(cql, h)
-    await manager.server_stop_gracefully(srv.server_id)
-    await manager.server_start(srv.server_id)
-    cql = await reconnect_driver(manager)
-    await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
+        logger.info(f"Leaving recovery state")
+        await delete_raft_data_and_upgrade_state(cql, h)
+        await manager.server_stop_gracefully(srv.server_id)
+        await manager.server_start(srv.server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 
-    logger.info(f"Waiting for group 0 upgrade to finish")
-    await wait_until_upgrade_finishes(cql, h, time.time() + 60)
+        logger.info(f"Waiting for group 0 upgrade to finish")
+        await wait_until_upgrade_finishes(cql, h, time.time() + 60)
 
-    # The Raft log will only contain this change,
-    # older schema changes can only be obtained through snapshot transfer.
-    await cql.run_async("create table ks.t2 (pk int primary key)")
+        # The Raft log will only contain this change,
+        # older schema changes can only be obtained through snapshot transfer.
+        await cql.run_async(f"create table {ks}.t2 (pk int primary key)")
 
-    # Restarting the server should trigger snapshot creation.
-    await manager.server_restart(srv.server_id)
-    cql = await reconnect_driver(manager)
-    await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
+        # Restarting the server should trigger snapshot creation.
+        await manager.server_restart(srv.server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 
-    await manager.server_add(config=cfg)
-    await manager.server_sees_others(srv.server_id, 1)
-    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
+        await manager.server_add(config=cfg)
+        await manager.server_sees_others(srv.server_id, 1)
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 60)
 
-    # This would fail if snapshot creation wasn't triggered,
-    # second node reporting 'Failed to apply mutation ... no_such_column_family`
-    await cql.run_async("insert into ks.t (pk) values (0)", host=h)
+        # This would fail if snapshot creation wasn't triggered,
+        # second node reporting 'Failed to apply mutation ... no_such_column_family`
+        await cql.run_async(f"insert into {ks}.t (pk) values (0)", host=h)

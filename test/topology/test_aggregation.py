@@ -39,8 +39,8 @@ async def test_cancel_mapreduce(manager: ManagerClient):
     [host1] = filter(lambda host: host.address == s1.ip_addr, hosts)
     host_id2 = await manager.get_host_id(s2.server_id)
 
-    async with new_test_keyspace(cql, "WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
-        async with new_test_table(cql, ks, "pk int PRIMARY KEY, v int") as t:
+    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as t:
             # Distribute data across the nodes.
             for _ in range(250):
                 # Note: CQL int is a 32-bit integer.
