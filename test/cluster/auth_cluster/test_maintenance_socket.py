@@ -11,6 +11,8 @@ from cassandra.connection import UnixSocketEndPoint
 from test.pylib.manager_client import ManagerClient
 
 import pytest
+from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
+
 
 @pytest.mark.asyncio
 async def test_maintenance_socket(manager: ManagerClient):
@@ -19,6 +21,7 @@ async def test_maintenance_socket(manager: ManagerClient):
     even if the authentication is enabled on the regular port.
     """
     config = {
+        **auth_config,
         "authenticator": "PasswordAuthenticator",
         "authorizer": "CassandraAuthorizer",
     }

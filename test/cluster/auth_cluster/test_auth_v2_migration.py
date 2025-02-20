@@ -15,6 +15,8 @@ from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from cassandra.cluster import ConsistencyLevel
 from test.cluster.util import wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
+from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
+
 
 def auth_data():
     return [
@@ -147,12 +149,12 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
 @pytest.mark.asyncio
 async def test_auth_v2_migration(request, manager: ManagerClient):
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {**auth_config, 'force_gossip_topology_changes': True, 'enable_tablets': False}
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
     # using gossiper-based node operations
-    del cfg['force_gossip_topology_changes']
+    cfg.pop('force_gossip_topology_changes')
 
     servers += [await manager.server_add(config=cfg) for _ in range(2)]
     cql = manager.cql
@@ -184,7 +186,7 @@ async def test_auth_v2_migration(request, manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_auth_v2_during_recovery(manager: ManagerClient):
-    servers = await manager.servers_add(3)
+    servers = await manager.servers_add(3, config=auth_config)
     cql, hosts = await manager.get_ready_cql(servers)
 
     logging.info("Checking auth version before recovery")
