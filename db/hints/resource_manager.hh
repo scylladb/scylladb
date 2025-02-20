@@ -188,6 +188,8 @@ public:
     /// \brief Allows replaying hints for managers which are registered now or will be in the future.
     void allow_replaying() noexcept;
 
+    future<> drain_hints_for_left_nodes();
+
     /// \brief Registers the hints::manager in resource_manager, and starts it, if resource_manager is already running.
     ///
     /// The hints::managers can be added either before or after resource_manager starts.
