@@ -11,7 +11,7 @@ import pytest
 from cassandra.auth import PlainTextAuthProvider
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
-from test.topology_custom.util import trigger_snapshot
+from test.cluster.util import trigger_snapshot
 
 
 """

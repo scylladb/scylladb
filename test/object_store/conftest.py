@@ -5,7 +5,7 @@ import boto3
 # use minio_server
 from test.pylib.minio_server import MinioServer
 from test.pylib.cql_repl import conftest
-from test.topology_custom.conftest import *
+from test.cluster.conftest import *
 
 
 def pytest_addoption(parser):
