@@ -2125,3 +2125,66 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_wait_queue_overload_c
     permit1 = {};
     permit2_fut.get();
 }
+
+// Check that attempting to abort an already aborted permit is handled correctly.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_double_permit_abort) {
+    simple_schema s;
+    const auto schema = s.schema();
+
+    const std::string test_name = get_name();
+
+    reader_concurrency_semaphore semaphore(
+            utils::updateable_value<int>(2),
+            2048,
+            test_name + " semaphore",
+            std::numeric_limits<size_t>::max(),
+            utils::updateable_value<uint32_t>(2),
+            utils::updateable_value<uint32_t>(400),
+            utils::updateable_value<uint32_t>(2),
+            reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    reader_permit_opt permit1 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}).get();
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 1);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+
+    reader_permit_opt permit2 = semaphore.obtain_permit(schema, test_name, 1024, db::no_timeout, {}).get();
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted, 2);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 2);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 0);
+
+    // Exhaust all memory until serialize-limit triggers and make sure permit1 is
+    // the blessed one.
+    auto res1 = permit1->consume_memory(2048);
+    auto requested_memory1_fut = permit1->request_memory(1024);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 0);
+    auto requested_memory1 = requested_memory1_fut.get();
+
+    // Requesting memory for permit2 will queue the permit for memory.
+    auto requested_memory2_fut = permit2->request_memory(1024);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_enqueued_for_memory, 1);
+
+    // Set timeout to 0 and wait for permit to time out.
+    permit2->set_timeout(db::timeout_clock::now());
+    eventually_true([&] {
+        try {
+            permit2->check_abort();
+            return false;
+        } catch (named_semaphore_timed_out&) {
+            return true;
+        } catch (timed_out_error&) {
+            return true;
+        } catch (...) {
+            BOOST_FAIL(format("unexpected exception while waiting for permit to time out: {}", std::current_exception()));
+            return true;
+        }
+    });
+
+    // Attempting to register a read which is queued on memory as inactive, will
+    // trigger an attempt to abort the read.
+    // This is where the double-abort happens.
+    auto irh = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), *permit2));
+
+    BOOST_REQUIRE_THROW(requested_memory2_fut.get(), named_semaphore_timed_out);
+}
