@@ -23,6 +23,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "cql3/query_processor.hh"
 #include "db/view/base_info.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
@@ -2503,13 +2504,12 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
     });
 }
 
-service::query_state& view_builder_query_state() {
+static service::query_state view_builder_query_state(cql3::query_processor& qp) {
     using namespace std::chrono_literals;
     const auto t = 10s;
     static timeout_config tc{ t, t, t, t, t, t, t };
     static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
-    static thread_local service::query_state qs(cs, empty_service_permit());
-    return qs;
+    return service::query_state(cs, make_service_permit(qp.start_operation()));
 };
 
 static future<> announce_with_raft(
@@ -2521,6 +2521,7 @@ static future<> announce_with_raft(
         std::string_view description) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
+    auto qs = view_builder_query_state(qp);
     while (true) {
         as.check();
 
@@ -2529,7 +2530,7 @@ static future<> announce_with_raft(
 
         auto muts = co_await qp.get_mutations_internal(
                 query_string,
-                view_builder_query_state(),
+                qs,
                 timestamp,
                 values);
         std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
@@ -2605,10 +2606,11 @@ future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_na
 
 static future<std::unordered_map<locator::host_id, sstring>>
 view_status_common(cql3::query_processor& qp, sstring ks_name, sstring cf_name, sstring view_ks_name, sstring view_name, db::consistency_level cl) {
-    return qp.execute_internal(
+    auto qs = view_builder_query_state(qp);
+    co_return co_await qp.execute_internal(
             format("SELECT host_id, status FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", ks_name, cf_name),
             cl,
-            view_builder_query_state(),
+            qs,
             { std::move(view_ks_name), std::move(view_name) },
             cql3::query_processor::cache_internal::no).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
         return *cql_result
@@ -2796,6 +2798,7 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     }
 
     auto& qp = sys_ks.query_processor();
+    auto qs = view_builder_query_state(qp);
 
     const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
             db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
@@ -2806,7 +2809,7 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     for (auto& view : db.get_views()) {
         auto vb_muts = co_await qp.get_mutations_internal(
                 query_string,
-                view_builder_query_state(),
+                qs,
                 timestamp,
                 {view->ks_name(), view->cf_name(), host_id.uuid()});
         SCYLLA_ASSERT(vb_muts.size() == 1);
@@ -2831,6 +2834,7 @@ future<> view_builder::migrate_to_v1_5(locator::token_metadata_ptr tmptr, db::sy
 future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::system_keyspace& sys_ks, cql3::query_processor& qp, service::raft_group0_client& group0_client, abort_source& as, service::group0_guard guard) {
     inject_failure("view_builder_migrate_to_v2");
 
+    auto qs = view_builder_query_state(qp);
     auto schema = qp.db().find_schema(db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS);
 
     // `system_distributed` keyspace has RF=3 and we need to scan it with CL=ALL
@@ -2846,7 +2850,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
     auto rows = co_await qp.execute_internal(
         format("SELECT keyspace_name, view_name, host_id, status, WRITETIME(status) AS ts FROM {}.{}", db::system_distributed_keyspace::NAME, db::system_distributed_keyspace::VIEW_BUILD_STATUS),
         cl,
-        view_builder_query_state(),
+        qs,
         {},
         cql3::query_processor::cache_internal::no);
 
@@ -2900,7 +2904,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
                 db::system_keyspace::VIEW_BUILD_STATUS_V2,
                 col_names_str,
                 val_binders_str),
-            view_builder_query_state(),
+            qs,
             row_ts,
             std::move(values));
         if (muts.size() != 1) {
