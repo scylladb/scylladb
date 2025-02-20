@@ -8,15 +8,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import ssl
+import tempfile
 import platform
 import urllib.parse
-from functools import partial
+from multiprocessing import Event, Process
 from typing import TYPE_CHECKING
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
-from test.pylib.async_cql import event_loop, run_async
+from test.pylib.async_cql import run_async
+from test.pylib.scylla_cluster import ScyllaClusterManager
 import logging
 import pytest
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
@@ -31,9 +34,13 @@ from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disa
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+    from typing import Callable
+
     from cassandra.connection import EndPoint
 
     from test.pylib.internal_types import IPAddress
+    from test.pylib.suite.base import Test
 
 
 Session.run_async = run_async     # patch Session for convenience
@@ -45,7 +52,7 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 
 
 def pytest_addoption(parser):
-    parser.addoption('--manager-api', action='store', required=True,
+    parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
     parser.addoption('--host', action='store', default='localhost',
                      help='CQL server host to connect to')
@@ -158,8 +165,40 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int, use_ssl: bool, aut
                    )
 
 
-@pytest.fixture(scope="session")
-async def manager_internal(event_loop, request):
+@pytest.fixture(scope="module")
+async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Test) -> AsyncGenerator[str]:
+    if manager_api := request.config.getoption("--manager-api"):
+        yield manager_api
+    else:
+        test_uname = testpy_test.uname
+        clusters = testpy_test.suite.clusters
+        base_dir = str(testpy_test.suite.log_dir)
+        sock_path = f"{tempfile.mkdtemp(prefix='manager-', dir='/tmp')}/api"
+
+        start_event = Event()
+        stop_event = Event()
+
+        async def run_manager() -> None:
+            mgr = ScyllaClusterManager(test_uname=test_uname, clusters=clusters, base_dir=base_dir, sock_path=sock_path)
+            await mgr.start()
+            start_event.set()
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
+            finally:
+                await mgr.stop()
+
+        manager_process = Process(target=lambda: asyncio.run(run_manager()))
+        manager_process.start()
+        start_event.wait()
+
+        yield sock_path
+
+        stop_event.set()
+        manager_process.join()
+
+
+@pytest.fixture(scope="module")
+async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path: str) -> Callable[[], ManagerClient]:
     """Session fixture to prepare client object for communicating with the Cluster API.
        Pass the Unix socket path where the Manager server API is listening.
        Pass a function to create driver connections.
@@ -173,14 +212,22 @@ async def manager_internal(event_loop, request):
         auth_provider = PlainTextAuthProvider(username=auth_username, password=auth_password)
     else:
         auth_provider = None
-    manager_int = partial(ManagerClient, request.config.getoption('manager_api'), port, use_ssl, auth_provider, cluster_con)
-    yield manager_int
+    return lambda: ManagerClient(
+        sock_path=manager_api_sock_path,
+        port=port,
+        use_ssl=use_ssl,
+        auth_provider=auth_provider,
+        con_gen=cluster_con,
+    )
 
 
 @pytest.fixture(scope="function")
-async def manager(request, manager_internal, record_property, testpy_test):
-    """Per test fixture to notify Manager client object when tests begin so it can
-    perform checks for cluster state.
+async def manager(request: pytest.FixtureRequest,
+                  manager_internal: Callable[[], ManagerClient],
+                  record_property: Callable[[str, object], None],
+                  testpy_test: Test) -> AsyncGenerator[ManagerClient]:
+    """
+    Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
     """
     test_case_name = request.node.name
     suite_testpy_log = testpy_test.log_filename
@@ -205,7 +252,7 @@ async def manager(request, manager_internal, record_property, testpy_test):
             failed_test_dir_path,
             {'pytest.log': test_log, 'test_py.log': test_py_log_test}
         )
-        with open(failed_test_dir_path / f"stacktrace", 'w') as f:
+        with open(failed_test_dir_path / "stacktrace", "w") as f:
             f.write(report.longreprtext)
         if request.config.getoption('artifacts_dir_url') is not None:
             # get the relative path to the tmpdir for the failed directory
@@ -217,7 +264,11 @@ async def manager(request, manager_internal, record_property, testpy_test):
     cluster_status = await manager_client.after_test(test_case_name, not failed)
     await manager_client.stop()  # Stop client session and close driver after each test
     if cluster_status["server_broken"]:
-        pytest.fail(f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken, server_broken_reason: {cluster_status["message"]}")
+        pytest.fail(
+            f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken,"
+            f" server_broken_reason: {cluster_status["message"]}"
+        )
+
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object

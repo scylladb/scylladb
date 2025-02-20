@@ -26,6 +26,7 @@ from test.pylib.suite.base import (
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
+
     from test.pylib.cpp.item import CppTestFunction
     from test.pylib.suite.base import Test
 
@@ -49,6 +50,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help='Run pytest session in test.py-compatible mode.  I.e., start all required services, etc.')
 
     # Options for compatibility with test.py
+    parser.addoption('--save-log-on-success', default=False,
+                        dest="save_log_on_success", action="store_true",
+                        help="Save test log output on success.")
     parser.addoption('--coverage', action='store_true', default=False,
                       help="When running code instrumented with coverage support"
                            "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
@@ -57,6 +61,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--cluster-pool-size", type=int,
                      help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
                           "CLUSTER_POOL_SIZE can be used to achieve the same")
+    parser.addoption("--extra-scylla-cmdline-options", default=[],
+                     help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
+                          " '--logger-log-level raft=trace --default-log-level error'")
 
 
 @pytest.fixture(scope="session")

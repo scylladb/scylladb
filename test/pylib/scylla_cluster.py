@@ -1265,6 +1265,7 @@ class ScyllaCluster:
         server = self.servers[server_id]
         return server.get_sstables_disk_usage(keyspace, table)
 
+
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
        Provides an async API for tests to request changes in the Cluster.
@@ -1275,7 +1276,11 @@ class ScyllaClusterManager:
     site: aiohttp.web.UnixSite
     is_after_test_ok: bool
 
-    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+    def __init__(self,
+                 test_uname: str,
+                 clusters: Pool[ScyllaCluster],
+                 base_dir: str,
+                 sock_path: str | None = None) -> None:
         self.test_uname: str = test_uname
         self.base_dir: str = base_dir
         logger = logging.getLogger(self.test_uname)
@@ -1293,8 +1298,12 @@ class ScyllaClusterManager:
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
         # Put the socket in /tmp, not base_dir, to avoid going over the length
         # limit of UNIX-domain socket addresses (issue #12622).
-        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir="/tmp")
-        self.sock_path: str = f"{self.manager_dir}/api"
+        if sock_path is None:
+            self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir="/tmp")
+            self.sock_path: str = f"{self.manager_dir}/api"
+        else:
+            self.manager_dir = os.path.dirname(sock_path)
+            self.sock_path = sock_path
         app = aiohttp.web.Application()
         self._setup_routes(app)
         self.runner = aiohttp.web.AppRunner(app)
