@@ -9,6 +9,7 @@
 #include <source_location>
 #include <fmt/ranges.h>
 
+#include "mutation/async_utils.hh"
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_rpc.hh"
@@ -27,6 +28,7 @@
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "service/topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
@@ -490,7 +492,7 @@ utils::observer<bool> raft_group0::observe_leadership(std::function<void(bool)> 
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_ptr<service::group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
-                                  db::system_keyspace& sys_ks, bool topology_change_enabled) {
+                                  db::system_keyspace& sys_ks, bool topology_change_enabled, const join_node_request_params& params) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     SCYLLA_ASSERT(!joined_group0());
 
@@ -529,11 +531,18 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // We should start a new group with this node as voter.
                 group0_log.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_id);
                 initial_configuration.current.emplace(my_addr, true);
+
+                // Initializes system tables for the first group 0 member. Nodes joining group 0 henceforth would apply them via snapshots.
+                if (topology_change_enabled) {
+                    co_await ss.raft_initialize_discovery_leader(params);
+                }
+
                 // Force snapshot transfer from us to subsequently joining servers.
                 // This is important for upgrade and recovery, where the group 0 state machine
                 // (schema tables in particular) is nonempty.
-                // In a fresh cluster this will trigger an empty snapshot transfer which is redundant but correct.
-                // See #14066.
+                // In case of fresh cluster with raft topology enabled, this will trigger a snapshot transfer which propagates initial 
+                // topology state (created in raft_initialize_discovery_leader above). Otherwise, with raft topology disabled, this will 
+                // trigger an empty snapshot transfer.
                 nontrivial_snapshot = true;
             } else {
                 co_await handshaker->pre_server_start(g0_info);
@@ -542,6 +551,11 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
             utils::get_local_injector().inject("stop_after_sending_join_node_request",
                 [] { std::raise(SIGSTOP); });
 
+            // Populates correct upgrade state value before starting raft server, so that reads always get correct values.
+            if (topology_change_enabled) {
+                co_await ss.initialize_done_topology_upgrade_state();
+            }
+            
             // Bootstrap the initial configuration
             co_await raft_sys_table_storage(qp, group0_id, my_id)
                     .bootstrap(std::move(initial_configuration), nontrivial_snapshot);
@@ -708,7 +722,8 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
 
 future<> raft_group0::setup_group0(
         db::system_keyspace& sys_ks, const std::unordered_set<gms::inet_address>& initial_contact_nodes, shared_ptr<group0_handshaker> handshaker,
-        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
+        std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled,
+        const join_node_request_params& params) {
     if (!co_await use_raft()) {
         co_return;
     }
@@ -721,7 +736,7 @@ future<> raft_group0::setup_group0(
     std::vector<gms::inet_address> seeds(initial_contact_nodes.begin(), initial_contact_nodes.end());
 
     group0_log.info("setup_group0: joining group 0...");
-    co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks, topology_change_enabled);
+    co_await join_group0(std::move(seeds), std::move(handshaker), ss, qp, mm, sys_ks, topology_change_enabled, params);
     group0_log.info("setup_group0: successfully joined group 0.");
 
     // Start group 0 leadership monitor fiber.
@@ -1684,7 +1699,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
         auto handshaker = make_legacy_handshaker(can_vote::yes); // Voter
-        co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks, topology_change_enabled);
+        co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks, topology_change_enabled, join_node_request_params{});
     } else {
         upgrade_log.info(
             "We're already a member of group 0."
