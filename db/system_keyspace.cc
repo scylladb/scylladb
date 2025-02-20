@@ -47,6 +47,7 @@
 #include "replica/query.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "utils/phased_barrier.hh"
 #include "utils/shared_dict.hh"
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
@@ -2693,12 +2694,12 @@ future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql_with
     struct timeout_context {
         std::unique_ptr<service::client_state> client_state;
         service::query_state query_state;
-        timeout_context(db::timeout_clock::duration d)
+        timeout_context(db::timeout_clock::duration d, utils::phased_barrier::operation op)
                 : client_state(std::make_unique<service::client_state>(service::client_state::internal_tag{}, timeout_config{d, d, d, d, d, d, d}))
-                , query_state(*client_state, empty_service_permit())
+                , query_state(*client_state, make_service_permit(std::move(op)))
         {}
     };
-    return do_with(timeout_context(d), [this, req = std::move(req), &args...] (auto& tctx) {
+    return do_with(timeout_context(d, _qp.start_operation()), [this, req = std::move(req), &args...] (auto& tctx) {
         return _qp.execute_internal(req,
             cql3::query_options::DEFAULT.get_consistency(),
             tctx.query_state,
