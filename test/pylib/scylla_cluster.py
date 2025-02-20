@@ -1409,6 +1409,7 @@ class ScyllaClusterManager:
         add_put('/cluster/before-test/{test_case_name}', self._before_test_req)
         add_put('/cluster/after-test/{success}', self._after_test)
         add_put('/cluster/mark-dirty', self._mark_dirty)
+        add_put('/cluster/mark-clean', self._mark_clean)
         add_put('/cluster/server/{server_id}/stop', self._cluster_server_stop)
         add_put('/cluster/server/{server_id}/stop_gracefully', self._cluster_server_stop_gracefully)
         add_put('/cluster/server/{server_id}/start', self._cluster_server_start)
@@ -1517,6 +1518,12 @@ class ScyllaClusterManager:
         """Mark current cluster dirty"""
         assert self.cluster
         self.cluster.is_dirty = True
+
+    async def _mark_clean(self, _request) -> None:
+        """Mark current cluster clean"""
+        assert self.cluster
+        self.cluster.is_dirty = False
+        self.cluster.keyspace_count = self.cluster._get_keyspace_count()
 
     async def _server_stop(self, request: aiohttp.web.Request, gracefully: bool) -> None:
         """Stop a server. No-op if already stopped."""
