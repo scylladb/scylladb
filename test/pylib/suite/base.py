@@ -26,15 +26,17 @@ from typing import TYPE_CHECKING
 import colorama
 import yaml
 
-from test import ALL_MODES, DEBUG_MODES, TOP_SRCDIR
+from test import ALL_MODES, DEBUG_MODES, TOP_SRCDIR, TESTDIR
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.resource_gather import get_resource_gather
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-    from typing import Any, Dict, List
+    from typing import Any, List
 
+
+SUITE_CONFIG_FILENAME = "suite.yaml"
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -73,10 +75,14 @@ class TestSuite(ABC):
     E.g. it can be unit tests, boost tests, or CQL tests."""
 
     # All existing test suites, one suite per path/mode.
-    suites: Dict[str, 'TestSuite'] = dict()
+
+    suites: dict[str, TestSuite] = {}
+
     artifacts: ArtifactRegistry
     hosts: HostRegistry
+
     FLAKY_RETRIES = 5
+
     _next_id = collections.defaultdict(int) # (test_key -> id)
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
@@ -124,6 +130,8 @@ class TestSuite(ABC):
             # thousands of tests it can easily reach 10 of GBs)
             # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
             self.base_env["LLVM_PROFILE_FILE"] = str(self.log_dir / "coverage" / self.name / "%m.profraw")
+
+
     # Generate a unique ID for `--repeat`ed tests
     # We want these tests to have different XML IDs so test result
     # processors (Jenkins) don't merge results for different iterations of
@@ -187,7 +195,7 @@ class TestSuite(ABC):
         pass
 
     @abstractmethod
-    async def add_test(self, shortname: str, casename: str) -> None:
+    async def add_test(self, shortname: str, casename: str | None) -> None:
         pass
 
     async def run(self, test: 'Test', options: argparse.Namespace):
@@ -520,3 +528,11 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             if cleanup_fn is not None:
                 cleanup_fn()
     return False
+
+
+def find_suite_config(path: pathlib.Path) -> pathlib.Path:
+    for directory in (path.joinpath("_") if path.is_dir() else path).absolute().relative_to(TESTDIR).parents:
+        suite_config = TESTDIR / directory / SUITE_CONFIG_FILENAME
+        if suite_config.exists():
+            return suite_config
+    raise FileNotFoundError(f"Unable to find a suite config file ({SUITE_CONFIG_FILENAME}) related to {path}")
