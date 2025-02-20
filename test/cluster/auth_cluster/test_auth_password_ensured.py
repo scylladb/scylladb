@@ -9,9 +9,11 @@ import logging
 import time
 
 from cassandra.cluster import NoHostAvailable
-from test.auth_cluster.conftest import skip_mode
+from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient, ServerUpState
 from test.pylib.util import wait_for
+from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
+
 
 async def repeat_if_host_unavailable(f):
     async def try_execute(f):
@@ -30,6 +32,7 @@ After CQL is served, user is properily authenticated as superuser (not annonymou
 @skip_mode('release', 'error injection is disabled in release mode')
 async def test_auth_password_ensured(manager: ManagerClient) -> None:
     config = {
+        **auth_config,
         'authenticator': "com.scylladb.auth.TransitionalAuthenticator",
         'error_injections_at_startup': ['password_authenticator_start_pause'],
     }

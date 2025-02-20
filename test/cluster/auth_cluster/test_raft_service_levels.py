@@ -17,6 +17,7 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
 from cassandra.auth import PlainTextAuthProvider
+from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
         Add 10 service levels. Start new server and it should get a snapshot on bootstrap.
         Stop 3 `old` servers and query the new server to validete if it has the same service levels.
     """
-    servers = await manager.servers_add(3)
+    servers = await manager.servers_add(3, config=auth_config)
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await manager.servers_see_each_other(servers)
@@ -44,7 +45,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
     host0 = cql.cluster.metadata.get_host(servers[0].ip_addr)
     result = await cql.run_async("SELECT service_level FROM system.service_levels_v2", host=host0)
 
-    new_server = await manager.server_add()
+    new_server = await manager.server_add(config=auth_config)
     all_servers = servers + [new_server]
     await wait_for_cql_and_get_hosts(cql, all_servers, time.time() + 60)
     await manager.servers_see_each_other(all_servers)
@@ -61,12 +62,12 @@ async def test_service_levels_snapshot(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_service_levels_upgrade(request, manager: ManagerClient):
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {**auth_config, 'force_gossip_topology_changes': True, 'enable_tablets': False}
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
     # using gossiper-based node operations
-    del cfg['force_gossip_topology_changes']
+    cfg.pop('force_gossip_topology_changes')
 
     servers += [await manager.server_add(config=cfg) for _ in range(2)]
     cql = manager.get_cql()
@@ -105,7 +106,7 @@ async def test_service_levels_upgrade(request, manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
-    servers = await manager.servers_add(3)
+    servers = await manager.servers_add(3, config=auth_config)
 
     logging.info("Waiting until driver connects to every server")
     cql = manager.get_cql()
@@ -235,7 +236,7 @@ async def assert_connections_params(manager: ManagerClient, hosts, expect):
 @pytest.mark.asyncio
 @skip_mode('release', 'cql server testing REST API is not supported in release mode')
 async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
-    servers = await manager.servers_add(3)
+    servers = await manager.servers_add(3, config=auth_config)
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -318,7 +319,7 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
 
 @pytest.mark.asyncio
 async def test_service_level_cache_after_restart(manager: ManagerClient):
-    servers = await manager.servers_add(1)
+    servers = await manager.servers_add(1, config=auth_config)
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -379,9 +380,11 @@ async def test_workload_prioritization_upgrade(manager: ManagerClient):
     # Using error injection, the test disables WORKLOAD_PRIORITIZATION feature
     # and removes `shares` column from system_distributed.service_levels table.
     config = {
+        **auth_config,
         'authenticator': 'AllowAllAuthenticator',
         'authorizer': 'AllowAllAuthorizer',
         'force_gossip_topology_changes': True,
+        'enable_tablets': False,
         'error_injections_at_startup': [
             {
                 'name': 'suppress_features',
@@ -417,7 +420,7 @@ async def test_workload_prioritization_upgrade(manager: ManagerClient):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injection is disabled in release mode')
 async def test_service_levels_over_limit(manager: ManagerClient):
-    srv = await manager.server_add(config={
+    srv = await manager.server_add(config={**auth_config,
         "error_injections_at_startup": ['allow_service_level_over_limit']
     })
     await manager.server_start(srv.server_id)
@@ -445,7 +448,7 @@ async def test_service_levels_over_limit(manager: ManagerClient):
 # Reproduces issue scylla-enterprise#4912
 @pytest.mark.asyncio
 async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
-    servers = await manager.servers_add(2)
+    servers = await manager.servers_add(2, config=auth_config)
     s = servers[0]
     cql = manager.get_cql()
     [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
@@ -476,5 +479,5 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
     await cql.run_async(f"DROP SERVICE LEVEL {sl2}", host=h)
 
     # Check if group0 is healthy
-    s2 = await manager.server_add()
+    s2 = await manager.server_add(config=auth_config)
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)

@@ -12,6 +12,7 @@ from cassandra.auth import PlainTextAuthProvider
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.cluster.util import trigger_snapshot
+from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
 """
@@ -21,6 +22,7 @@ cluster should still work but that's guaranteed only if auth data is replicated 
 @pytest.mark.asyncio
 async def test_auth_no_quorum(manager: ManagerClient) -> None:
     config = {
+        **auth_config,
         # disable auth cache
         'permissions_validity_in_ms': 0,
         'permissions_update_interval_in_ms': 0,
@@ -60,7 +62,7 @@ Tests raft snapshot transfer of auth data.
 """
 @pytest.mark.asyncio
 async def test_auth_raft_snapshot_transfer(manager: ManagerClient) -> None:
-    servers = await manager.servers_add(1)
+    servers = await manager.servers_add(1, config=auth_config)
 
     cql = manager.get_cql()
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -73,7 +75,7 @@ async def test_auth_raft_snapshot_transfer(manager: ManagerClient) -> None:
     await trigger_snapshot(manager, servers[0])
 
     # on startup node should receive snapshot
-    snapshot_receiving_server = await manager.server_add()
+    snapshot_receiving_server = await manager.server_add(config=auth_config)
     servers.append(snapshot_receiving_server)
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     await manager.servers_see_each_other(servers)

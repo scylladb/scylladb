@@ -9,6 +9,7 @@ from test.pylib.manager_client import ManagerClient
 import pytest
 from test.pylib.rest_client import inject_error, read_barrier
 from test.pylib.util import unique_name
+from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
 """
@@ -16,7 +17,7 @@ Tests case when bigger auth operation is split into multiple raft commands.
 """
 @pytest.mark.asyncio
 async def test_auth_raft_command_split(manager: ManagerClient) -> None:
-    servers = await manager.servers_add(3)
+    servers = await manager.servers_add(3, config=auth_config)
     cql, hosts = await manager.get_ready_cql(servers)
 
     initial_perms = await cql.run_async("SELECT * FROM system.role_permissions")
