@@ -9,6 +9,7 @@
 #pragma once
 
 #include "db/config.hh"
+#include "seastar/core/semaphore.hh"
 #include "utils/log.hh"
 
 #include "seastarx.hh"
