@@ -12,6 +12,8 @@
 #include <boost/range/irange.hpp>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 
 #include "cdc/log.hh"
 #include "cdc/generation.hh"
@@ -1606,7 +1608,7 @@ public:
     {
         auto& p = m.partition();
         if (p.clustered_rows().empty() && p.static_row().empty()) {
-            return make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>();
+            co_return lw_shared_ptr<cql3::untyped_result_set>();
         }
 
         dht::partition_range_vector partition_ranges{dht::partition_range(m.decorated_key())};
@@ -1687,10 +1689,8 @@ public:
         const auto select_cl = adjust_cl(write_cl);
 
       try {
-        return _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state)).then(
-                [s = _schema, partition_slice = std::move(partition_slice), selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) -> lw_shared_ptr<cql3::untyped_result_set> {
-            return make_lw_shared<cql3::untyped_result_set>(*s, std::move(qr.query_result), *selection, partition_slice);
-        });
+        auto qr = co_await _ctx._proxy.query(_schema, std::move(command), std::move(partition_ranges), select_cl, service::storage_proxy::coordinator_query_options(default_timeout(), empty_service_permit(), client_state));
+        co_return make_lw_shared<cql3::untyped_result_set>(*_schema, std::move(qr.query_result), *selection, std::move(partition_slice));
       } catch (exceptions::unavailable_exception& e) {
         // `query` can throw `unavailable_exception`, which is seen by clients as ~ "NoHostAvailable". 
         // So, we'll translate it to a `read_failure_exception` with custom message.
@@ -1763,64 +1763,61 @@ public:
 };
 
 template <typename Func>
-future<std::vector<mutation>>
+future<>
 transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_size, Func&& f) {
     return parallel_for_each(
             boost::irange(static_cast<decltype(muts.size())>(0), muts.size(), batch_size),
-            std::forward<Func>(f))
-        .then([&muts] () mutable { return std::move(muts); });
+            std::forward<Func>(f));
 }
 
 } // namespace cdc
 
 future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations_, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
     // we do all this because in the case of batches, we can have mixed schemas.
+    auto mutations = std::move(mutations_);
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
         return m.schema()->cdc_options().enabled();
     });
 
     if (i == e) {
-        return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), lw_shared_ptr<cdc::operation_result_tracker>()));
+        co_return std::make_tuple(std::move(mutations), lw_shared_ptr<cdc::operation_result_tracker>());
     }
 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
     mutations.reserve(2 * mutations.size());
 
-    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
-            [this, tr_state = std::move(tr_state), write_cl] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
-        return transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable {
+    auto qs = service::query_state(service::client_state::for_internal_calls(), empty_service_permit());
+    auto details = operation_details{};
+    // FIXME: indentation
+    co_await transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable -> future<> {
             auto& m = mutations[idx];
             auto s = m.schema();
 
             if (!s->cdc_options().enabled()) {
-                return make_ready_future<>();
+                co_return;
             }
 
             transformer trans(_ctxt, s, m.decorated_key());
 
-            auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
+            lw_shared_ptr<cql3::untyped_result_set> rs;
             if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
                 tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
-                f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
+                auto f = co_await coroutine::as_future(trans.pre_image_select(qs.get_client_state(), write_cl, m));
                     auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
                     cdc_stats.counters_total.preimage_selects++;
                     if (f.failed()) {
                         cdc_stats.counters_failed.preimage_selects++;
+                        co_await coroutine::return_exception_ptr(f.get_exception());
                     }
-                    return f;
-                });
+                rs = f.get();
             } else {
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
-
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state, &details] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
-                auto& m = mutations[idx];
-                auto& s = m.schema();
 
                 if (rs) {
                     const auto& p = m.partition();
@@ -1848,13 +1845,10 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // `m` might be invalidated at this point because of the push_back to the vector
                 tracing::trace(tr_state, "CDC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());
                 details.touched_parts.add(touched_parts);
-            });
-        }).then([this, tr_state, &details](std::vector<mutation> mutations) {
+        });
             tracing::trace(tr_state, "CDC: Finished generating all log mutations");
             auto tracker = make_lw_shared<cdc::operation_result_tracker>(_ctxt._proxy.get_cdc_stats(), details);
-            return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), std::move(tracker)));
-        });
-    });
+            co_return std::make_tuple(std::move(mutations), std::move(tracker));
 }
 
 bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutations) const {
