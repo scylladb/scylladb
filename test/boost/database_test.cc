@@ -1867,6 +1867,49 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
     BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_group0, dk, false), first_repair_time);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot_rf_one_tables) {
+    auto table_gc_mode_repair1 = schema_builder("test", "table_gc_mode_repair1")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
+            .build();
+
+    auto table_gc_mode_repair2 = schema_builder("test", "table_gc_mode_repair2")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
+            .build();
+
+    // One pk to rule them all, all schemas have the same partition key, so we
+    // can reuse a single key for this test.
+    const auto pk = partition_key::from_single_value(*table_gc_mode_repair1, utf8_type->decompose(data_value("pk")));
+    const auto dk = dht::decorate_key(*table_gc_mode_repair1, pk);
+
+    shared_tombstone_gc_state shared_state;
+    shared_state.set_table_rf_one(table_gc_mode_repair1->id());
+
+    const auto now = gc_clock::now();
+    const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
+
+    auto snapshot = shared_state.snapshot();
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), now);
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
+
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
+
+    shared_state.set_table_rf_n(table_gc_mode_repair1->id());
+    shared_state.set_table_rf_one(table_gc_mode_repair2->id());
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), now);
+
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), snapshot.query_time());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), gc_clock::time_point::min());
+}
+
 SEASTAR_TEST_CASE(test_max_purgeable_combine) {
     const gc_clock::time_point t_pre_treshold = gc_clock::now();
     const gc_clock::time_point t1 = t_pre_treshold + std::chrono::seconds(10);
