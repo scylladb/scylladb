@@ -396,14 +396,13 @@ future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp,
     }
 
     co_await _events.cache_table_info(qp, mm, _dummy_query_state);
-    // FIXME: indentation
-        tlogger.trace("{}: storing {} events records: parent_id {} span_id {}", records->session_id, events_records.size(), records->parent_id, records->my_span_id);
+    tlogger.trace("{}: storing {} events records: parent_id {} span_id {}", records->session_id, events_records.size(), records->parent_id, records->my_span_id);
 
-        std::vector<cql3::statements::batch_statement::single_statement> modifications(events_records.size(), cql3::statements::batch_statement::single_statement(_events.insert_stmt(), false));
-        std::vector<cql3::raw_value_vector_with_unset> values;
+    std::vector<cql3::statements::batch_statement::single_statement> modifications(events_records.size(), cql3::statements::batch_statement::single_statement(_events.insert_stmt(), false));
+    std::vector<cql3::raw_value_vector_with_unset> values;
 
-        values.reserve(events_records.size());
-        std::for_each(events_records.begin(), events_records.end(), [&values, all_records = records, this] (event_record& one_event_record) { values.emplace_back(make_event_mutation_data(my_address(), *all_records, one_event_record)); });
+    values.reserve(events_records.size());
+    std::for_each(events_records.begin(), events_records.end(), [&values, all_records = records, this] (event_record& one_event_record) { values.emplace_back(make_event_mutation_data(my_address(), *all_records, one_event_record)); });
 
     auto batch_options =  cql3::query_options::make_batch_options(cql3::query_options(cql3::default_cql_config, db::consistency_level::ANY, std::nullopt, std::vector<cql3::raw_value>{}, false, cql3::query_options::specific_options::DEFAULT), std::move(values));
     auto batch = cql3::statements::batch_statement(cql3::statements::batch_statement::type::UNLOGGED, std::move(modifications), cql3::attributes::none(), qp.get_cql_stats());
@@ -412,50 +411,48 @@ future<> trace_keyspace_helper::apply_events_mutation(cql3::query_processor& qp,
 
 future<> trace_keyspace_helper::flush_one_session_mutations(lw_shared_ptr<one_session_records> records) {
     auto events_records = std::move(records->events_recs);
-    // FIXME: indentation
-        records->events_recs.clear();
+    records->events_recs.clear();
 
-        // Check if a session's record is ready before handling events' records.
-        //
-        // New event's records and a session's record may become ready while a
-        // mutation with the current events' records is being written. We don't want
-        // to allow the situation when a session's record is written before the last
-        // event record from the same session.
-        bool session_record_is_ready = records->session_rec.ready();
+    // Check if a session's record is ready before handling events' records.
+    //
+    // New event's records and a session's record may become ready while a
+    // mutation with the current events' records is being written. We don't want
+    // to allow the situation when a session's record is written before the last
+    // event record from the same session.
+    bool session_record_is_ready = records->session_rec.ready();
 
-        // From this point on - all new data will have to be handled in the next write event
-        records->data_consumed();
+    // From this point on - all new data will have to be handled in the next write event
+    records->data_consumed();
 
-        // We want to serialize the creation of events mutations in order to ensure
-        // that mutations for events that were created first are going to be
-        // created first too.
-        auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(records->backend_state_ptr.get());
-        semaphore& write_sem = backend_state_ptr->write_sem;
-        auto units = co_await get_units(write_sem, 1);
-            // This code is inside the _pending_writes gate and the qp pointer
-            // is cleared on ::stop() after the gate is closed.
-            SCYLLA_ASSERT(_qp_anchor != nullptr && _mm_anchor != nullptr);
-            cql3::query_processor& qp = *_qp_anchor;
-            service::migration_manager& mm = *_mm_anchor;
-            co_await apply_events_mutation(qp, mm, records, events_records);
-                if (session_record_is_ready) {
+    // We want to serialize the creation of events mutations in order to ensure
+    // that mutations for events that were created first are going to be
+    // created first too.
+    auto backend_state_ptr = static_cast<trace_keyspace_backend_sesssion_state*>(records->backend_state_ptr.get());
+    semaphore& write_sem = backend_state_ptr->write_sem;
+    auto units = co_await get_units(write_sem, 1);
+    // This code is inside the _pending_writes gate and the qp pointer
+    // is cleared on ::stop() after the gate is closed.
+    SCYLLA_ASSERT(_qp_anchor != nullptr && _mm_anchor != nullptr);
+    cql3::query_processor& qp = *_qp_anchor;
+    service::migration_manager& mm = *_mm_anchor;
+    co_await apply_events_mutation(qp, mm, records, events_records);
+    if (session_record_is_ready) {
+        // if session is finished - store a session and a session time index entries
+        tlogger.trace("{}: going to store a session event", records->session_id);
+        co_await _sessions.insert(qp, mm, _dummy_query_state, make_session_mutation_data, my_address(), std::ref(*records));
+        tlogger.trace("{}: going to store a {} entry", records->session_id, _sessions_time_idx.name());
+        co_await _sessions_time_idx.insert(qp, mm, _dummy_query_state, make_session_time_idx_mutation_data, my_address(), std::ref(*records));
+        if (!records->do_log_slow_query) {
+            co_return;
+        }
 
-                    // if session is finished - store a session and a session time index entries
-                    tlogger.trace("{}: going to store a session event", records->session_id);
-                    co_await _sessions.insert(qp, mm, _dummy_query_state, make_session_mutation_data, my_address(), std::ref(*records));
-                        tlogger.trace("{}: going to store a {} entry", records->session_id, _sessions_time_idx.name());
-                        co_await _sessions_time_idx.insert(qp, mm, _dummy_query_state, make_session_time_idx_mutation_data, my_address(), std::ref(*records));
-                        if (!records->do_log_slow_query) {
-                            co_return;
-                        }
-
-                        // if slow query log is requested - store a slow query log and a slow query log time index entries
-                        auto start_time_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
-                        tlogger.trace("{}: going to store a slow query event", records->session_id);
-                        co_await _slow_query_log.insert(qp, mm, _dummy_query_state, make_slow_query_mutation_data, my_address(), std::ref(*records), start_time_id);
-                            tlogger.trace("{}: going to store a {} entry", records->session_id, _slow_query_log_time_idx.name());
-                            co_await _slow_query_log_time_idx.insert(qp, mm, _dummy_query_state, make_slow_query_time_idx_mutation_data, my_address(), std::ref(*records), start_time_id);
-                }
+        // if slow query log is requested - store a slow query log and a slow query log time index entries
+        auto start_time_id = utils::UUID_gen::get_time_UUID(table_helper::make_monotonic_UUID_tp(_slow_query_last_nanos, records->session_rec.started_at));
+        tlogger.trace("{}: going to store a slow query event", records->session_id);
+        co_await _slow_query_log.insert(qp, mm, _dummy_query_state, make_slow_query_mutation_data, my_address(), std::ref(*records), start_time_id);
+        tlogger.trace("{}: going to store a {} entry", records->session_id, _slow_query_log_time_idx.name());
+        co_await _slow_query_log_time_idx.insert(qp, mm, _dummy_query_state, make_slow_query_time_idx_mutation_data, my_address(), std::ref(*records), start_time_id);
+    }
 }
 
 std::unique_ptr<backend_session_state_base> trace_keyspace_helper::allocate_session_state() const {
