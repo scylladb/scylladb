@@ -33,3 +33,5 @@ run_in_dev:
   - test_replace_ignore_nodes
   - test_zero_token_nodes_no_replication
   - test_not_enough_token_owners
+run_in_debug:
+  - test_random_failures
