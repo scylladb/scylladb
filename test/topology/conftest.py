@@ -265,3 +265,11 @@ def skip_mode_fixture(request, build_mode):
     for reason, platform_key in skipped_funcs.get((request.function, build_mode), []):
         if platform_key is None or platform_key in platform.platform():
             pytest.skip(f'{request.node.name} skipped, reason: {reason}')
+
+
+@pytest.fixture(scope="function")
+async def prepare_3_nodes_cluster(manager):
+    servers = await  manager.running_servers()
+    if not servers:
+        await manager.servers_add(3)
+        await manager.mark_clean()
