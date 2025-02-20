@@ -6,6 +6,7 @@ import requests
 import pytest
 import shutil
 import logging
+import json
 
 from test.pylib.minio_server import MinioServer
 from cassandra.protocol import ConfigurationException
@@ -46,8 +47,9 @@ def create_ks_and_cf(cql, s3_server):
 async def test_basic(manager: ManagerClient, s3_server):
     '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
@@ -104,8 +106,9 @@ async def test_garbage_collect(manager: ManagerClient, s3_server):
 
     sstable_entries = []
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
@@ -144,8 +147,9 @@ async def test_garbage_collect(manager: ManagerClient, s3_server):
 async def test_populate_from_quarantine(manager: ManagerClient, s3_server):
     '''verify sstables are populated from quarantine state'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
@@ -180,8 +184,9 @@ async def test_populate_from_quarantine(manager: ManagerClient, s3_server):
 async def test_misconfigured_storage(manager: ManagerClient, s3_server):
     '''creating keyspace with unknown endpoint is not allowed'''
     # scylladb/scylladb#15074
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
@@ -203,14 +208,10 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     '''verify that memtable flush doesn't crash in case storage access keys are incorrect'''
 
     print('Spoof the object-store config')
-    local_config = tmpdir / 'object_storage.yaml'
-    MinioServer.create_conf_file(s3_server.address, s3_server.port, 'bad_key', 'bad_secret', 'bad_region', local_config)
-
-    orig_config = s3_server.config_file
-    s3_server.config_file = local_config
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
 
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options']}
     server = await manager.server_add(config=cfg)
 
@@ -242,3 +243,19 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     have_res = { x.name: x.value for x in res }
     assert have_res == dict(rows), f'Unexpected table content: {have_res}'
+
+@pytest.mark.asyncio
+async def test_get_object_store_endpoints(manager: ManagerClient, s3_server):
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
+    badconf = MinioServer.create_conf('a', 123, 'bad_region')
+    cfg = {'object_storage_endpoints': objconf + badconf}
+
+    print('Scylla returns the object storage endpoints')
+    server = await manager.server_add(config=cfg)
+    endpoints = await manager.api.get_config(server.ip_addr, 'object_storage_endpoints')
+
+    print('Also check the returned string is valid JSON')
+    del objconf[0]['name']
+    del badconf[0]['name']
+    assert json.loads(endpoints[s3_server.address]) == objconf[0]
+    assert json.loads(endpoints['a']) == badconf[0]
