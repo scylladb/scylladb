@@ -531,6 +531,7 @@ system_distributed_keyspace::insert_cdc_generation(
     const size_t L = 60'000'000;
     const auto mutation_size_threshold = std::max(size_t(1), L / (num_replicas * concurrency));
 
+    auto permit = make_service_permit(_qp.start_operation());
     auto s = _qp.db().real_database().find_schema(
         system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
     auto ms = co_await cdc::get_cdc_generation_mutations_v2(s, id, desc, mutation_size_threshold, api::new_timestamp());
@@ -540,7 +541,7 @@ system_distributed_keyspace::insert_cdc_generation(
             db::consistency_level::ALL,
             db::timeout_clock::now() + 60s,
             nullptr, // trace_state
-            empty_service_permit(),
+            permit,
             db::allow_per_partition_rate_limit::no,
             false // raw_counters
         );
@@ -629,6 +630,7 @@ system_distributed_keyspace::create_cdc_desc(
         context ctx) {
     using namespace std::chrono_literals;
 
+    auto permit = make_service_permit(_qp.start_operation());
     auto ms = co_await get_cdc_streams_descriptions_v2_mutation(_qp.db().real_database(), time, desc);
     co_await max_concurrent_for_each(ms, 20, [&] (mutation& m) -> future<> {
         // We use the storage_proxy::mutate API since CQL is not the best for handling large batches.
@@ -637,7 +639,7 @@ system_distributed_keyspace::create_cdc_desc(
             quorum_if_many(ctx.num_token_owners),
             db::timeout_clock::now() + 30s,
             nullptr, // trace_state
-            empty_service_permit(),
+            permit,
             db::allow_per_partition_rate_limit::no,
             false // raw_counters
         );
@@ -657,6 +659,8 @@ future<bool>
 system_distributed_keyspace::cdc_desc_exists(
         db_clock::time_point streams_ts,
         context ctx) {
+    auto permit = make_service_permit(_qp.start_operation());
+
     // Reading from this table on a freshly upgraded node that is the first to announce the CDC_TIMESTAMPS
     // schema would most likely result in replicas refusing to return data, telling the node that they can't
     // find the schema. Indeed, it takes some time for the nodes to synchronize their schema; schema is
@@ -682,7 +686,7 @@ system_distributed_keyspace::cdc_desc_exists(
             quorum_if_many(ctx.num_token_owners),
             db::timeout_clock::now() + 10s,
             nullptr, // trace_state
-            empty_service_permit(),
+            permit,
             db::allow_per_partition_rate_limit::no,
             false // raw_counters
         );
