@@ -633,6 +633,53 @@ class load_balancer {
         }
     };
 
+    // utility functions to work with table groups.
+    // We may have tables in one group with different tablet counts.
+    // The "base" tablet count is the minimum of all tablet counts.  If
+    // a table has greater number of tablets, we consider it as if it
+    // has base_tablet_count virtual tablets, each composed of
+    // f=(tablet_count/base_tablet_count) actual tablets, which are
+    // considered as one co-located unit.
+    // The reason for this is that the virtual tablets in each chunk
+    // cover the token range of a single tablet in another table, so
+    // they must be all co-located.
+    //
+    // For example, we have a group of tables:
+    // * T with tablets {0,1}
+    // * V with tablets {0,1,2,3}
+    // Then
+    // * base_tablet_count=2
+    // * base_tid=0 corresponds to {T:0,V:0,V:1}
+    // * base_tid=1 corresponds to {T:1,V:2,V:3}
+    struct table_group_processor {
+        const tablet_metadata& _tm;
+        const table_group& _table_ids;
+        const size_t base_tablet_count;
+
+        table_group_processor(const tablet_metadata& tm, const table_group& table_ids)
+            : _tm(tm),
+              _table_ids(table_ids),
+              base_tablet_count(std::ranges::min(_table_ids | std::views::transform(
+                    [this] (table_id table) { return _tm.get_tablet_map(table).tablet_count(); }))) {}
+
+        auto tablet_ids_for_table(table_id table, size_t base_tid) {
+            auto tablet_count = _tm.get_tablet_map(table).tablet_count();
+            size_t f = tablet_count / base_tablet_count;
+
+            return std::views::iota(base_tid * f, (base_tid + 1) * f)
+                    | std::views::transform([] (size_t t) { return tablet_id(t); });
+        };
+
+        auto all_tablets(size_t base_tid) {
+            return _table_ids
+                | std::views::transform([&] (table_id table) {
+                        return tablet_ids_for_table(table, base_tid) | std::views::transform([table] (tablet_id tid) { return global_tablet_id {table, tid};});
+                        })
+                | std::ranges::to<std::vector>()
+                | std::views::join;
+        };
+    };
+
     // Per-shard limits for active tablet streaming sessions.
     //
     // There is no hard reason for these values being what they are other than
@@ -2841,14 +2888,14 @@ public:
         }
     };
 
-    void for_each_table_group(seastar::noncopyable_function<void(const table_group&)> func) {
+    void for_each_table_group(seastar::noncopyable_function<void(const table_group&, table_group_processor)> func) {
         for (const auto& table_ids : _table_grouping.groups()) {
-            func(table_ids);
+            func(table_ids, table_group_processor(_tm->tablets(), table_ids));
         }
         for (auto&& [table, _tmap] : _tm->tablets().all_tables()) {
             if (!_table_grouping.is_in_group(table)) {
                 table_group table_ids = { table };
-                func(table_ids);
+                func(table_ids, table_group_processor(_tm->tablets(), table_ids));
             }
         }
     }
