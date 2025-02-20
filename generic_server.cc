@@ -14,10 +14,100 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/smp.hh>
+#include <utility>
 
 #include "db/config.hh"
+#include "seastar/core/semaphore.hh"
 
 namespace generic_server {
+
+class counted_data_source_impl : public data_source_impl {
+    data_source _ds;
+    connection::cpu_concurrency_t& _cpu_concurrency;
+
+    future<temporary_buffer<char>> invoke_with_counting(
+            std::function<future<temporary_buffer<char>>()> fun) {
+        if (_cpu_concurrency.stopped) {
+            return fun();
+        }
+        return futurize_invoke([this] () {
+            _cpu_concurrency.units.return_all();
+        }).then([fun = std::move(fun)] () {
+            return fun();
+        }).finally([this] () {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
+        });
+    };
+public:
+    counted_data_source_impl(data_source ds, connection::cpu_concurrency_t& cpu_concurrency) : _ds(std::move(ds)), _cpu_concurrency(cpu_concurrency) {};
+    virtual ~counted_data_source_impl() = default;
+    virtual future<temporary_buffer<char>> get() override {
+        return invoke_with_counting([this] {return _ds.get();});
+    };
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        return invoke_with_counting([this, n] {return _ds.skip(n);});
+    };
+    virtual future<> close() override {
+        return _ds.close();
+    };
+};
+
+class counted_data_sink_impl : public data_sink_impl {
+    data_sink _ds;
+    connection::cpu_concurrency_t& _cpu_concurrency;
+
+    template <typename F>
+    future<> invoke_with_counting(F&& fun) {
+        if (_cpu_concurrency.stopped) {
+            return fun();
+        }
+        return futurize_invoke([this] () {
+            _cpu_concurrency.units.return_all();
+        }).then([fun = std::move(fun)] () mutable {
+            return fun();
+        }).finally([this] () {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
+        });
+    };
+public:
+    counted_data_sink_impl(data_sink ds, connection::cpu_concurrency_t& cpu_concurrency) : _ds(std::move(ds)), _cpu_concurrency(cpu_concurrency) {};
+    virtual ~counted_data_sink_impl() = default;
+    virtual temporary_buffer<char> allocate_buffer(size_t size) override {
+        return _ds.allocate_buffer(size);
+    }
+    virtual future<> put(net::packet data) override {
+        return invoke_with_counting([this, data = std::move(data)] () mutable {
+            return _ds.put(std::move(data));
+        });
+    }
+    virtual future<> put(std::vector<temporary_buffer<char>> data)  override {
+        return invoke_with_counting([this, data = std::move(data)] () mutable {
+            return _ds.put(std::move(data));
+        });
+    }
+    virtual future<> put(temporary_buffer<char> buf) override {
+        return invoke_with_counting([this, buf = std::move(buf)] () mutable {
+            return _ds.put(std::move(buf));
+        });
+    }
+    virtual future<> flush() override {
+        return invoke_with_counting([this] (void) mutable {
+            return _ds.flush();
+        });
+    }
+    virtual future<> close() override {
+        return _ds.close();
+    }
+    virtual size_t buffer_size() const noexcept override {
+        return _ds.buffer_size();
+    }
+    virtual bool can_batch_flushes() const noexcept override {
+        return _ds.can_batch_flushes();
+    }
+    virtual void on_batch_flush_error() noexcept override {
+        _ds.on_batch_flush_error();
+    }
+};
 
 connection::connection(server& server, connected_socket&& fd, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
     : _conns_cpu_concurrency{sem, std::move(initial_sem_units), false}
