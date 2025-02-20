@@ -13,7 +13,7 @@ import time
 from test.pylib.util import wait_for
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
-from test.topology.util import check_token_ring_and_group0_consistency,            \
+from test.topology_custom.util import check_token_ring_and_group0_consistency,            \
                                wait_for_token_ring_and_group0_consistency
 import pytest
 

@@ -6,7 +6,7 @@
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
 from pytest import Config
-from test.topology.conftest import *
+from test.topology_custom.conftest import *
 
 def pytest_configure(config: Config):
     config.option.auth_username = 'cassandra'

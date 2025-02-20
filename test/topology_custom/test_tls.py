@@ -6,7 +6,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from cassandra.connection import ConnectionShutdown
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 import asyncio
 import logging

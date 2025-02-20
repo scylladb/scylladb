@@ -12,7 +12,7 @@ from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import check_token_ring_and_group0_consistency, new_test_keyspace
+from test.topology_custom.util import check_token_ring_and_group0_consistency, new_test_keyspace
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, 
     ],
 )
 @pytest.mark.asyncio
-async def test_change_replication_factor_1_to_0_and_decommission(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:    
+async def test_change_replication_factor_1_to_0_and_decommission(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
     CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "enable_tablets": str(use_tablets)}
     logger.info("Creating a new cluster")
     for i in range(2):
@@ -103,7 +103,7 @@ async def test_change_replication_factor_1_to_0_and_decommission(request: pytest
         await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc0': 1, 'dc1': 0}}")
 
         logger.info(f"Decommissioning node {srvs[1]}")
-        
+
         # decommission dc1
         await manager.decommission_node(srvs[1].server_id)
         await check_token_ring_and_group0_consistency(manager)

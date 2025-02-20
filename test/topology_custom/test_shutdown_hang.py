@@ -14,8 +14,8 @@ from cassandra.cluster import ConsistencyLevel # type: ignore
 from cassandra.protocol import WriteTimeout # type: ignore
 
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import wait_for_token_ring_and_group0_consistency, new_test_keyspace, reconnect_driver
-from test.topology.conftest import skip_mode
+from test.topology_custom.util import wait_for_token_ring_and_group0_consistency, new_test_keyspace, reconnect_driver
+from test.topology_custom.conftest import skip_mode
 
 
 logger = logging.getLogger(__name__)

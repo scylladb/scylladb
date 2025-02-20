@@ -9,7 +9,7 @@ Test replacing node in different scenarios
 import time
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import wait_for_token_ring_and_group0_consistency, wait_for_cql_and_get_hosts, wait_for
+from test.topology_custom.util import wait_for_token_ring_and_group0_consistency, wait_for_cql_and_get_hosts, wait_for
 import pytest
 import logging
 import asyncio

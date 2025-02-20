@@ -6,9 +6,9 @@
 from test.pylib.rest_client import inject_error
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.util import wait_for_cdc_generations_publishing, \
+from test.topology_custom.util import wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 from cassandra.cluster import ConsistencyLevel # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module

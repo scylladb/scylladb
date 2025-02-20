@@ -4,7 +4,7 @@
 #
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 import pytest
 import logging

@@ -5,7 +5,7 @@
 #
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_first_completed
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 from collections.abc import Coroutine
 import pytest
 import logging

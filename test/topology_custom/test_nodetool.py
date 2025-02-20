@@ -3,7 +3,7 @@ import asyncio
 import subprocess
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_first_completed
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 pytestmark = pytest.mark.prepare_3_nodes_cluster
 

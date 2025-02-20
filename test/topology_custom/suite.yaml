@@ -17,8 +17,12 @@ run_first:
   - test_raft_ignore_nodes
   - test_tablets
   - test_tablets2
+  - test_cluster_features
+  - test_topology_remove_decom
+  - test_mutation_schema_change
 skip_in_release:
   - test_raft_cluster_features
+  - test_cluster_features
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
@@ -26,6 +30,8 @@ skip_in_debug:
   - test_node_shutdown_waits_for_pending_requests
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing
+run_in_release:
+    - test_gossiper
 run_in_dev:
   - test_raft_ignore_nodes
   - test_group0_schema_versioning
@@ -33,5 +39,6 @@ run_in_dev:
   - test_replace_ignore_nodes
   - test_zero_token_nodes_no_replication
   - test_not_enough_token_owners
+  - test_replace_alive_node
 run_in_debug:
   - test_random_failures

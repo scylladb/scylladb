@@ -12,7 +12,7 @@ import time
 from test.pylib.internal_types import IPAddress
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 
 logger = logging.getLogger(__name__)

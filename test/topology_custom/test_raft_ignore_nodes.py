@@ -11,7 +11,7 @@ import logging
 from test.pylib.internal_types import IPAddress, HostID
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient, ServerInfo
-from test.topology.util import get_current_group0_config, wait_for_token_ring_and_group0_consistency
+from test.topology_custom.util import get_current_group0_config, wait_for_token_ring_and_group0_consistency
 
 
 logger = logging.getLogger(__name__)

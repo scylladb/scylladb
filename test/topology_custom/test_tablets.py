@@ -11,8 +11,8 @@ from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name
-from test.topology.conftest import skip_mode
-from test.topology.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest

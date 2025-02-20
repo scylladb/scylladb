@@ -7,10 +7,10 @@
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, get_tablet_task_id, load_tablet_repair_task_infos
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.topology.util import create_new_test_keyspace
+from test.topology_custom.util import create_new_test_keyspace
 
 from cassandra.cluster import Session as CassandraSession
 

@@ -7,8 +7,8 @@ from itertools import zip_longest
 
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import skip_mode
-from test.topology.util import new_test_keyspace
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import new_test_keyspace
 
 
 def verify_data(response, expected_data):

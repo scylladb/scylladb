@@ -1,8 +1,7 @@
-import asyncio
 import pytest
 
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')

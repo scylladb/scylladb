@@ -13,11 +13,11 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, enter_recovery_state, \
+from test.topology_custom.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
         wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
-from test.topology.conftest import cluster_con
+from test.topology_custom.conftest import cluster_con
 
 
 @pytest.mark.asyncio

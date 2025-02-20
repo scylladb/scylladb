@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from test.topology.util import wait_for_token_ring_and_group0_consistency
+from test.topology_custom.util import wait_for_token_ring_and_group0_consistency
 
 if TYPE_CHECKING:
     from test.pylib.random_tables import RandomTables

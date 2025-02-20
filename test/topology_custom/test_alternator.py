@@ -26,7 +26,7 @@ from cassandra.auth import PlainTextAuthProvider
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 

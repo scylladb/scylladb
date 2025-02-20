@@ -10,7 +10,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 import pytest
 import asyncio

@@ -19,8 +19,8 @@ import pytest
 from cassandra.cluster import NoHostAvailable
 
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.util import wait_for_token_ring_and_group0_consistency, get_coordinator_host
-from test.topology.conftest import skip_mode
+from test.topology_custom.util import wait_for_token_ring_and_group0_consistency, get_coordinator_host
+from test.topology_custom.conftest import skip_mode
 from test.pylib.internal_types import ServerUpState
 from test.topology_custom.random_failures.cluster_events import CLUSTER_EVENTS, TOPOLOGY_TIMEOUT
 from test.topology_custom.random_failures.error_injections import ERROR_INJECTIONS, ERROR_INJECTIONS_NODE_MAY_HANG

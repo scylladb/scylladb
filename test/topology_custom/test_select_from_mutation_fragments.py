@@ -9,7 +9,7 @@ import pytest
 
 from cassandra.protocol import InvalidRequest  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 from test.pylib.manager_client import ManagerClient
 

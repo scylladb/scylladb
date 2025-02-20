@@ -11,8 +11,8 @@ import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver
-from test.topology.conftest import skip_mode
+from test.topology_custom.util import reconnect_driver
+from test.topology_custom.conftest import skip_mode
 from test.pylib.random_tables import Column, TextType
 
 logger = logging.getLogger(__name__)

@@ -8,8 +8,8 @@ from cassandra.protocol import InvalidRequest
 from cassandra.cluster import TruncateError
 from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import skip_mode
-from test.topology.util import get_topology_coordinator, new_test_keyspace
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import get_topology_coordinator, new_test_keyspace
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.util import wait_for_cql_and_get_hosts
 import time

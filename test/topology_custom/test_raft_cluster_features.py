@@ -6,14 +6,12 @@
 """
 Tests that are specific to the raft-based cluster feature implementation.
 """
-import logging
 import asyncio
 import time
 
 from test.pylib.manager_client import ManagerClient
-from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
-from test.topology import test_cluster_features
+from test.topology_custom import test_cluster_features
 import pytest
 
 

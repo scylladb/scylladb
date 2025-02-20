@@ -13,8 +13,8 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair, get_tablet_task_id
 from test.pylib.tablets import get_all_tablet_replicas
-from test.topology.conftest import skip_mode
-from test.topology.util import create_new_test_keyspace, new_test_keyspace
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import create_new_test_keyspace, new_test_keyspace
 from test.topology_custom.test_tablets2 import inject_error_on
 from test.topology_custom.tasks.task_manager_client import TaskManagerClient
 from test.topology_custom.tasks.task_manager_types import TaskStatus, TaskStats

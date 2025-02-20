@@ -4,16 +4,15 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 import logging
-import re
 import time
 
 import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.topology.conftest import skip_mode
-from test.topology.util import (check_token_ring_and_group0_consistency, wait_for_token_ring_and_group0_consistency,
-                                get_coordinator_host, get_coordinator_host_ids, wait_new_coordinator_elected)
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import (check_token_ring_and_group0_consistency, wait_for_token_ring_and_group0_consistency,
+                                       get_coordinator_host, get_coordinator_host_ids, wait_new_coordinator_elected)
 
 
 logger = logging.getLogger(__name__)

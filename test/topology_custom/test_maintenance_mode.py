@@ -9,9 +9,9 @@ from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import cluster_con
+from test.topology_custom.conftest import cluster_con
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import new_test_keyspace
+from test.topology_custom.util import new_test_keyspace
 
 import pytest
 import logging

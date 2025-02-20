@@ -9,8 +9,8 @@ from cassandra.query import SimpleStatement # type: ignore
 from cassandra.cluster import ConsistencyLevel # type: ignore
 from cassandra.protocol import ReadTimeout # type: ignore
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.conftest import skip_mode
-from test.topology.util import new_test_keyspace, reconnect_driver
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import new_test_keyspace, reconnect_driver
 
 
 logger = logging.getLogger(__name__)

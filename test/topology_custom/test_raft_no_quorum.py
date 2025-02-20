@@ -8,9 +8,9 @@ import logging
 import pytest
 import asyncio
 from test.pylib.manager_client import ManagerClient
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 from test.pylib.rest_client import inject_error_one_shot, InjectionHandler
-from test.topology.util import create_new_test_keyspace
+from test.topology_custom.util import create_new_test_keyspace
 
 logger = logging.getLogger(__name__)
 

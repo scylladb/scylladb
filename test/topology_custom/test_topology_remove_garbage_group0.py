@@ -10,7 +10,7 @@ import logging
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import get_token_ring_host_ids, get_current_group0_config, \
+from test.topology_custom.util import get_token_ring_host_ids, get_current_group0_config, \
                                check_token_ring_and_group0_consistency, wait_for_token_ring_and_group0_consistency
 import time
 import pytest

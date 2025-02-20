@@ -17,7 +17,7 @@ from cassandra.pool import Host  # type: ignore # pylint: disable=no-name-in-mod
 from test.pylib.internal_types import ServerInfo
 from test.pylib.random_tables import Column, IntType, TextType
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
-from test.topology.util import reconnect_driver
+from test.topology_custom.util import reconnect_driver
 
 logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_nodes_cluster

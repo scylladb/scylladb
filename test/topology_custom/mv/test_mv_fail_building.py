@@ -5,11 +5,10 @@
 #
 import asyncio
 import pytest
-import time
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_view
-from test.topology.util import new_test_keyspace, reconnect_driver
+from test.topology_custom.util import new_test_keyspace, reconnect_driver
 
 from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore

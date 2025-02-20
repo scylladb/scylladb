@@ -12,7 +12,7 @@ from cassandra.cluster import ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import check_node_log_for_failed_mutations, start_writes
+from test.topology_custom.util import check_node_log_for_failed_mutations, start_writes
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.topology.conftest import cluster_con
+from test.topology_custom.conftest import cluster_con
 
 
 @pytest.mark.asyncio

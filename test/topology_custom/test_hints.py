@@ -18,8 +18,8 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for
 
-from test.topology.conftest import skip_mode
-from test.topology.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace
 
 
 logger = logging.getLogger(__name__)

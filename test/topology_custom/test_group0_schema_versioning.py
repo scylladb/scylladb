@@ -17,7 +17,7 @@ from cassandra.pool import Host # type: ignore
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.log_browsing import ScyllaLogFile
-from test.topology.util import reconnect_driver, wait_until_upgrade_finishes, \
+from test.topology_custom.util import reconnect_driver, wait_until_upgrade_finishes, \
         enter_recovery_state, delete_raft_data_and_upgrade_state, new_test_keyspace
 
 

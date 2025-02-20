@@ -14,7 +14,7 @@ import logging
 
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import start_writes
-from test.topology.util import create_new_test_keyspace
+from test.topology_custom.util import create_new_test_keyspace
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@
 Test consistency of schema changes with server hard stop.
 """
 import time
-from test.topology.util import wait_for_token_ring_and_group0_consistency
+from test.topology_custom.util import wait_for_token_ring_and_group0_consistency
 import pytest
 
 pytestmark = pytest.mark.prepare_3_nodes_cluster

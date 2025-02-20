@@ -11,7 +11,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
-from test.topology.conftest import skip_mode
+from test.topology_custom.conftest import skip_mode
 import pytest
 import logging
 import time

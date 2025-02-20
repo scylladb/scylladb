@@ -8,7 +8,7 @@ import time
 import pytest
 from cassandra.protocol import InvalidRequest, ReadFailure                         # type: ignore
 from cassandra.query import SimpleStatement                                        # type: ignore
-from test.topology.util import wait_for_token_ring_and_group0_consistency
+from test.topology_custom.util import wait_for_token_ring_and_group0_consistency
 
 pytestmark = pytest.mark.prepare_3_nodes_cluster
 

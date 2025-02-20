@@ -14,8 +14,8 @@ from cassandra.cluster import NoHostAvailable  # type: ignore
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.conftest import skip_mode
-from test.topology.util import new_test_keyspace, new_test_table
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
 pytestmark = pytest.mark.prepare_3_nodes_cluster

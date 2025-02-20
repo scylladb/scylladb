@@ -6,8 +6,8 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.topology.conftest import skip_mode
-from test.topology.util import check_token_ring_and_group0_consistency, new_test_keyspace
+from test.topology_custom.conftest import skip_mode
+from test.topology_custom.util import check_token_ring_and_group0_consistency, new_test_keyspace
 
 import pytest
 import asyncio

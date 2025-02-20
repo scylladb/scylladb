@@ -5,15 +5,12 @@
 #
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.pylib.internal_types import ServerInfo
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
-from test.topology.util import check_token_ring_and_group0_consistency, reconnect_driver
+from test.pylib.util import wait_for_cql_and_get_hosts
+from test.topology_custom.util import check_token_ring_and_group0_consistency, reconnect_driver
 from test.topology_custom.test_topology_ops import check_node_log_for_failed_mutations, start_writes
 
-from cassandra.cluster import Session, ConsistencyLevel
-from cassandra.query import SimpleStatement
+from cassandra.cluster import ConsistencyLevel
 
-import asyncio
 import time
 import pytest
 import logging

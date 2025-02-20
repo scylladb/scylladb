@@ -11,7 +11,7 @@ import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
-from test.topology.util import wait_for_token_ring_and_group0_consistency
+from test.topology_custom.util import wait_for_token_ring_and_group0_consistency
 import pytest
 from pytest import FixtureRequest
 import platform

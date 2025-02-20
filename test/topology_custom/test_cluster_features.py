@@ -17,7 +17,7 @@ from cassandra.pool import Host        # type: ignore # pylint: disable=no-name-
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature, get_supported_features, get_enabled_features
-from test.topology.util import reconnect_driver
+from test.topology_custom.util import reconnect_driver
 import pytest
 
 
