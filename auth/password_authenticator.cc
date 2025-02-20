@@ -110,7 +110,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
                     {std::move(salted_hash), username},
                     cql3::query_processor::cache_internal::no).discard_result();
         }
-       plogger.info("Finished migrating legacy authentication metadata.");
+        plogger.info("Finished migrating legacy authentication metadata.");
     } catch (...) {
         plogger.error("Encountered an error during migration!");
         throw;
