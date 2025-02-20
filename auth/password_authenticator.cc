@@ -93,28 +93,28 @@ future<> password_authenticator::migrate_legacy_metadata() const {
     plogger.info("Starting migration of legacy authentication metadata.");
     static const sstring query = seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, legacy_table_name);
 
-    return _qp.execute_internal(
+    try {
+        auto results = co_await _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
             internal_distributed_query_state(),
-            cql3::query_processor::cache_internal::no).then([this](::shared_ptr<cql3::untyped_result_set> results) {
-        return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
+            cql3::query_processor::cache_internal::no);
+        for (const auto& row : *results) {
             auto username = row.get_as<sstring>("username");
             auto salted_hash = row.get_as<sstring>(SALTED_HASH);
             static const auto query = update_row_query();
-            return _qp.execute_internal(
+            co_await _qp.execute_internal(
                     query,
                     consistency_for_user(username),
                     internal_distributed_query_state(),
                     {std::move(salted_hash), username},
                     cql3::query_processor::cache_internal::no).discard_result();
-        }).finally([results] {});
-    }).then([] {
+        }
        plogger.info("Finished migrating legacy authentication metadata.");
-    }).handle_exception([](std::exception_ptr ep) {
+    } catch (...) {
         plogger.error("Encountered an error during migration!");
-        std::rethrow_exception(ep);
-    });
+        throw;
+    }
 }
 
 future<> password_authenticator::create_default_if_missing() {
