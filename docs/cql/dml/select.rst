@@ -246,6 +246,9 @@ The ``LIMIT`` option to a ``SELECT`` statement limits the number of rows returne
 LIMIT``  option (introduced in ScyllaDB 3.1) limits the number of rows returned for a given **partition** by the query. Note that both types of limit can be
 used in the same statement.
 
+.. note::
+    The ``LIMIT`` and ``PER PARTITION LIMIT`` are applied to the output of the aggregate functions.
+
 Examples:
 
 The Partition Key in the following table is ``client_id``, and the clustering key is ``when``.
@@ -396,7 +399,7 @@ of the SELECT statement.
  - GROUP BY is then applied to create groups.
  - Aggregate functions in the SELECT clause are applied to groups, or to the entire query if GROUP BY was not specified.
  - If there are selectors that are not aggregate functions, then the first value in the group is selected.
- - If specified, PER PARTITION LIMIT is applied to each partition.
+ - If specified, PER PARTITION LIMIT is applied to each partition result.
  - If specified, LIMIT is applied to the entire query result.
 
 .. note:: The server may use a different execution plan, as long as it arrives at the same result. For
