@@ -262,10 +262,13 @@ public:
     }
 };
 
-std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}) {
+std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}, std::optional<sstring> replication = {}) {
     std::unordered_map<sstring, sstring> params;
     if (type) {
         params["type"] = *type;
+    }
+    if (replication) {
+        params["replication"] = *replication;
     }
     auto keyspaces_json = client.get("/storage_service/keyspaces", std::move(params));
     std::vector<sstring> keyspaces;
@@ -1427,10 +1430,17 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     std::vector<sstring> keyspaces, tables;
     if (vm.contains("keyspace")) {
         auto res = parse_keyspace_and_tables(client, vm, true);
+        auto uses_tablets = keyspace_uses_tablets(client, res.keyspace);
+        if (uses_tablets) {
+            fmt::print("WARNING: Do not use nodetool repair for tablet keyspaces!");
+        }
         keyspaces.push_back(std::move(res.keyspace));
         tables = std::move(res.tables);
     } else {
         keyspaces = get_keyspaces(client, "non_local_strategy");
+        if (!get_keyspaces(client, "non_local_strategy", "tablets").empty()) {
+            fmt::print("WARNING: Do not use nodetool repair for tablet keyspaces!");
+        }
     }
 
     if (vm.contains("partitioner-range") && (vm.contains("in-dc") || vm.contains("in-hosts"))) {
