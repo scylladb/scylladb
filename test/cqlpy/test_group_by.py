@@ -191,13 +191,11 @@ def test_group_by_count_with_limit(cql, table1):
 def test_group_by_count_with_pplimit(cql, table1):
     # Without per-partition limit we get 4 results, 2 from each partition:
     assert {(0,0,2), (0,1,2), (1,0,2), (1,1,2)} == set(cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1'))
-    # With per-partition limit of 2, no change:
-    assert {(0,0,2), (0,1,2), (1,0,2), (1,1,2)} == set(cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1 PER PARTITION LIMIT 2'))
-    # With per-partition limit of 1, we should get just two of the results -
-    # the lower clustering key in each.
-    # In issue #5363 we wrongly got here all four results (the PER PARTITION
-    # LIMIT appears to have been ignored)
-    assert {(0,0,2), (1,0,2)} == set(cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1 PER PARTITION LIMIT 1'))
+    # #9879 - PER PARTITION LIMIT is not allowed with aggregate queries
+    with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+        cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1 PER PARTITION LIMIT 2')
+    with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+        cql.execute(f'SELECT p,c1,count(*) FROM {table1} GROUP BY p,c1 PER PARTITION LIMIT 1')
 
 def test_group_by_sum(cql, table1):
     assert {(0,10), (1,26)} == set(cql.execute(f'SELECT p,sum(v) FROM {table1} GROUP BY p'))

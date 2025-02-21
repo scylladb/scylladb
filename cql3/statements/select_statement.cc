@@ -2014,6 +2014,10 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         validate_distinct_selection(*schema, *selection, *restrictions);
     }
 
+    if (selection->contains_aggregate_functions() && _per_partition_limit) {
+        throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries");
+    }
+
     select_statement::ordering_comparator_type ordering_comparator;
     bool is_reversed_ = false;
 

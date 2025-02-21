@@ -153,6 +153,8 @@ public:
 
     virtual bool is_aggregate() const = 0;
 
+    virtual bool contains_aggregate_functions() const = 0;
+
     virtual bool is_count() const {return false;}
 
     virtual bool is_reducible() const {return false;}

@@ -120,6 +120,7 @@ public:
 
     virtual bool is_wildcard() const override { return _is_wildcard; }
     virtual bool is_aggregate() const override { return false; }
+    virtual bool contains_aggregate_functions() const override { return false; }
 protected:
     class simple_selectors : public selectors {
     public:
@@ -243,6 +244,16 @@ public:
 
     virtual bool is_aggregate() const override {
         return !_inner_loop.empty();
+    }
+
+    virtual bool contains_aggregate_functions() const override {
+        // We don't count GROUP BY queries as aggregate queries unless they
+        // have an aggregate function in them.
+        static const auto first_function_name = functions::aggregate_fcts::first_function_name();
+        size_t count = std::ranges::count_if(used_functions(), [] (const shared_ptr<functions::function>& f) {
+            return f->is_aggregate() && f->name() != first_function_name;
+        });
+        return count > 0;
     }
 
     virtual bool is_count() const override {
