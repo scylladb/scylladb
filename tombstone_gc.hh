@@ -84,10 +84,6 @@ public:
 
     explicit tombstone_gc_state(per_table_history_maps* maps) noexcept : _reconcile_history_maps(maps) {}
 
-    explicit operator bool() const noexcept {
-        return _reconcile_history_maps != nullptr;
-    }
-
     void set_gc_time_min_source(gc_time_min_source src) {
         _gc_min_source = std::move(src);
     }
