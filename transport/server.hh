@@ -36,13 +36,16 @@
 #include "utils/chunked_vector.hh"
 #include "exceptions/coordinator_result.hh"
 #include "db/operation_type.hh"
-#include "db/config.hh"
 #include "service/maintenance_mode.hh"
 
 namespace cql3 {
 
 class query_processor;
 
+}
+
+namespace db {
+class config;
 }
 
 namespace scollectd {

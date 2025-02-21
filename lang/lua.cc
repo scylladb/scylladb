@@ -19,7 +19,6 @@
 #include <seastar/core/align.hh>
 #include <lua.hpp>
 #include "seastarx.hh"
-#include "db/config.hh"
 
 // Lua 5.4 added an extra parameter to lua_resume
 
