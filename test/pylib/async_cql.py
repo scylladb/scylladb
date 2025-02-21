@@ -60,10 +60,10 @@ def _wrap_future(driver_response_future: ResponseFuture, all_pages: bool = False
                 loop.call_soon_threadsafe(aio_future.set_result, None)
             else:
                 _result.extend(result)
-                if not driver_response_future.has_more_pages or not all_pages:
-                    loop.call_soon_threadsafe(aio_future.set_result, _result)
-                else:
+                if driver_response_future.has_more_pages and all_pages:
                     driver_response_future.start_fetching_next_page()
+                else:
+                    loop.call_soon_threadsafe(aio_future.set_result, _result)
 
     def on_error(exception, *_):
         if not aio_future.done():
