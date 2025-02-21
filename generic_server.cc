@@ -261,21 +261,19 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 }
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
-    return repeat([this, which, keepalive, server_addr] {
+    for (;;) {
         seastar::gate::holder holder(_gate);
-        return _listeners[which].accept().then_wrapped([this, keepalive, server_addr, holder = std::move(holder)] (future<accept_result> f_cs_sa) mutable {
+        try {
+            accept_result cs_sa = co_await _listeners[which].accept();
             if (_gate.is_closed()) {
-                f_cs_sa.ignore_ready_future();
-                return stop_iteration::yes;
+                break;
             }
-            auto cs_sa = f_cs_sa.get();
             auto fd = std::move(cs_sa.connection);
             auto addr = std::move(cs_sa.remote_address);
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
                     _conns_cpu_concurrency_semaphore, {});
-
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
                 return advertise_new_connection(conn); // Notify any listeners about new connection.
@@ -300,12 +298,10 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                     return unadvertise_connection(conn);
                 });
             });
-            return stop_iteration::no;
-        }).handle_exception([this] (auto ep) {
-            _logger.debug("accept failed: {}", ep);
-            return stop_iteration::no;
-        });
-    });
+        } catch (...) {
+            _logger.debug("accept failed: {}", std::current_exception());
+        }
+    }
 }
 
 future<>
