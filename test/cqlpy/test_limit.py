@@ -29,6 +29,7 @@
 
 import pytest
 from .util import unique_key_int, new_test_table
+from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -148,3 +149,19 @@ def test_limit_single_partition_scan_with_tombstones(cql, table1):
         if i%2 == 0:
             cql.execute(dstmt, [i])
     assert [1,3,5,7] == [x.c for x in cql.execute(f'SELECT c from {table1} WHERE p={p} LIMIT 4')]
+
+# Check that LIMIT must be strictly positive.
+def test_limit_must_be_positive(cql, table1):
+    stmt = cql.prepare(f'SELECT c from {table1} LIMIT ?')
+    with pytest.raises(InvalidRequest, match="LIMIT must be strictly positive"):
+        cql.execute(stmt, [0])
+    with pytest.raises(InvalidRequest, match="LIMIT must be strictly positive"):
+        cql.execute(stmt, [-1])
+
+# Check that PER PARTITION LIMIT must be strictly positive.
+def test_per_partition_limit_must_be_positive(cql, table1):
+    stmt = cql.prepare(f'SELECT c from {table1} PER PARTITION LIMIT ?')
+    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT must be strictly positive"):
+        cql.execute(stmt, [0])
+    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT must be strictly positive"):
+        cql.execute(stmt, [-1])
