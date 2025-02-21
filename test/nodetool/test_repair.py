@@ -51,7 +51,7 @@ def _remove_log_timestamp(res):
 
 def test_repair_all_single_keyspace(nodetool):
     res = nodetool("repair", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"}, response=["ks1"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=["ks1"]),
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=[]),
         expected_request("GET", "/storage_service/keyspaces", response=["ks1"], multiple=expected_request.ANY),
         JMX_COLUMN_FAMILIES_REQUEST,
@@ -79,7 +79,7 @@ Repair session 1 finished
 
 def test_repair_all_two_keyspaces(nodetool):
     res = nodetool("repair", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"},
                          response=["ks1", "ks2"]),
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=[]),
         expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.ANY, response=["ks1", "ks2"]),
@@ -268,7 +268,7 @@ def test_repair_all_three_keyspaces_failed(nodetool):
     """Check that given three keyspaces to repair, if the second one fails, the
     third one isn't even started."""
     expected_requests = [
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"},
                          response=["ks1", "ks2", "ks3"]),
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"},
                          response=[]),
@@ -593,3 +593,42 @@ def test_repair_pr_and_hosts(nodetool):
         ]},
         ["error: Primary range repair should be performed on all nodes in the cluster.",
          "error processing arguments: primary range repair should be performed on all nodes in the cluster"])
+
+def test_repair_all_with_tablet_keyspace(nodetool):
+    res = nodetool("repair", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=["ks1"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=["ks2"]),
+        expected_request("GET", "/storage_service/keyspaces", response=["ks1"], multiple=expected_request.ANY),
+        JMX_COLUMN_FAMILIES_REQUEST,
+        JMX_STREAM_MANAGER_REQUEST,
+        expected_request(
+            "POST",
+            "/storage_service/repair_async/ks1",
+            params={
+                "trace": "false",
+                "ignoreUnreplicatedKeyspaces": "false",
+                "parallelism": "parallel",
+                "incremental": "false",
+                "pullRepair": "false",
+                "primaryRange": "false",
+                "jobThreads": "1"},
+            response=1),
+        expected_request("GET", "/storage_service/repair_async/ks1", params={"id": "1"}, response="SUCCESSFUL")])
+
+    assert "WARNING: Do not use nodetool repair for tablet keyspaces! To repair tablet keyspaces use nodetool cluster repair." in res.stdout
+
+    assert _remove_log_timestamp(res.stdout) == """\
+Starting repair command #1, repairing 1 ranges for keyspace ks1 (parallelism=SEQUENTIAL, full=true)
+Repair session 1
+Repair session 1 finished
+"""
+
+def test_repair_keyspace(nodetool):
+    check_nodetool_fails_with(
+        nodetool,
+        ("repair", "ks"),
+        {"expected_requests": [
+                expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        ]},
+        ["error processing arguments: nodetool repair repairs only vnode keyspaces! To repair tablet keyspaces use nodetool cluster repair."])
