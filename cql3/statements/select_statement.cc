@@ -2005,6 +2005,13 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                      ? selection::selection::wildcard(schema)
                      : selection::selection::from_selectors(db, schema, keyspace(), levellized_prepared_selectors);
 
+    // Cassandra 5.0.2 disallows PER PARTITION LIMIT with aggregate queries
+    // but only if GROUP BY is not used.
+    // See #9879 for more details.
+    if (selection->is_aggregate() && _per_partition_limit && _group_by_columns.empty()) {
+        throw exceptions::invalid_request_exception("PER PARTITION LIMIT is not allowed with aggregate queries.");
+    }
+
     auto restrictions = prepare_restrictions(db, schema, ctx, selection, for_view, _parameters->allow_filtering(),
             restrictions::check_indexes(!_parameters->is_mutation_fragments()));
 
