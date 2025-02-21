@@ -419,8 +419,8 @@ select_statement::do_execute(query_processor& qp,
             options.get_timestamp(state));
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
     logger.trace("Executing read query (reversed {}): table schema {}, query schema {}",
-        slice.is_reversed(), _schema->version(), _query_schema->version());
-    tracing::trace(state.get_trace_state(), "Executing read query (reversed {})", slice.is_reversed());
+        command->slice.is_reversed(), _schema->version(), _query_schema->version());
+    tracing::trace(state.get_trace_state(), "Executing read query (reversed {})", command->slice.is_reversed());
 
     int32_t page_size = options.get_page_size();
 
