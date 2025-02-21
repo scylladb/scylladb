@@ -73,6 +73,8 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
             cls.append(ConsistencyLevel.LOCAL_ONE)
 
         for cl in cls:
+            logging.info('Testing with rf=%s, consistency_level=%s', rf, cl)
+
             insert_query = SimpleStatement(f'INSERT INTO {ks_names[rf]}.tbl (pk, v) VALUES (1, 1)',
                                            consistency_level=cl)
             await dc1_cql.run_async(insert_query)
@@ -82,7 +84,9 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
                 continue  # EACH_QUORUM is supported only for writes
 
             select_query = SimpleStatement(f'SELECT * FROM {ks_names[rf]}.tbl', consistency_level=cl)
-            dc1_result = list((await dc1_cql.run_async(select_query))[0])
-            dc2_result = list((await dc2_cql.run_async(select_query))[0])
-            assert dc1_result == [1, 1]
-            assert dc2_result == [1, 1]
+            dc1_result_set = await dc1_cql.run_async(select_query)
+            dc2_result_set = await dc2_cql.run_async(select_query)
+            assert dc1_result_set
+            assert list(dc1_result_set[0]) == [1, 1]
+            assert dc2_result_set
+            assert list(dc2_result_set[0]) == [1, 1]
