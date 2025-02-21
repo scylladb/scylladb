@@ -14,7 +14,6 @@
 #include "vint-serialization.hh"
 #include "sstables/types.hh"
 #include "sstables/mx/types.hh"
-#include "db/config.hh"
 #include "mutation/atomic_cell.hh"
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"

@@ -15,6 +15,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/util/closeable.hh>
+#include "db/config.hh"
 #include "gms/feature_service.hh"
 #include "message/messaging_service.hh"
 #include "gms/gossip_digest_syn.hh"

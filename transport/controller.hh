@@ -13,7 +13,6 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 
-#include "db/config.hh"
 #include "protocol_server.hh"
 #include "service/maintenance_mode.hh"
 

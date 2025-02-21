@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "db/config.hh"
 #include "messaging_service_fwd.hh"
 #include "msg_addr.hh"
 #include <seastar/core/sharded.hh>
@@ -50,15 +49,6 @@ namespace gms {
     class gossip_get_endpoint_states_request;
     class gossip_get_endpoint_states_response;
     class feature_service;
-}
-
-namespace db {
-class seed_provider_type;
-class config;
-}
-
-namespace db::view {
-class update_backlog;
 }
 
 namespace locator {
