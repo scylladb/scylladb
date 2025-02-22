@@ -423,15 +423,6 @@ class load_balancer {
             co_await utils::clear_gently(candidates_all_tables);
         }
 
-        bool has_candidates() const {
-            for (const auto& [table, tablets] : candidates) {
-                if (!tablets.empty()) {
-                    return true;
-                }
-            }
-            return !candidates_all_tables.empty();
-        }
-
         size_t candidate_count() const {
             size_t result = 0;
             for (const auto& [table, tablets] : candidates) {
@@ -694,6 +685,7 @@ class load_balancer {
     table_grouping _table_grouping;
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
+    std::unordered_set<global_tablet_id> _erased_candidates;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -1661,12 +1653,18 @@ public:
         return rand_int() % shard_count;
     }
 
-    table_id pick_table(const table_candidates_map& candidates) {
+    bool is_candidate_erased(const migration_tablet_set& candidate) {
+        auto is_tablet_erased = [this] (global_tablet_id t) { return _erased_candidates.contains(t); };
+        return std::ranges::any_of(candidate.tablets(), is_tablet_erased);
+    }
+
+    std::optional<table_id> pick_table(table_candidates_map& candidates) {
         if (!_use_table_aware_balancing) {
             on_internal_error(lblogger, "pick_table() called when table-aware balancing is disabled");
         }
         size_t total = 0;
         for (auto&& [table, tablets] : candidates) {
+            std::erase_if(tablets, [this] (const migration_tablet_set& cand) { return is_candidate_erased(cand); });
             total += tablets.size();
         }
         ssize_t candidate_index = rand_int() % total;
@@ -1676,16 +1674,45 @@ public:
                 return table;
             }
         }
-        on_internal_error(lblogger, "No candidate table");
+        return std::nullopt;
     }
 
-    migration_tablet_set peek_candidate(shard_load& shard_info) {
-        if (_use_table_aware_balancing) {
-            auto table = pick_table(shard_info.candidates);
-            return *shard_info.candidates[table].begin();
+    std::optional<migration_tablet_set> peek_candidate(std::unordered_set<migration_tablet_set>& candidates) {
+        for (auto it = candidates.begin(); it != candidates.end();) {
+            if (is_candidate_erased(*it)) {
+                it = candidates.erase(it);
+                continue;
+            }
+            return *it;
         }
+        return std::nullopt;
+    }
 
-        return *shard_info.candidates_all_tables.begin();
+    std::optional<migration_tablet_set> peek_candidate(shard_load& shard_info, table_id table) {
+        return peek_candidate(shard_info.candidates[table]);
+    }
+
+    std::optional<migration_tablet_set> peek_candidate(shard_load& shard_info) {
+        if (_use_table_aware_balancing) {
+            return pick_table(shard_info.candidates).and_then([&] (table_id table) {
+                return peek_candidate(shard_info, table);
+            });
+        } else {
+            return peek_candidate(shard_info.candidates_all_tables);
+        }
+    }
+
+    bool has_candidates(shard_load& shard_info) {
+        if (_use_table_aware_balancing) {
+            for (const auto& [table, _tablets] : shard_info.candidates) {
+                if (peek_candidate(shard_info, table)) {
+                    return true;
+                }
+            }
+            return false;
+        } else {
+            return bool(peek_candidate(shard_info));
+        }
     }
 
     // Evaluates impact on load balance of migrating a single tablet of a given table to dst.
@@ -1775,34 +1802,30 @@ public:
         };
     }
 
-    future<migration_candidate> peek_candidate(node_load_map& nodes, shard_load& shard_info, tablet_replica src, tablet_replica dst) {
+    future<std::optional<migration_candidate>> peek_candidate(node_load_map& nodes, shard_load& shard_info, tablet_replica src, tablet_replica dst) {
         if (!_use_table_aware_balancing) {
-            co_return migration_candidate{peek_candidate(shard_info), src, dst, migration_badness{}};
-        }
-
-        if (shard_info.candidates.empty()) {
-            on_internal_error(lblogger, format("No candidates for migration on {}", src));
+            co_return peek_candidate(shard_info).transform([src, dst] (migration_tablet_set cand) {
+                    return migration_candidate{std::move(cand), src, dst, migration_badness{}};
+                });
         }
 
         std::optional<migration_candidate> best_candidate;
 
         for (auto&& [table, tablets] : shard_info.candidates) {
-            if (!tablets.empty()) {
-                auto badness = evaluate_candidate(nodes, table, src, dst);
-                auto candidate = migration_candidate{*tablets.begin(), src, dst, badness};
-                lblogger.trace("Candidate: {}", candidate);
-                if (!best_candidate || candidate.badness < best_candidate->badness) {
-                    best_candidate = candidate;
-                }
+            auto candidate_opt = peek_candidate(shard_info, table);
+            if (!candidate_opt) {
+                continue;
+            }
+            auto badness = evaluate_candidate(nodes, table, src, dst);
+            auto candidate = migration_candidate{*candidate_opt, src, dst, badness};
+            lblogger.trace("Candidate: {}", candidate);
+            if (!best_candidate || candidate.badness < best_candidate->badness) {
+                best_candidate = candidate;
             }
         }
 
-        if (!best_candidate) {
-            on_internal_error(lblogger, format("No candidates for migration on {}", src));
-        }
-
-        lblogger.trace("Best candidate: {}", *best_candidate);
-        co_return *best_candidate;
+        lblogger.trace("Best candidate: {}", best_candidate);
+        co_return best_candidate;
     }
 
     void erase_candidate(shard_load& shard_info, const migration_tablet_set& tablets) {
@@ -1818,33 +1841,8 @@ public:
     }
 
     void erase_candidates(node_load_map& nodes, const migration_tablet_set& tablets) {
-        auto& tmeta = _tm->tablets();
         for (auto tablet : tablets.tablets()) {
-            auto& src_tinfo = tmeta.get_tablet_map(tablet.table).get_tablet_info(tablet.tablet);
-            for (auto&& r : src_tinfo.replicas) {
-                if (nodes.contains(r.host)) {
-                    lblogger.trace("Erasing tablet {} from {}", tablet, r);
-
-                    auto& shard_info = nodes[r.host].shards[r.shard];
-
-                    if (_use_table_aware_balancing) {
-                        for (auto table : tablets.tables()) {
-                            std::erase_if(shard_info.candidates[table],
-                                    [&tablet] (const migration_tablet_set& c) {
-                                        return std::ranges::any_of(c.tablets(), [&tablet] (const auto& c_tablet) { return c_tablet == tablet; });
-                                    });
-                            if (shard_info.candidates[table].empty()) {
-                                shard_info.candidates.erase(table);
-                            }
-                        }
-                    } else {
-                        std::erase_if(shard_info.candidates_all_tables,
-                                [&tablet] (const migration_tablet_set& c) {
-                                    return std::ranges::any_of(c.tablets(), [&tablet] (const auto& c_tablet) { return c_tablet == tablet; });
-                                });
-                    }
-                }
-            }
+            _erased_candidates.insert(tablet);
         }
     }
 
@@ -2019,16 +2017,15 @@ public:
                 break;
             }
 
-            if (!src_info.has_candidates()) {
+            auto candidate = co_await peek_candidate(nodes, src_info, tablet_replica{host, src}, tablet_replica{host, dst});
+            if (!candidate) {
                 lblogger.debug("No more candidates on shard {} of {}", src, host);
                 max_load = std::max(max_load, src_info.tablet_count);
                 src_shards.pop_back();
                 push_back.cancel();
                 continue;
             }
-
-            auto candidate = co_await peek_candidate(nodes, src_info, tablet_replica{host, src}, tablet_replica{host, dst});
-            auto tablets = candidate.tablets;
+            auto tablets = candidate->tablets;
 
             // Recheck convergence to avoid oscillations if co-located tablets are being migrated together.
             if (!shuffle && (src == dst || !check_convergence(src_info, dst_info, tablets))) {
@@ -2254,7 +2251,7 @@ public:
     //   nodes_by_load_dst.back().id == result.dst.host
     //   result.tablet is removed from candidate lists in src_node_info.
     //
-    future<migration_candidate> pick_candidate(node_load_map& nodes,
+    future<std::optional<migration_candidate>> pick_candidate(node_load_map& nodes,
                                                node_load& src_node_info,
                                                node_load& target_info,
                                                tablet_replica src,
@@ -2263,7 +2260,7 @@ public:
                                                bool drain_skipped)
     {
         auto get_candidate = [this, drain_skipped, &nodes, &src_node_info] (tablet_replica src, tablet_replica dst)
-                -> future<migration_candidate> {
+                -> future<std::optional<migration_candidate>> {
             if (drain_skipped) {
                 auto source_tablets = src_node_info.skipped_candidates.back().tablets;
                 auto badness = evaluate_candidate(nodes, source_tablets.table(), src, dst);
@@ -2274,7 +2271,11 @@ public:
             }
         };
 
-        migration_candidate min_candidate = co_await get_candidate(src, dst);
+        auto min_candidate_opt = co_await get_candidate(src, dst);
+        if (!min_candidate_opt) {
+            co_return std::nullopt;
+        }
+        migration_candidate min_candidate = *min_candidate_opt;
 
         // Given src as the source replica, evaluate all destinations.
         // Updates min_candidate with the best candidate, if better is found.
@@ -2387,8 +2388,11 @@ public:
                         continue;
                     }
 
-                    auto tablet = *src_node_info.shards[min_src->shard].candidates[table].begin();
-                    co_await evaluate_targets(tablet, *min_src, min_src_badness);
+                    auto tablet = peek_candidate(src_node_info.shards[min_src->shard], table);
+                    if (!tablet) {
+                        continue;
+                    }
+                    co_await evaluate_targets(*tablet, *min_src, min_src_badness);
                     if (!min_candidate.badness.is_bad()) {
                         break;
                     }
@@ -2571,7 +2575,7 @@ public:
                 auto src_shard = src_node_info.shards_by_load.back();
                 src = tablet_replica {src_host, src_shard};
                 auto&& src_shard_info = src_node_info.shards[src_shard];
-                if (!src_shard_info.has_candidates()) {
+                if (!has_candidates(src_shard_info)) {
                     lblogger.debug("shard {} ran out of candidates with {} tablets remaining.", src,
                                    src_shard_info.tablet_count);
                     src_node_info.shards_by_load.pop_back();
@@ -2645,8 +2649,12 @@ public:
             // Pick tablet movement.
 
             // May choose a different source shard than src.shard or different destination host/shard than dst.
-            auto candidate = co_await pick_candidate(nodes, src_node_info, target_info, src, dst, nodes_by_load_dst,
+            auto candidate_opt = co_await pick_candidate(nodes, src_node_info, target_info, src, dst, nodes_by_load_dst,
                                                      drain_skipped);
+            if (!candidate_opt) {
+                break;
+            }
+            auto candidate = *candidate_opt;
             auto source_tablets = candidate.tablets;
             src = candidate.src;
             dst = candidate.dst;
