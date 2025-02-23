@@ -763,6 +763,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Throttles all outbound streaming file transfers on a node to the specified throughput. Cassandra does mostly sequential I/O when streaming data during bootstrap or repair, which can lead to saturating the network connection and degrading client (RPC) performance.")
     , inter_dc_stream_throughput_outbound_megabits_per_sec(this, "inter_dc_stream_throughput_outbound_megabits_per_sec", value_status::Unused, 0,
         "Throttles all streaming file transfer between the data centers. This setting allows throttles streaming throughput betweens data centers in addition to throttling all network stream traffic as configured with stream_throughput_outbound_megabits_per_sec.")
+    , streaming_min_shares(this, "streaming_min_shares", liveness::LiveUpdate, value_status::Used, 200,
+        "Set the number of shares for the streaming/maintenance scheduling group. Do not set this unless you know what you are doing and suspect a problem in streaming. Note that this scheduling group is used for other background maintenance operations, like major compaction, repair, backup, and so on.")
     , stream_io_throughput_mb_per_sec(this, "stream_io_throughput_mb_per_sec", liveness::LiveUpdate, value_status::Used, 0,
         "Throttles streaming I/O to the specified total throughput (in MiBs/s) across the entire system. Streaming I/O includes the one performed by repair and both RBNO and legacy topology operations such as adding or removing a node. Setting the value to 0 disables stream throttling.")
     , stream_plan_ranges_fraction(this, "stream_plan_ranges_fraction", liveness::LiveUpdate, value_status::Used, 0.1,
