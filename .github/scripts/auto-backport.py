@@ -133,6 +133,12 @@ def with_github_keyword_prefix(repo, pr):
     pattern = rf"(?:fix(?:|es|ed))\s*:?\s*(?:(?:(?:{repo.full_name})?#)|https://github\.com/{repo.full_name}/issues/)(\d+)"
     match = re.findall(pattern, pr.body, re.IGNORECASE)
     if not match:
+        for commit in pr.get_commits():
+            match = re.findall(pattern, commit.commit.message, re.IGNORECASE)
+            if match:
+                print(f'{pr.number} has a valid close reference in commit message {commit.sha}')
+                break
+    if not match:
         print(f'No valid close reference for {pr.number}')
         comment = f':warning:  @{pr.user.login} PR body does not contain a Fixes reference to an issue '
         comment += ' and can not be backported\n\n'
