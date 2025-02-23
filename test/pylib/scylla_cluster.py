@@ -29,7 +29,7 @@ from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely
+from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from functools import partial
 import aiohttp
@@ -276,8 +276,11 @@ class ScyllaServer:
                  server_encryption: str) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
+        xdist_worker_id = get_xdist_worker_id()
         # this variable needed to make a cleanup after server is not needed anymore
-        self.maintenance_socket_dir = tempfile.TemporaryDirectory(prefix=f"scylladb-{self.server_id}-test.py-")
+        self.maintenance_socket_dir = tempfile.TemporaryDirectory(
+            prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-"
+        )
         self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
@@ -292,7 +295,7 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
-        shortname = f"scylla-{self.server_id}"
+        shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
         self.workdir = self.vardir / shortname
         self.log_filename = self.workdir.with_suffix(".log")
         self.config_filename = self.workdir / "conf/scylla.yaml"
