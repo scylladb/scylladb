@@ -30,6 +30,7 @@ from test import ALL_MODES, DEBUG_MODES, TOP_SRCDIR, TESTDIR
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.resource_gather import get_resource_gather
+from test.pylib.util import get_xdist_worker_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -303,7 +304,9 @@ class Test:
         self.suite = suite
         self.allure_dir = self.suite.log_dir / 'allure'
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname.replace("/", "_"), self.id)
+        self.uname = f"{self.suite.name}.{self.shortname.replace('/', '_')}.{self.id}"
+        if xdist_worker_id := get_xdist_worker_id():
+            self.uname = f"{xdist_worker_id}.{self.uname}"
         self.log_filename = self.suite.log_dir / f"{self.uname}.log"
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
