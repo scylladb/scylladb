@@ -153,13 +153,6 @@ struct migration_badness {
     bool operator<=>(const migration_badness& other) const = default;
 };
 
-struct sibling_tablets {
-    global_tablet_id left_tablet;
-    global_tablet_id right_tablet;
-
-    auto operator<=>(const sibling_tablets&) const = default;
-};
-
 struct colocated_tablets {
     std::vector<global_tablet_id> tablets;
 
@@ -173,7 +166,7 @@ struct colocated_tablets {
 // work to preserve the co-location by migrating those replicas to same
 // destination.
 struct migration_tablet_set {
-    std::variant<global_tablet_id, sibling_tablets, colocated_tablets> tablet_s;
+    std::variant<global_tablet_id, colocated_tablets> tablet_s;
 
     // This method doesn't make much sense anymore since when we have the
     // colocated_tablets variant which has tablets from different tables and
@@ -183,7 +176,6 @@ struct migration_tablet_set {
         return std::visit(
             overloaded_functor{
                 [](global_tablet_id t) { return t.table; },
-                [](sibling_tablets t) { return t.left_tablet.table; },
                 [](const colocated_tablets& t) { return t.tablets.begin()->table; },
             },
             tablet_s);
@@ -195,7 +187,6 @@ struct migration_tablet_set {
         return std::visit(
             overloaded_functor{
                 [](global_tablet_id t) { return table_small_vector{t.table}; },
-                [](sibling_tablets t) { return table_small_vector{t.left_tablet.table}; },
                 [](const colocated_tablets& t) {
                     return t.tablets | std::views::transform(std::mem_fn(&global_tablet_id::table)) | std::ranges::to<table_small_vector>();
                 }
@@ -210,18 +201,11 @@ struct migration_tablet_set {
             overloaded_functor{
                 [](global_tablet_id t) {
                     return tablet_small_vector{t}; },
-                [](sibling_tablets t) {
-                    return tablet_small_vector{t.left_tablet, t.right_tablet};
-                },
                 [](const colocated_tablets& t) {
                     return tablet_small_vector(t.tablets.begin(), t.tablets.end());
                 },
             },
             tablet_s);
-    }
-
-    bool siblings() const {
-        return std::holds_alternative<sibling_tablets>(tablet_s);
     }
 
     bool colocated() const {
@@ -252,9 +236,6 @@ template<>
 struct fmt::formatter<service::migration_tablet_set> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::migration_tablet_set& tablet_set, FormatContext& ctx) const {
-        if (tablet_set.siblings()) {
-            return fmt::format_to(ctx.out(), "{{siblings: {}}}", tablet_set.tablets());
-        }
         if (tablet_set.colocated()) {
             return fmt::format_to(ctx.out(), "{{colocated: {}}}", tablet_set.tablets());
         }
@@ -308,14 +289,6 @@ struct table_grouping {
 namespace std {
 
 using namespace service;
-
-template <>
-struct hash<sibling_tablets> {
-    size_t operator()(const sibling_tablets& id) const {
-        return utils::hash_combine(std::hash<global_tablet_id>()(id.left_tablet),
-                                   std::hash<global_tablet_id>()(id.right_tablet));
-    }
-};
 
 template <>
 struct hash<colocated_tablets> {
