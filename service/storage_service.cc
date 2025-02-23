@@ -2295,6 +2295,12 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, locator:
 }
 
 future<> storage_service::handle_state_normal(inet_address endpoint, locator::host_id host_id, gms::permit_id pid) {
+    // The handler is called on shard0 only. get_token_metadata_lock() already assert this,
+    // but lets make it more explicit here
+    assert(this_shard_id() == 0);
+    thread_local static semaphore lock(1);
+    auto units = co_await get_units(lock, 1);
+
     slogger.debug("endpoint={}/{} handle_state_normal: permit_id={}", endpoint, host_id, pid);
 
     auto tokens = get_tokens_for(endpoint);
@@ -2325,20 +2331,13 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     // Old node in replace-with-same-IP scenario.
     std::optional<locator::host_id> replaced_id;
 
-    auto ips = _gossiper.get_nodes_with_host_id(host_id);
+    auto id_to_ip_map = co_await get_host_id_to_ip_map();
 
     std::optional<inet_address> existing;
 
     if (tmptr->get_topology().find_node(host_id)) {
-        // If node is not in the topology there is no existing address
-        // If there are two addresses for the same id the "other" one is existing
-        // If there is only one it is existing
-        if (ips.size() == 2) {
-            if (ips.erase(endpoint) == 0) {
-                on_internal_error(slogger, fmt::format("Gossiper has two ips {} for host id {} but none of them is {}", ips, endpoint, host_id));
-            }
-        }
-        existing = *ips.begin();
+        auto it = id_to_ip_map.find(host_id);
+        existing = it != id_to_ip_map.end() ? it->second : endpoint;
     }
 
     if (existing && *existing != endpoint) {
