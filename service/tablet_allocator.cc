@@ -159,6 +159,8 @@ struct colocated_tablets {
     auto operator<=>(const colocated_tablets&) const = default;
 };
 
+using table_small_vector = utils::small_vector<table_id, 2>;
+
 // Represents either a single tablet replica, or co-located replicas of sibling
 // tablets, or a set of co-located replicas of different tables. The migration
 // tablet set is logically treated by balancer as a single candidate. When
@@ -180,8 +182,6 @@ struct migration_tablet_set {
             },
             tablet_s);
     }
-
-    using table_small_vector = utils::small_vector<table_id, 2>;
 
     table_small_vector tables() const {
         return std::visit(
@@ -1713,12 +1713,12 @@ public:
         }
     }
 
-    // Evaluates impact on load balance of migrating a single tablet of a given table to dst.
-    migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst) {
+    // Evaluates impact on load balance of migrating a single tablet of a given table group to dst.
+    migration_badness evaluate_dst_badness(node_load_map& nodes, const table_small_vector& tables, tablet_replica dst) {
         _stats.for_dc(_dc).candidates_evaluated++;
 
         auto& node_info = nodes[dst.host];
-        size_t total_load = _tablet_count_per_table[table];
+        size_t total_load = std::ranges::fold_left(tables | std::views::transform([&] (table_id table) { return _tablet_count_per_table[table]; }), 0, std::plus<size_t>());
         size_t total_shard_count = _total_capacity_shards;
 
         // Load per shard in a perfectly balanced state.
@@ -1729,27 +1729,27 @@ public:
         // Rounded up because we don't want to consider movement which is within the best possible
         // per-shard distribution as bad.
         double shard_balance_threshold = std::ceil(desired_load_per_shard);
-        auto new_shard_load = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
+        size_t new_shard_load = std::ranges::fold_left(tables | std::views::transform([&] (table_id table) { return node_info.shards[dst.shard].tablet_count_per_table[table] + 1; }), 0, std::plus<size_t>());
         auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / total_load;
-        lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", table, dst,
+        lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", tables, dst,
                        shard_balance_threshold, new_shard_load, dst_shard_badness);
 
         // max number of tablets per node to keep perfect distribution.
         double node_balance_threshold = std::ceil(desired_load_per_shard * node_info.shard_count);
-        size_t new_node_load = node_info.tablet_count_per_table[table] + 1;
+        size_t new_node_load = std::ranges::fold_left(tables | std::views::transform([&] (table_id table) { return node_info.tablet_count_per_table[table] + 1; }), 0, std::plus<size_t>());
         auto dst_node_badness = (new_node_load - node_balance_threshold) / total_load;
-        lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
+        lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", tables, dst,
                        node_balance_threshold, new_node_load, dst_node_badness);
 
         return migration_badness{0, 0, dst_shard_badness, dst_node_badness};
     }
 
-    // Evaluates impact on load balance of migrating a single tablet of a given table from src.
-    migration_badness evaluate_src_badness(node_load_map& nodes, table_id table, tablet_replica src) {
+    // Evaluates impact on load balance of migrating a single tablet of a given table group from src.
+    migration_badness evaluate_src_badness(node_load_map& nodes, const table_small_vector& tables, tablet_replica src) {
         _stats.for_dc(_dc).candidates_evaluated++;
 
         auto& node_info = nodes[src.host];
-        size_t total_load = _tablet_count_per_table[table];
+        size_t total_load = std::ranges::fold_left(tables | std::views::transform([&] (table_id table) { return _tablet_count_per_table[table]; }), 0, std::plus<size_t>());
         size_t total_shard_count = _total_capacity_shards;
 
         // Load per shard in a perfectly balanced state.
@@ -1759,33 +1759,33 @@ public:
         // For determining impact on leaving, round down, because we don't want to consider movement which is within
         // the best possible per-shard distribution as bad.
         double leaving_shard_balance_threshold = std::floor(desired_load_per_shard);
-        auto new_shard_load = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
+        size_t new_shard_load = std::ranges::fold_left(tables | std::views::transform([&] (table_id table) { return node_info.shards[src.shard].tablet_count_per_table[table] - 1; }), 0, std::plus<size_t>());
 
         auto src_shard_badness = node_info.drained
                 ? 0 // Moving a tablet away from a drained node is always good.
                 : (leaving_shard_balance_threshold - new_shard_load) / total_load;
 
-        lblogger.trace("Table {} @{} shard balance threshold: {}, src: {} ({:.4f})", table, src,
+        lblogger.trace("Table {} @{} shard balance threshold: {}, src: {} ({:.4f})", tables, src,
                        leaving_shard_balance_threshold, new_shard_load, src_shard_badness);
 
         // max number of tablets per node to keep perfect distribution.
         double leaving_node_balance_threshold = std::floor(desired_load_per_shard * node_info.shard_count);
-        size_t new_node_load = node_info.tablet_count_per_table[table] - 1;
+        size_t new_node_load = std::ranges::fold_left(tables | std::views::transform([&] (table_id table) { return node_info.tablet_count_per_table[table] - 1; }), 0, std::plus<size_t>());
 
         auto src_node_badness = node_info.drained
                 ? 0 // Moving a tablet away from a drained node is always good.
                 : (leaving_node_balance_threshold - new_node_load) / total_load;
 
-        lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", table, src,
+        lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", tables, src,
                        leaving_node_balance_threshold, new_node_load, src_node_badness);
 
         return migration_badness{src_shard_badness, src_node_badness, 0, 0};
     }
 
-    // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
-    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
-        auto src_badness = evaluate_src_badness(nodes, table, src);
-        auto dst_badness = evaluate_dst_badness(nodes, table, dst);
+    // Evaluates impact on load balance of migrating a single tablet of a given table group from src to dst.
+    migration_badness evaluate_candidate(node_load_map& nodes, const table_small_vector& tables, tablet_replica src, tablet_replica dst) {
+        auto src_badness = evaluate_src_badness(nodes, tables, src);
+        auto dst_badness = evaluate_dst_badness(nodes, tables, dst);
 
         if (src.host == dst.host) {
             src_badness.src_node_badness = 0;
@@ -1814,7 +1814,7 @@ public:
             if (!candidate_opt) {
                 continue;
             }
-            auto badness = evaluate_candidate(nodes, table, src, dst);
+            auto badness = evaluate_candidate(nodes, candidate_opt->tables(), src, dst);
             auto candidate = migration_candidate{*candidate_opt, src, dst, badness};
             lblogger.trace("Candidate: {}", candidate);
             if (!best_candidate || candidate.badness < best_candidate->badness) {
@@ -2261,7 +2261,7 @@ public:
                 -> future<std::optional<migration_candidate>> {
             if (drain_skipped) {
                 auto source_tablets = src_node_info.skipped_candidates.back().tablets;
-                auto badness = evaluate_candidate(nodes, source_tablets.table(), src, dst);
+                auto badness = evaluate_candidate(nodes, source_tablets.tables(), src, dst);
                 co_return migration_candidate{source_tablets, src, dst, badness};
             } else {
                 auto&& src_shard_info = src_node_info.shards[src.shard];
@@ -2292,7 +2292,7 @@ public:
                     continue;
                 }
 
-                auto badness = evaluate_dst_badness(nodes, tablets.table(), tablet_replica{new_target, 0});
+                auto badness = evaluate_dst_badness(nodes, tablets.tables(), tablet_replica{new_target, 0});
                 if (!min_dst_host || badness.dst_node_badness < min_dst_badness.dst_node_badness) {
                     min_dst_badness = badness;
                     min_dst_host = new_target;
@@ -2317,7 +2317,7 @@ public:
                     co_await coroutine::maybe_yield();
                     auto new_dst = tablet_replica{host, new_dst_shard};
 
-                    auto badness = evaluate_dst_badness(nodes, tablets.table(), new_dst);
+                    auto badness = evaluate_dst_badness(nodes, tablets.tables(), new_dst);
                     if (!min_dst || badness < min_dst_badness) {
                         min_dst_badness = badness;
                         min_dst = new_dst;
@@ -2353,7 +2353,7 @@ public:
             // Consider better alternatives.
             if (drain_skipped) {
                 auto tablets = src_node_info.skipped_candidates.back().tablets;
-                auto badness = evaluate_src_badness(nodes, tablets.table(), src);
+                auto badness = evaluate_src_badness(nodes, tablets.tables(), src);
                 co_await evaluate_targets(tablets, src, badness);
             } else {
                 // Find a better candidate.
@@ -2374,7 +2374,7 @@ public:
                             lblogger.trace("No src candidates for table {} on shard {}", table, new_src);
                             continue;
                         }
-                        auto badness = evaluate_src_badness(nodes, table, new_src);
+                        auto badness = evaluate_src_badness(nodes, {table}, new_src);
                         if (!min_src || badness < min_src_badness) {
                             min_src_badness = badness;
                             min_src = new_src;
