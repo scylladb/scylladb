@@ -305,3 +305,7 @@ async def gather_safely(*awaitables: Awaitable):
         if isinstance(result, BaseException):
             raise result from None
     return results
+
+
+def get_xdist_worker_id() -> str | None:
+    return os.environ.get("PYTEST_XDIST_WORKER")

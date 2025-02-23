@@ -34,7 +34,7 @@ from test.pylib.minio_server import MinioServer
 from test.pylib.resource_gather import get_resource_gather
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.util import LogPrefixAdapter
+from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -308,7 +308,9 @@ class Test:
         self.suite = suite
         self.allure_dir = self.suite.log_dir / 'allure'
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname.replace("/", "_"), self.id)
+        self.uname = f"{self.suite.name}.{self.shortname.replace('/', '_')}.{self.id}"
+        if xdist_worker_id := get_xdist_worker_id():
+            self.uname = f"{xdist_worker_id}.{self.uname}"
         self.log_filename = self.suite.log_dir / f"{self.uname}.log"
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
