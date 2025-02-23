@@ -814,6 +814,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker] {
+          ::stop_signal stop_signal; // support SIGINT during initialization
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -826,7 +827,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 engine().update_blocked_reactor_notify_ms(10000h);
             }).get();
 
-            ::stop_signal stop_signal; // we can move this earlier to support SIGINT during initialization
             read_config(opts, *cfg).get();
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
             enable_initial_error_injections(*cfg).get();
@@ -2380,7 +2380,20 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // just ignore it and exit normally
             _exit(0);
             return 0;
+          } catch (const gate_closed_exception&) {
+            startlog.info("Startup interrupted");
+            // This happens when scylla gets SIGINT when joining group0, so
+            // just ignore it and exit normally
+            _exit(0);
+            return 0;
           } catch (...) {
+            if (stop_signal.stopping()) {
+                // Demote any other errors that happened when we got the stop signal during startup
+                // Just log the error in info level and exit normally.
+                startlog.info("Startup interrupted: {}", std::current_exception());
+                _exit(0);
+                return 0;
+            }
             startlog.error("Startup failed: {}", std::current_exception());
             // We should be returning 1 here, but the system is not yet prepared for orderly rollback of main() objects
             // and thread_local variables.
