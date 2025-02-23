@@ -151,7 +151,7 @@ fedora_python3_packages=(
 
 # an associative array from packages to constrains
 declare -A pip_packages=(
-    [scylla-driver]=
+    [scylla-driver]="==3.28.2"
     [geomet]="<0.3,>=0.1"
     [traceback-with-variables]=
     [scylla-api-client]=
@@ -213,11 +213,11 @@ go_arch() {
     echo ${GO_ARCH["$(arch)"]}
 }
 
-NODE_EXPORTER_VERSION=1.8.2
+NODE_EXPORTER_VERSION=1.9.0
 declare -A NODE_EXPORTER_CHECKSUM=(
-    ["x86_64"]=6809dd0b3ec45fd6e992c19071d6b5253aed3ead7bf0686885a51d85c6643c66
-    ["aarch64"]=627382b9723c642411c33f48861134ebe893e70a63bcc8b3fc0619cd0bfac4be
-    ["s390x"]=971481f06a985e9fcaee9bcd8da99a830d5b9e5f21e5225694de7e23401327c4
+    ["x86_64"]=e7b65ea30eec77180487d518081d3dcb121b975f6d95f1866dfb9156c5b24075
+    ["aarch64"]=5314fae1efff19abf807cfc8bd7dadbd47a35565c1043c236ffb0689dc15ef4f
+    ["s390x"]=089d2c2f87b4d716dd5ff006b89ab4424e7917f67830a8dd580d528f1d99ca58
 )
 NODE_EXPORTER_DIR=/opt/scylladb/dependencies
 
