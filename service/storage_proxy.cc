@@ -524,7 +524,7 @@ private:
         // called below. The way to fix it is to move the entry to the phased barrier into the function, but the barrier needs to be entered
         // before fencing so the fencing should be moves as well, but and we do fencing here because was want to avoid fetching schema for
         // fenced writes.
-        auto op = _sp.start_write();
+        auto permit = make_service_permit(_sp.start_write());
 
         const auto fence = fence_opt.value_or(fencing_token{});
         if (auto stale = _sp.apply_fence(fence, src_addr)) {
@@ -543,7 +543,7 @@ private:
             });
         });
         auto& sp = _sp;
-        co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
+        co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), permit);
         if (auto stale = _sp.apply_fence(fence, src_addr)) {
             co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
                 make_exception_ptr(std::move(*stale)));
@@ -4169,7 +4169,9 @@ future<> storage_proxy::send_to_endpoint(
         timeout = clock_type::now() + 5min;
     }
 
-    return mutate_prepare(std::array{std::move(m)}, cl, type, /* does view building should hold a real permit */ empty_service_permit(),
+    /* does view building should hold a real permit */
+    auto permit = make_service_permit(start_write());
+    return mutate_prepare(std::array{std::move(m)}, cl, type, std::move(permit),
             [this, tr_state, erm = std::move(ermp), target = std::array{target}, pending_endpoints, &stats, cancellable] (
                 std::unique_ptr<mutation_holder>& m,
                 db::consistency_level cl,
@@ -4240,7 +4242,7 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
     std::array<hint_wrapper, 1> ms{hint_wrapper { fm_a_s.fm.unfreeze(fm_a_s.s) }};
-    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, make_service_permit(start_write()))
             .then(utils::result_into_future<result<>>);
 }
 
