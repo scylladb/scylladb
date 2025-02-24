@@ -20,7 +20,7 @@
 #
 # Key bindings:
 #
-#  t - toggle display of table tags. Each table has a unique color which is displayed in the bottom part of the tablet.
+#  t - toggle display of table tags. Each table has a unique color which fills tablets of that table.
 #  i - toggle display of tablet ids. Only visible when table tags are visible.
 #
 
@@ -573,7 +573,7 @@ def draw_tablet(tablet, x, y):
                                          w,
                                          h - 2 * tablet_frame_size), border_radius=tablet_radius)
 
-        if show_table_tag:
+        if show_table_tag and tablet.state[0] != Tablet.STATE_NORMAL:
             table_tag_h = tablet_radius
             pygame.draw.rect(window, color, (x + tablet_frame_size + (tablet_w - w) / 2,
                                              y + tablet_frame_size,
@@ -582,11 +582,11 @@ def draw_tablet(tablet, x, y):
                              border_top_left_radius=tablet_radius,
                              border_top_right_radius=tablet_radius)
 
-            if show_tablet_id:
-                number_text = str(tablet.seq)
-                number_image = number_font.render(number_text, True, BLACK)
-                window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
-                                           y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
+        if show_table_tag and show_tablet_id:
+            number_text = str(tablet.seq)
+            number_image = number_font.render(number_text, True, BLACK)
+            window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
+                                       y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
 
 def draw_node_frame(x, y, x2, y2, color):
     pygame.draw.rect(window, color, (x, y, x2 - x, y2 - y), node_frame_thickness,
