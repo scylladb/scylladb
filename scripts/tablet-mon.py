@@ -21,6 +21,7 @@
 # Key bindings:
 #
 #  t - toggle display of table tags. Each table has a unique color which is displayed in the bottom part of the tablet.
+#  i - toggle display of tablet ids. Only visible when table tags are visible.
 #
 
 import math
@@ -44,6 +45,7 @@ tablet_h = tablet_w // 2
 tablet_radius = tablet_size // 7
 tablet_frame_size = max(2, min(6, tablet_size // 14))
 show_table_tag = False
+show_tablet_id = False
 
 # Animation settings
 streaming_trace_duration_ms = 300
@@ -89,6 +91,7 @@ class Tablet(object):
         self.state = state
         self.insert_time = pygame.time.get_ticks()
         self.streaming = False
+        self.seq = 0 # Tablet index within table
 
         table_id = id[0]
         if table_id not in table_tag_colors:
@@ -445,7 +448,8 @@ def update_from_cql(initial=False):
         return ret
 
     for tablet in session.execute(tablets_query):
-        id = (tablet.table_id, tablet.last_token, tablet_id_for_table(tablet.table_id))
+        tablet_seq = tablet_id_for_table(tablet.table_id)
+        id = (tablet.table_id, tablet.last_token)
         replicas = set(tablet.replicas)
         new_replicas = set(tablet.new_replicas) if tablet.new_replicas else replicas
 
@@ -477,6 +481,7 @@ def update_from_cql(initial=False):
                 inserted = True
                 changed = True
             t = s.tablets[id]
+            t.seq = tablet_seq
             if t.state != state:
                 t.state = state
                 stage_change = True
@@ -577,10 +582,11 @@ def draw_tablet(tablet, x, y):
                              border_top_left_radius=tablet_radius,
                              border_top_right_radius=tablet_radius)
 
-            number_text = str(tablet.id[2])
-            number_image = number_font.render(number_text, True, BLACK)
-            window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
-                                       y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
+            if show_tablet_id:
+                number_text = str(tablet.seq)
+                number_image = number_font.render(number_text, True, BLACK)
+                window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
+                                           y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
 
 def draw_node_frame(x, y, x2, y2, color):
     pygame.draw.rect(window, color, (x, y, x2 - x, y2 - y), node_frame_thickness,
@@ -678,6 +684,9 @@ while running:
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_t:
                 show_table_tag = not show_table_tag
+                changed = True
+            elif event.key == pygame.K_i:
+                show_tablet_id = not show_tablet_id
                 changed = True
 
     now = float(pygame.time.get_ticks())
