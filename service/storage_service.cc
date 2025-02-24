@@ -7202,6 +7202,20 @@ void storage_service::init_messaging_service() {
             return ss.load_stats_for_tablet_based_tables();
         });
     });
+    ser::storage_service_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (table_id t_id) -> future<uint64_t> {
+        co_return co_await _db.map_reduce0(seastar::coroutine::lambda([&] (replica::database& local_db) -> future<uint64_t> {
+            uint64_t result = 0;
+            auto& t = local_db.get_tables_metadata().get_table(t_id);
+            auto snap = co_await t.take_sstable_set_snapshot();
+            for (const auto& sst : snap) {
+                result += sst.sst->data_size();
+            }
+            co_return result;
+        }), uint64_t(0), std::plus());
+    });
+    ser::storage_service_rpc_verbs::register_sample_sstables(&_messaging.local(), [this] (table_id table, uint64_t chunk_size, uint64_t n_chunks) -> future<utils::chunked_vector<bytes>> {
+        return _db.local().sample_data_files(table, chunk_size, n_chunks);
+    });
     ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
         return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {
             return ss.join_node_request_handler(std::move(params));
