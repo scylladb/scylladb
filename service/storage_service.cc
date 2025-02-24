@@ -2414,11 +2414,8 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     // token_to_endpoint_map is used to track the current token owners for the purpose of removing replaced endpoints.
     // when any token is replaced by a new owner, we track the existing owner in `candidates_for_removal`
     // and eventually, if any candidate for removal ends up owning no tokens, it is removed from token_metadata.
-    std::unordered_map<token, inet_address> token_to_endpoint_map = get_token_metadata().get_token_to_endpoint() |
-            std::views::transform([this] (auto& e) {
-                return std::make_pair(e.first, _address_map.get(e.second));
-            }) | std::ranges::to<std::unordered_map>();
-    std::unordered_set<inet_address> candidates_for_removal;
+    std::unordered_map<token, locator::host_id> token_to_endpoint_map = get_token_metadata().get_token_to_endpoint();
+    std::unordered_set<locator::host_id> candidates_for_removal;
 
     // Here we convert endpoint tokens from gossiper to owned_tokens, which will be assigned as a new
     // normal tokens to the token_metadata.
@@ -2439,25 +2436,25 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
             continue;
         }
         auto current_owner = current->second;
-        if (endpoint == current_owner) {
-            slogger.info("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, current_owner, t);
+        if (endpoint == _address_map.get(current_owner)) {
+            slogger.info("handle_state_normal: endpoint={} == current_owner={} token {}", host_id, current_owner, t);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
             owned_tokens.insert(t);
-        } else if (std::is_gt(_gossiper.compare_endpoint_startup(endpoint, current_owner))) {
-            slogger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", endpoint, current_owner, t);
+        } else if (std::is_gt(_gossiper.compare_endpoint_startup(endpoint, _address_map.get(current_owner)))) {
+            slogger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", host_id, current_owner, t);
             owned_tokens.insert(t);
             slogger.info("handle_state_normal: remove endpoint={} token={}", current_owner, t);
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
             // a host no longer has any tokens, we'll want to remove it.
             token_to_endpoint_map.erase(current);
             candidates_for_removal.insert(current_owner);
-            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. {} is the new owner", endpoint, current_owner, t, endpoint);
+            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. {} is the new owner", host_id, current_owner, t, endpoint);
         } else {
             // current owner of this token is kept and endpoint attempt to own it is rejected.
             // Keep track of these moves, because when a host no longer has any tokens, we'll want to remove it.
             token_to_endpoint_map.erase(current);
-            candidates_for_removal.insert(endpoint);
-            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. Ignoring {}", endpoint, current_owner, t, endpoint);
+            candidates_for_removal.insert(host_id);
+            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. Ignoring {}", host_id, current_owner, t, endpoint);
         }
     }
 
@@ -2478,7 +2475,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
 
     for (const auto& ep : candidates_for_removal) {
         slogger.info("handle_state_normal: endpoints_to_remove endpoint={}", ep);
-        endpoints_to_remove.insert(ep);
+        endpoints_to_remove.insert(_address_map.get(ep));
     }
 
     bool is_normal_token_owner = tmptr->is_normal_token_owner(host_id);
