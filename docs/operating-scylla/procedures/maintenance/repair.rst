@@ -25,10 +25,13 @@ Data stored on nodes may become inconsistent with other replicas over time. For 
 
 ScyllaDB repair is a process that runs in the background and synchronizes the data between nodes so that all the replicas hold the same data.
 Running repairs is necessary to ensure that data on a given node is consistent with the other nodes in the cluster. 
-You can manually run the ``nodetool repair`` command or schedule repair with `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/repair>`_, 
+You can manually run the ``nodetool repair`` and ``nodetool cluster repair`` commands or schedule repair with `ScyllaDB Manager <https://manager.docs.scylladb.com/stable/repair>`_,
 which can run repairs for you.
 
-.. note:: Run the :doc:`nodetool repair </operating-scylla/nodetool-commands/repair/>` command regularly. If you delete data frequently, it should be more often than the value of ``gc_grace_seconds`` (by default: 10 days), for example, every week. Use the **nodetool repair -pr** on each node in the cluster, sequentially.
+To synchronize all data in clusters that have both tablets- and vnodes-based keyspaces, run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair/>` on **all**
+of the nodes in the cluster, and :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>` on  **any** of the nodes in the cluster.
+
+.. note:: Run the :doc:`nodetool repair </operating-scylla/nodetool-commands/repair/>` and :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>` command regularly. If you delete data frequently, it should be more often than the value of ``gc_grace_seconds`` (by default: 10 days), for example, every week. Use the **nodetool repair -pr** on each node in the cluster, sequentially.
 
 In most cases, the proportion of data that is out of sync is very small.  In a few cases, for example, if a node was down for a day, the difference might be more significant.
 
