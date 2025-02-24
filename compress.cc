@@ -107,15 +107,52 @@ public:
     }
 };
 
+class lz4_cdict : public enable_lw_shared_from_this<lz4_cdict> {
+    mutable sstable_compressor_factory_impl* _owner;
+    lw_shared_ptr<const raw_dict> _raw;
+    std::unique_ptr<LZ4_stream_t, decltype(&LZ4_freeStream)> _dict;
+public:
+    lz4_cdict(sstable_compressor_factory_impl& owner, lw_shared_ptr<const raw_dict> raw)
+        : _owner(&owner)
+        , _raw(raw)
+        , _dict(LZ4_createStream(), LZ4_freeStream)
+    {
+        if (!_dict) {
+            throw std::bad_alloc();
+        }
+        LZ4_loadDictSlow(_dict.get(), reinterpret_cast<const char*>(_raw->raw().data()), _raw->raw().size());
+    }
+    ~lz4_cdict();
+    auto dict() const {
+        return _dict.get();
+    }
+    auto raw() const {
+        return _raw->raw();
+    }
+    auto disown() const {
+        _owner = nullptr;
+    }
+};
+
 class lz4_processor: public compressor {
 public:
-    using compressor::compressor;
-
+    using cdict_ptr = foreign_ptr<lw_shared_ptr<const lz4_cdict>>;
+    using ddict_ptr = foreign_ptr<lw_shared_ptr<const raw_dict>>;
+private:
+    cdict_ptr _cdict;
+    ddict_ptr _ddict;
+    static LZ4_stream_t* get_cctx() {
+        static thread_local auto cctx = std::unique_ptr<LZ4_stream_t, decltype(&LZ4_freeStream)>{LZ4_createStream(), LZ4_freeStream};
+        return cctx.get();
+    }
+public:
+    lz4_processor(cdict_ptr = nullptr, ddict_ptr = nullptr);
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+    std::map<sstring, sstring> options() const override;
 };
 
 class snappy_processor: public compressor {
@@ -326,7 +363,7 @@ std::map<sstring, sstring> compressor::options() const {
     return {};
 }
 
-thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>(make_name("LZ4Compressor"));
+thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>();
 thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>(make_name("SnappyCompressor"));
 thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>(make_name("DeflateCompressor"));
 
@@ -471,6 +508,12 @@ std::map<sstring, sstring> compression_parameters::get_options() const {
     return opts;
 }
 
+lz4_processor::lz4_processor(cdict_ptr cdict, ddict_ptr ddict)
+    : compressor(sstring(compression_parameters::algorithm_to_name(compression_parameters::algorithm::lz4)))
+    , _cdict(std::move(cdict))
+    , _ddict(std::move(ddict))
+{}
+
 size_t lz4_processor::uncompress(const char* input, size_t input_len,
                 char* output, size_t output_len) const {
     // We use LZ4_decompress_safe(). According to the documentation, the
@@ -490,7 +533,12 @@ size_t lz4_processor::uncompress(const char* input, size_t input_len,
     input += 4;
     input_len -= 4;
 
-    auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
+    int ret;
+    if (_cdict) {
+        ret = LZ4_decompress_safe_usingDict(input, output, input_len, output_len, reinterpret_cast<const char*>(_ddict->raw().data()), _ddict->raw().size());
+    } else {
+        ret = LZ4_decompress_safe(input, output, input_len, output_len);
+    }
     if (ret < 0) {
         throw std::runtime_error("LZ4 uncompression failure");
     }
@@ -507,7 +555,19 @@ size_t lz4_processor::compress(const char* input, size_t input_len,
     output[1] = (input_len >> 8) & 0xFF;
     output[2] = (input_len >> 16) & 0xFF;
     output[3] = (input_len >> 24) & 0xFF;
-    auto ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
+    int ret;
+    if (_cdict) {
+        auto* ctx = get_cctx();
+        LZ4_attach_dictionary(ctx, _cdict->dict());
+        ret = LZ4_compress_fast_continue(ctx, input, output + 4, input_len, LZ4_compressBound(input_len), 1);
+        if (ret == 0) {
+            LZ4_initStream(ctx, sizeof(*ctx));
+        } else {
+            LZ4_resetStream_fast(ctx);
+        }
+    } else {
+        ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
+    }
     if (ret == 0) {
         throw std::runtime_error("LZ4 compression failure: LZ4_compress() failed");
     }
@@ -516,6 +576,20 @@ size_t lz4_processor::compress(const char* input, size_t input_len,
 
 size_t lz4_processor::compress_max_size(size_t input_len) const {
     return LZ4_COMPRESSBOUND(input_len) + 4;
+}
+
+std::map<sstring, sstring> lz4_processor::options() const {
+    std::optional<std::span<const std::byte>> dict_blob;
+    if (_cdict) {
+        dict_blob = _cdict->raw();
+    } else if (_ddict) {
+        dict_blob = _ddict->raw();
+    }
+    if (dict_blob) {
+        return dict_as_options(*dict_blob);
+    } else {
+        return {};
+    }
 }
 
 size_t deflate_processor::uncompress(const char* input,
@@ -616,6 +690,7 @@ class sstable_compressor_factory_impl : public sstable_compressor_factory {
     std::map<dict_id, const raw_dict*> _raw_dicts;
     std::map<zstd_cdict_id, const zstd_cdict*> _zstd_cdicts;
     std::map<dict_id, const zstd_ddict*> _zstd_ddicts;
+    std::map<dict_id, const lz4_cdict*> _lz4_cdicts;
     std::map<table_id, lw_shared_ptr<const raw_dict>> _recommended;
 
     lw_shared_ptr<const raw_dict> get_canonical_ptr(std::span<const std::byte> dict) {
@@ -670,6 +745,40 @@ class sstable_compressor_factory_impl : public sstable_compressor_factory {
             }
         });
     }
+    using lz4_dicts = std::pair<
+        foreign_ptr<lw_shared_ptr<const raw_dict>>,
+        foreign_ptr<lw_shared_ptr<const lz4_cdict>>
+    >;
+    lz4_dicts get_lz4_dicts(lw_shared_ptr<const raw_dict> raw) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        lw_shared_ptr<const lz4_cdict> cdict;
+        if (auto it = _lz4_cdicts.find(raw->id()); it != _lz4_cdicts.end()) {
+            cdict = it->second->shared_from_this();
+        } else {
+            cdict = make_lw_shared<lz4_cdict>(*this, raw);
+            _lz4_cdicts.emplace(raw->id(), cdict.get());
+        }
+        return {make_foreign(std::move(raw)), make_foreign(std::move(cdict))};
+    }
+    future<lz4_dicts> get_lz4_dicts(std::span<const std::byte> dict) {
+        return smp::submit_to(_owner_shard, [this, dict] -> lz4_dicts {
+            auto raw = get_canonical_ptr(dict);
+            return get_lz4_dicts(raw);
+        });
+    }
+    future<lz4_dicts> get_lz4_dicts(table_id t) {
+        return smp::submit_to(_owner_shard, [this, t] -> lz4_dicts {
+            if (!_feature_service.sstable_compression_dicts) {
+                return {};
+            }
+            auto rec_it = _recommended.find(t);
+            if (rec_it != _recommended.end()) {
+                return get_lz4_dicts(rec_it->second);
+            } else {
+                return {};
+            }
+        });
+    }
 
 public:
     sstable_compressor_factory_impl(const gms::feature_service& fs)
@@ -693,6 +802,10 @@ public:
             v->disown();
         }
         _zstd_ddicts.clear();
+        for (auto& [k, v] : _lz4_cdicts) {
+            v->disown();
+        }
+        _lz4_cdicts.clear();
     }
     void forget_raw_dict(dict_id id) {
         SCYLLA_ASSERT(this_shard_id() == _owner_shard);
@@ -705,6 +818,10 @@ public:
     void forget_zstd_ddict(dict_id id) {
         SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         _zstd_ddicts.erase(id);
+    }
+    void forget_lz4_cdict(dict_id id) {
+        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
+        _lz4_cdicts.erase(id);
     }
     future<> set_recommended_dict(table_id t, std::span<const std::byte> dict) override {
         return smp::submit_to(_owner_shard, [this, t, dict] {
@@ -728,9 +845,10 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_writ
     auto params = s->get_compressor_params();
     using algorithm = compression_parameters::algorithm;
     switch (params.get_algorithm()) {
-    case algorithm::lz4:
-        // FIXME: use the dict.
-        co_return compressor::lz4;
+    case algorithm::lz4: {
+        auto [ddict, cdict] = co_await get_lz4_dicts(s->id());
+        co_return seastar::make_shared<lz4_processor>(std::move(cdict), std::move(ddict));
+    }
     case algorithm::deflate:
         co_return compressor::deflate;
     case algorithm::snappy:
@@ -751,9 +869,14 @@ future<compressor_ptr> sstable_compressor_factory_impl::make_compressor_for_read
     using algorithm = compression_parameters::algorithm;
     std::unique_ptr<compressor> p;
     switch (params.get_algorithm()) {
-    case algorithm::lz4:
-        // FIXME: use the dict.
-        co_return compressor::lz4;
+    case algorithm::lz4: {
+        if (dict) {
+            auto [ddict, cdict] = co_await get_lz4_dicts(std::as_bytes(std::span(*dict)));
+            co_return seastar::make_shared<lz4_processor>(std::move(cdict), std::move(ddict));
+        } else {
+            co_return seastar::make_shared<lz4_processor>(nullptr, nullptr);
+        }
+    }
     case algorithm::deflate:
         co_return compressor::deflate;
     case algorithm::snappy:
@@ -788,6 +911,12 @@ zstd_cdict::~zstd_cdict() {
 zstd_ddict::~zstd_ddict() {
     if (_owner) {
         _owner->forget_zstd_ddict(_raw->id());
+    }
+}
+
+lz4_cdict::~lz4_cdict() {
+    if (_owner) {
+        _owner->forget_lz4_cdict(_raw->id());
     }
 }
 
