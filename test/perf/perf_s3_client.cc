@@ -87,8 +87,8 @@ public:
         }
     }
 
-    future<> run_download() {
-        plog.info("Downloading");
+    future<> run_contiguous_get() {
+        plog.info("Running GET-s");
         auto until = now() + _duration;
         uint64_t off = 0;
         do {
@@ -140,7 +140,7 @@ int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
-        ("upload", "test file upload")
+        ("operation", bpo::value<sstring>()->required(), "which test to perform (options: upload, get)")
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
         ("sockets", bpo::value<unsigned>()->default_value(1), "maximum number of socket for http client")
         ("part_size_mb", bpo::value<unsigned>()->default_value(5), "part size")
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
         auto part_size = app.configuration()["part_size_mb"].as<unsigned>();
         auto oname = app.configuration()["object_name"].as<sstring>();
         auto osz = app.configuration()["object_size"].as<size_t>();
-        auto upload = app.configuration().contains("upload");
+        auto operation = app.configuration()["operation"].as<sstring>();
         sharded<tester> test;
         plog.info("Creating");
         co_await test.start(dur, sks, part_size, oname, osz);
@@ -162,10 +162,12 @@ int main(int argc, char** argv) {
             plog.info("Starting");
             co_await test.invoke_on_all(&tester::start);
             plog.info("Running");
-            if (upload) {
+            if (operation == "upload") {
                 co_await test.invoke_on_all(&tester::run_upload);
+            } else if (operation == "get") {
+                co_await test.invoke_on_all(&tester::run_contiguous_get);
             } else {
-                co_await test.invoke_on_all(&tester::run_download);
+                throw std::runtime_error(format("Unknown operation {}", operation));
             }
         } catch (...) {
             plog.error("Error running: {}", std::current_exception());
