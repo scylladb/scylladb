@@ -114,6 +114,7 @@
 #include "utils/shared_dict.hh"
 #include "message/dictionary_service.hh"
 #include "utils/disk_space_monitor.hh"
+#include "service/streaming_controller.hh"
 
 
 #define P11_KIT_FUTURE_UNSTABLE_API
@@ -739,6 +740,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
     std::optional<utils::disk_space_monitor> disk_space_monitor_shard0;
+    std::optional<service::streaming_controller> streaming_controller_shard0;
     sharded<compaction_manager> cm;
     sharded<sstables::storage_manager> sstm;
     distributed<replica::database> db;
@@ -801,7 +803,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         tcp_syncookies_sanity();
         tcp_timestamps_sanity();
 
-        return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
+        return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &streaming_controller_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker] {
@@ -1187,6 +1189,19 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             disk_space_monitor_shard0->start().get();
             auto stop_dsm = defer_verbose_shutdown("disk space monitor", [&disk_space_monitor_shard0] {
                 disk_space_monitor_shard0->stop().get();
+            });
+
+            supervisor::notify("starting streaming controller");
+            auto streaming_controller_cfg = service::streaming_controller::config{
+                .streaming_sg = dbcfg.streaming_scheduling_group,
+                .min_shares = cfg->streaming_min_shares,
+                .max_shares = cfg->streaming_max_shares,
+                .disk_utilization_threshold = cfg->high_disk_utilization_level,
+            };
+            streaming_controller_shard0.emplace(std::move(streaming_controller_cfg), *disk_space_monitor_shard0, stop_signal.as_local_abort_source());
+            streaming_controller_shard0->validate_config();
+            auto stop_streaming_controller = defer_verbose_shutdown("streaming controller", [&] {
+                streaming_controller_shard0->stop().get();
             });
 
             supervisor::notify("starting compaction_manager");

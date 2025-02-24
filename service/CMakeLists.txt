@@ -28,6 +28,7 @@ target_sources(service
     session.cc
     storage_proxy.cc
     storage_service.cc
+    streaming_controller.cc
     tablet_allocator.cc
     task_manager_module.cc
     topology_coordinator.cc
