@@ -40,7 +40,10 @@ async def test_major_compaction_consider_only_existing_data(manager: ManagerClie
        - If consider_only_existing_data is True, the tombstones should be purged and the backdated rows should be visible
     """
     logger.info("Bootstrapping cluster")
-    server = (await manager.servers_add(1))[0]
+    cmdline = [
+        '--tablets-initial-scale-factor=1' # The test assumes 1 compaction group per shard because of injection point trap
+    ]
+    server = (await manager.servers_add(1, cmdline=cmdline))[0]
 
     logger.info("Creating table")
     cf = "test_consider_only_existing_data"

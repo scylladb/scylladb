@@ -480,21 +480,24 @@ class load_balancer {
     // due to the average size dropping below the merge threshold, as tablet count doubles.
     const uint64_t _target_tablet_size = default_target_tablet_size;
 
+    const unsigned _tablets_per_shard_goal;
+
+    uint64_t target_max_tablet_size() const noexcept {
+        return _target_tablet_size * 2;
+    }
+
+    uint64_t target_min_tablet_size() const noexcept {
+        return _target_tablet_size / 2;
+    }
+
     struct table_size_desc {
         uint64_t target_tablet_size;
         uint64_t avg_tablet_size;
         locator::resize_decision resize_decision;
+        locator::resize_decision new_resize_decision;
         size_t tablet_count;
         size_t shard_count;
-        size_t min_tablet_count;
-
-        uint64_t target_max_tablet_size() const noexcept {
-            return target_tablet_size * 2;
-        }
-
-        uint64_t target_min_tablet_size() const noexcept {
-            return target_tablet_size / 2;
-        }
+        sstring reason; // reason for target_tablet_count
     };
 
     struct cluster_resize_load {
@@ -503,31 +506,7 @@ class load_balancer {
         std::vector<table_id_and_size_desc> tables_being_resized;
 
         static locator::resize_decision to_resize_decision(const table_size_desc& d) {
-            locator::resize_decision decision;
-
-            auto target_tablet_count = d.tablet_count;
-            // Split based on min_tablet_count or avg_tablet_size, or
-            // if the current resize_decision is split, apply hysteresis,
-            // so it would get cancelled only when crossing back the half-way point.
-            if (d.tablet_count < d.min_tablet_count || d.avg_tablet_size > d.target_max_tablet_size() ||
-                (d.resize_decision.is_split() && d.avg_tablet_size >= d.target_tablet_size)) {
-                // TODO: extend to n-way split when needed
-                target_tablet_count *= 2;
-                decision.way = resize_decision::split{};
-            } else if (target_tablet_count / 2 >= d.min_tablet_count) {
-                // Consider merge, as long as it wouldn't violate min_tablet_count.
-                // If the current resize_decision is merge, apply hysteresis,
-                // so it would get cancelled only when crossing back the half-way point.
-                if (d.avg_tablet_size < d.target_min_tablet_size() ||
-                    (d.resize_decision.is_merge() && d.avg_tablet_size <= d.target_tablet_size)) {
-                    target_tablet_count /= 2;
-                    decision.way = resize_decision::merge{};
-                }
-            }
-
-            lblogger.debug("to_resize_decision: tablet_count={}, avg_tablet_size={}, min_tablet_count={}, target_tablet_count={}: decision={}",
-                           d.tablet_count, d.avg_tablet_size, d.min_tablet_count, target_tablet_count, decision.type_name());
-            return decision;
+            return d.new_resize_decision;
         }
 
         bool table_needs_resize(const table_size_desc& d) const {
@@ -565,7 +544,7 @@ class load_balancer {
             return [] (const table_id_and_size_desc& a, const table_id_and_size_desc& b) {
                 auto urgency = [] (const table_size_desc& d) -> double {
                     // FIXME: only takes into account split today.
-                    return double(d.avg_tablet_size) / d.target_max_tablet_size();
+                    return double(d.avg_tablet_size);
                 };
                 return urgency(a.second) < urgency(b.second);
             };
@@ -618,6 +597,7 @@ class load_balancer {
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
+    double _initial_scale = 1;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -685,8 +665,13 @@ private:
         return streaming_infos;
     }
 public:
-    load_balancer(replica::database& db, token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, load_balancer_stats_manager& stats, uint64_t target_tablet_size, std::unordered_set<host_id> skiplist)
+    load_balancer(replica::database& db, token_metadata_ptr tm, locator::load_stats_ptr table_load_stats,
+            load_balancer_stats_manager& stats,
+            uint64_t target_tablet_size,
+            unsigned tablets_per_shard_goal,
+            std::unordered_set<host_id> skiplist)
         : _target_tablet_size(target_tablet_size)
+        , _tablets_per_shard_goal(tablets_per_shard_goal)
         , _db(db)
         , _tm(std::move(tm))
         , _table_load_stats(std::move(table_load_stats))
@@ -694,13 +679,13 @@ public:
         , _skiplist(std::move(skiplist))
     { }
 
-    future<migration_plan> make_plan(std::optional<unsigned> initial_scale, bool test_mode) {
+    future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
 
         // Prepare plans for each DC separately and combine them to be executed in parallel.
         for (auto&& dc : topo.get_datacenters()) {
-            auto dc_plan = co_await make_plan(dc, initial_scale, test_mode);
+            auto dc_plan = co_await make_plan(dc);
             auto level = dc_plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations in DC {}", dc_plan.size(), dc);
             plan.merge(std::move(dc_plan));
@@ -710,7 +695,7 @@ public:
         plan.set_repair_plan(co_await make_repair_plan(plan));
 
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
-        plan.merge_resize_plan(co_await make_resize_plan(plan, initial_scale, test_mode));
+        plan.merge_resize_plan(co_await make_resize_plan(plan));
 
         auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
         lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
@@ -720,6 +705,10 @@ public:
 
     void set_use_table_aware_balancing(bool use_table_aware_balancing) {
         _use_table_aware_balancing = use_table_aware_balancing;
+    }
+
+    void set_initial_scale(double initial_scale) {
+        _initial_scale = initial_scale;
     }
 
     const locator::table_load_stats* load_stats_for_table(table_id id) const {
@@ -1055,60 +1044,314 @@ public:
         co_return std::move(plan);
     }
 
-    future<table_resize_plan> make_resize_plan(const migration_plan& plan, std::optional<unsigned> initial_scale, bool test_mode) {
+    std::tuple<schema_ptr, const tablet_aware_replication_strategy*> get_schema_and_rs(table_id table) {
+        auto t = _db.get_tables_metadata().get_table_if_exists(table);
+        if (!t) {
+            on_internal_error(lblogger, format("Table {} does not exist", table));
+        }
+
+        auto s = t->schema();
+        auto erm = t->get_effective_replication_map();
+        auto rs = erm->get_replication_strategy().maybe_as_tablet_aware();
+        if (!rs) {
+            auto msg = format("Table {}.{} has no tablet_aware_replication_strategy: uses_tablets={}",
+                              s->ks_name(), s->cf_name(), erm->get_replication_strategy().uses_tablets());
+            on_internal_error(lblogger, msg);
+        }
+
+        return {s, rs};
+    }
+
+    struct table_sizing {
+        size_t current_tablet_count; // Tablet count in group0.
+        size_t target_tablet_count; // Tablet count wanted by scheduler.
+        sstring target_tablet_count_reason; // Winning rule for target_tablet_count value.
+        std::optional<uint64_t> avg_tablet_size; // nullopt when stats not yet available.
+
+        size_t target_tablet_count_aligned; // target_tablet_count aligned to power of 2.
+        resize_decision::way_type resize_decision; // Decision which should be emitted to achieve target_tablet_count_aligned.
+    };
+
+    struct sizing_plan {
+        std::unordered_map<table_id, table_sizing> tables;
+    };
+
+    struct tablet_count_and_reason {
+        size_t tablet_count = 0;
+        sstring reason;
+    };
+
+    tablet_count_and_reason tablet_count_from_min_per_shard_tablet_count(const schema& s,
+            const std::unordered_map<sstring, unsigned>& shards_per_dc,
+            const tablet_aware_replication_strategy& rs,
+            double min_per_shard_tablet_count)
+    {
+        // Try to use as many tablets so that all shards in the current topology
+        // are covered with at least `min_per_shard_tablet_count` tablets on average.
+
+        size_t tablet_count = 0;
+        const sstring* winning_dc = nullptr;
+
+        for (auto&& [dc, shards_in_dc] : shards_per_dc) {
+            auto rf_in_dc = rs.get_replication_factor(dc);
+            if (!rf_in_dc) {
+                continue;
+            }
+            size_t tablets_in_dc = std::ceil((double)(min_per_shard_tablet_count * shards_in_dc) / rf_in_dc);
+            lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{} in DC {}", tablets_in_dc,
+                    min_per_shard_tablet_count, s.ks_name(), s.cf_name(), dc);
+            if (tablets_in_dc > tablet_count) {
+                tablet_count = tablets_in_dc;
+                winning_dc = &dc;
+            }
+        }
+
+        if (!winning_dc) {
+            return {};
+        }
+
+        return {tablet_count, format("min_per_shard_tablet_count={:.3f} in DC {}", min_per_shard_tablet_count, *winning_dc)};
+    }
+
+    future<sizing_plan> make_sizing_plan(schema_ptr new_table = nullptr, const tablet_aware_replication_strategy* new_rs = nullptr) {
+        std::unordered_map<table_id, const tablet_aware_replication_strategy*> rs_by_table;
+        sizing_plan plan;
+
+        std::unordered_map<sstring, unsigned> shards_per_dc;
+        _tm->for_each_token_owner([&] (const node& n) {
+            if (n.is_normal()) {
+                shards_per_dc[n.dc_rack().dc] += n.get_shard_count();
+            }
+        });
+
+        auto process_table = [&] (table_id table, schema_ptr s, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
+            table_sizing& table_plan = plan.tables[table];
+            table_plan.current_tablet_count = tablet_count;
+            rs_by_table[table] = rs;
+
+            tablet_count_and_reason target_tablet_count = {1, ""};
+            auto maybe_apply = [&] (tablet_count_and_reason candidate) {
+                lblogger.debug("Table {} ({}.{}) wants {} tablets due to {}", table, s->ks_name(), s->cf_name(),
+                        candidate.tablet_count, candidate.reason);
+                if (candidate.tablet_count > target_tablet_count.tablet_count) {
+                    target_tablet_count = candidate;
+                }
+            };
+
+            maybe_apply({rs->get_initial_tablets(), "initial"});
+
+            const auto& tablet_options = s->tablet_options();
+            if (tablet_options.min_tablet_count) {
+                maybe_apply({tablet_options.min_tablet_count.value(), "min_tablet_count"});
+            }
+
+            if (tablet_options.expected_data_size_in_gb) {
+                maybe_apply({(tablet_options.expected_data_size_in_gb.value() << 30) / _target_tablet_size,
+                        format("expected_data_size_in_gb={}", tablet_options.expected_data_size_in_gb.value())});
+            }
+
+            auto min_per_shard_tablet_count = tablet_options.min_per_shard_tablet_count.value_or(
+                    // If min_tablet_count is set, initial_scale should not be effective for
+                    // compatibility with the deprecated "initial" tablet count.
+                    (rs->get_initial_tablets() || tablet_options.min_tablet_count) ? 0 : _initial_scale);
+            if (min_per_shard_tablet_count) {
+                maybe_apply(tablet_count_from_min_per_shard_tablet_count(*s, shards_per_dc, *rs, min_per_shard_tablet_count));
+            }
+
+            const auto* table_stats = load_stats_for_table(table);
+            if (table_stats) {
+                auto cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
+                auto avg_tablet_size = table_stats->size_in_bytes / std::max<size_t>(table_plan.current_tablet_count, 1);
+                auto tablet_count_from_size = table_plan.current_tablet_count;
+
+                // Split based on avg_tablet_size, or if the current resize_decision is split, apply hysteresis,
+                // so it would get cancelled only when crossing back the half-way point.
+                if (avg_tablet_size > target_max_tablet_size() ||
+                    (cur_decision.is_split() && avg_tablet_size >= _target_tablet_size)) {
+                    // TODO: extend to n-way split when needed
+                    tablet_count_from_size *= 2;
+                } else {
+                    // Consider merge. If the current resize_decision is merge, apply hysteresis,
+                    // so it would get cancelled only when crossing back the half-way point.
+                    if (avg_tablet_size < target_min_tablet_size() ||
+                        (cur_decision.is_merge() && avg_tablet_size <= _target_tablet_size)) {
+                        tablet_count_from_size /= 2;
+                    }
+                }
+
+                table_plan.avg_tablet_size = avg_tablet_size;
+                maybe_apply({tablet_count_from_size, format("avg_tablet_size={}", avg_tablet_size)});
+            } else {
+                // When we don't have tablet size info, allow tablet count to increase but not to decrease.
+                // Increasing will always bring us closer to the true target count, since tablet_count_from_size
+                // can only increase the count above it, but decreasing may go against the true target count
+                // if tablet_count_from_size would demand more tablets.
+                maybe_apply({table_plan.current_tablet_count, "current count"});
+            }
+
+            table_plan.target_tablet_count = target_tablet_count.tablet_count;
+            table_plan.target_tablet_count_reason = target_tablet_count.reason;
+
+            lblogger.debug("Table {} ({}.{}) target_tablet_count: {} ({})", table, s->ks_name(), s->cf_name(),
+                    table_plan.target_tablet_count, table_plan.target_tablet_count_reason);
+        };
+
+        for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
+            auto [s, rs] = get_schema_and_rs(table);
+            process_table(table, s, rs, tmap->tablet_count());
+            co_await coroutine::maybe_yield();
+        }
+
+        if (new_table) {
+            process_table(new_table->id(), new_table, new_rs, 0);
+        }
+
+        // Below section ensures we respect the _tablets_per_shard_goal.
+        //
+        // It will scale down target_tablet_count for all tables so that
+        // the average number of tablets per shard in each DC does not exceed _tablets_per_shard_goal.
+        //
+        // The impact of table's tablet count on average per-shard tablet replica count
+        // is different in each DC because replication factors are different in each DC.
+        //
+        // The algorithm works like this:
+        // Compute average tablet replica count per-shard in each DC,
+        // determine if per-shard goal is exceeded in that DC,
+        // compute scale factor by which tablet count should be multiplied so that the goal
+        // is not exceeded in that DC.
+        // Take the smallest scale factor among all DCs, which ensures that no DC is overloaded.
+        //
+        // We align tablet counts to the nearest power of 2 post-scaling, which
+        // means that scaling may not be effective and in the worst case we may overshoot the goal by
+        // a factor of 2. This is acceptable since the goal is a soft limit and not a hard constraint.
+        // Scaling post-alignment would be problematic. If we scale down all tables fairly, we undershoot the goal
+        // by a factor of 2 in the worst case. If we choose a subset of tables to scale down by a factor of 2 then
+        // we have a problem of making sure that the choice is stable across scheduler invocations to avoid
+        // oscillations of decisions.
+
+        std::unordered_map<table_id, double> table_scaling;
+
+        for (auto&& [dc, shard_count] : shards_per_dc) {
+            double cur_avg_tablets_per_shard = 0;
+            double new_avg_tablets_per_shard = 0;
+
+            for (auto&& [table, table_plan] : plan.tables) {
+                auto* rs = rs_by_table[table];
+                auto rf = rs->get_replication_factor(dc);
+                auto get_avg_tablets_per_shard = [&] (size_t tablet_count) {
+                    return double(tablet_count) * rf / shard_count;
+                };
+
+                auto cur_tablets_per_shard = get_avg_tablets_per_shard(table_plan.current_tablet_count);
+                cur_avg_tablets_per_shard += cur_tablets_per_shard;
+                lblogger.debug("cur_avg_tablets_per_shard [dc={}, table={}]: {:.3f}", dc, table, cur_tablets_per_shard);
+
+                auto new_tablets_per_shard = get_avg_tablets_per_shard(table_plan.target_tablet_count);
+                new_avg_tablets_per_shard += new_tablets_per_shard;
+                lblogger.debug("new_avg_tablets_per_shard [dc={}, table={}]: {:.3f}", dc, table, new_tablets_per_shard);
+            }
+
+            {
+                bool overloaded = cur_avg_tablets_per_shard > _tablets_per_shard_goal;
+                lblogger.debug("cur_avg_tablets_per_shard[dc={}]: {:.3f}{}", dc, cur_avg_tablets_per_shard,
+                    overloaded ? " (overloaded!)" : "");
+            }
+
+            bool overloaded = new_avg_tablets_per_shard > _tablets_per_shard_goal;
+            lblogger.debug("new_avg_tablets_per_shard[dc={}]: {:.3f}{}", dc, new_avg_tablets_per_shard,
+                overloaded ? " (overloaded!)" : "");
+
+            if (overloaded) {
+                auto scale = _tablets_per_shard_goal / new_avg_tablets_per_shard;
+
+                for (auto&& [table, table_plan]: plan.tables) {
+                    auto* rs = rs_by_table[table];
+                    auto rf = rs->get_replication_factor(dc);
+
+                    // If table has no replicas in this DC, scaling it won't help and is harmful to its distribution
+                    // in other DCs.
+                    if (rf) {
+                        auto [i, inserted] = table_scaling.try_emplace(table, scale);
+                        if (!inserted) {
+                            i->second = std::min(i->second, scale);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (auto&& [table, scale] : table_scaling) {
+            auto& table_plan = plan.tables[table];
+            auto new_count = std::max<size_t>(1, table_plan.target_tablet_count * scale);
+            lblogger.debug("Scaling down table {} by a factor of {:.3f}: {} => {}", table, scale, table_plan.target_tablet_count, new_count);
+            table_plan.target_tablet_count = new_count;
+            table_plan.target_tablet_count_reason = format("{} scaled by {:.3f}", table_plan.target_tablet_count_reason, scale);
+        }
+
+        // Generate:
+        //   table_plan.target_tablet_count_aligned
+        //   table_plan.resize_decision
+
+        for (auto&& [table, table_plan] : plan.tables) {
+            table_plan.target_tablet_count_aligned = 1u << log2ceil(table_plan.target_tablet_count);
+
+            if (table_plan.target_tablet_count_aligned > table_plan.current_tablet_count) {
+                table_plan.resize_decision = locator::resize_decision::split();
+            } else if (table_plan.target_tablet_count_aligned < table_plan.current_tablet_count) {
+                table_plan.resize_decision = locator::resize_decision::merge();
+            }
+
+            lblogger.debug("Table {}, {} => {} ({}: {}), resize: {}", table,
+                           table_plan.current_tablet_count,
+                           table_plan.target_tablet_count_aligned,
+                           table_plan.target_tablet_count,
+                           table_plan.target_tablet_count_reason,
+                           table_plan.resize_decision);
+        }
+
+        co_return std::move(plan);
+    }
+
+    future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
         table_resize_plan resize_plan;
 
         if (!_tm->tablets().balancing_enabled()) {
             co_return std::move(resize_plan);
         }
 
+        auto table_sizing_plan = co_await make_sizing_plan();
+
         cluster_resize_load resize_load;
 
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = *tmap_;
 
-            const auto* table_stats = load_stats_for_table(table);
-            if (!table_stats) {
+            table_sizing& table_plan = table_sizing_plan.tables[table];
+            if (!table_plan.avg_tablet_size) {
                 continue;
             }
 
-            auto avg_tablet_size = table_stats->size_in_bytes / std::max(tmap.tablet_count(), size_t(1));
             // shard presence of a table across the cluster
             size_t shard_count = std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
                 [] (size_t shard_count, const locator::tablet_info& info) {
                     return shard_count + info.replicas.size();
                 });
 
+            resize_decision new_resize_decision;
+            new_resize_decision.way = table_plan.resize_decision;
+
             table_size_desc size_desc {
-                .target_tablet_size = _target_tablet_size,
-                .avg_tablet_size = avg_tablet_size,
+                .avg_tablet_size = *table_plan.avg_tablet_size,
                 .resize_decision = tmap.resize_decision(),
-                .tablet_count = tmap.tablet_count(),
+                .new_resize_decision = new_resize_decision,
+                .tablet_count = table_plan.current_tablet_count,
                 .shard_count = shard_count,
-                .min_tablet_count = 1,
+                .reason = table_plan.target_tablet_count_reason,
             };
 
-            // FIXME: the table or the replication_strategy might be missing in boost unit tests
-            auto t = _db.get_tables_metadata().get_table_if_exists(table);
-            if (t) {
-                const auto& erm = t->get_effective_replication_map();
-                if (const auto* rs = erm->get_replication_strategy().maybe_as_tablet_aware()) {
-                    size_desc.min_tablet_count = std::max<size_t>(size_desc.min_tablet_count,
-                            rs->calculate_min_tablet_count(t->schema(), erm->get_token_metadata_ptr(), size_desc.target_tablet_size, initial_scale));
-                } else {
-                    auto msg = format("Table {}.{} has no tablet_aware_replication_strategy: uses_tablets={}", t->schema()->ks_name(), t->schema()->cf_name(), erm->get_replication_strategy().uses_tablets());
-                    if (!test_mode) {
-                        on_internal_error(lblogger, msg);
-                    } else {
-                        lblogger.debug("{}", msg);
-                    }
-                }
-            } else if (!test_mode) {
-                on_internal_error(lblogger, format("Table {} does not exist", table));
-            }
-
             resize_load.update(table, std::move(size_desc));
-            lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(), avg_tablet_size);
+            lblogger.debug("Table {} with tablet_count={} has an average tablet size of {}", table, tmap.tablet_count(),
+                    *table_plan.avg_tablet_size);
             co_await coroutine::maybe_yield();
         }
 
@@ -1143,8 +1386,8 @@ public:
             }
 
             auto resize_decision = cluster_resize_load::to_resize_decision(size_desc);
-            lblogger.info("Emitting resize decision of type {} for table {} due to avg tablet size of {}",
-                          resize_decision.type_name(), table, size_desc.avg_tablet_size);
+            lblogger.info("Emitting resize decision of type {} for table {}, avg_tablet_size={} reason={}",
+                          resize_decision.type_name(), table, size_desc.avg_tablet_size, size_desc.reason);
             resize_plan.resize[table] = std::move(resize_decision);
             _stats.for_cluster().resizes_emitted++;
 
@@ -1161,7 +1404,8 @@ public:
             if (resize_load.table_needs_resize_cancellation(size_desc)) {
                 resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
                 _stats.for_cluster().resizes_revoked++;
-                lblogger.info("Revoking resize decision for table {} due to avg tablet size of {}", table, size_desc.avg_tablet_size);
+                lblogger.info("Revoking resize decision for table {}, avg_tablet_size={} reason={}",
+                              table, size_desc.avg_tablet_size, size_desc.reason);
                 continue;
             }
 
@@ -2412,7 +2656,7 @@ public:
         }
     };
 
-    future<migration_plan> make_plan(dc_name dc, std::optional<unsigned> initial_scale, bool test_mode) {
+    future<migration_plan> make_plan(dc_name dc) {
         migration_plan plan;
 
         _dc = dc;
@@ -2421,7 +2665,8 @@ public:
         auto shuffle = in_shuffle_mode();
 
         _stats.for_dc(dc).calls++;
-        lblogger.debug("Examining DC {} (shuffle={}, balancing={})", dc, shuffle, _tm->tablets().balancing_enabled());
+        lblogger.debug("Examining DC {} (shuffle={}, balancing={}, tablets_per_shard_goal={})",
+                dc, shuffle, _tm->tablets().balancing_enabled(), _tablets_per_shard_goal);
 
         const locator::topology& topo = _tm->get_topology();
 
@@ -2698,21 +2943,28 @@ public:
 
 class tablet_allocator_impl : public tablet_allocator::impl
                             , public service::migration_listener::empty_listener {
-    const tablet_allocator::config _config;
     service::migration_notifier& _migration_notifier;
     replica::database& _db;
     load_balancer_stats_manager _load_balancer_stats;
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
+private:
+    load_balancer make_load_balancer(token_metadata_ptr tm,
+            locator::load_stats_ptr table_load_stats,
+            std::unordered_set<host_id> skiplist) {
+        load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats,
+            _db.get_config().target_tablet_size_in_bytes(),
+            _db.get_config().tablets_per_shard_goal(),
+            std::move(skiplist));
+        lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
+        lb.set_initial_scale(_db.get_config().tablets_initial_scale_factor());
+        return lb;
+    }
 public:
     tablet_allocator_impl(tablet_allocator::config cfg, service::migration_notifier& mn, replica::database& db)
-            : _config(std::move(cfg))
-            , _migration_notifier(mn)
+            : _migration_notifier(mn)
             , _db(db)
             , _load_balancer_stats("load_balancer") {
-        if (_config.initial_tablets_scale == 0) {
-            throw std::runtime_error("Initial tablets scale must be positive");
-        }
         _migration_notifier.register_listener(this);
     }
 
@@ -2727,10 +2979,9 @@ public:
         _stopped = true;
     }
 
-    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist, bool test_mode) {
-        load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
-        lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
-        co_return co_await lb.make_plan(_config.initial_tablets_scale, test_mode);
+    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
+        auto lb = make_load_balancer(tm, std::move(table_load_stats), std::move(skiplist));
+        co_return co_await lb.make_plan();
     }
 
     void set_use_tablet_aware_balancing(bool use_tablet_aware_balancing) {
@@ -2743,7 +2994,15 @@ public:
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
             lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
-            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, _db.get_config().target_tablet_size_in_bytes(), _config.initial_tablets_scale).get();
+            auto lb = make_load_balancer(tm, nullptr, {});
+            auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
+            auto& table_plan = plan.tables[s.id()];
+            if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
+                lblogger.info("Rounding up tablet count from {} to {} for table {}.{}", table_plan.target_tablet_count,
+                        table_plan.target_tablet_count_aligned, s.ks_name(), s.cf_name());
+            }
+            auto tablet_count = table_plan.target_tablet_count_aligned;
+            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
         }
     }
@@ -2879,8 +3138,8 @@ future<> tablet_allocator::stop() {
     return impl().stop();
 }
 
-future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist, bool test_mode) {
-    return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist), test_mode);
+future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist) {
+    return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist));
 }
 
 void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balancing) {

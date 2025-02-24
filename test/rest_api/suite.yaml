@@ -9,3 +9,4 @@ extra_scylla_cmdline_options:
   - '--experimental-features=udf'
   - '--enable-tablets=true'
   - '--experimental-features=views-with-tablets'
+  - '--tablets-initial-scale-factor=1'

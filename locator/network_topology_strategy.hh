@@ -29,7 +29,7 @@ public:
         return _rep_factor;
     }
 
-    size_t get_replication_factor(const sstring& dc) const {
+    size_t get_replication_factor(const sstring& dc) const override {
         auto dc_factor = _dc_rep_factor.find(dc);
         return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second;
     }
@@ -46,8 +46,7 @@ public:
 
 public: // tablet_aware_replication_strategy
     virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const override;
-    virtual size_t calculate_min_tablet_count(schema_ptr s, token_metadata_ptr tm, uint64_t target_tablet_size, std::optional<unsigned> initial_scale) const override;
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, uint64_t target_tablet_size, std::optional<unsigned> initial_scale = std::nullopt) const override;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count) const override;
     virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets) const override;
 protected:
     /**

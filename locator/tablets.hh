@@ -325,10 +325,12 @@ struct resize_decision {
     struct merge {
         auto operator<=>(const merge&) const = default;
     };
+    using way_type = std::variant<none, split, merge>;
 
     using seq_number_t = int64_t;
 
-    std::variant<none, split, merge> way;
+    way_type way;
+
     // The sequence number globally identifies a resize decision.
     // It's monotonically increasing, globally.
     // Needed to distinguish stale decision from latest one, in case coordinator
@@ -353,6 +355,8 @@ struct resize_decision {
     sstring type_name() const;
     seq_number_t next_sequence_number() const;
 };
+
+using resize_decision_way = resize_decision::way_type;
 
 struct table_load_stats {
     uint64_t size_in_bytes = 0;
@@ -672,6 +676,11 @@ struct tablet_metadata_change_hint {
 };
 
 }
+
+template <>
+struct fmt::formatter<locator::resize_decision_way> : fmt::formatter<string_view> {
+    auto format(const locator::resize_decision_way&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
 
 template <>
 struct fmt::formatter<locator::tablet_transition_stage> : fmt::formatter<string_view> {

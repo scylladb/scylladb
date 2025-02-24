@@ -7,3 +7,4 @@ extra_scylla_cmdline_options:
   - '--experimental-features=keyspace-storage-options'
   - '--experimental-features=views-with-tablets'
   - '--enable-tablets=true'
+  - '--tablets-initial-scale-factor=1'
