@@ -13,6 +13,7 @@ Nodetool
    nodetool-commands/checkandrepaircdcstreams
    nodetool-commands/cleanup
    nodetool-commands/clearsnapshot
+   nodetool-commands/cluster/index
    nodetool-commands/compactionhistory
    nodetool-commands/compactionstats
    nodetool-commands/compact
@@ -85,6 +86,7 @@ Operations that are not listed below are currently not available.
 * :doc:`checkandrepaircdcstreams </operating-scylla/nodetool-commands/checkandrepaircdcstreams/>` - Checks and fixes CDC streams.
 * :doc:`cleanup </operating-scylla/nodetool-commands/cleanup/>` - Triggers the immediate cleanup of keys no longer belonging to a node.
 * :doc:`clearsnapshot </operating-scylla/nodetool-commands/clearsnapshot/>` - This command removes snapshots.
+* :doc:`cluster <nodetool-commands/cluster/index>` - Run a cluster operation.
 * :doc:`compactionhistory </operating-scylla/nodetool-commands/compactionhistory/>` - Provides the history of compactions.
 * :doc:`compactionstats </operating-scylla/nodetool-commands/compactionstats/>`- Print statistics on compactions.
 * :doc:`compact </operating-scylla/nodetool-commands/compact/>`- Force a (major) compaction on one or more column families.
@@ -115,7 +117,7 @@ Operations that are not listed below are currently not available.
 * :doc:`rebuild </operating-scylla/nodetool-commands/rebuild/>` :code:`[<src-dc-name>]`- Rebuild data by streaming from other nodes
 * :doc:`refresh </operating-scylla/nodetool-commands/refresh/>`- Load newly placed SSTables to the system without restart
 * :doc:`removenode </operating-scylla/nodetool-commands/removenode/>`- Remove node with the provided ID
-* :doc:`repair <nodetool-commands/repair/>`  :code:`<keyspace>` :code:`<table>` - Repair one or more tables
+* :doc:`repair <nodetool-commands/repair/>`  :code:`<keyspace>` :code:`<table>` - Repair one or more vnode tables.
 * :doc:`restore </operating-scylla/nodetool-commands/restore/>` - Load SSTables from a designated bucket in object store into a specified keyspace or table
 * :doc:`resetlocalschema </operating-scylla/nodetool-commands/resetlocalschema/>` - Reset the node's local schema.
 * :doc:`ring <nodetool-commands/ring/>` - The nodetool ring command display the token ring information.

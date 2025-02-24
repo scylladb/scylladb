@@ -1,12 +1,22 @@
 Nodetool repair
 ===============
 
-**Repair** - a process that runs in the background and synchronizes the data between nodes.
+**Repair** - A process that runs in the background and synchronizes the data between nodes. It only repairs keyspaces with tablets disabled (vnode-based).
+To repair keyspaces with tablets, see :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>`.
 
 When running ``nodetool repair`` on a **single node**, it acts as the **repair master**. Only the data contained in the master node and its replications will be repaired.
 Typically, this subset of data is replicated on many nodes in the cluster, often all, and the repair process syncs between all the replicas until the master data subset is in-sync.
 
 To repair **all** of the data in the cluster, you need to run a repair on **all** of the nodes in the cluster, or let `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_ do it for you.
+
+To synchronize all data in clusters that have both tablets- and vnodes-based keyspaces, run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair/>` on **all**
+of the nodes in the cluster, and :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair/>` on **any** of the nodes in the cluster.
+
+To check if a keyspace enables tablets, use:
+
+.. code-block:: cql
+
+  DESCRIBE KEYSPACE `keyspace_name`
 
 .. note:: Run the :doc:`nodetool repair </operating-scylla/nodetool-commands/repair/>` command regularly. If you delete data frequently, it should be more often than the value of ``gc_grace_seconds`` (by default: 10 days), for example, every week. Use the **nodetool repair -pr** on each node in the cluster, sequentially.
 
