@@ -221,7 +221,7 @@ void compression::segmented_offsets::push_back(uint64_t offset, compression::seg
 
 void compression::set_compressor(compressor_ptr c) {
     if (c) {
-        unqualified_name uqn(compressor::make_name(""), c->name());
+        unqualified_name uqn(compression_parameters::name_prefix, c->name());
         const sstring& cn = uqn;
         name.value = bytes(cn.begin(), cn.end());
         for (auto& [k, v] : c->options()) {

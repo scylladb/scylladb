@@ -20,10 +20,7 @@
 class compression_parameters;
 
 class compressor {
-    sstring _name;
 public:
-    compressor(sstring);
-
     virtual ~compressor() {}
 
     /**
@@ -56,9 +53,7 @@ public:
     /**
      * Compressor class name.
      */
-    const sstring& name() const {
-        return _name;
-    }
+    virtual std::string_view name() const = 0;
 
     using ptr_type = shared_ptr<compressor>;
 
@@ -87,6 +82,7 @@ public:
         deflate,
         none,
     };
+    static constexpr std::string_view name_prefix = "org.apache.cassandra.io.compress.";
     static constexpr std::array<std::string_view, 4> algorithm_names = {
         "org.apache.cassandra.io.compress.LZ4Compressor",
         "org.apache.cassandra.io.compress.ZstdCompressor",
