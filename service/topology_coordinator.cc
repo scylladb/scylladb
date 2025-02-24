@@ -1442,6 +1442,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             guard = co_await global_tablet_token_metadata_barrier(std::move(guard));
             barrier.set_value();
             fail_barrier.cancel();
+            co_return;
         }
 
         if (has_updates) {
