@@ -21,9 +21,7 @@
 #include "utils/chunked_vector.hh"
 #include "utils/amortized_reserve.hh"
 
-#include <boost/range/algorithm/equal.hpp>
 #include <boost/range/algorithm/reverse.hpp>
-#include <boost/range/irange.hpp>
 
 using disk_array = utils::chunked_vector<uint64_t, 1024>;
 
@@ -109,7 +107,7 @@ BOOST_AUTO_TEST_CASE(test_random_walk) {
             abort();
         }
         BOOST_REQUIRE_EQUAL(c.size(), d.size());
-        BOOST_REQUIRE(boost::equal(c, d));
+        BOOST_REQUIRE(std::ranges::equal(c, d));
     }
 }
 
