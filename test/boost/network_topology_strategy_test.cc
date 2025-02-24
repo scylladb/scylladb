@@ -35,7 +35,6 @@
 #include <sstream>
 #include <compare>
 #include <ranges>
-#include <boost/range/algorithm/adjacent_find.hpp>
 #include <boost/algorithm/cxx11/iota.hpp>
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
@@ -72,7 +71,7 @@ static void verify_sorted(const dht::token_range_vector& trv) {
                 || a.end()->value() > b.start()->value()
                 || (a.end()->value() == b.start()->value() && a.end()->is_inclusive() && b.start()->is_inclusive());
     };
-    BOOST_CHECK(boost::adjacent_find(trv, not_strictly_before) == trv.end());
+    BOOST_CHECK(std::ranges::adjacent_find(trv, not_strictly_before) == trv.end());
 }
 
 static future<> check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, locator::host_id ep) {
