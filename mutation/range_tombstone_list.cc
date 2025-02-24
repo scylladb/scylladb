@@ -9,7 +9,6 @@
 #include "range_tombstone_list.hh"
 #include "utils/assert.hh"
 #include "utils/allocation_strategy.hh"
-#include <boost/range/algorithm/equal.hpp>
 #include <seastar/util/variant_utils.hh>
 
 range_tombstone_list::range_tombstone_list(const range_tombstone_list& x)
@@ -425,7 +424,7 @@ void range_tombstone_list::update_undo_op::undo(const schema& s, range_tombstone
 }
 
 bool range_tombstone_list::equal(const schema& s, const range_tombstone_list& other) const {
-    return boost::equal(_tombstones, other._tombstones, [&s] (auto&& rt1, auto&& rt2) {
+    return std::ranges::equal(_tombstones, other._tombstones, [&s] (auto&& rt1, auto&& rt2) {
         return rt1.tombstone().equal(s, rt2.tombstone());
     });
 }
