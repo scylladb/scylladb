@@ -165,6 +165,7 @@ public:
     gms::feature compression_dicts { *this, "COMPRESSION_DICTS"sv };
     gms::feature tablet_options { *this, "TABLET_OPTIONS"sv };
     gms::feature tablet_load_stats_v2 { *this, "TABLET_LOAD_STATS_V2"sv };
+    gms::feature sstable_compression_dicts { *this, "SSTABLE_COMPRESSION_DICTS"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
