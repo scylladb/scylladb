@@ -1682,9 +1682,15 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe(notify_topology);
             auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
 
-            auto compression_dict_updated_callback = [] (std::string_view) -> future<> {
-                auto dict = co_await sys_ks.local().query_dict(dictionary_service::rpc_compression_dict_name);
-                co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+            auto compression_dict_updated_callback = [&sstable_compressor_factory] (std::string_view name) -> future<> {
+                auto dict = co_await sys_ks.local().query_dict(name);
+                auto sstables_prefix = std::string_view("sstables/");
+                if (name.starts_with(sstables_prefix)) {
+                    auto table = table_id(utils::UUID(name.substr(sstables_prefix.size())));
+                    co_await sstable_compressor_factory->set_recommended_dict(table, std::move(dict.data));
+                } else if (name == dictionary_service::rpc_compression_dict_name) {
+                    co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+                }
             };
 
             checkpoint(stop_signal, "starting system distributed keyspace");
