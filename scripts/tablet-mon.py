@@ -586,7 +586,7 @@ def draw_tablet(tablet, x, y):
             number_text = str(tablet.seq)
             number_image = number_font.render(number_text, True, BLACK)
             window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
-                                       y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
+                                       y + tablet_frame_size + (h - 2 * tablet_frame_size - number_image.get_height()) / 2))
 
 def draw_node_frame(x, y, x2, y2, color):
     pygame.draw.rect(window, color, (x, y, x2 - x, y2 - y), node_frame_thickness,
