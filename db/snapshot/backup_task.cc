@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -77,6 +78,9 @@ future<> backup_task_impl::upload_component(sstring name) {
     //  - http::client::max_connections limitation
     try {
         co_await _client->upload_file(component_name, destination, _progress, &_as);
+    } catch (const abort_requested_exception&) {
+        snap_log.info("Upload aborted per requested: {}", component_name.native());
+        throw;
     } catch (...) {
         snap_log.error("Error uploading {}: {}", component_name.native(), std::current_exception());
         throw;
