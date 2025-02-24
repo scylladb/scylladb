@@ -18,6 +18,7 @@
 #include "version.hh"
 #include "counters.hh"
 #include "dht/i_partitioner_fwd.hh"
+#include <set>
 
 namespace sstables {
 

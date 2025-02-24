@@ -10,7 +10,6 @@
 
 #include <map>
 #include <optional>
-#include <set>
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -48,10 +47,6 @@ public:
      */
     virtual size_t compress_max_size(size_t input_len) const = 0;
 
-    /**
-     * Returns accepted option names for this compressor
-     */
-    virtual std::set<sstring> option_names() const;
     /**
      * Returns original options used in instantiating this compressor
      */

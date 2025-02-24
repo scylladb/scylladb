@@ -112,8 +112,6 @@ public:
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
     algorithm get_algorithm() const override;
-
-    std::set<sstring> option_names() const override;
     std::map<sstring, sstring> options() const override;
 };
 
@@ -159,17 +157,8 @@ auto zstd_processor::get_algorithm() const -> algorithm {
     return algorithm::zstd;
 }
 
-
-std::set<sstring> zstd_processor::option_names() const {
-    return {COMPRESSION_LEVEL};
-}
-
 std::map<sstring, sstring> zstd_processor::options() const {
     return {{COMPRESSION_LEVEL, std::to_string(_compression_level)}};
-}
-
-std::set<sstring> compressor::option_names() const {
-    return {};
 }
 
 std::map<sstring, sstring> compressor::options() const {
