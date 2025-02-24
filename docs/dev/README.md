@@ -18,3 +18,5 @@ For information on how to build Scylla and how to contribute visit
 Index
 =====
 [Module list and dependencies](modules.md)
+
+[Repository layout and short summary of components](repository_layout.md)
