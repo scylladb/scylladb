@@ -13,7 +13,8 @@ import re
 import textwrap
 from contextlib import contextmanager, ExitStack
 from .util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, \
-    new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user
+    new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user, new_materialized_view, \
+    new_secondary_index
 from cassandra.protocol import InvalidRequest, Unauthorized
 from collections.abc import Iterable
 from typing import Any
@@ -493,7 +494,7 @@ def test_desc_cluster(scylla_only, cql, test_keyspace):
 def is_scylla(cql):
     return any('scylla' in name for name in [row.table_name for row in cql.execute("SELECT * FROM system_schema.tables WHERE keyspace_name = 'system'")])
 
-# Test that 'DESC INDEX' contains create statement od index
+# Test that 'DESC INDEX' contains create statement of index
 def test_desc_index(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int primary key, b int, c int") as tbl:
         tbl_name = get_name(tbl)
@@ -631,11 +632,47 @@ def test_index_desc_in_table_desc(cql, test_keyspace):
 
         tbl_name = get_name(tbl)
         desc = "\n".join([d.create_statement for d in cql.execute(f"DESC TABLE {tbl}")])
+        print(desc)
         
         assert f"CREATE INDEX {tbl_name}_b_idx ON {tbl}{maybe_space}(b)" in desc
         assert f"CREATE INDEX named_index ON {tbl}{maybe_space}(c)" in desc
         if has_local:
             assert f"CREATE INDEX {tbl_name}_b_idx_1 ON {tbl}((a), b)" in desc
+
+# Test that while 'DESC TABLE' and 'DESC KEYSPACE' include creation of a
+# secondary index (CREATE INDEX command), neither includes a CREATE
+# MATERIALIZED VIEW for the materialized view that Scylla uses internally
+# to back the index. This test confirms that issue #6058 might have existed
+# in cqlsh, but no longer exist for server-side describe.
+def test_index_not_view_in_desc(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        with new_test_table(cql, ks, "a int primary key, b int, c int") as table:
+            with new_secondary_index(cql, table, 'c'):
+                desc = [d.create_statement for d in cql.execute(f"DESC TABLE {table}")]
+                assert 1 == sum(1 for line in desc if 'CREATE INDEX' in line)
+                assert 0 == sum(1 for line in desc if 'CREATE MATERIALIZED VIEW' in line)
+                desc = [d.create_statement for d in cql.execute(f"DESC KEYSPACE {ks}")]
+                assert 1 == sum(1 for line in desc if 'CREATE INDEX' in line)
+                assert 0 == sum(1 for line in desc if 'CREATE MATERIALIZED VIEW' in line)
+
+# Test that 'DESC KEYSPACE' contains description of a materialized view in
+# that keyspace.
+def test_view_desc_in_keyspace_desc(cql):
+    with new_test_keyspace(cql, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        with new_test_table(cql, ks, "a int primary key, b int, c int") as table:
+            with new_materialized_view(cql, table, '*', 'b, a', 'b is not null and a is not null') as mv:
+                desc = [d.create_statement for d in cql.execute(f"DESC KEYSPACE {ks}")]
+                assert 1 == sum(1 for line in desc if 'CREATE MATERIALIZED VIEW' in line)
+
+# Test that 'DESC TABLE' contains description of a materialized view on that
+# table. This is in fact missing in Cassandra, and I consider this a Cassandra
+# but so opened https://issues.apache.org/jira/browse/CASSANDRA-20365.
+# See also discussion in #23014.
+def test_view_desc_in_table_desc(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "a int primary key, b int, c int") as table:
+        with new_materialized_view(cql, table, '*', 'b, a', 'b is not null and a is not null') as mv:
+            desc = [d.create_statement for d in cql.execute(f"DESC TABLE {table}")]
+            assert 1 == sum(1 for line in desc if 'CREATE MATERIALIZED VIEW' in line)
 
 # -----------------------------------------------------------------------------
 # "Generic describe" is a describe statement without specifying what kind of object 
