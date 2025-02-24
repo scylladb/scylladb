@@ -49,10 +49,6 @@ public:
     virtual size_t compress_max_size(size_t input_len) const = 0;
 
     /**
-     * Returns accepted option names for this compressor
-     */
-    virtual std::set<sstring> option_names() const;
-    /**
      * Returns original options used in instantiating this compressor
      */
     virtual std::map<sstring, sstring> options() const;
