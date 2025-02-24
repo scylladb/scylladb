@@ -615,7 +615,7 @@ def test_repair_all_with_tablet_keyspace(nodetool):
             response=1),
         expected_request("GET", "/storage_service/repair_async/ks1", params={"id": "1"}, response="SUCCESSFUL")])
 
-    assert "Warning: only vnode keyspaces will be repaired" in res.stdout
+    assert "Warning: only vnode keyspaces will be repaired. To repair tablet keyspaces use nodetool tablet-repair." in res.stdout
 
     assert _remove_log_timestamp(res.stdout) == """\
 Starting repair command #1, repairing 1 ranges for keyspace ks1 (parallelism=SEQUENTIAL, full=true)
@@ -631,4 +631,4 @@ def test_repair_keyspace(nodetool):
                 expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
                 expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
         ]},
-        ["error processing arguments: nodetool repair repairs only vnode keyspaces"])
+        ["error processing arguments: nodetool repair repairs only vnode keyspaces. To repair tablet keyspaces use nodetool tablet-repair."])
