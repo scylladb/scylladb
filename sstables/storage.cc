@@ -480,7 +480,15 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
 }
 
 future<atomic_delete_context> filesystem_storage::atomic_delete_prepare(const std::vector<shared_sstable>& ssts) const {
-    co_return co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
+    atomic_delete_context res;
+
+    for (const auto& sst : ssts) {
+        auto prefix = sst->_storage->prefix();
+        res.prefixes.insert(prefix);
+    }
+
+    res.pending_delete_log = co_await sstable_directory::create_pending_deletion_log(_base_dir, ssts);
+    co_return std::move(res);
 }
 
 future<> filesystem_storage::atomic_delete_complete(atomic_delete_context ctx) const {
