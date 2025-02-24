@@ -141,13 +141,39 @@ public:
     }
 };
 
+// A lz4 compressor for SSTables.
+//
+// Compression and decompression dicts can be passed to it via the constructor,
+// and they will be used for compression and decompression respectively.
+//
+// If only the decompression dict is passed, calling `compress()` is illegal.
+// If only the compression dict is passed, calling `decompress()` is illegal.
+// If both dicts or none are passed, both `compress()` and `decompress()` are legal.
+//
+// (The reason we want to allow passing only one dict is that we want to discard
+// compression dicts after the SSTable is written. They are much bigger then decompression
+// dicts, and they won't be useful anymore, so it makes sense to free them.)
 class lz4_processor: public compressor {
 public:
+    using cdict_ptr = foreign_ptr<lw_shared_ptr<const lz4_cdict>>;
+    using ddict_ptr = foreign_ptr<lw_shared_ptr<const raw_dict>>;
+private:
+    cdict_ptr _cdict;
+    ddict_ptr _ddict;
+    static LZ4_stream_t* get_cctx() {
+        static thread_local auto cctx = std::unique_ptr<LZ4_stream_t, decltype(&LZ4_freeStream)>{LZ4_createStream(), LZ4_freeStream};
+        return cctx.get();
+    }
+public:
+    lz4_processor(cdict_ptr = nullptr, ddict_ptr = nullptr);
+    // Legal if `_ddict || !_cdict`.
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
+    // Legal if `_cdict || !_ddict`.
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+    std::map<sstring, sstring> options() const override;
     algorithm get_algorithm() const override;
 };
 
@@ -537,6 +563,11 @@ std::map<sstring, sstring> compression_parameters::get_options() const {
     return opts;
 }
 
+lz4_processor::lz4_processor(cdict_ptr cdict, ddict_ptr ddict)
+    : _cdict(std::move(cdict))
+    , _ddict(std::move(ddict))
+{}
+
 size_t lz4_processor::uncompress(const char* input, size_t input_len,
                 char* output, size_t output_len) const {
     // We use LZ4_decompress_safe(). According to the documentation, the
@@ -556,7 +587,13 @@ size_t lz4_processor::uncompress(const char* input, size_t input_len,
     input += 4;
     input_len -= 4;
 
-    auto ret = LZ4_decompress_safe(input, output, input_len, output_len);
+    int ret;
+    if (_ddict) {
+        ret = LZ4_decompress_safe_usingDict(input, output, input_len, output_len, reinterpret_cast<const char*>(_ddict->raw().data()), _ddict->raw().size());
+    } else {
+        SCYLLA_ASSERT(!_cdict && "Write-only compressor used for reading");
+        ret = LZ4_decompress_safe(input, output, input_len, output_len);
+    }
     if (ret < 0) {
         throw std::runtime_error("LZ4 uncompression failure");
     }
@@ -573,7 +610,20 @@ size_t lz4_processor::compress(const char* input, size_t input_len,
     output[1] = (input_len >> 8) & 0xFF;
     output[2] = (input_len >> 16) & 0xFF;
     output[3] = (input_len >> 24) & 0xFF;
-    auto ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
+    int ret;
+    if (_cdict) {
+        auto* ctx = get_cctx();
+        LZ4_attach_dictionary(ctx, _cdict->dict());
+        ret = LZ4_compress_fast_continue(ctx, input, output + 4, input_len, LZ4_compressBound(input_len), 1);
+        if (ret == 0) {
+            LZ4_initStream(ctx, sizeof(*ctx));
+        } else {
+            LZ4_resetStream_fast(ctx);
+        }
+    } else {
+        SCYLLA_ASSERT(!_ddict && "Read-only compressor used for writing");
+        ret = LZ4_compress_default(input, output + 4, input_len, LZ4_compressBound(input_len));
+    }
     if (ret == 0) {
         throw std::runtime_error("LZ4 compression failure: LZ4_compress() failed");
     }
@@ -586,6 +636,20 @@ size_t lz4_processor::compress_max_size(size_t input_len) const {
 
 auto lz4_processor::get_algorithm() const -> algorithm {
     return algorithm::lz4;
+}
+
+std::map<sstring, sstring> lz4_processor::options() const {
+    std::optional<std::span<const std::byte>> dict_blob;
+    if (_cdict) {
+        dict_blob = _cdict->raw();
+    } else if (_ddict) {
+        dict_blob = _ddict->raw();
+    }
+    if (dict_blob) {
+        return dict_as_options(*dict_blob);
+    } else {
+        return {};
+    }
 }
 
 size_t deflate_processor::uncompress(const char* input,
