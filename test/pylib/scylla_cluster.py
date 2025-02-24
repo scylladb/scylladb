@@ -27,7 +27,7 @@ from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line
+from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from functools import partial
 import aiohttp
@@ -1780,20 +1780,3 @@ async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], te
         yield manager
     finally:
         await manager.stop()
-
-
-async def gather_safely(*awaitables: Awaitable):
-    """
-    Developers using asyncio.gather() often assume that it waits for all futures (awaitables) givens.
-    But this isn't true when the return_exceptions parameter is False, which is the default.
-    In that case, as soon as one future completes with an exception, the gather() call will return this exception
-    immediately, and some of the finished tasks may continue to run in the background.
-    This is bad for applications that use gather() to ensure that a list of background tasks has all completed.
-    So such applications must use asyncio.gather() with return_exceptions=True, to wait for all given futures to
-    complete either successfully or unsuccessfully.
-    """
-    results = await asyncio.gather(*awaitables, return_exceptions=True)
-    for result in results:
-        if isinstance(result, BaseException):
-            raise result from None
-    return results

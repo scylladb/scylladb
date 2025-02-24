@@ -218,49 +218,60 @@ async def wait_until_last_generation_is_in_use(cql: Session):
     else:
         logger.info(f"The last generation is already in use.")
 
-async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, hosts: list[Host], cqls: Optional[list[Session]] = None):
+async def check_system_topology_and_cdc_generations_v3_consistency(manager: ManagerClient, live_hosts: list[Host], cqls: Optional[list[Session]] = None, ignored_hosts: list[Host] = []):
     # The cqls parameter is a temporary workaround for testing the recovery mode in the presence of live zero-token
     # nodes. A zero-token node requires a different cql session not to be ignored by the driver because of empty tokens
     # in the system.peers table.
-    assert len(hosts) != 0
+    assert len(live_hosts) != 0
+
+    logging.info(f"Nodes that will be ignored by check_system_topology_and_cdc_generations_v3_consistency: {ignored_hosts}")
 
     if cqls is None:
-        cqls = [manager.cql] * len(hosts)
+        cqls = [manager.cql] * len(live_hosts)
 
-    topo_results = await asyncio.gather(*(cql.run_async("SELECT * FROM system.topology", host=host) for cql, host in zip(cqls, hosts)))
+    live_host_ids = frozenset(host.host_id for host in live_hosts)
+    ignored_host_ids = frozenset(host.host_id for host in ignored_hosts)
 
-    for host, topo_res in zip(hosts, topo_results):
+    topo_results = await asyncio.gather(*(cql.run_async("SELECT * FROM system.topology", host=host) for cql, host in zip(cqls, live_hosts)))
+
+    for host, topo_res in zip(live_hosts, topo_results):
         logging.info(f"Dumping the state of system.topology as seen by {host}:")
         for row in topo_res:
             logging.info(f"  {row}")
 
-    for cql, host, topo_res in zip(cqls, hosts, topo_results):
+    for cql, host, topo_res in zip(cqls, live_hosts, topo_results):
         assert len(topo_res) != 0
 
         for row in topo_res:
-            assert row.host_id is not None
-            assert row.datacenter is not None
-            assert row.ignore_msb is not None
-            assert row.node_state == "normal"
-            assert row.num_tokens is not None
-            assert row.rack is not None
-            assert row.release_version is not None
-            assert row.supported_features is not None
-            assert row.shard_count is not None
+            if row.host_id in live_host_ids:
+                assert row.datacenter is not None
+                assert row.ignore_msb is not None
+                assert row.node_state == "normal"
+                assert row.num_tokens is not None
+                assert row.rack is not None
+                assert row.release_version is not None
+                assert row.supported_features is not None
+                assert row.shard_count is not None
+            else:
+                assert row.host_id is not None
+                assert row.host_id in ignored_host_ids
+                assert row.node_state == "left"
 
             assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
 
-        assert topo_res[0].committed_cdc_generations is not None
-        committed_generations = frozenset(gen[1] for gen in topo_res[0].committed_cdc_generations)
+        live_topo_res = [row for row in topo_res if row.host_id in live_host_ids]
 
-        assert topo_res[0].fence_version is not None
-        assert topo_res[0].upgrade_state == "done"
+        assert live_topo_res[0].committed_cdc_generations is not None
+        committed_generations = frozenset(gen[1] for gen in live_topo_res[0].committed_cdc_generations)
 
-        assert host.host_id in (row.host_id for row in topo_res)
+        assert live_topo_res[0].fence_version is not None
+        assert live_topo_res[0].upgrade_state == "done"
 
-        computed_enabled_features = functools.reduce(operator.and_, (frozenset(row.supported_features) for row in topo_res))
-        assert topo_res[0].enabled_features is not None
-        enabled_features = frozenset(topo_res[0].enabled_features)
+        assert live_host_ids == frozenset(row.host_id for row in live_topo_res)
+
+        computed_enabled_features = functools.reduce(operator.and_, (frozenset(row.supported_features) for row in live_topo_res))
+        assert live_topo_res[0].enabled_features is not None
+        enabled_features = frozenset(live_topo_res[0].enabled_features)
         assert enabled_features == computed_enabled_features
         assert "SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES" in enabled_features
 
@@ -271,7 +282,9 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         assert committed_generations.issubset(all_generations)
 
         # Check that the contents fetched from the current host are the same as for other nodes
-        assert topo_results[0] == topo_res
+        # (ignoring the dead rows as the orphan node remover might have removed them
+        # at a different time on different nodes).
+        assert [row for row in topo_results[0] if row.host_id in live_host_ids] == live_topo_res
 
 async def check_node_log_for_failed_mutations(manager: ManagerClient, server: ServerInfo):
     logging.info(f"Checking that node {server} had no failed mutations")
