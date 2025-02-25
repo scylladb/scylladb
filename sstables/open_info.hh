@@ -79,6 +79,9 @@ struct sstable_open_config {
     // Mimics behavior when a SSTable is streamed to a given shard, where SSTable
     // writer considers the shard that created the SSTable as its owner.
     bool current_shard_as_sstable_owner = false;
+    // Sharding metadata can take lots of memory, and it's only used for computing
+    // a set of shard owners, so it can be usually discarded afterward.
+    bool clear_sharding_metadata = true;
 };
 
 }
