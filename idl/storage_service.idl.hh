@@ -24,8 +24,13 @@ struct table_load_stats final {
     int64_t split_ready_seq_number;
 };
 
-struct load_stats final {
+struct load_stats_v1 final {
     std::unordered_map<::table_id, locator::table_load_stats> tables;
+};
+
+struct load_stats {
+    std::unordered_map<::table_id, locator::table_load_stats> tables;
+    std::unordered_map<locator::host_id, uint64_t> capacity;
 };
 
 }
@@ -69,6 +74,7 @@ verb raft_topology_cmd (raft::server_id dst_id, raft::term_t term, uint64_t cmd_
 verb [[cancellable]] raft_pull_snapshot (raft::server_id dst_id, service::raft_snapshot_pull_params) -> service::raft_snapshot;
 verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
+verb [[cancellable]] table_load_stats_v1 (raft::server_id dst_id) -> locator::load_stats_v1;
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
 verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id) -> service::tablet_operation_repair_result;
 }

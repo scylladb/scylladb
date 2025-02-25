@@ -2966,6 +2966,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
         rtlogger.debug("raft topology: Refreshing table load stats for DC {} that has {} token owners", dc, nodes.size());
         co_await coroutine::parallel_for_each(nodes, [&] (const auto& node) -> future<> {
             auto dst = node.get().host_id();
+            auto dst_server = raft::server_id(dst.uuid());
 
             _as.check();
 
@@ -2982,10 +2983,19 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
             t.arm(timeout);
             auto sub = _as.subscribe(request_abort);
 
-            auto node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
-                                                                                             dst,
-                                                                                             as,
-                                                                                             raft::server_id(dst.uuid()));
+            locator::load_stats node_stats;
+            if (_feature_service.tablet_load_stats_v2) {
+                node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
+                                                                                            dst,
+                                                                                            as,
+                                                                                            dst_server);
+            } else {
+                node_stats = locator::load_stats::from_v1(
+                    co_await ser::storage_service_rpc_verbs::send_table_load_stats_v1(&_messaging,
+                                                                                      dst,
+                                                                                      as,
+                                                                                      dst_server));
+            }
 
             dc_stats += node_stats;
         });
