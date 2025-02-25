@@ -1279,22 +1279,25 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         co_return api_error::validation(fmt::format("Prefix {} is reserved for accessing internal tables", executor::INTERNAL_TABLE_PREFIX));
     }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
-    const rjson::value& attribute_definitions = request["AttributeDefinitions"];
+    const rjson::value* attribute_definitions = rjson::find(request, "AttributeDefinitions");
+    if (attribute_definitions == nullptr) {
+        co_return api_error::validation("Missing AttributeDefinitions in CreateTable request");
+    }
     // Save the list of AttributeDefinitions in unused_attribute_definitions,
     // and below remove each one as we see it in a KeySchema of the table or
     // any of its GSIs or LSIs. If anything remains in this set at the end of
     // this function, it's an error.
     std::unordered_set<std::string> unused_attribute_definitions =
-        validate_attribute_definitions(attribute_definitions);
+        validate_attribute_definitions(*attribute_definitions);
 
     tracing::add_table_name(trace_state, keyspace_name, table_name);
 
     schema_builder builder(keyspace_name, table_name);
     auto [hash_key, range_key] = parse_key_schema(request);
-    add_column(builder, hash_key, attribute_definitions, column_kind::partition_key);
+    add_column(builder, hash_key, *attribute_definitions, column_kind::partition_key);
     unused_attribute_definitions.erase(hash_key);
     if (!range_key.empty()) {
-        add_column(builder, range_key, attribute_definitions, column_kind::clustering_key);
+        add_column(builder, range_key, *attribute_definitions, column_kind::clustering_key);
         unused_attribute_definitions.erase(range_key);
     }
     builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
@@ -1340,7 +1343,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             if (view_hash_key != hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex hash key must match the base table hash key");
             }
-            add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key);
+            add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key);
             unused_attribute_definitions.erase(view_hash_key);
             if (view_range_key.empty()) {
                 co_return api_error::validation("LocalSecondaryIndex must specify a sort key");
@@ -1350,14 +1353,14 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
                 co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
               }
             if (view_range_key != range_key) {
-                add_column(builder, view_range_key, attribute_definitions, column_kind::regular_column);
+                add_column(builder, view_range_key, *attribute_definitions, column_kind::regular_column);
             }
-            add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key);
+            add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key);
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
             // key(s).
             if  (!range_key.empty() && view_range_key != range_key) {
-                add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
+                add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
             }
             view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
             // Note above we don't need to add virtual columns, as all
@@ -1403,13 +1406,13 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             bool view_hash_key_real_column =
                 partial_schema->get_column_definition(to_bytes(view_hash_key)) ||
                 lsi_range_keys.contains(view_hash_key);
-            add_column(view_builder, view_hash_key, attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
+            add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
             unused_attribute_definitions.erase(view_hash_key);
             if (!view_range_key.empty()) {
                 bool view_range_key_real_column =
                     partial_schema->get_column_definition(to_bytes(view_range_key)) ||
                     lsi_range_keys.contains(view_range_key);
-                add_column(view_builder, view_range_key, attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
+                add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
                 if (!partial_schema->get_column_definition(to_bytes(view_range_key)) &&
                     !partial_schema->get_column_definition(to_bytes(view_hash_key))) {
                     // FIXME: This warning should go away. See issue #6714
@@ -1421,10 +1424,10 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             // be added to the view nonetheless, as (additional) clustering
             // key(s).
             if  (hash_key != view_hash_key && hash_key != view_range_key) {
-                add_column(view_builder, hash_key, attribute_definitions, column_kind::clustering_key);
+                add_column(view_builder, hash_key, *attribute_definitions, column_kind::clustering_key);
             }
             if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
-                add_column(view_builder, range_key, attribute_definitions, column_kind::clustering_key);
+                add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
             }
             // GSIs have no tags:
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());

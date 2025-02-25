@@ -241,6 +241,13 @@ def test_create_table_invalid_attribute_definitions(dynamodb):
     # validation in conftest.py, boto3 still doesn't us test the case of
     # extra fields in AttributeDefinitions, and catches such errors itself.
 
+# Creation of a table without AttributeDefinitions is illegal
+# Reproduces #23043
+def test_create_table_lacking_attribute_definitions(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*[aA]ttributeDefinitions'):
+        with new_test_table(dynamodb, KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }]) as table:
+            pass
+
 # Test that trying to create a table that already exists fails in the
 # appropriate way (ResourceInUseException)
 def test_create_table_already_exists(dynamodb, test_table):
