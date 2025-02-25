@@ -193,7 +193,9 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
-        return _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        auto modules_to_reload = get_modules_to_reload(chng.mutations);
+        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        co_await reload_modules(std::move(modules_to_reload));
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
