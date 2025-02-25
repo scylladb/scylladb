@@ -662,6 +662,7 @@ public:
     // with the current timestamp.
     future<mutation> get_insert_dict_mutation(
             std::string_view name, bytes dict, locator::host_id self, db_clock::time_point dict_ts, api::timestamp_type write_ts) const;
+    static mutation get_delete_dict_mutation(std::string_view name, api::timestamp_type write_ts);
     // Queries `dicts` for the most recent compression dictionary.
     future<utils::shared_dict> query_dict(std::string_view name) const;
     future<std::vector<sstring>> query_all_dict_names() const;

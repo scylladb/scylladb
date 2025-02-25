@@ -3482,6 +3482,15 @@ future<mutation> system_keyspace::get_insert_dict_mutation(
     co_return std::move(muts[0]);
 }
 
+mutation system_keyspace::get_delete_dict_mutation(std::string_view name, api::timestamp_type write_ts) {
+    auto s = db::system_keyspace::dicts();
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(name).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(write_ts, gc_clock::now()));
+    return m;
+}
+
 future<std::vector<sstring>> system_keyspace::query_all_dict_names() const {
     std::vector<sstring> result;
     sstring query = format("SELECT name from {}.{}", NAME, DICTS);
