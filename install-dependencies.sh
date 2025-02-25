@@ -85,7 +85,6 @@ fedora_packages=(
     python3-tabulate
     python3-boto3
     python3-pytest
-    python3-pytest-asyncio
     python3-redis
     python3-unidiff
     python3-humanfriendly
@@ -162,6 +161,7 @@ declare -A pip_packages=(
     [treelib]=""
     [allure-pytest]=""
     [pytest-xdist]=""
+    [pytest-asyncio]=""
     [pykmip]=""
     [universalasync]=""
     [boto3-stubs[dynamodb]]=""
