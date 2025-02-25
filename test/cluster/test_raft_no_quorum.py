@@ -15,8 +15,8 @@ from test.cluster.util import create_new_test_keyspace
 logger = logging.getLogger(__name__)
 
 
-@pytest.fixture
-def raft_op_timeout(build_mode):
+@pytest.fixture(name="raft_op_timeout")  # avoid the W0621:redefined-outer-name pylint warning
+def fixture_raft_op_timeout(build_mode):
     return 10000 if build_mode == 'debug' else 1000
 
 
@@ -211,7 +211,7 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
                             expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
                             timeout=60)
 
-    with pytest.raises(Exception, match="raft operation \[read_barrier\] timed out, "
+    with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, "
                                         "there is no raft quorum, total voters count 2, alive voters count 1"):
         await manager.get_cql().run_async(f'drop table {ks}.test_table', timeout=60)
 
