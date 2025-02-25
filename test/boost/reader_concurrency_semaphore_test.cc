@@ -660,7 +660,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // resources and waitlist
     {
-        reader_permit_opt permit = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+        reader_permit_opt permit = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
 
         require_can_admit(true, "enough resources");
 
@@ -688,7 +688,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // need_cpu and awaits
     {
-        auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+        auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
 
         require_can_admit(true, "!need_cpu");
         {
@@ -717,7 +717,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
 
     // forward progress -- readmission
     {
-        auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+        auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
 
         auto irh = semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), permit));
         BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
@@ -810,7 +810,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                return reader_permit_opt(semaphore.obtain_permit(schema, get_name(), 2 * 1024, db::timeout_clock::now(), {}).get());
+                return reader_permit_opt(semaphore.obtain_permit(schema, get_name(), 2 * 1024, db::no_timeout, {}).get());
             },
             [] (reader_permit_opt& permit1) {
                 permit1 = {};
@@ -825,7 +825,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                return reader_permit_opt(semaphore.obtain_permit(schema, get_name(), 2 * 1024, db::timeout_clock::now(), {}).get());
+                return reader_permit_opt(semaphore.obtain_permit(schema, get_name(), 2 * 1024, db::no_timeout, {}).get());
             },
             [&] (reader_permit_opt& permit1) {
                 return semaphore.register_inactive_read(make_empty_flat_reader_v2(s.schema(), *permit1));
@@ -839,7 +839,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+                auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
                 require_can_admit(true, "enough resources");
                 return std::pair(permit, std::optional<reader_permit::need_cpu_guard>{permit});
             }, [&] (std::pair<reader_permit, std::optional<reader_permit::need_cpu_guard>>& permit_and_need_cpu_guard) {
@@ -855,7 +855,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
     {
         check_admitting_enqueued_read(
             [&] {
-                auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+                auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
                 require_can_admit(true, "enough resources");
                 return std::pair(permit, reader_permit::need_cpu_guard{permit});
             }, [&] (std::pair<reader_permit, reader_permit::need_cpu_guard>& permit_and_need_cpu_guard) {
@@ -2044,7 +2044,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
         ::require_can_admit(schema, semaphore, expected_can_admit, description, sl);
     };
 
-    auto permit1 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+    auto permit1 = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
 
     require_can_admit(true, "!need_cpu");
     {
@@ -2052,7 +2052,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_cpu_concu
 
         require_can_admit(true, "need_cpu < cpu_concurrency");
 
-        auto permit2 = semaphore.obtain_permit(schema, get_name(), 1024, db::timeout_clock::now(), {}).get();
+        auto permit2 = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
 
         // no change
         require_can_admit(true, "need_cpu < cpu_concurrency");
