@@ -122,4 +122,11 @@ async def test_retrain_dict(manager: ManagerClient):
     results = await cql.run_async(select, [42])
     assert results[0][0] == blob
 
+    # Check that dropping the table also drops the dict.
+    assert (await cql.run_async("SELECT COUNT(name) FROM system.dicts"))[0][0] == 1
+    logger.info("Dropping the table")
+    await cql.run_async("DROP TABLE test.test")
+    await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
+    assert (await cql.run_async("SELECT COUNT(name) FROM system.dicts"))[0][0] == 0
+
     logger.info("Test completed successfully")

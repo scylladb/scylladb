@@ -1673,6 +1673,25 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mapreduce_service.stop().get();
             });
 
+            class sstable_dict_deleter : public service::migration_listener::empty_listener {
+                service::migration_notifier& _mn;
+                db::system_keyspace& _sys_ks;
+                gms::feature_service& _feat;
+            public:
+                sstable_dict_deleter(service::migration_notifier& mn, db::system_keyspace& sys_ks, gms::feature_service& feat) : _mn(mn) , _sys_ks(sys_ks), _feat(feat) {
+                    _mn.register_listener(this);
+                }
+                ~sstable_dict_deleter() {
+                    _mn.unregister_listener(this).get();
+                }
+                void on_before_drop_column_family(const schema& s, std::vector<mutation>& mutations, api::timestamp_type ts) override {
+                    if (_feat.sstable_compression_dicts) {
+                        mutations.push_back(db::system_keyspace::get_delete_dict_mutation(fmt::format("sstables/{}", s.id()), ts));
+                    }
+                }
+            };
+            auto the_sstable_dict_deleter = sstable_dict_deleter(mm_notifier.local(), sys_ks.local(), feature_service.local());
+
             supervisor::notify("starting migration manager");
             debug::the_migration_manager = &mm;
             mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
