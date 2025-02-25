@@ -302,6 +302,9 @@ void view_update_generator::setup_metrics() {
 
 void view_update_generator::discover_staging_sstables() {
     _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+        if (table->uses_tablets()) {
+            return;
+        }
         auto t = table->shared_from_this();
         for (auto sstables = t->get_sstables(); sstables::shared_sstable sst : *sstables) {
             if (sst->requires_view_building()) {
