@@ -1189,3 +1189,902 @@ def test_base_partition_deletion_with_low_timestamp(cql, test_keyspace):
             # Verify we get only the row with the newer timestamp
             assert [2] == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=0")]
             assert [2] == [x.c for x in cql.execute(f"SELECT c FROM {mv} WHERE p=0")]
+<<<<<<< HEAD:test/cql-pytest/test_materialized_view.py
+||||||| parent of 74cbc77f50 (test: add test for schema registry maintaining base info for views):test/cqlpy/test_materialized_view.py
+
+# A few basic tests for the "WITH" option in CREATE MATERIALIZED VIEW.
+def test_create_mv_with(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, c int') as table:
+        # Check that "WITH COMMENT=..." is accepted, and just adds the
+        # "WITH COMMENT=..." to the output of DESC but changes nothing else.
+        with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with comment = 'hello123'") as mv:
+            assert 'hello123' in cql.execute(f'DESC MATERIALIZED VIEW {mv}').one().create_statement
+        # Check that unrecognized WITH options are rejected with an error.
+        # Recognized options are those listed in cf_prop_defs::validate() or
+        # in one of the registered schema extensions or appearing with a
+        # special syntax in cfamProperty in cql3/Cql.g. "garbagename" isn't
+        # on of the recognized options.
+        with pytest.raises(SyntaxException, match="Unknown property"):
+            with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with garbagename = 'dog234'") as mv:
+                pass
+        # Check that COMPACT STORAGE is *not* allowed for materialized views
+        # (Scylla and Cassandra 3 allow it just for regular tables, but this
+        # isn't tested here).
+        with pytest.raises(InvalidRequest, match="COMPACT STORAGE"):
+            with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with compact storage") as mv:
+                pass
+
+# Verify that creating a materialized view with an ID that is already used fails.
+#
+# We mark this function as `cassandra_bug` because trying to create an MV with
+# an existing ID against Cassandra results in a server error.
+#
+# Note that Scylla's behavior is consistent with how we handle `WITH ID`
+# in the case of regular tables.
+def test_creating_mv_with_existing_id(cassandra_bug, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        # Case 1. Try to create an MV with the ID of another MV.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL') as mv:
+            mv_id = get_id_of_mv(cql, mv)
+            with pytest.raises(InvalidRequest, match=f'Table with ID {mv_id} already exists: {mv}'):
+                with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}'):
+                    pass
+
+        # Case 2. Try to create an MV with the ID of a regular table.
+        cf_id = get_id_of_cf(cql, table)
+        with pytest.raises(InvalidRequest, match=f'Table with ID {cf_id} already exists: {table}'):
+            with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {cf_id}'):
+                pass
+
+# Verify that creating an MV with a specified ID succeeds and the MV really bears it.
+def test_creating_mv_with_given_id(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        # Step 1. We need an unused ID for the MV. Create a materialized view, obtain a statement
+        #         to restore it, and extract its ID. Drop the MV.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL') as mv:
+            mv_id = get_id_of_mv(cql, mv)
+
+        # Step 2. Create a new MV with a specific ID. Verify that it really uses it.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}') as mv:
+            assert mv_id == get_id_of_mv(cql, mv)
+
+# Verify that creating an MV fails when provided an invalid ID.
+def test_creating_mv_with_invalid_id(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        for mv_id in ["'null'", "'something'", "'!@?'"]:
+            with pytest.raises(ConfigurationException, match='Invalid table id'):
+                with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}'):
+                    pass
+
+# Verify that creating an MV fails when the provided ID is null.
+#
+# This test is Scylla-only because Cassandra treats `WITH ID = null` as a special case,
+# and it's not a ConfigurationException, but a syntax error.
+# Note that creating a table in Scylla using `WITH ID = null` also results in a ConfigurationException,
+# so MVs are consistent with that.
+def test_creating_mv_with_null_id(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        with pytest.raises(ConfigurationException, match='Invalid table id'):
+            with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', 'WITH ID = null'):
+                pass
+@pytest.fixture(scope="module")
+def table1(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, primary key (p)') as table:
+        yield table
+
+# Verify that oversized materialized view names are cleanly rejected,
+# as InvalidRequest (or, perhaps ConfigurationException).
+# Reproduces issue #20755 where it was reported that Scylla shuts down when
+# creating a view with a very long view name (considering the failure to
+# create a directory with the long name as an unrecoverable "IO error").
+# Cassandra doesn't shut down in this test, but it still fails uncleanly and
+# leaves the table in a partly-existing state so it fails this test and the
+# test is marked a cassandra_bug.
+@pytest.mark.skip(reason="issue #20755")
+def test_create_materialized_view_oversized_name(cql, test_keyspace, table1, cassandra_bug):
+    stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
+    try:
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(stmt % ('x'*500))
+    finally:
+        # We shouldn't reach here, but if we did, let the test fail cleanly
+        cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{"x"*500}')
+
+# Verify that invalid characters (like, for example, "!") in materialized
+# view names are cleanly rejected, as InvalidRequest or ConfigurationException.
+# This is currently enforced in Cassandra, but not in Scylla - and it is
+# questionable whether we must be identical to Cassandra in this enforcement.
+# The test below (test_create_materialized_view_slash_name) checks the one
+# character - slash - that it is critical to not allow.
+@pytest.mark.xfail(reason="allowed characters not enforced in view names")
+def test_create_materialized_view_invalid_char_name(cql, test_keyspace, table1):
+    stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
+    try:
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(stmt % ('"xyz!123"'))
+    finally:
+        # We shouldn't reach here, but if we did, let the test fail cleanly
+        cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}."xyz!123"')
+
+# Thanks to commit f76f6dbccb2, a slash in the name failed even when other
+# characters are not enforced (see "!" in the previous test). However, it
+# still fails with an "unclean" internal error instead of the expected
+# exception.
+@pytest.mark.xfail(reason="allowed characters not enforced in view names")
+def test_create_materialized_view_slash_name(cql, test_keyspace, table1):
+    stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
+    try:
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(stmt % ('"/xyz/"'))
+    finally:
+        # We shouldn't reach here, but if we did, let the test fail cleanly
+        cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}."/xyz/"')
+
+@pytest.fixture(scope="module")
+def mv1(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'c, p', 'p is not null and c is not null') as mv:
+            yield mv
+
+# A materialized view cannot be written to directly - it can only be written
+# through its base table. This test verifies that all CQL operations that can
+# write to a table - INSERT, UPDATE, BATCH, DELETE, and TRUNCATE - are
+# rejected on a view table.
+def test_view_forbids_write(cql, mv1):
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'INSERT INTO {mv1} (c,p) VALUES (1,2)')
+    with pytest.raises(InvalidRequest, match=f'Cannot directly modify a materialized view'):
+        cql.execute(f'UPDATE {mv1} SET x=1 WHERE c=1 AND p=2')
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'BEGIN BATCH UPDATE {mv1} SET x=1 WHERE c=1 AND p=2; APPLY BATCH')
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'DELETE FROM {mv1} WHERE c=1 AND p=2')
+    with pytest.raises(InvalidRequest, match='Cannot TRUNCATE materialized view directly'):
+        cql.execute(f'TRUNCATE {mv1}')
+
+# A materialized view should not be operated on with operations that have
+# "TABLE" in their name - DROP TABLE, ALTER TABLE, and DESC TABLE. There
+# are identical operations with "MATERIALIZED VIEW" in their name, which
+# should be used instead.
+def test_view_forbids_table_ops(cql, mv1):
+    with pytest.raises(InvalidRequest, match='Cannot use'):
+        cql.execute(f'DROP TABLE {mv1}')
+    with pytest.raises(InvalidRequest, match='Cannot use'):
+        cql.execute(f"ALTER TABLE {mv1} WITH comment='hello'")
+    # Unlike the previous operations, in DESC TABLE cassandra doesn't explain
+    # that DESC TABLE cannot be used on a view and that DESC MATERIALIZED VIEW
+    # should be used instead - it just reports that the table is "not found".
+    # Reproduces #21026 (DESC TABLE was allowed on a view):
+    with pytest.raises(InvalidRequest, match='Cannot use|not found'):
+        cql.execute(f'DESC TABLE {mv1}')
+
+# A materialized view cannot have its own materialized views, nor secondary
+# indexes. Verify that.
+def test_view_forbids_view_or_index(cql, mv1):
+    # Cassandra and Scylla print different error messages here. Cassandra
+    # just claims that "Base table '{mv1}' doesn't exist" (it exists, but it's
+    # not a base table). Scylla says "Materialized views cannot be created
+    # against other materialized views". Let's allow both:
+    with pytest.raises(InvalidRequest, match='Base table|materialized views'):
+        with new_materialized_view(cql, mv1, '*', 'v, p', 'v is not null and p is not null'):
+            pass
+    with pytest.raises(InvalidRequest, match='materialized views'):
+        with new_secondary_index(cql, mv1, 'x'):
+            pass
+# Test that TRUNCATE on a base table also truncates its views. This test
+# doesn't try to exercise the inconsistency created by non-atomic deletion of a
+# base and views (see #17635) - it just tries to check the basic functionality,
+# that TRUNCATE on a base actually performs a TRUNCATE also on the views.
+def test_truncate_base(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int') as table:
+        with new_materialized_view(cql, table, '*', 'a,p', 'a is not null and p is not null') as mv1:
+            with new_materialized_view(cql, table, '*', 'b,p', 'b is not null and p is not null') as mv2:
+                # Wait for the view building to end on both views - so we
+                # won't run into issue #17635 in this test (where a view
+                # building in parallel with TRUNCATE results in untruncated
+                # data in the view).
+                for mv in [mv1, mv2]:
+                    wait_for_view_built(cql, mv)
+                cql.execute(f'INSERT INTO {table} (p,a,b) VALUES (0,1,2)')
+                # Check the data reached the base and both views. On a single-
+                # node cluster, this insertion is synchronous so no need to
+                # retry the reads.
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {table}"))
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {mv1}"))
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {mv2}"))
+                # Check that after a TRUNCATE, the data is gone from the base
+                # table, but also from both views:
+                cql.execute(f'TRUNCATE {table}')
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {table}"))
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {mv1}"))
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {mv2}"))
+
+# Test that DROP TABLE on a base table which has a view is *not* allowed
+# (it's necessary to explicitly DROP MATERIALIZED VIEW the view first):
+def test_drop_table_with_view(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int') as table:
+        with new_materialized_view(cql, table, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # Interestingly, the error message in Scylla and Cassandra have
+            # the same text ("Cannot drop a table when materialized views
+            # still depend on it") but Cassandra adds in parentheses the name
+            # of the table - while Scylla adds the name of the view that
+            # prevented the deletion. I think Scylla's message is better,
+            # but let's not insist and just look for a phrase that will
+            # probably appear in the error message even if it's changed:
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'DROP TABLE {table}')
+
+# Although the previous test checked that DROP TABLE is not allowed on a
+# table that still has views, a DROP KEYSPACE is allowed and deletes all
+# the tables and views in that keyspace.
+def test_drop_keyspace_with_view(cql, this_dc):
+    ks = unique_name()
+    cql.execute("CREATE KEYSPACE " + ks + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
+    try:
+        table = ks + '.' + unique_name()
+        cql.execute(f'CREATE TABLE {table} (p int PRIMARY KEY, a int)')
+        mv = ks + '.' + unique_name()
+        cql.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE a IS NOT NULL AND p IS NOT NULL PRIMARY KEY (a, p)')
+        # Check that DROP KEYSPACE is allowed, despite the existance of a view
+        cql.execute(f'DROP KEYSPACE {ks}')
+        # It's obvious that if the keyspace no longer exists a view in it
+        # can't possibly exist, but let's verify anyway:
+        with pytest.raises(InvalidRequest, match='does not exist'):
+            cql.execute(f'SELECT * FROM {mv}')
+    finally:
+        cql.execute(f'DROP KEYSPACE IF EXISTS {ks}')
+
+# Test that in many cases, the existance of a materialized view prevents
+# dropping columns from a base table. Scylla does allow dropping *some*
+# columns, the next test will be devoted to those cases.
+# See also C++ test view_schema_test.cc::test_mv_allow_some_column_drops()
+# which checks the same scenarios, but as a C++ test cannot be compared to
+# Cassandra.
+def test_alter_table_drop_forbidden(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int, c int') as base:
+        with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # Base column base column b is selected, and can't be dropped.
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP b')
+            # A view key column is also selected and can't be dropped
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP a')
+        with new_materialized_view(cql, base, 'p,a', 'p', 'p is not null') as mv:
+            # Base column base column b is unselected but this view has
+            # virtual columns, so b is a virtual column and can't be dropped.
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP b')
+
+# Cassandra starting in version 3.11 (see Cassandra commit
+# e6fb8302848bc43888b0a742a9b0abce09872c45doesn't) doesn't allow dropping
+# base-table columns as soon as it has any views. In Scylla (starting
+# in #4448) we do allow removing *some* columns, as long as no view "needs"
+# them. This test demonstrates this Scylla-only extension, where dropping a
+# column is allowed in some cases (the previous test the checks cases that
+# aren't allowed in both Scylla or Cassandra).
+# The test is marked scylla_only because only Scylla allows these column drops.
+def test_alter_table_drop_allowed(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int, c int') as base:
+        with new_materialized_view(cql, base, 'p,a,b', 'a,p', 'a is not null and p is not null') as mv:
+            # base column c is not selected, and because the view's key has
+            # a column not in the base's (a) there are no virtual columns, so
+            # Scylla allows to drop column c.
+            cql.execute(f'ALTER TABLE {base} DROP c')
+
+# Test that if a view uses "SELECT *" and a new column is added to the base
+# table, it is also added to the view and selected.
+# See also test_mv_prepared_statement_with_altered_base() above
+def test_alter_table_add_select_star(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int') as base:
+        with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # We can add a new column "c" to the base table, and it will be
+            # automatically selected in the view because "SELECT *" expands
+            # to contain it.
+            cql.execute(f'INSERT INTO {base} (p,a,b) VALUES (1,2,3)')
+            cql.execute(f'ALTER TABLE {base} ADD c int')
+            cql.execute(f'INSERT INTO {base} (p,a,b,c) VALUES (0,1,2,3)')
+            assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {base}"))
+            assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {mv}"))
+
+# Test that tombstones with future timestamps work correctly
+# when a write with lower timestamp arrives - in such case,
+# if the base row is covered by such a tombstone, a view update
+# needs to take it into account.
+# Reproduces issue #5793
+def test_views_with_future_tombstones(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, primary key (a, b, c)') as table:
+        with new_materialized_view(cql, table, '*', 'b, a, c', 'a is not null and b is not null and c is not null') as mv:
+            # Partition tombstone
+            cql.execute(f'delete from {table} using timestamp 10 where a=1')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (1,2,3,4,5) using timestamp 8')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            # On a single-node test, the update will be synchronous so no
+            # need for retry.
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+            # Range tombstone
+            cql.execute(f'delete from {table} using timestamp 16 where a=2 and b > 1 and b < 4')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (2,3,4,5,6) using timestamp 12')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+            # Row tombstone
+            cql.execute(f'delete from {table} using timestamp 24 where a=3 and b=4 and c=5')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (3,4,5,6,7) using timestamp 18')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+# Test view representation in system.* tables
+def test_view_in_system_tables(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
+        with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
+            wait_for_view_built(cql, view)
+            res = [ f'{r.keyspace_name}.{r.view_name}' for r in cql.execute('select * from system.built_views')]
+            assert view in res
+            res = [ f'{r.table_name}.{r.index_name}' for r in cql.execute('select * from system."IndexInfo"')]
+            assert view not in res
+
+# This test indirectly verifies that a shadowable tombstone goes beyond
+# hiding data older than its timestamp - it actually hides an *entire* row -
+# even cells newer than the tombstone - if the shadowable tombstone is newer
+# than just the row marker. We suspected (ssee #21769) we might have a bug
+# in this area if the newer call was a map element, but it turns out we
+# didn't have such a bug - and this test passes.
+def test_shadowable_tombstone_and_newer_collection_cells(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, m map<int, int>, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p, c', 'x is not null and p is not null and c is not null') as mv:
+            # Insert into the base table a row p=1 c=2 with x=3. This will
+            # create an empty view row x=3
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,3)')
+            # We should see this new row when reading the view partition x=1.
+            # We assume that on a single-node test, the view updates are
+            # synchronous so don't need to retry.
+            assert [(1,2,3)] == list(cql.execute(f'select p,c,x from {mv} where x=3'))
+            # Now, in the base row p=1 c=2 leave x unmodified (3), but add
+            # an element to the map m. The view row will remain with its old
+            # timestamp, but will get a new cell - the new map element - with
+            # a *newer* timestamp.
+            cql.execute(f'update {table} set m = m + {{7: 8}} where p=1 and c=2')
+            assert [(1,2,3,{7:8})] == list(cql.execute(f'select p,c,x,m from {mv} where x=3'))
+            # Finally, in the base row p=1 c=2, set x to 4. This should
+            # create a new view rew with x=5, but more importantly for this
+            # test - should delete the entirety of the old view row x=3.
+            # Even the map item that was added with a later timestamp, should
+            # be gone.
+            cql.execute(f'update {table} set x = 4 where p=1 and c=2')
+            assert [(1,2,4,{7:8})] == list(cql.execute(f'select p,c,x,m from {mv} where x=4'))
+            assert [] == list(cql.execute(f'select p,c,x,m from {mv} where x=3'))
+
+# Same as the previous test checking shadowable tombstones and newer calls,
+# but here we use ordinary atomic (not collection) cells, and also use INSERT
+# instead of UPDATE.
+def test_shadowable_tombstone_and_newer_atomic_cells(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p, c', 'x is not null and p is not null and c is not null') as mv:
+            # Insert into the base table a row p=1 c=2 with x=3. This will
+            # create an empty view row x=3
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,3)')
+            # We should see this new row when reading the view partition x=1.
+            # We assume that on a single-node test, the view updates are
+            # synchronous so don't need to retry.
+            assert [(1,2,3,None)] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+            # Now, in the base row p=1 c=2 leave x unmodified (3), but set
+            # a value for column y. The new cell y will get a new timestamp,
+            # but because we use INSERT instead of UPDATE - the base row
+            # marker will also get a new row timestamp, but it doesn't
+            # affect the row marker of the view (which only depends on the
+            # timestamp of x).
+            cql.execute(f'insert into {table} (p,c,y) values (1,2,7)')
+            assert [(1,2,3,7)] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+            # Finally, in the base row p=1 c=2, set x to 4. This should
+            # create a new view rew with x=5, but more importantly for this
+            # test - should delete the entirety of the old view row x=3.
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,4)')
+            assert [(1,2,4,7)] == list(cql.execute(f'select p,c,x,y from {mv} where x=4'))
+            assert [] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+
+# Test that setting a TTL on a base-regular column which is a view key
+# column, correctly applies this TTL to the view row. In other words,
+# when the base value expires, the entire view row (the row marker and
+# the individual cells) expire.
+# This test reaches the same code paths as cassandra_tests/validation/entities/
+# secondary_index_test.py::testIndexOnRegularColumnInsertExpiringColumn
+# but uses a materialized view - not a secondary index.
+def test_view_update_with_ttl(cql, test_keyspace):
+    # To be able to set a TTL on a view key column x, obviously it needs to
+    # be a *regular* column in the base (key columns do not have TTLs).
+    with new_test_table(cql, test_keyspace, 'p int, x int, y int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p', 'x is not null and p is not null') as mv:
+            # Unfortunately, because we can't read the TTL of a row marker
+            # (issue #14019) we can't verify that the correct TTL was set
+            # on the view row marker - such that it would cause it to
+            # eventually expire. So we are forced to actually sleep waiting
+            # for the data to expire to verify the entire row is gone.
+            # A wrong TTL on the row marker would have left an empty row,
+            # and a wrong TTL on the cell y would have left that in the view.
+            # This means this test takes two seconds :-(
+            cql.execute(f'insert into {table} (p,x,y) values (1,2,3) using ttl 1')
+            time.sleep(1.1)
+            assert [] == list(cql.execute(f'select * from {mv}'))
+            # Updating x without a TTL will make this row appear again
+            # We assume that on a single node, view updates are synchronous
+            # so we don't need to loop the read.
+            cql.execute(f'update {table} set x=4, y=5 where p=1')
+            assert [(4,1,5)] == list(cql.execute(f'select * from {mv}'))
+            # Update x again with a TTL of 1 and sleep. The view row should
+            # disappear completely (including the row marker and y)
+            cql.execute(f'update {table} using ttl 1 set x=5 where p=1')
+            time.sleep(1.1)
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+# Test view representation in REST API
+def test_view_in_API(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
+        with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
+            view_name = view.split('.')[1]
+            res = rest_api.get_request(cql, f"storage_service/view_build_statuses/{test_keyspace}/{view_name}")
+            assert len(res) == 1 and 'value' in res[0] and res[0]['value'] in [ 'UNKNOWN', 'STARTED', 'SUCCESS' ]
+            # Indexes are implemented on top of materialized-views, but even then no MVs
+            # should appear in the output of built_indexes API. And since this API only
+            # reports views that are built, check that view is built first.
+            wait_for_view_built(cql, view)
+            res = rest_api.get_request(cql, f"column_family/built_indexes/{base.replace('.',':')}")
+            assert view_name not in res
+=======
+
+# A few basic tests for the "WITH" option in CREATE MATERIALIZED VIEW.
+def test_create_mv_with(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int primary key, c int') as table:
+        # Check that "WITH COMMENT=..." is accepted, and just adds the
+        # "WITH COMMENT=..." to the output of DESC but changes nothing else.
+        with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with comment = 'hello123'") as mv:
+            assert 'hello123' in cql.execute(f'DESC MATERIALIZED VIEW {mv}').one().create_statement
+        # Check that unrecognized WITH options are rejected with an error.
+        # Recognized options are those listed in cf_prop_defs::validate() or
+        # in one of the registered schema extensions or appearing with a
+        # special syntax in cfamProperty in cql3/Cql.g. "garbagename" isn't
+        # on of the recognized options.
+        with pytest.raises(SyntaxException, match="Unknown property"):
+            with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with garbagename = 'dog234'") as mv:
+                pass
+        # Check that COMPACT STORAGE is *not* allowed for materialized views
+        # (Scylla and Cassandra 3 allow it just for regular tables, but this
+        # isn't tested here).
+        with pytest.raises(InvalidRequest, match="COMPACT STORAGE"):
+            with new_materialized_view(cql, table, '*', 'p,c', 'p is not null and c is not null', "with compact storage") as mv:
+                pass
+
+# Verify that creating a materialized view with an ID that is already used fails.
+#
+# We mark this function as `cassandra_bug` because trying to create an MV with
+# an existing ID against Cassandra results in a server error.
+#
+# Note that Scylla's behavior is consistent with how we handle `WITH ID`
+# in the case of regular tables.
+def test_creating_mv_with_existing_id(cassandra_bug, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        # Case 1. Try to create an MV with the ID of another MV.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL') as mv:
+            mv_id = get_id_of_mv(cql, mv)
+            with pytest.raises(InvalidRequest, match=f'Table with ID {mv_id} already exists: {mv}'):
+                with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}'):
+                    pass
+
+        # Case 2. Try to create an MV with the ID of a regular table.
+        cf_id = get_id_of_cf(cql, table)
+        with pytest.raises(InvalidRequest, match=f'Table with ID {cf_id} already exists: {table}'):
+            with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {cf_id}'):
+                pass
+
+# Verify that creating an MV with a specified ID succeeds and the MV really bears it.
+def test_creating_mv_with_given_id(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        # Step 1. We need an unused ID for the MV. Create a materialized view, obtain a statement
+        #         to restore it, and extract its ID. Drop the MV.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL') as mv:
+            mv_id = get_id_of_mv(cql, mv)
+
+        # Step 2. Create a new MV with a specific ID. Verify that it really uses it.
+        with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}') as mv:
+            assert mv_id == get_id_of_mv(cql, mv)
+
+# Verify that creating an MV fails when provided an invalid ID.
+def test_creating_mv_with_invalid_id(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        for mv_id in ["'null'", "'something'", "'!@?'"]:
+            with pytest.raises(ConfigurationException, match='Invalid table id'):
+                with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', f'WITH ID = {mv_id}'):
+                    pass
+
+# Verify that creating an MV fails when the provided ID is null.
+#
+# This test is Scylla-only because Cassandra treats `WITH ID = null` as a special case,
+# and it's not a ConfigurationException, but a syntax error.
+# Note that creating a table in Scylla using `WITH ID = null` also results in a ConfigurationException,
+# so MVs are consistent with that.
+def test_creating_mv_with_null_id(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        with pytest.raises(ConfigurationException, match='Invalid table id'):
+            with new_materialized_view(cql, table, '*', 'p', 'p IS NOT NULL', 'WITH ID = null'):
+                pass
+@pytest.fixture(scope="module")
+def table1(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, primary key (p)') as table:
+        yield table
+
+# Verify that oversized materialized view names are cleanly rejected,
+# as InvalidRequest (or, perhaps ConfigurationException).
+# Reproduces issue #20755 where it was reported that Scylla shuts down when
+# creating a view with a very long view name (considering the failure to
+# create a directory with the long name as an unrecoverable "IO error").
+# Cassandra doesn't shut down in this test, but it still fails uncleanly and
+# leaves the table in a partly-existing state so it fails this test and the
+# test is marked a cassandra_bug.
+@pytest.mark.skip(reason="issue #20755")
+def test_create_materialized_view_oversized_name(cql, test_keyspace, table1, cassandra_bug):
+    stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
+    try:
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(stmt % ('x'*500))
+    finally:
+        # We shouldn't reach here, but if we did, let the test fail cleanly
+        cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}.{"x"*500}')
+
+# Verify that invalid characters (like, for example, "!") in materialized
+# view names are cleanly rejected, as InvalidRequest or ConfigurationException.
+# This is currently enforced in Cassandra, but not in Scylla - and it is
+# questionable whether we must be identical to Cassandra in this enforcement.
+# The test below (test_create_materialized_view_slash_name) checks the one
+# character - slash - that it is critical to not allow.
+@pytest.mark.xfail(reason="allowed characters not enforced in view names")
+def test_create_materialized_view_invalid_char_name(cql, test_keyspace, table1):
+    stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
+    try:
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(stmt % ('"xyz!123"'))
+    finally:
+        # We shouldn't reach here, but if we did, let the test fail cleanly
+        cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}."xyz!123"')
+
+# Thanks to commit f76f6dbccb2, a slash in the name failed even when other
+# characters are not enforced (see "!" in the previous test). However, it
+# still fails with an "unclean" internal error instead of the expected
+# exception.
+@pytest.mark.xfail(reason="allowed characters not enforced in view names")
+def test_create_materialized_view_slash_name(cql, test_keyspace, table1):
+    stmt = f'CREATE MATERIALIZED VIEW {test_keyspace}.%s AS SELECT * FROM {table1} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (p,c)'
+    try:
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            cql.execute(stmt % ('"/xyz/"'))
+    finally:
+        # We shouldn't reach here, but if we did, let the test fail cleanly
+        cql.execute(f'DROP MATERIALIZED VIEW IF EXISTS {test_keyspace}."/xyz/"')
+
+@pytest.fixture(scope="module")
+def mv1(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'c, p', 'p is not null and c is not null') as mv:
+            yield mv
+
+# A materialized view cannot be written to directly - it can only be written
+# through its base table. This test verifies that all CQL operations that can
+# write to a table - INSERT, UPDATE, BATCH, DELETE, and TRUNCATE - are
+# rejected on a view table.
+def test_view_forbids_write(cql, mv1):
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'INSERT INTO {mv1} (c,p) VALUES (1,2)')
+    with pytest.raises(InvalidRequest, match=f'Cannot directly modify a materialized view'):
+        cql.execute(f'UPDATE {mv1} SET x=1 WHERE c=1 AND p=2')
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'BEGIN BATCH UPDATE {mv1} SET x=1 WHERE c=1 AND p=2; APPLY BATCH')
+    with pytest.raises(InvalidRequest, match='Cannot directly modify a materialized view'):
+        cql.execute(f'DELETE FROM {mv1} WHERE c=1 AND p=2')
+    with pytest.raises(InvalidRequest, match='Cannot TRUNCATE materialized view directly'):
+        cql.execute(f'TRUNCATE {mv1}')
+
+# A materialized view should not be operated on with operations that have
+# "TABLE" in their name - DROP TABLE, ALTER TABLE, and DESC TABLE. There
+# are identical operations with "MATERIALIZED VIEW" in their name, which
+# should be used instead.
+def test_view_forbids_table_ops(cql, mv1):
+    with pytest.raises(InvalidRequest, match='Cannot use'):
+        cql.execute(f'DROP TABLE {mv1}')
+    with pytest.raises(InvalidRequest, match='Cannot use'):
+        cql.execute(f"ALTER TABLE {mv1} WITH comment='hello'")
+    # Unlike the previous operations, in DESC TABLE cassandra doesn't explain
+    # that DESC TABLE cannot be used on a view and that DESC MATERIALIZED VIEW
+    # should be used instead - it just reports that the table is "not found".
+    # Reproduces #21026 (DESC TABLE was allowed on a view):
+    with pytest.raises(InvalidRequest, match='Cannot use|not found'):
+        cql.execute(f'DESC TABLE {mv1}')
+
+# A materialized view cannot have its own materialized views, nor secondary
+# indexes. Verify that.
+def test_view_forbids_view_or_index(cql, mv1):
+    # Cassandra and Scylla print different error messages here. Cassandra
+    # just claims that "Base table '{mv1}' doesn't exist" (it exists, but it's
+    # not a base table). Scylla says "Materialized views cannot be created
+    # against other materialized views". Let's allow both:
+    with pytest.raises(InvalidRequest, match='Base table|materialized views'):
+        with new_materialized_view(cql, mv1, '*', 'v, p', 'v is not null and p is not null'):
+            pass
+    with pytest.raises(InvalidRequest, match='materialized views'):
+        with new_secondary_index(cql, mv1, 'x'):
+            pass
+# Test that TRUNCATE on a base table also truncates its views. This test
+# doesn't try to exercise the inconsistency created by non-atomic deletion of a
+# base and views (see #17635) - it just tries to check the basic functionality,
+# that TRUNCATE on a base actually performs a TRUNCATE also on the views.
+def test_truncate_base(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int') as table:
+        with new_materialized_view(cql, table, '*', 'a,p', 'a is not null and p is not null') as mv1:
+            with new_materialized_view(cql, table, '*', 'b,p', 'b is not null and p is not null') as mv2:
+                # Wait for the view building to end on both views - so we
+                # won't run into issue #17635 in this test (where a view
+                # building in parallel with TRUNCATE results in untruncated
+                # data in the view).
+                for mv in [mv1, mv2]:
+                    wait_for_view_built(cql, mv)
+                cql.execute(f'INSERT INTO {table} (p,a,b) VALUES (0,1,2)')
+                # Check the data reached the base and both views. On a single-
+                # node cluster, this insertion is synchronous so no need to
+                # retry the reads.
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {table}"))
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {mv1}"))
+                assert [(0,1,2)] == list(cql.execute(f"SELECT p,a,b FROM {mv2}"))
+                # Check that after a TRUNCATE, the data is gone from the base
+                # table, but also from both views:
+                cql.execute(f'TRUNCATE {table}')
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {table}"))
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {mv1}"))
+                assert [] == list(cql.execute(f"SELECT p,a,b FROM {mv2}"))
+
+# Test that DROP TABLE on a base table which has a view is *not* allowed
+# (it's necessary to explicitly DROP MATERIALIZED VIEW the view first):
+def test_drop_table_with_view(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int') as table:
+        with new_materialized_view(cql, table, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # Interestingly, the error message in Scylla and Cassandra have
+            # the same text ("Cannot drop a table when materialized views
+            # still depend on it") but Cassandra adds in parentheses the name
+            # of the table - while Scylla adds the name of the view that
+            # prevented the deletion. I think Scylla's message is better,
+            # but let's not insist and just look for a phrase that will
+            # probably appear in the error message even if it's changed:
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'DROP TABLE {table}')
+
+# Although the previous test checked that DROP TABLE is not allowed on a
+# table that still has views, a DROP KEYSPACE is allowed and deletes all
+# the tables and views in that keyspace.
+def test_drop_keyspace_with_view(cql, this_dc):
+    ks = unique_name()
+    cql.execute("CREATE KEYSPACE " + ks + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
+    try:
+        table = ks + '.' + unique_name()
+        cql.execute(f'CREATE TABLE {table} (p int PRIMARY KEY, a int)')
+        mv = ks + '.' + unique_name()
+        cql.execute(f'CREATE MATERIALIZED VIEW {mv} AS SELECT * FROM {table} WHERE a IS NOT NULL AND p IS NOT NULL PRIMARY KEY (a, p)')
+        # Check that DROP KEYSPACE is allowed, despite the existance of a view
+        cql.execute(f'DROP KEYSPACE {ks}')
+        # It's obvious that if the keyspace no longer exists a view in it
+        # can't possibly exist, but let's verify anyway:
+        with pytest.raises(InvalidRequest, match='does not exist'):
+            cql.execute(f'SELECT * FROM {mv}')
+    finally:
+        cql.execute(f'DROP KEYSPACE IF EXISTS {ks}')
+
+# Test that in many cases, the existance of a materialized view prevents
+# dropping columns from a base table. Scylla does allow dropping *some*
+# columns, the next test will be devoted to those cases.
+# See also C++ test view_schema_test.cc::test_mv_allow_some_column_drops()
+# which checks the same scenarios, but as a C++ test cannot be compared to
+# Cassandra.
+def test_alter_table_drop_forbidden(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int, c int') as base:
+        with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # Base column base column b is selected, and can't be dropped.
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP b')
+            # A view key column is also selected and can't be dropped
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP a')
+        with new_materialized_view(cql, base, 'p,a', 'p', 'p is not null') as mv:
+            # Base column base column b is unselected but this view has
+            # virtual columns, so b is a virtual column and can't be dropped.
+            with pytest.raises(InvalidRequest, match='materialized view'):
+                cql.execute(f'ALTER TABLE {base} DROP b')
+
+# Cassandra starting in version 3.11 (see Cassandra commit
+# e6fb8302848bc43888b0a742a9b0abce09872c45doesn't) doesn't allow dropping
+# base-table columns as soon as it has any views. In Scylla (starting
+# in #4448) we do allow removing *some* columns, as long as no view "needs"
+# them. This test demonstrates this Scylla-only extension, where dropping a
+# column is allowed in some cases (the previous test the checks cases that
+# aren't allowed in both Scylla or Cassandra).
+# The test is marked scylla_only because only Scylla allows these column drops.
+def test_alter_table_drop_allowed(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int, c int') as base:
+        with new_materialized_view(cql, base, 'p,a,b', 'a,p', 'a is not null and p is not null') as mv:
+            # base column c is not selected, and because the view's key has
+            # a column not in the base's (a) there are no virtual columns, so
+            # Scylla allows to drop column c.
+            cql.execute(f'ALTER TABLE {base} DROP c')
+
+# Test that if a view uses "SELECT *" and a new column is added to the base
+# table, it is also added to the view and selected.
+# See also test_mv_prepared_statement_with_altered_base() above
+def test_alter_table_add_select_star(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, a int, b int') as base:
+        with new_materialized_view(cql, base, '*', 'a,p', 'a is not null and p is not null') as mv:
+            # We can add a new column "c" to the base table, and it will be
+            # automatically selected in the view because "SELECT *" expands
+            # to contain it.
+            cql.execute(f'INSERT INTO {base} (p,a,b) VALUES (1,2,3)')
+            cql.execute(f'ALTER TABLE {base} ADD c int')
+            cql.execute(f'INSERT INTO {base} (p,a,b,c) VALUES (0,1,2,3)')
+            assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {base}"))
+            assert {(0,1,2,3),(1,2,3,None)} == set(cql.execute(f"SELECT p,a,b,c FROM {mv}"))
+
+# Test that tombstones with future timestamps work correctly
+# when a write with lower timestamp arrives - in such case,
+# if the base row is covered by such a tombstone, a view update
+# needs to take it into account.
+# Reproduces issue #5793
+def test_views_with_future_tombstones(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, e int, primary key (a, b, c)') as table:
+        with new_materialized_view(cql, table, '*', 'b, a, c', 'a is not null and b is not null and c is not null') as mv:
+            # Partition tombstone
+            cql.execute(f'delete from {table} using timestamp 10 where a=1')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (1,2,3,4,5) using timestamp 8')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            # On a single-node test, the update will be synchronous so no
+            # need for retry.
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+            # Range tombstone
+            cql.execute(f'delete from {table} using timestamp 16 where a=2 and b > 1 and b < 4')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (2,3,4,5,6) using timestamp 12')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+            # Row tombstone
+            cql.execute(f'delete from {table} using timestamp 24 where a=3 and b=4 and c=5')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            cql.execute(f'insert into {table} (a,b,c,d,e) values (3,4,5,6,7) using timestamp 18')
+            assert [] == list(cql.execute(f'select * from {table}'))
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+# Test view representation in system.* tables
+def test_view_in_system_tables(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
+        with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
+            wait_for_view_built(cql, view)
+            res = [ f'{r.keyspace_name}.{r.view_name}' for r in cql.execute('select * from system.built_views')]
+            assert view in res
+            res = [ f'{r.table_name}.{r.index_name}' for r in cql.execute('select * from system."IndexInfo"')]
+            assert view not in res
+
+# This test indirectly verifies that a shadowable tombstone goes beyond
+# hiding data older than its timestamp - it actually hides an *entire* row -
+# even cells newer than the tombstone - if the shadowable tombstone is newer
+# than just the row marker. We suspected (ssee #21769) we might have a bug
+# in this area if the newer call was a map element, but it turns out we
+# didn't have such a bug - and this test passes.
+def test_shadowable_tombstone_and_newer_collection_cells(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, m map<int, int>, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p, c', 'x is not null and p is not null and c is not null') as mv:
+            # Insert into the base table a row p=1 c=2 with x=3. This will
+            # create an empty view row x=3
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,3)')
+            # We should see this new row when reading the view partition x=1.
+            # We assume that on a single-node test, the view updates are
+            # synchronous so don't need to retry.
+            assert [(1,2,3)] == list(cql.execute(f'select p,c,x from {mv} where x=3'))
+            # Now, in the base row p=1 c=2 leave x unmodified (3), but add
+            # an element to the map m. The view row will remain with its old
+            # timestamp, but will get a new cell - the new map element - with
+            # a *newer* timestamp.
+            cql.execute(f'update {table} set m = m + {{7: 8}} where p=1 and c=2')
+            assert [(1,2,3,{7:8})] == list(cql.execute(f'select p,c,x,m from {mv} where x=3'))
+            # Finally, in the base row p=1 c=2, set x to 4. This should
+            # create a new view rew with x=5, but more importantly for this
+            # test - should delete the entirety of the old view row x=3.
+            # Even the map item that was added with a later timestamp, should
+            # be gone.
+            cql.execute(f'update {table} set x = 4 where p=1 and c=2')
+            assert [(1,2,4,{7:8})] == list(cql.execute(f'select p,c,x,m from {mv} where x=4'))
+            assert [] == list(cql.execute(f'select p,c,x,m from {mv} where x=3'))
+
+# Same as the previous test checking shadowable tombstones and newer calls,
+# but here we use ordinary atomic (not collection) cells, and also use INSERT
+# instead of UPDATE.
+def test_shadowable_tombstone_and_newer_atomic_cells(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, x int, y int, primary key (p, c)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p, c', 'x is not null and p is not null and c is not null') as mv:
+            # Insert into the base table a row p=1 c=2 with x=3. This will
+            # create an empty view row x=3
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,3)')
+            # We should see this new row when reading the view partition x=1.
+            # We assume that on a single-node test, the view updates are
+            # synchronous so don't need to retry.
+            assert [(1,2,3,None)] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+            # Now, in the base row p=1 c=2 leave x unmodified (3), but set
+            # a value for column y. The new cell y will get a new timestamp,
+            # but because we use INSERT instead of UPDATE - the base row
+            # marker will also get a new row timestamp, but it doesn't
+            # affect the row marker of the view (which only depends on the
+            # timestamp of x).
+            cql.execute(f'insert into {table} (p,c,y) values (1,2,7)')
+            assert [(1,2,3,7)] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+            # Finally, in the base row p=1 c=2, set x to 4. This should
+            # create a new view rew with x=5, but more importantly for this
+            # test - should delete the entirety of the old view row x=3.
+            cql.execute(f'insert into {table} (p,c,x) values (1,2,4)')
+            assert [(1,2,4,7)] == list(cql.execute(f'select p,c,x,y from {mv} where x=4'))
+            assert [] == list(cql.execute(f'select p,c,x,y from {mv} where x=3'))
+
+# Test that setting a TTL on a base-regular column which is a view key
+# column, correctly applies this TTL to the view row. In other words,
+# when the base value expires, the entire view row (the row marker and
+# the individual cells) expire.
+# This test reaches the same code paths as cassandra_tests/validation/entities/
+# secondary_index_test.py::testIndexOnRegularColumnInsertExpiringColumn
+# but uses a materialized view - not a secondary index.
+def test_view_update_with_ttl(cql, test_keyspace):
+    # To be able to set a TTL on a view key column x, obviously it needs to
+    # be a *regular* column in the base (key columns do not have TTLs).
+    with new_test_table(cql, test_keyspace, 'p int, x int, y int, primary key (p)') as table:
+        with new_materialized_view(cql, table, '*', 'x, p', 'x is not null and p is not null') as mv:
+            # Unfortunately, because we can't read the TTL of a row marker
+            # (issue #14019) we can't verify that the correct TTL was set
+            # on the view row marker - such that it would cause it to
+            # eventually expire. So we are forced to actually sleep waiting
+            # for the data to expire to verify the entire row is gone.
+            # A wrong TTL on the row marker would have left an empty row,
+            # and a wrong TTL on the cell y would have left that in the view.
+            # This means this test takes two seconds :-(
+            cql.execute(f'insert into {table} (p,x,y) values (1,2,3) using ttl 1')
+            time.sleep(1.1)
+            assert [] == list(cql.execute(f'select * from {mv}'))
+            # Updating x without a TTL will make this row appear again
+            # We assume that on a single node, view updates are synchronous
+            # so we don't need to loop the read.
+            cql.execute(f'update {table} set x=4, y=5 where p=1')
+            assert [(4,1,5)] == list(cql.execute(f'select * from {mv}'))
+            # Update x again with a TTL of 1 and sleep. The view row should
+            # disappear completely (including the row marker and y)
+            cql.execute(f'update {table} using ttl 1 set x=5 where p=1')
+            time.sleep(1.1)
+            assert [] == list(cql.execute(f'select * from {mv}'))
+
+# Test view representation in REST API
+def test_view_in_API(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
+        with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
+            view_name = view.split('.')[1]
+            res = rest_api.get_request(cql, f"storage_service/view_build_statuses/{test_keyspace}/{view_name}")
+            assert len(res) == 1 and 'value' in res[0] and res[0]['value'] in [ 'UNKNOWN', 'STARTED', 'SUCCESS' ]
+            # Indexes are implemented on top of materialized-views, but even then no MVs
+            # should appear in the output of built_indexes API. And since this API only
+            # reports views that are built, check that view is built first.
+            wait_for_view_built(cql, view)
+            res = rest_api.get_request(cql, f"column_family/built_indexes/{base.replace('.',':')}")
+            assert view_name not in res
+
+# Test that we can perform reads from the view in reverse order without crashing.
+# Reproduces issue https://github.com/scylladb/scylladb/issues/21354
+def test_reverse_read_from_view(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int PRIMARY KEY, b int') as table:
+        with new_materialized_view(cql, table, '*', 'b, a', 'a is not null and b is not null') as mv:
+            cql.execute(f'insert into {table} (a, b) values (1, 1)')
+            cql.execute(f'insert into {table} (a, b) values (2, 1)')
+            assert {(1,),(2,)} == set(cql.execute(f'select a from {mv} where b=1'))
+            assert [(1,),(2,)] == list(cql.execute(f'select a from {mv} where b=1 order by a asc'))
+            assert [(2,),(1,)] == list(cql.execute(f'select a from {mv} where b=1 order by a desc'))
+>>>>>>> 74cbc77f50 (test: add test for schema registry maintaining base info for views):test/cqlpy/test_materialized_view.py
