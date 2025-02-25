@@ -1279,6 +1279,9 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         co_return api_error::validation(fmt::format("Prefix {} is reserved for accessing internal tables", executor::INTERNAL_TABLE_PREFIX));
     }
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
+    if (!request.HasMember("AttributeDefinitions")) {
+        co_return api_error::validation("No Attribute Schema Defined");
+    }
     const rjson::value& attribute_definitions = request["AttributeDefinitions"];
     // Save the list of AttributeDefinitions in unused_attribute_definitions,
     // and below remove each one as we see it in a KeySchema of the table or
