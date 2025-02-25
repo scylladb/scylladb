@@ -34,7 +34,7 @@ async def test_mv_topology_change(manager: ManagerClient):
            'enable_tablets': False,
            'error_injections_at_startup': ['delay_before_get_view_natural_endpoint']}
 
-    servers = [await manager.server_add(config=cfg, timeout=60) for _ in range(3)]
+    servers = [await manager.server_add(config=cfg) for _ in range(3)]
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
