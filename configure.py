@@ -730,7 +730,7 @@ arg_parser.add_argument('--cspgo', dest='cspgo', action='store_true', default=Fa
                         help='Generate and use fresh CSPGO profiles when building Scylla. A clang-specific optional addition to --pgo.')
 arg_parser.add_argument('--experimental-pgo', dest='experimental_pgo', action='store_true', default=False,
                         help='When building with PGO, enable nonconservative (potentially pessimizing) optimizations. Only supported with clang for now. Not recommended.')
-arg_parser.add_argument('--use-cmake', action=argparse.BooleanOptionalAction, default=False, help='Whether to use CMake as the build system')
+arg_parser.add_argument('--use-cmake', action=argparse.BooleanOptionalAction, default=True, help='Whether to use CMake as the build system')
 arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scylla with coverage instrumentation')
 arg_parser.add_argument('--build-dir', action='store', default='build',
                         help='Build directory path')

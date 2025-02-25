@@ -280,13 +280,12 @@ Once the patch set is ready to be reviewed, push the branch to the public remote
 
 ### Development environment and source code navigation
 
-Scylla includes a [CMake](https://cmake.org/) file, `CMakeLists.txt`, for use only with development environments (not for building) so that they can properly analyze the source code.
+Scylla uses [CMake](https://cmake.org/) and ninja as its building system. This allows for seamless
+integration with any IDE or tool that supports CMake projects or can utilize `compile_commands.json`.
 
 [CLion](https://www.jetbrains.com/clion/) is a commercial IDE offers reasonably good source code navigation and advice for code hygiene, though its C++ parser sometimes makes errors and flags false issues.
 
 Other good options that directly parse CMake files are [KDevelop](https://www.kdevelop.org/) and [QtCreator](https://wiki.qt.io/Qt_Creator).
-
-To use the `CMakeLists.txt` file with these programs, define the `FOR_IDE` CMake variable or shell environmental variable.
 
 [Eclipse](https://eclipse.org/cdt/) is another open-source option. It doesn't natively work with CMake projects, and its C++ parser has many similar issues as CLion.
 
@@ -302,7 +301,12 @@ A reasonably-powered laptop acts as the coordinator for compilation. A second, m
 Having a direct wired connection between the machines ensures that object files can be transmitted quickly and limits the overhead of remote compilation.
 The coordinator has been assigned the static IP address `10.0.0.1` and the passive compilation machine has been assigned `10.0.0.2`.
 
-On Fedora, installing the `ccache` package places symbolic links for `gcc` and `g++` in the `PATH`. This allows normal compilation to transparently invoke `ccache` for compilation and cache object files on the local file-system.
+On Fedora, installing the `ccache` package creates symbolic links for `gcc` and `g++` in your `PATH`. This enables transparent compilation caching on the local filesystem without any additional configuration. For explicit configuration or when using other build systems, tell CMake to use ccache by setting these environment variables before running `configure.py` or `cmake`: 
+
+```bash
+export CMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/ccache
+export CMAKE_C_COMPILER_LAUNCHER=/usr/bin/ccache
+```
 
 Next, set `CCACHE_PREFIX` so that `ccache` is responsible for invoking `distcc` as necessary:
 
