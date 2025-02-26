@@ -43,7 +43,7 @@ $ ./tools/toolchain/dbuild ninja build/release/scylla
 $ ./tools/toolchain/dbuild ./build/release/scylla --developer-mode 1
 ```
 
-Note: do not mix environemtns - either perform all your work with dbuild, or natively on the host.
+Note: do not mix environments - either perform all your work with dbuild, or natively on the host.
 Note2: you can get to an interactive shell within dbuild by running it without any parameters:
 ```bash
 $ ./tools/toolchain/dbuild
@@ -91,7 +91,7 @@ You can also specify a single mode. For example
 $ ninja-build release
 ```
 
-Will build everytihng in release mode. The valid modes are
+Will build everything in release mode. The valid modes are
 
 * Debug: Enables [AddressSanitizer](https://github.com/google/sanitizers/wiki/AddressSanitizer)
   and other sanity checks. It has no optimizations, which allows for debugging with tools like
