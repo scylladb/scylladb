@@ -2062,6 +2062,12 @@ class seastar_lw_shared_ptr():
         else:
             return self.ref['_p'].cast(self._no_esft_type())['_value'].address
 
+    def __nonzero__(self):
+        return bool(self.ref['_p'])
+
+    def __bool__(self):
+        return self.__nonzero__()
+
 
 class lsa_region():
     def __init__(self, region):
