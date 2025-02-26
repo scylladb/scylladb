@@ -98,7 +98,7 @@ public:
         friend class double_decker;
         using super = iterator_base<false>;
 
-        iterator(const const_iterator&& other) noexcept : super(std::move(other._bucket), other._idx) {}
+        explicit iterator(const_iterator&& other) noexcept : super(outer_iterator(std::move(other._bucket)), other._idx) {}
 
     public:
         iterator() noexcept : super() {}

@@ -664,7 +664,7 @@ public:
         iterator(data* d, kid_index idx) noexcept : super(d, idx) {}
 
     public:
-        iterator(const const_iterator&& other) noexcept {
+        explicit iterator(const_iterator&& other) noexcept {
             if (other.is_end()) {
                 super::_idx = super::npos;
                 super::_tree = const_cast<tree *>(other._tree);
