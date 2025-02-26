@@ -1248,7 +1248,7 @@ const storage_group_map& table::storage_groups() const {
     return _sg_manager->storage_groups();
 }
 
-future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
+future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot_impl(dht::token_range tr, bool flush) {
     utils::chunked_vector<sstables::sstable_files_snapshot> ret;
 
     for (auto& cg : compaction_groups_for_token_range(tr)) {
@@ -1258,7 +1258,9 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
         // deadlock might occur due to memtable flush backpressure waiting on
         // compaction to reduce the backlog.
 
-        co_await cg->flush();
+        if (flush) {
+            co_await cg->flush();
+        }
 
         // The sstable set must be obtained *after* the deletion lock is taken,
         // otherwise components of sstables in the set might be unlinked from the filesystem
@@ -1273,6 +1275,14 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
     }
 
     co_return std::move(ret);
+}
+
+future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
+    return take_storage_snapshot_impl(std::move(tr), true);
+}
+
+future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_sstable_set_snapshot() {
+    return take_storage_snapshot_impl(dht::token_range::make_open_ended_both_sides(), false);
 }
 
 future<utils::chunked_vector<sstables::entry_descriptor>>
