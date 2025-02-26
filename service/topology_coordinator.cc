@@ -730,7 +730,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
             } catch (raft::request_aborted&) {
                 rtlogger.debug("CDC generation publisher fiber aborted");
-            } catch (seastar::abort_requested_exception) {
+            } catch (seastar::abort_requested_exception&) {
                 rtlogger.debug("CDC generation publisher fiber aborted");
             } catch (group0_concurrent_modification&) {
             } catch (term_changed_error&) {
@@ -805,7 +805,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             } catch (raft::request_aborted&) {
                 rtlogger.debug("gossiper orphan remover fiber aborted");
-            } catch (seastar::abort_requested_exception) {
+            } catch (seastar::abort_requested_exception&) {
                 rtlogger.debug("gossiper orphan remover fiber aborted");
             } catch (group0_concurrent_modification&) {
             } catch (term_changed_error&) {
@@ -3051,7 +3051,7 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
         } catch (raft::request_aborted&) {
             rtlogger.debug("raft topology: Tablet load stats refresher aborted");
             sleep = false;
-        } catch (seastar::abort_requested_exception) {
+        } catch (seastar::abort_requested_exception&) {
             rtlogger.debug("raft topology: Tablet load stats refresher aborted");
             sleep = false;
         } catch (...) {
