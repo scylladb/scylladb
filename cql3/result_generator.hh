@@ -20,7 +20,7 @@ class result_generator {
     foreign_ptr<lw_shared_ptr<query::result>> _result;
     lw_shared_ptr<const query::read_command> _command;
     shared_ptr<const selection::selection> _selection;
-    cql_stats* _stats;
+    cql_stats* _stats = nullptr;
 private:
     friend class untyped_result_set;
     template<typename Visitor>
