@@ -39,6 +39,7 @@ public:
         updateable_value<int> high_polling_interval;
         // Use high_polling_interval above this threshold
         updateable_value<float> polling_interval_threshold;
+        updateable_value<uint64_t> capacity_override; // 0 means no override.
     };
 
 private:
