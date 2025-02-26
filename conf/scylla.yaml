@@ -747,7 +747,7 @@ maintenance_socket: ignore
 #
 # Actual connection can be either an explicit endpoint (<host>:<port>), or selected automatic via aws_region.
 # 
-# Authentication can be explicit with aws_access_key_id and aws_secret_access_key. Either secret or both can be ommitted
+# Authentication can be explicit with aws_access_key_id and aws_secret_access_key. Either secret or both can be omitted
 # in which case the provider will try to read them from AWS credentials in ~/.aws/credentials. If aws_profile is set, the
 # credentials in this section is used.
 #
