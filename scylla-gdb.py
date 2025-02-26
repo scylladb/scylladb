@@ -951,6 +951,46 @@ class sstring:
         return self.as_hex()
 
 
+class managed_bytes:
+    def __init__(self, val):
+        self.val = val
+
+    def is_multi_chunk(self):
+        return int(self.val['_inline_size']) < -1;
+
+    def is_single_chunk(self):
+        return int(self.val['_inline_size']) == -1;
+
+    def is_inline(self):
+        return int(self.val['_inline_size']) >= 0;
+
+    def __len__(self):
+        if self.is_multi_chunk():
+            return int(self.val['_u']['multi_chunk_ref']['size'])
+        elif self.is_single_chunk():
+            return int(self.val['_u']['single_chunk_ref']['size'])
+        else:
+            return int(self.val['_inline_size'])
+
+    def get(self):
+        inf = gdb.selected_inferior()
+
+        def to_bytes(data, size):
+            return bytes(inf.read_memory(data, size))
+
+        if self.is_inline():
+            return to_bytes(self.val['_u']['inline_data'], int(self.val['_inline_size']))
+        elif self.is_single_chunk():
+            return to_bytes(self.val['_u']['single_chunk_ref']['ptr']['data'], int(self.val['_u']['single_chunk_ref']['size']))
+        else:
+            ref = self.val['_u']['multi_chunk_ref']['ptr']
+            chunks = list()
+            while ref['ptr']:
+                chunks.append(to_bytes(ref['ptr']['data'], int(ref['ptr']['frag_size'])))
+                ref = ref['ptr']['next']
+            return b''.join(chunks)
+
+
 def uint64_t(val):
     val = int(val)
     if val < 0:
@@ -1015,25 +1055,10 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
     'print a managed_bytes'
 
     def __init__(self, val):
-        self.val = val
+        self.val = managed_bytes(val)
 
     def pure_bytes(self):
-        inf = gdb.selected_inferior()
-
-        def to_bytes(data, size):
-            return bytes(inf.read_memory(data, size))
-
-        if self.val['_inline_size'] >= 0:
-            return to_bytes(self.val['_u']['inline_data'], int(self.val['_inline_size']))
-        elif self.val['_inline_size'] == -1:
-            return to_bytes(self.val['_u']['single_chunk_ref']['ptr']['data'], int(self.val['_u']['single_chunk_ref']['size']))
-        else:
-            ref = self.val['_u']['multi_chunk_ref']['ptr']
-            chunks = list()
-            while ref['ptr']:
-                chunks.append(to_bytes(ref['ptr']['data'], int(ref['ptr']['frag_size'])))
-                ref = ref['ptr']['next']
-            return b''.join(chunks)
+        return self.val.get()
 
     def bytes_as_hex(self):
         return self.pure_bytes().hex()
