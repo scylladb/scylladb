@@ -187,7 +187,7 @@ private:
 private:
     template <typename... Args>
     future<> try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
-            std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const;
+            std::string_view size_desc, std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const;
 };
 
 class nop_large_data_handler : public large_data_handler {
