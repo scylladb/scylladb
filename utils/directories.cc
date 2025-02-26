@@ -169,7 +169,7 @@ future<> directories::verify_owner_and_mode_of_data_dir(directories::set dir_set
                     // like stat/lstat will load the inode/dentry into the cache.
                     auto descriptor_tuple = sstables::parse_path(path);
                     path_component_type = std::get<0>(descriptor_tuple).component;
-                } catch (sstables::malformed_sstable_exception) {
+                } catch (sstables::malformed_sstable_exception&) {
                     // path is not a SSTable component - do not filter it out
                     return true;
                 }

@@ -205,7 +205,7 @@ future<> stream_blob_handler(replica::database& db,
                     }
                 }
             }
-          } catch (seastar::rpc::stream_closed) {
+          } catch (seastar::rpc::stream_closed&) {
               // After we get streaming::stream_blob_cmd::end_of_stream which
               // is the last message from peer, it does not matter if the
               // source() is closed or not.
@@ -514,7 +514,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
                         } else {
                             break;
                         }
-                      } catch (seastar::rpc::stream_closed) {
+                      } catch (seastar::rpc::stream_closed&) {
                           // After we get streaming::stream_blob_cmd::ok
                           // which is the last message from peer, it does not
                           // matter if the source() is closed or not.
