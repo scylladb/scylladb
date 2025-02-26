@@ -197,7 +197,7 @@ ring_position_range_sharder::next(const schema& s) {
         auto end = interval_bound<ring_position>(shard_boundary, false);
         _range = dht::partition_range(
                 interval_bound<ring_position>(std::move(shard_boundary), true),
-                std::move(_range.end()));
+                _range.end());
         return ring_position_range_and_shard{dht::partition_range(std::move(start), std::move(end)), shard};
     }
     _done = true;
