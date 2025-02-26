@@ -318,7 +318,7 @@ mutation_reader make_reversing_reader(mutation_reader original, query::max_resul
                     mrlog.warn(
                             "Memory usage of reversed read exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit), while reading partition {}",
                             _max_size.soft_limit,
-                            key.with_schema(*_schema));
+                            key.with_schema(*_schema)));
                     _below_soft_limit = false;
                 }
             }
@@ -518,7 +518,7 @@ public:
             tracing::trace_state_ptr trace_state)
         : impl(s, std::move(permit))
         , _generator(std::move(generator))
-        , _reader(source.make_reader_v2(s, _permit, first_range, slice, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+        , _reader(source.make_reader_v2(s, mutation_reader::reader_params{first_range, slice, permit, trace_state}))
     {
     }
 
@@ -606,8 +606,7 @@ public:
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         if (!_reader) {
-            _reader = _source.make_reader_v2(_schema, _permit, pr, _slice, std::move(_trace_state), streamed_mutation::forwarding::no,
-                    mutation_reader::forwarding::yes);
+            _reader = _source.make_reader_v2(_schema, mutation_reader::reader_params{pr, _slice, _permit, std::move(_trace_state)});
             _end_of_stream = false;
             return make_ready_future<>();
         }
@@ -662,7 +661,7 @@ make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source
             return make_empty_flat_reader_v2(std::move(s), std::move(permit));
         }
     } else if (ranges.size() == 1) {
-        return source.make_reader_v2(std::move(s), std::move(permit), ranges.front(), slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+        return source.make_reader_v2(std::move(s), mutation_reader::reader_params{ranges.front(), slice, std::move(permit), std::move(trace_state)});
     } else {
         return make_mutation_reader<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
                 ranges.front(), adapter(std::next(ranges.cbegin()), ranges.cend()), slice, std::move(trace_state));
@@ -1214,7 +1213,7 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         std::vector<mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms.make_reader_v2(s, permit, pr, slice, tr, fwd_sm, fwd_mr));
+            rd.emplace_back(ms.make_reader_v2(s, mutation_reader::reader_params{pr, slice, permit, tr}));
         }
         return make_combined_reader(s, std::move(permit), std::move(rd), fwd_sm, fwd_mr);
     });
@@ -1244,7 +1243,9 @@ public:
     }
     virtual ~queue_reader_v2() {
         if (_handle) {
-            _handle->_reader = nullptr;
+            if (_handle) {
+                _handle->_reader = nullptr;
+            }
         }
     }
     virtual future<> fill_buffer() override {
