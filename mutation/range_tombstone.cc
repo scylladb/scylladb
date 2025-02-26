@@ -9,7 +9,6 @@
 #include "range_tombstone.hh"
 
 #include <boost/range/algorithm/upper_bound.hpp>
-#include <boost/range/numeric.hpp>
 
 std::optional<range_tombstone> range_tombstone::apply(const schema& s, range_tombstone&& src)
 {
@@ -39,7 +38,7 @@ position_in_partition_view range_tombstone::end_position() const {
 }
 
 void range_tombstone_accumulator::update_current_tombstone() {
-    _current_tombstone = boost::accumulate(_range_tombstones, _partition_tombstone, [] (tombstone t, const range_tombstone& rt) {
+    _current_tombstone = std::ranges::fold_left(_range_tombstones, _partition_tombstone, [] (tombstone t, const range_tombstone& rt) {
         t.apply(rt.tomb);
         return t;
     });
