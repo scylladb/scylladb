@@ -14,7 +14,6 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/range/algorithm_ext.hpp>
-#include <boost/range/numeric.hpp>
 #include <json/json.h>
 #include <fmt/ranges.h>
 #include "test/lib/cql_test_env.hh"
@@ -1316,7 +1315,7 @@ public:
         for (auto&& result : results) {
             print_all(result);
 
-            auto average_aio = boost::accumulate(result, 0., [&] (double a, const test_result& b) {
+            auto average_aio = std::ranges::fold_left(result, 0., [&] (double a, const test_result& b) {
                 return a + b.aio_reads() + b.aio_writes();
             }) / (result.empty() ? 1 : result.size());
 

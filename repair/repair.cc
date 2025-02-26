@@ -30,7 +30,6 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/range/algorithm_ext.hpp>
-#include <boost/range/numeric.hpp>
 
 #include <fmt/ranges.h>
 
@@ -609,7 +608,7 @@ future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, co
             // FIXME: If sstables are shared, they will be accounted more than
             // once. However, shared sstables should exist for a short-time only.
             auto sstables = db.find_column_family(keyspace, cf).get_sstables();
-            return boost::accumulate(*sstables, uint64_t(0),
+            return std::ranges::fold_left(*sstables, uint64_t(0),
                 [&range] (uint64_t x, auto&& sst) { return x + sst->estimated_keys_for_range(range); });
         },
         uint64_t(0),

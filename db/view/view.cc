@@ -17,8 +17,6 @@
 #include <vector>
 #include <algorithm>
 
-#include <boost/range/numeric.hpp>
-
 #include <fmt/ranges.h>
 
 #include <seastar/core/future-util.hh>
@@ -3340,7 +3338,7 @@ update_backlog node_update_backlog::fetch() {
     auto now = clock::now();
     if (now >= _last_update.load(std::memory_order_relaxed) + _interval) {
         _last_update.store(now, std::memory_order_relaxed);
-        auto new_max = boost::accumulate(
+        auto new_max = std::ranges::fold_left(
                 _backlogs,
                 update_backlog::no_backlog(),
                 [] (const update_backlog& lhs, const per_shard_backlog& rhs) {

@@ -12,7 +12,6 @@
 #include "manager.hh"
 #include "utils/log.hh"
 #include <boost/range/algorithm/for_each.hpp>
-#include <boost/range/numeric.hpp>
 #include "utils/disk-error-handler.hh"
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
@@ -189,7 +188,7 @@ void space_watchdog::on_timer() {
 
         // Adjust the quota to take into account the space we guarantee to every end point manager
         size_t adjusted_quota = 0;
-        size_t delta = boost::accumulate(per_device_limits.managers, 0, [] (size_t sum, manager& shard_manager) {
+        size_t delta = std::ranges::fold_left(per_device_limits.managers, 0, [] (size_t sum, manager& shard_manager) {
             return sum + shard_manager.ep_managers_size() * resource_manager::hint_segment_size_in_mb * 1024 * 1024;
         });
         if (per_device_limits.max_shard_disk_space_size > delta) {

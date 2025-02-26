@@ -39,10 +39,10 @@ compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstab
         if (runs.size() < size_t(table_s.schema()->min_compaction_threshold())) {
             continue;
         }
-        auto all = boost::accumulate(runs, std::vector<shared_sstable>(), [&] (std::vector<shared_sstable>&& v, const frozen_sstable_run& run) {
-            v.insert(v.end(), run->all().begin(), run->all().end());
-            return std::move(v);
-        });
+        auto all = runs
+            | std::views::transform([] (auto& run) -> auto& { return run->all(); })
+            | std::views::join
+            | std::ranges::to<std::vector>();
         return sstables::compaction_descriptor(std::move(all), 0, static_fragment_size_for_run);
     }
     return sstables::compaction_descriptor();
