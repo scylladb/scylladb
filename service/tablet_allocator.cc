@@ -961,48 +961,27 @@ public:
                 return tablet_migration_info{kind, gid, src, dst};
             };
 
-            co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
-                // Be optimistic about migrating tablets, as if they succeeded.
-                // Merge finalization will have to recheck that all sibling tablets are co-located.
+            struct tablet_colocation_info {
+                tablet_desc desc;
+                tablet_replica_set sorted_set;
+            };
+            using check_constraints_f = noncopyable_function<bool(tablet_replica src, tablet_replica dst)>;
 
-                if (!t2_opt) {
-                    on_internal_error(lblogger, format("Unable to find sibling tablet during co-location, with tablet count {}, for table {}",
-                                                       tmap.tablet_count(), table));
-                }
-                auto t2 = *t2_opt;
+            // TODO: extract all co-location migration planning logic into a class for readability.
+            auto maybe_generate_colocation_plan = [&] (tablet_colocation_info t1, tablet_colocation_info t2,
+                                                       const check_constraints_f& check_constraints) {
+                auto t1_id = global_tablet_id{table, t1.desc.tid};
+                auto t2_id = global_tablet_id{table, t2.desc.tid};
+                auto& r1 = t1.sorted_set;
+                auto& r2 = t2.sorted_set;
 
-                auto r1 = get_replicas(t1);
-                auto r2 = get_replicas(t2);
-                if (r1 == r2) {
-                    return make_ready_future<>();
-                }
-                auto t1_id = global_tablet_id{table, t1.tid};
-                auto t2_id = global_tablet_id{table, t2.tid};
-
-                if (migrating(t1) || migrating(t2)) {
-                    return make_ready_future<>();
-                }
                 // During RF change, tablets may have incrementally replicas allocated / deallocated to them.
                 // Let's temporarily delay their co-location until their replica sets have the same size.
                 if (r1.size() != r2.size()) {
                     lblogger.warn("Replica sets of tablets to be co-located differ in size: ({}: {}), ({}, {})",
                                   t1_id, r1, t2_id, r2);
-                    return make_ready_future<>();
+                    return;
                 }
-
-                // Returns true if moving candidate into dst will violate replication constraint.
-                const auto r2_hosts = r2
-                    | std::views::transform(std::mem_fn(&locator::tablet_replica::host))
-                    | std::ranges::to<std::unordered_set<host_id>>();
-                auto check_constraints = [r2_hosts = std::move(r2_hosts)] (tablet_replica src, tablet_replica dst) {
-                    // handles intra-node migration.
-                    if (src.host == dst.host && src.shard != dst.shard) {
-                        return false;
-                    }
-                    return r2_hosts.contains(dst.host);
-                };
-
-                lblogger.debug("Replica sets of tablets being co-located: ({}: {}), ({}, {})", t1_id, r1, t2_id, r2);
 
                 auto ret = first_non_matching_replicas(r1, r2);
                 if (!ret) {
@@ -1021,21 +1000,60 @@ public:
                 if (skip) {
                     lblogger.debug("Replication constraint check failed, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
-                    return make_ready_future<>();
+                    return;
                 }
 
                 auto mig = create_migration_info(t2_id, src, dst);
-                auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), *t2.info, mig);
+                auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), *t2.desc.info, mig);
                 if (!can_accept_load(nodes, mig_streaming_info)) {
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
-                    return make_ready_future<>();
+                    return;
                 }
                 apply_load(nodes, mig_streaming_info);
 
                 lblogger.info("Created migration for replica ({}, {}) to co-habit same shard as ({}, {})", t2_id, src, t1_id, dst);
                 plan.add(std::move(mig));
+            };
+
+            co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
+                // Be optimistic about migrating tablets, as if they succeeded.
+                // Merge finalization will have to recheck that all sibling tablets are co-located.
+
+                if (!t2_opt) {
+                    on_internal_error(lblogger, format("Unable to find sibling tablet during co-location, with tablet count {}, for table {}",
+                                                       tmap.tablet_count(), table));
+                }
+                auto t2 = *t2_opt;
+
+                auto r1 = get_replicas(t1);
+                auto r2 = get_replicas(t2);
+                if (r1 == r2) {
+                    return make_ready_future<>();
+                }
+
+                if (migrating(t1) || migrating(t2)) {
+                    return make_ready_future<>();
+                }
+
+                // Returns true if moving candidate into dst will violate replication constraint.
+                const auto r2_hosts = r2
+                    | std::views::transform(std::mem_fn(&locator::tablet_replica::host))
+                    | std::ranges::to<std::unordered_set<host_id>>();
+                auto check_constraints = [r2_hosts = std::move(r2_hosts)] (tablet_replica src, tablet_replica dst) {
+                    // handles intra-node migration.
+                    if (src.host == dst.host && src.shard != dst.shard) {
+                        return false;
+                    }
+                    return r2_hosts.contains(dst.host);
+                };
+
+                lblogger.debug("Replica sets of tablets being co-located: ({}: {}), ({}, {})",
+                        global_tablet_id{table, t1.tid}, r1, global_tablet_id{table, t2.tid}, r2);
+
+                maybe_generate_colocation_plan({t1, std::move(r1)}, {t2, std::move(r2)}, check_constraints);
+
                 return make_ready_future<>();
             });
         }
