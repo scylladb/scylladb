@@ -3949,6 +3949,7 @@ future<> compaction_group::cleanup() {
     class compaction_group_cleaner : public row_cache::external_updater_impl {
         table& _t;
         compaction_group& _cg;
+        std::vector<sstables::shared_sstable>& _all_sstables;
         const lw_shared_ptr<sstables::sstable_set> _empty_main_set;
         const lw_shared_ptr<sstables::sstable_set> _empty_maintenance_set;
     private:
@@ -3956,9 +3957,10 @@ future<> compaction_group::cleanup() {
             return make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
         }
     public:
-        explicit compaction_group_cleaner(compaction_group& cg)
+        explicit compaction_group_cleaner(compaction_group& cg, std::vector<sstables::shared_sstable>& sstables_to_delete)
                 : _t(cg._t)
                 , _cg(cg)
+                , _all_sstables(sstables_to_delete)
                 , _empty_main_set(empty_sstable_set())
                 , _empty_maintenance_set(empty_sstable_set())
         {
@@ -3966,12 +3968,10 @@ future<> compaction_group::cleanup() {
         virtual future<> prepare() override {
             // Capture SSTables after flush, and with compaction disabled, to avoid missing any.
             auto set = _cg.make_sstable_set();
-            std::vector<sstables::shared_sstable> all_sstables;
-            all_sstables.reserve(set->size());
-            set->for_each_sstable([&all_sstables] (const sstables::shared_sstable& sst) mutable {
-                all_sstables.push_back(sst);
+            _all_sstables.reserve(set->size());
+            set->for_each_sstable([this] (const sstables::shared_sstable& sst) mutable {
+                _all_sstables.push_back(sst);
             });
-            co_await _cg.delete_sstables_atomically(std::move(all_sstables));
             if (utils::get_local_injector().enter("tablet_cleanup_failure")) {
                 co_await sleep(std::chrono::seconds(1));
                 tlogger.info("Cleanup failed for tablet {}", _cg.group_id());
@@ -3987,13 +3987,18 @@ future<> compaction_group::cleanup() {
         }
     };
 
-    auto updater = row_cache::external_updater(std::make_unique<compaction_group_cleaner>(*this));
+    std::vector<sstables::shared_sstable> sstables_to_delete;
+    auto updater = row_cache::external_updater(std::make_unique<compaction_group_cleaner>(*this, sstables_to_delete));
 
     auto p_range = to_partition_range(token_range());
     tlogger.debug("Invalidating range {} for compaction group {} of table {} during cleanup.",
                   p_range, group_id(), _t.schema()->ks_name(), _t.schema()->cf_name());
     co_await _t._cache.invalidate(std::move(updater), p_range);
     _t._cache.refresh_snapshot();
+
+    // Delete the sstable files only after updating the
+    // compaction group sstable sets.
+    co_await delete_sstables_atomically(std::move(sstables_to_delete));
 }
 
 future<> table::clear_inactive_reads_for_tablet(database& db, storage_group& sg) {
