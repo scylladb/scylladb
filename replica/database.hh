@@ -1242,6 +1242,8 @@ private:
     void do_update_off_strategy_trigger();
 
     compaction_group* try_get_compaction_group_with_static_sharding() const;
+
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot_impl(dht::token_range tr, bool flush);
 public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
@@ -1267,6 +1269,9 @@ public:
     // all compaction groups that overlap with a given token range. The output is
     // a list of SSTables that represent the snapshot.
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
+
+    // Takes snapshot of current sstable set all compaction groups.
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_sstable_set_snapshot();
 
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
