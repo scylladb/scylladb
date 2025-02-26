@@ -199,6 +199,30 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/task_manager/drain/{module}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Drain finished local tasks",
+               "type":"void",
+               "nickname":"drain_tasks",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"module",
+                     "description":"The module to drain",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
       }
    ],
    "models":{
