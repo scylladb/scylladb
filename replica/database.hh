@@ -1282,6 +1282,9 @@ public:
     // a list of SSTables that represent the snapshot.
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
 
+    // Takes snapshot of current sstable set all compaction groups.
+    future<utils::chunked_vector<sstables::shared_sstable>> take_sstable_set_snapshot();
+
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
