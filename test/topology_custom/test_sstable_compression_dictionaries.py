@@ -30,7 +30,10 @@ async def test_retrain_dict(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     servers = (await manager.servers_add(2, cmdline=[
         '--logger-log-level=storage_service=debug',
-        '--logger-log-level=api=debug',
+        '--logger-log-level=api=trace',
+        '--logger-log-level=database=debug',
+        '--abort-on-seastar-bad-alloc',
+        '--dump-memory-diagnostics-on-alloc-failure-kind=all',
     ]))
 
     # Create keyspace and table
@@ -121,6 +124,16 @@ async def test_retrain_dict(manager: ManagerClient):
     logger.info("Validating query results")
     results = await cql.run_async(select, [42])
     assert results[0][0] == blob
+
+    # Test the estimator
+    other_blob = random.randbytes(32*1024);
+    for pks in itertools.batched(range(n_blobs, 2*n_blobs), n=100):
+        await asyncio.gather(*[
+            cql.run_async(insert, [k, other_blob])
+            for k in pks
+        ])
+    await asyncio.gather(*[manager.api.keyspace_flush(s.ip_addr, "test", "test") for s in servers])
+    logger.info(await manager.api.estimate_compression_ratios(servers[0].ip_addr, "test", "test"))
 
     # Check that dropping the table also drops the dict.
     assert (await cql.run_async("SELECT COUNT(name) FROM system.dicts"))[0][0] == 1
