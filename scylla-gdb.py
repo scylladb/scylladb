@@ -6125,20 +6125,81 @@ class scylla_repairs(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla repairs', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
-    def process(self, master, rm):
+    def process(self, rm, calculate_memory_consumption):
         schema = rm['_schema']
         table = schema_ptr(schema).table_name().replace('"', '')
-        all_nodes_state = []
-        ip = str(rm['_myip']).replace('"', '')
+        row_buf = std_list(rm['_row_buf'])
+        working_row_buf = std_list(rm['_working_row_buf'])
+
+        def repair_row_list_memory(row_list):
+            mem = 0
+            repair_row_size = gdb.lookup_type('repair_row').sizeof
+            decorated_key_with_hash_size = gdb.lookup_type('decorated_key_with_hash').sizeof
+            known_dk_with_hash = set()
+
+            for row in row_list:
+                mem += repair_row_size
+
+                fm_opt = std_optional(row['_fm'])
+                if fm_opt:
+                    mem += int(fm_opt.get()['_bytes']['_size'])
+
+                dk_with_hash_ptr = seastar_lw_shared_ptr(row['_dk_with_hash'])
+                if dk_with_hash_ptr:
+                    if int(dk_with_hash_ptr.get()) in known_dk_with_hash:
+                        continue
+
+                    mem += decorated_key_with_hash_size
+                    mem += len(managed_bytes(dk_with_hash_ptr.get()['dk']['_key']['_bytes']))
+
+                mf_ptr = seastar_lw_shared_ptr(row['_mf'])
+                if mf_ptr:
+                    data = std_unique_ptr(mf_ptr.get()['_data'])
+                    if data:
+                        mem += int(data.get()['_memory']['_resources']['memory'])
+
+            return mem
+
+
+        if calculate_memory_consumption:
+            row_buf_mem = repair_row_list_memory(row_buf)
+            working_row_buf_mem = repair_row_list_memory(working_row_buf)
+        else:
+            row_buf_mem = 'n/a'
+            working_row_buf_mem = 'n/a'
+
+
+        gdb.write('  (repair_meta*) {}: id={}, table={}, reason={}, row_buf={{len={}, memory={}}}, working_row_buf={{len={}, memory={}}}, same_shard={}, tablet={}\n'.format(
+            rm.address,
+            int(rm['_repair_meta_id']),
+            table,
+            int(rm['_reason']),
+            len(row_buf),
+            row_buf_mem,
+            len(working_row_buf),
+            working_row_buf_mem,
+            bool(rm['_same_sharding_config']),
+            bool(rm['_is_tablet'])))
+
         for n in std_vector(rm['_all_node_states']):
-            all_nodes_state.append(str(n['node']).replace('"', '') + "->" + str(n['state']))
-        gdb.write('(%s*) for %s: addr = %s, table = %s, ip = %s, states = %s, repair_meta = (repair_meta*) %s\n' % (rm.type, master, str(rm.address), table, ip, all_nodes_state, rm.address))
+            gdb.write('    host: {}, shard: {}, state: {}\n'.format(n['node']['id'], n['shard'], n['state']))
 
     def invoke(self, arg, for_tty):
+        parser = argparse.ArgumentParser(description="scylla repairs")
+        parser.add_argument("-m", "--memory", action="store_true", default=False,
+                help="Calculate memory consumption of repairs")
+
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        gdb.write('Repairs for which this node is leader:\n')
         for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_masters._repair_metas'), link='_tracker_link'):
-            self.process("masters", rm)
+            self.process(rm, args.memory)
+        gdb.write('Repairs for which this node is follower:\n')
         for rm in intrusive_list(gdb.parse_and_eval('debug::repair_meta_for_followers._repair_metas'), link='_tracker_link'):
-            self.process("follower", rm)
+            self.process(rm, args.memory)
 
 
 class scylla_tablet_metadata(gdb.Command):
