@@ -446,6 +446,10 @@ class ScyllaRESTAPIClient():
         url = f"/storage_service/retrain_dict?keyspace={keyspace}&cf={table}"
         await self.client.post_json(url, host=node_ip)
 
+    async def estimate_compression_ratios(self, node_ip: str, keyspace: str, table: str):
+        url = f"/storage_service/estimate_compression_ratios?keyspace={keyspace}&cf={table}"
+        return await self.client.get_json(url, host=node_ip)
+
     async def get_sstable_info(self, node_ip: str, keyspace: Optional[str] = None, table: Optional[str] = None):
         url = "/storage_service/sstable_info"
         params = []

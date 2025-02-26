@@ -3060,6 +3060,41 @@
          ]
       },
       {
+         "path":"/storage_service/estimate_compression_ratios",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Compute an estimated compression ratio for SSTables of the given table, for various compression configurations.",
+               "type":"array",
+               "items":{
+                  "type":"compression_config_result"
+               },
+               "nickname":"estimate_compression_ratios",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"Name of the keyspace containing the target table.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"cf",
+                     "description":"Name of the target table.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/raft_topology/reload",
          "operations":[
             {
@@ -3360,6 +3395,32 @@
                 "type":"string"
             }
         }
+      },
+      "compression_config_result":{
+         "id":"compression_config_result",
+         "description":"Compression ratio estimation result for one config",
+         "properties":{
+            "level":{
+               "type":"long",
+               "description":"compression_level"
+            },
+            "chunk_length_in_kb":{
+               "type":"long",
+               "description":"chunk_length_in_kb"
+            },
+            "dict":{
+               "type":"string",
+               "description":"Dictionary: `none`, `past`, or `future`"
+            },
+            "sstable_compression":{
+               "type":"string",
+               "description":"sstable_compression"
+            },
+            "ratio":{
+               "type":"float",
+               "description":"sstable_compression"
+            }
+         }
       }
    }
 }
