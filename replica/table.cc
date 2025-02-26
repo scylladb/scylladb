@@ -3971,12 +3971,12 @@ future<> compaction_group::cleanup() {
             set->for_each_sstable([&all_sstables] (const sstables::shared_sstable& sst) mutable {
                 all_sstables.push_back(sst);
             });
+            co_await _cg.delete_sstables_atomically(std::move(all_sstables));
             if (utils::get_local_injector().enter("tablet_cleanup_failure")) {
                 co_await sleep(std::chrono::seconds(1));
                 tlogger.info("Cleanup failed for tablet {}", _cg.group_id());
                 throw std::runtime_error("tablet cleanup failure");
             }
-            co_await _cg.delete_sstables_atomically(std::move(all_sstables));
         }
 
         virtual void execute() override {
