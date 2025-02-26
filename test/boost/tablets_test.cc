@@ -2553,6 +2553,119 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
   }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
+    // 3 racks, RF=3. 1 table with 90% space.
+    // We start with 1 i4i_2xlarge per rack, then add i4i_large to each rack.
+    // We want utilization to be balanced.
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        std::vector<host_id> hosts;
+
+        uint64_t i4i_2xlarge_cap = 1'875'000'000'000;
+        uint64_t i4i_large_cap = 468'000'000'000;
+
+        auto add_i4i_2xlarge = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 7, rack);
+            load_stats.set_capacity(h, i4i_2xlarge_cap);
+            hosts.push_back(h);
+        };
+
+        auto add_i4i_large = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 2, rack);
+            load_stats.set_capacity(h, i4i_large_cap);
+            hosts.push_back(h);
+        };
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        add_i4i_2xlarge(rack1);
+        add_i4i_2xlarge(rack2);
+        add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}});
+        auto table1 = add_table(e, ks_name).get();
+
+        load_stats.set_size(table1, 0.9 * i4i_2xlarge_cap);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Initial cluster ready");
+
+        std::unordered_map<host_id, double> initial_utilization;
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                initial_utilization[h] = *u;
+            }
+        }
+
+        add_i4i_large(rack1);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity in rack1");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            auto u0 = *load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size);
+            BOOST_REQUIRE_LT(u0, initial_utilization[hosts[0]]);
+            initial_utilization[hosts[0]] = u0;
+            // rack2 and rack3 are not changed, to keep racks not overloaded (RF=rack_count)
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[1]]);
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[2]]);
+        }
+
+        add_i4i_large(rack2);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity in rack2");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[0]]);
+            auto u1 = *load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size);
+            BOOST_REQUIRE_LT(u1, initial_utilization[hosts[1]]);
+            initial_utilization[hosts[1]] = u1;
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[2]]);
+        }
+
+        add_i4i_large(rack3);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity in rack3");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[0]]);
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[1]]);
+            auto u2 = *load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size);
+            BOOST_REQUIRE_LT(u2, initial_utilization[hosts[2]]);
+            initial_utilization[hosts[2]] = u2;
+
+            // Check that utilization difference is < 1%
+            min_max_tracker<double> node_utilization;
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                node_utilization.update(*u);
+            }
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.01);
+        }
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     do_with_cql_env_thread([] (auto& e) {
         auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
