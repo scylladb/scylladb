@@ -1,0 +1,23 @@
+{% if flag != "manual" %}
+<div class="admonition caution">
+    <p class="admonition-title">Caution</p>
+    <p>
+        You're viewing documentation for a previous version.
+        <a href="https://docs.scylladb.com/manual/">Switch to the latest stable version.</a>
+    </p>
+</div>
+{% elif versions and current_version and latest_version and current_version != latest_version %}
+    <div class="admonition caution">
+        <p class="admonition-title">Caution</p>
+        <p>
+            {% if current_version.name in theme_versions_unstable %}
+                You're viewing documentation for an unstable version of {{ project }}.
+            {% elif current_version.name in theme_versions_deprecated %}
+                You're viewing documentation for a deprecated version of {{ project }}.
+            {% else %}
+                You're viewing documentation for a previous version of {{ project }}.
+            {% endif %}
+            <a href="{{ vpathto(latest_version.name) }}">Switch to the latest stable version.</a>
+        </p>
+    </div>
+{% endif %}
