@@ -31,6 +31,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
+from test.pylib.opensearch_cluster import OpenSearchCluster
 from test.pylib.resource_gather import get_resource_gather, setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
@@ -560,6 +561,15 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     )
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
+    if any("opensearch" in test.name for test in TestSuite.all_tests()):
+        opensearch_cluster = OpenSearchCluster(
+            tempdir_base=str(tempdir_base),
+            address="127.0.0.1",
+            logger=LogPrefixAdapter(logger=logging.getLogger("opensearch"), extra={"prefix": "opensearch"}),
+        )
+        await opensearch_cluster.start()
+        TestSuite.artifacts.add_exit_artifact(None, opensearch_cluster.stop)
 
     TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
 
