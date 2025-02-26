@@ -43,7 +43,7 @@ std::optional<sstring> is_cql_key_invalid(const schema& schema, partition_key_vi
 
 void
 validate_cql_key(const schema& schema, partition_key_view key) {
-    if (const auto err = is_cql_key_invalid(schema, key); err) {
+    if (auto err = is_cql_key_invalid(schema, key); err) {
         throw exceptions::invalid_request_exception(std::move(*err));
     }
 }

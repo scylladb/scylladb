@@ -345,7 +345,7 @@ static value_set possible_lhs_values(const column_definition* cdef,
                             if (cdef) {
                                 return unbounded_value_set;
                             }
-                            const auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
+                            auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                             if (!val) {
                                 return empty_value_set; // All NULL comparisons fail; no token values match.
                             }

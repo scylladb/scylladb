@@ -824,19 +824,19 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
         builder.with_column(to_bytes(format("pk{}", pk)), std::move(pk_columns[pk]), column_kind::partition_key);
     }
 
-    const auto ck_columns = spec.clustering_key_columns(engine);
+    auto ck_columns = spec.clustering_key_columns(engine);
     for (size_t ck = 0; ck < ck_columns.size(); ++ck) {
         builder.with_column(to_bytes(format("ck{}", ck)), std::move(ck_columns[ck]), column_kind::clustering_key);
     }
 
     if (!ck_columns.empty()) {
-        const auto static_columns = spec.static_columns(engine);
+        auto static_columns = spec.static_columns(engine);
         for (size_t s = 0; s < static_columns.size(); ++s) {
             builder.with_column(to_bytes(format("s{}", s)), std::move(static_columns[s]), column_kind::static_column);
         }
     }
 
-    const auto regular_columns = spec.regular_columns(engine);
+    auto regular_columns = spec.regular_columns(engine);
     for (size_t r = 0; r < regular_columns.size(); ++r) {
         builder.with_column(to_bytes(format("v{}", r)), std::move(regular_columns[r]), column_kind::regular_column);
     }

@@ -63,7 +63,7 @@ static void with_user(cql_test_env& env, std::string_view user_name, noncopyable
     create_user_if_not_exists(env, user_name);
     cs.set_login(auth::authenticated_user(sstring(user_name)));
 
-    const auto reset = defer([&cs, old_user = std::move(old_user)] {
+    const auto reset = defer([&cs, old_user = std::move(old_user)] mutable {
         cs.set_login(std::move(*old_user));
     });
 
