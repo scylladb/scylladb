@@ -88,7 +88,7 @@ static const class_registrator<
 ldap_role_manager::ldap_role_manager(
         std::string_view query_template, std::string_view target_attr, std::string_view bind_name, std::string_view bind_password,
         cql3::query_processor& qp, ::service::raft_group0_client& rg0c, ::service::migration_manager& mm)
-        : _std_mgr(qp, rg0c, mm), _group0_client(rg0c), _query_template(query_template), _target_attr(target_attr), _bind_name(bind_name)
+        : _std_mgr(qp, mm), _group0_client(rg0c), _query_template(query_template), _target_attr(target_attr), _bind_name(bind_name)
         , _bind_password(bind_password)
         , _connection_factory(bind(std::mem_fn(&ldap_role_manager::reconnect), std::ref(*this))) {
 }

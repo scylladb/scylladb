@@ -37,7 +37,6 @@ extern const std::string_view password_authenticator_name;
 
 class password_authenticator : public authenticator {
     cql3::query_processor& _qp;
-    ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
     abort_source _as;
@@ -48,7 +47,7 @@ public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
     static std::string default_superuser(const db::config&);
 
-    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
+    password_authenticator(cql3::query_processor&, ::service::migration_manager&);
 
     ~password_authenticator();
 

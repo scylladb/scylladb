@@ -34,7 +34,6 @@ namespace auth {
 
 class standard_role_manager final : public role_manager {
     cql3::query_processor& _qp;
-    ::service::raft_group0_client& _group0_client;
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
     abort_source _as;
@@ -42,7 +41,7 @@ class standard_role_manager final : public role_manager {
     shared_promise<> _superuser_created_promise;
 
 public:
-    standard_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
+    standard_role_manager(cql3::query_processor&, ::service::migration_manager&);
 
     virtual std::string_view qualified_java_name() const noexcept override;
 
