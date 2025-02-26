@@ -22,8 +22,7 @@ concept VerticiesContainer = requires(const Container& c) {
     c.begin();
     c.end();
     c.size();
-    std::same_as<typename Container::value_type, T>;
-};
+} && std::same_as<typename Container::value_type, T>;
 
 /**
  * Topological sort a DAG using Kahn's algorithm.
