@@ -283,7 +283,12 @@ void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dic
         throw exceptions::configuration_exception("tombstone_gc option not supported by the cluster");
     }
 
-    if (options->mode() == tombstone_gc_mode::repair && !needs_repair_before_gc(db.real_database(), ks_name)) {
+    auto real_db_ptr = db.real_database_ptr();
+    if (!real_db_ptr) {
+        return;
+    }
+
+    if (options->mode() == tombstone_gc_mode::repair && !needs_repair_before_gc(*real_db_ptr, ks_name)) {
         throw exceptions::configuration_exception("tombstone_gc option with mode = repair not supported for table with RF one or local replication strategy");
     }
 }
