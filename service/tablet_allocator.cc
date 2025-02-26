@@ -895,7 +895,7 @@ public:
         co_return all_colocated;
     }
 
-    future<migration_plan> make_merge_colocation_plan(node_load_map& nodes) {
+    future<migration_plan> make_merge_colocation_plan(const dc_name& dc, node_load_map& nodes) {
         migration_plan plan;
         table_resize_plan resize_plan;
 
@@ -967,9 +967,40 @@ public:
             };
             using check_constraints_f = noncopyable_function<bool(tablet_replica src, tablet_replica dst)>;
 
+            // Enable rack aware colocation if RF is a multiple of number of racks,
+            // meaning that sibling tablets will have the same number of replicas
+            // on each rack, allowing co-location migrations to not cross rack
+            // boundaries.
+            auto rack_awareness = std::invoke([&] () {
+                auto& topology = _tm->get_topology();
+                auto [_, rs] = get_schema_and_rs(table);
+                auto dc_rf = rs->get_replication_factor(dc);
+                const auto& racks = topology.get_datacenter_rack_nodes().at(dc);
+                auto racks_can_satisfy_their_rf = [&] {
+                    size_t rack_rf = dc_rf / racks.size();
+                    return std::ranges::all_of(racks | std::views::values, [rack_rf] (const auto& nodes) { return nodes.size() >= rack_rf; });
+                };
+                return racks.size() > 1 && (dc_rf % racks.size()) == 0 && racks_can_satisfy_their_rf();
+            });
+
+            auto per_rack_replica_sets = [&] (const tablet_replica_set& sorted_dc_replicas) {
+                auto& topology = _tm->get_topology();
+                std::unordered_map<sstring, tablet_replica_set> sets;
+                // Since dc replicas are sorted, the per-rack sets will still be sorted after segregation.
+                for (auto& r : sorted_dc_replicas) {
+                    sets[topology.get_rack(r.host)].push_back(r);
+                }
+                return sets;
+            };
+
+            auto is_colocation_cross_rack = [&] (tablet_replica src, tablet_replica dst) {
+                auto& topology = _tm->get_topology();
+                return topology.get_rack(src.host) != topology.get_rack(dst.host);
+            };
+
             // TODO: extract all co-location migration planning logic into a class for readability.
             auto maybe_generate_colocation_plan = [&] (tablet_colocation_info t1, tablet_colocation_info t2,
-                                                       const check_constraints_f& check_constraints) {
+                                                       const check_constraints_f& check_constraints) -> bool {
                 auto t1_id = global_tablet_id{table, t1.desc.tid};
                 auto t2_id = global_tablet_id{table, t2.desc.tid};
                 auto& r1 = t1.sorted_set;
@@ -980,7 +1011,7 @@ public:
                 if (r1.size() != r2.size()) {
                     lblogger.warn("Replica sets of tablets to be co-located differ in size: ({}: {}), ({}, {})",
                                   t1_id, r1, t2_id, r2);
-                    return;
+                    return false;
                 }
 
                 auto ret = first_non_matching_replicas(r1, r2);
@@ -1000,7 +1031,7 @@ public:
                 if (skip) {
                     lblogger.debug("Replication constraint check failed, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
-                    return;
+                    return false;
                 }
 
                 auto mig = create_migration_info(t2_id, src, dst);
@@ -1009,12 +1040,24 @@ public:
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
                         t2_id, src, t1_id, dst);
-                    return;
+                    return false;
                 }
                 apply_load(nodes, mig_streaming_info);
 
+                utils::get_local_injector().inject("disallow_cross_rack_colocation", [&] {
+                    if (is_colocation_cross_rack(src, dst)) {
+                        on_fatal_internal_error(lblogger, "Cross rack colocation is not allowed, killing the node");
+                    }
+                });
+                if (rack_awareness && is_colocation_cross_rack(src, dst)) {
+                    on_internal_error(lblogger,
+                            format("Cross-rack co-location is not allowed, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
+                                    t2_id, src, t1_id, dst));
+                }
+
                 lblogger.info("Created migration for replica ({}, {}) to co-habit same shard as ({}, {})", t2_id, src, t1_id, dst);
                 plan.add(std::move(mig));
+                return true;
             };
 
             co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
@@ -1049,10 +1092,39 @@ public:
                     return r2_hosts.contains(dst.host);
                 };
 
-                lblogger.debug("Replica sets of tablets being co-located: ({}: {}), ({}, {})",
-                        global_tablet_id{table, t1.tid}, r1, global_tablet_id{table, t2.tid}, r2);
+                lblogger.debug("Replica sets of tablets being co-located: ({}: {}), ({}, {}), rack_awareness={}",
+                        global_tablet_id{table, t1.tid}, r1, global_tablet_id{table, t2.tid}, r2, rack_awareness);
 
-                maybe_generate_colocation_plan({t1, std::move(r1)}, {t2, std::move(r2)}, check_constraints);
+                if (rack_awareness) {
+                    auto r1_sets = per_rack_replica_sets(r1);
+                    auto r2_sets = per_rack_replica_sets(r2);
+
+                    for (auto&& [rack, r1_s] : r1_sets) {
+                        auto it = r2_sets.find(rack);
+                        if (it == r2_sets.end()) {
+                            // When adding a new rack, e.g. from RF-1 to RF, only one of sibling tables might have
+                            // presence on all racks, so we can wait for migrations to settle before we proceed
+                            // with their co-location.
+                            lblogger.warn("Unable to find replicas of both sibling tablets on rack {}: ({}: {}), ({}, {})",
+                                    rack, global_tablet_id{table, t1.tid}, r1, global_tablet_id{table, t2.tid}, r2);
+                            return make_ready_future<>();
+                        }
+                        auto& r2_s = it->second;
+                        // Skip to next rack if current one is co-located.
+                        if (r1_s == r2_s) {
+                            continue;
+                        }
+
+                        // Each tablet allows for only one transition, so if a colocation plan was generated
+                        // for a given pair of sibling tablets, we can move to the next pair.
+                        // If a plan was *not* generated for current rack, we can skip to the next one.
+                        if (maybe_generate_colocation_plan({t1, std::move(r1_s)}, {t2, std::move(r2_s)}, check_constraints)) {
+                            return make_ready_future<>();
+                        }
+                    }
+                } else {
+                    maybe_generate_colocation_plan({t1, std::move(r1)}, {t2, std::move(r2)}, check_constraints);
+                }
 
                 return make_ready_future<>();
             });
@@ -2948,7 +3020,7 @@ public:
         }
 
         if (_tm->tablets().balancing_enabled() && plan.empty()) {
-            auto dc_merge_plan = co_await make_merge_colocation_plan(nodes);
+            auto dc_merge_plan = co_await make_merge_colocation_plan(dc, nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
             plan.merge(std::move(dc_merge_plan));
