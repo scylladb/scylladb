@@ -181,7 +181,42 @@ def test_describe_initial_tablets(cql, skip_without_tablets):
             "AND TABLETS = { 'initial' : 1 }"
     with new_test_keyspace(cql, ksdef) as keyspace:
         desc = cql.execute(f"DESCRIBE KEYSPACE {keyspace}")
-        assert "and tablets = {'initial': 1}" in desc.one().create_statement.lower()
+        assert "and tablets = {'enabled': true, 'initial': 1}" in desc.one().create_statement.lower()
+
+
+# Test to ensure metadata is printed when tablets are enabled during schema description, regardless of the use of WITH INTERNALS.
+#
+# Reproduces https://github.com/scylladb/scylladb/issues/22866
+@pytest.mark.parametrize("tablets_combinations", [(True, 0), (True, 7), (True, None), (False, None), (None, None)])
+def test_describe_tablets(cql, tablets_combinations, skip_without_tablets):
+    tablets, initial = tablets_combinations
+    tablets_str = (f"'enabled': {tablets}" if tablets is not None else "").lower()
+    initial_str = f"'initial': {initial}" if initial is not None else ""
+
+    tablets_def = ""
+    if tablets_str or initial_str:
+        tablets_def = " AND TABLETS = {"
+        tablets_def += ", ".join(filter(None, [tablets_str, initial_str]))
+        tablets_def += "}"
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' }}{tablets_def}"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        for with_internals in [True, False]:
+            desc = cql.execute('DESCRIBE SCHEMA' + (' WITH INTERNALS' if with_internals else ''))
+            validated = False
+            for res in desc:
+                create_statement = res.create_statement.lower()
+                if f"create keyspace {keyspace}" in create_statement:
+                    validated = True
+                    if tablets is None or tablets == True:
+                        expected_tablets = "tablets = {'enabled': true"
+                    else:
+                        expected_tablets = "tablets = {'enabled': false"
+                    assert expected_tablets in create_statement
+                    if (tablets is None or tablets) and initial is not None and initial > 0:
+                        assert initial_str in create_statement
+                    else:
+                        assert "'initial'" not in create_statement
+            assert validated, f"Keyspace {keyspace} not found in schema description"
 
 
 def verify_tablets_presence(cql, keyspace_name, table_name, expected:bool=True):
