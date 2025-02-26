@@ -8,8 +8,6 @@
 
 #include "range_tombstone.hh"
 
-#include <boost/range/algorithm/upper_bound.hpp>
-
 std::optional<range_tombstone> range_tombstone::apply(const schema& s, range_tombstone&& src)
 {
     bound_view::compare cmp(s);
@@ -66,7 +64,7 @@ void range_tombstone_accumulator::apply(range_tombstone rt) {
     auto cmp = [&] (const range_tombstone& rt1, const range_tombstone& rt2) {
         return _cmp(rt1.end_bound(), rt2.end_bound());
     };
-    _range_tombstones.insert(boost::upper_bound(_range_tombstones, rt, cmp), std::move(rt));
+    _range_tombstones.insert(std::ranges::upper_bound(_range_tombstones, rt, cmp), std::move(rt));
 }
 
 void range_tombstone_accumulator::clear() {
