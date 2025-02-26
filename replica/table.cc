@@ -1887,7 +1887,7 @@ compaction_group::delete_sstables_atomically(std::vector<sstables::shared_sstabl
     } catch (...) {
         // There is nothing more we can do here.
         // Any remaining SSTables will eventually be re-compacted and re-deleted.
-        tlogger.error("Compacted SSTables deletion failed: {}. Ignored.", std::current_exception());
+        tlogger.error("Atomic SSTables deletion failed: {}. Ignored.", std::current_exception());
     }
 }
 
