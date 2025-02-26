@@ -1187,6 +1187,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 .normal_polling_interval = cfg->disk_space_monitor_normal_polling_interval_in_seconds,
                 .high_polling_interval = cfg->disk_space_monitor_high_polling_interval_in_seconds,
                 .polling_interval_threshold = cfg->disk_space_monitor_polling_interval_threshold,
+                .capacity_override = cfg->data_file_capacity
             };
             if (data_dir_set.get_paths().empty()) {
                 throw std::runtime_error("data_dir_set must be non-empty");

@@ -603,6 +603,7 @@ private:
                 .normal_polling_interval = cfg->disk_space_monitor_normal_polling_interval_in_seconds,
                 .high_polling_interval = cfg->disk_space_monitor_high_polling_interval_in_seconds,
                 .polling_interval_threshold = cfg->disk_space_monitor_polling_interval_threshold,
+                .capacity_override = cfg->data_file_capacity,
             };
             _disk_space_monitor_shard0.emplace(abort_sources.local(), data_dir_path, dsm_cfg);
             _disk_space_monitor_shard0->start().get();
@@ -1152,6 +1153,10 @@ public:
 
     virtual sharded<qos::service_level_controller>& service_level_controller_service() override {
         return _sl_controller;
+    }
+
+    utils::disk_space_monitor& disk_space_monitor() override {
+        return *_disk_space_monitor_shard0;
     }
 
     db::config& db_config() override {
