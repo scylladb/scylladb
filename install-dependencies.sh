@@ -151,6 +151,7 @@ fedora_python3_packages=(
     python3-click
     python3-six
     python3-pyudev
+    python3-opensearch-py
 )
 
 # an associative array from packages to constrains
@@ -264,6 +265,37 @@ minio_download_jobs() {
     rm -f ${cfile}
 }
 
+opensearch_arch() {
+    local -A OPENSEARCH_ARCH=(
+        ["x86_64"]=x64
+        ["aarch64"]=arm64
+    )
+    echo "${OPENSEARCH_ARCH["$(arch)"]}"
+}
+
+OPENSEARCH_VERSION=2.19.1
+declare -A OPENSEARCH_CHECKSUM=(
+    ["x86_64"]=b243aaa7d8dcebb87881f70f71613903c36dda077fd90ee11ea377412d6d569f
+    ["aarch64"]=fc25c886a7f45c5c94699b217dcbb87528c2c25adf67797247a4e07fadc7326f
+)
+OPENSEARCH_DIR=/opt/scylladb/dependencies
+
+opensearch_filename() {
+    echo "opensearch-$OPENSEARCH_VERSION-linux-$(opensearch_arch).tar.gz"
+}
+
+opensearch_fullpath() {
+    echo "$OPENSEARCH_DIR/$(opensearch_filename)"
+}
+
+opensearch_checksum() {
+    sha256sum "$(opensearch_fullpath)" | while read -r sum _; do [[ "$sum" == "${OPENSEARCH_CHECKSUM["$(arch)"]}" ]]; done
+}
+
+opensearch_url() {
+    echo "https://artifacts.opensearch.org/releases/bundle/opensearch/$OPENSEARCH_VERSION/$(opensearch_filename)"
+}
+
 print_usage() {
     echo "Usage: install-dependencies.sh [OPTION]..."
     echo ""
@@ -370,6 +402,27 @@ elif [ "$ID" = "fedora" ]; then
         if ! node_exporter_checksum; then
             echo "$(node_exporter_filename) download failed"
             exit 1
+        fi
+    fi
+
+    if [ -f "$(opensearch_fullpath)" ] && opensearch_checksum; then
+        echo "$(opensearch_filename) already exists, skipping download"
+    else
+        mkdir -p "$OPENSEARCH_DIR"
+        if curl -fSL -o "$(opensearch_fullpath)" "$(opensearch_url)";
+        then
+            if ! opensearch_checksum; then
+                echo "$(opensearch_filename) download failed"
+                exit 1
+            else
+                mkdir -p "$OPENSEARCH_DIR"
+                tar -C "$OPENSEARCH_DIR" -xvf "$(opensearch_fullpath)"
+                chmod -R a+rx "$OPENSEARCH_DIR/opensearch-$OPENSEARCH_VERSION/jdk"
+                chmod -R a+rx "$OPENSEARCH_DIR/opensearch-$OPENSEARCH_VERSION/config"
+                chmod -R a+rw "$OPENSEARCH_DIR/opensearch-$OPENSEARCH_VERSION/logs"
+            fi
+        else
+            echo "$(opensearch_url) is unreachable, skipping"
         fi
     fi
 elif [ "$ID" = "centos" ]; then
