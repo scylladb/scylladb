@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import asyncio
 import ssl
 import tempfile
@@ -16,11 +17,14 @@ import urllib.parse
 from multiprocessing import Event, Process
 from pathlib import Path
 from typing import TYPE_CHECKING
+from opensearchpy import OpenSearch
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
+from test.pylib.opensearch_cluster import OpenSearchCluster
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster import ScyllaClusterManager
+from test.pylib.util import LogPrefixAdapter
 import logging
 import pytest
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
@@ -329,3 +333,27 @@ async def prepare_3_nodes_cluster(request, manager):
 async def prepare_3_racks_cluster(request, manager):
     if request.node.get_closest_marker("prepare_3_racks_cluster"):
         await manager.servers_add(3, auto_rack_dc="dc1")
+
+
+@pytest.fixture(scope="module")
+async def opensearch(request):
+    options = request.config.option
+    os_cluster = OpenSearchCluster(options.tmpdir, '127.0.0.1', LogPrefixAdapter(logging.getLogger('opensearch'), {'prefix': 'opensearch'}))
+    await os_cluster.start()
+
+    host = os.environ.get('OPENSEARCH_ADDRESS')
+    port = os.environ.get('OPENSEARCH_PORT')
+
+    client = OpenSearch(
+        hosts = [{'host': host, 'port': port}],
+        http_compress = True,
+        use_ssl = False,
+        verify_certs = False,
+        ssl_assert_hostname = False,
+        ssl_show_warn = False
+    )
+
+    yield client
+
+    client.close()
+    await os_cluster.stop()
