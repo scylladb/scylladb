@@ -1001,7 +1001,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         try {
             guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier_and_drain, exclude_nodes, drop_guard_and_retake::yes);
         } catch (...) {
-            rtlogger.error("drain rpc failed, proceed to fence old writes: {}", std::current_exception());
+            rtlogger.warn("drain rpc failed, proceed to fence old writes: {}", std::current_exception());
             drain_failed = true;
         }
         if (drain_failed) {
