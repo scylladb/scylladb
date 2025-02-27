@@ -20,6 +20,7 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
+#include "test/lib/topology_builder.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "db/config.hh"
@@ -48,15 +49,33 @@ cql_test_config tablet_cql_test_config() {
 }
 
 static
-future<table_id> add_table(cql_test_env& e) {
+future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "") {
     auto id = table_id(utils::UUID_gen::get_time_UUID());
-    co_await e.create_table([id] (std::string_view ks_name) {
+    co_await e.create_table([&] (std::string_view ks_name) {
+        if (!test_ks_name.empty()) {
+            ks_name = test_ks_name;
+        }
         return *schema_builder(ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)
                 .with_column("r1", int32_type)
                 .build();
     });
     co_return id;
+}
+
+// Run in a seastar thread
+static
+sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
+    static std::atomic<int> ks_id = 0;
+    auto ks_name = fmt::format("keyspace{}", ks_id.fetch_add(1));
+    sstring rf_options;
+    for (auto& [dc, rf] : dc_rf) {
+        rf_options += format(", '{}': {}", dc, rf);
+    }
+    e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy'{}}}"
+                              " and tablets = {{'enabled': true, 'initial': {}}}",
+                              ks_name, rf_options, initial_tablets)).get();
+    return ks_name;
 }
 
 static
@@ -116,8 +135,13 @@ struct rebalance_stats {
 };
 
 static
-rebalance_stats rebalance_tablets(tablet_allocator& talloc, shared_token_metadata& stm, locator::load_stats_ptr load_stats = {}, std::unordered_set<host_id> skiplist = {}) {
+rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_stats = {}, std::unordered_set<host_id> skiplist = {}) {
     rebalance_stats stats;
+    abort_source as;
+
+    auto guard = e.get_raft_group0_client().start_operation(as).get();
+    auto& talloc = e.get_tablet_allocator().local();
+    auto& stm = e.shared_token_metadata().local();
 
     // Sanity limit to avoid infinite loops.
     // The x10 factor is arbitrary, it's there to account for more complex schedules than direct migration.
@@ -126,7 +150,9 @@ rebalance_stats rebalance_tablets(tablet_allocator& talloc, shared_token_metadat
     for (size_t i = 0; i < max_iterations; ++i) {
         auto prev_lb_stats = talloc.stats().for_dc(dc);
         auto start_time = std::chrono::steady_clock::now();
+
         auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
+
         auto end_time = std::chrono::steady_clock::now();
         auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;
 
@@ -149,6 +175,11 @@ rebalance_stats rebalance_tablets(tablet_allocator& talloc, shared_token_metadat
                       lb_stats.tablets_skipped_node);
 
         if (plan.empty()) {
+            // We should not introduce inconsistency between on-disk state and in-memory state
+            // as that may violate invariants and cause failures in later operations
+            // causing test flakiness.
+            save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
+            e.get_storage_service().local().load_tablet_metadata({}).get();
             testlog.info("Rebalance took {:.3f} [s] after {} iteration(s)", stats.elapsed_time.count(), i + 1);
             return stats;
         }
@@ -230,42 +261,23 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         const shard_id shard_count = p.shards;
         const int cycles = p.iterations;
 
-        auto rack1 = endpoint_dc_rack{ dc, "rack-1" };
-
+        topology_builder topo(e);
         std::vector<host_id> hosts;
-        std::vector<inet_address> ips;
 
-        int host_seq = 1;
         auto add_host = [&] {
-            hosts.push_back(host_id(utils::make_random_uuid()));
-            ips.push_back(inet_address(format("192.168.0.{}", host_seq++)));
-            testlog.info("Added new node: {} ({})", hosts.back(), ips.back());
-        };
-
-        auto add_host_to_topology = [&] (token_metadata& tm, int i) -> future<> {
-            tm.update_topology(hosts[i], rack1, node::state::normal, shard_count);
-            co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(float(i) / hosts.size()))}, hosts[i]);
+            hosts.push_back(topo.add_node(service::node_state::normal, shard_count));
+            testlog.info("Added new node: {}", hosts.back());
         };
 
         for (int i = 0; i < n_hosts; ++i) {
             add_host();
         }
 
-        semaphore sem(1);
-        auto stm = shared_token_metadata([&sem]() noexcept { return get_units(sem, 1); }, locator::token_metadata::config {
-                locator::topology::config {
-                        .this_endpoint = ips[0],
-                        .this_host_id = hosts[0],
-                        .local_dc_rack = rack1
-                }
-        });
+        auto& stm = e.shared_token_metadata().local();
 
         auto bootstrap = [&] {
-            stm.mutate_token_metadata([&] (token_metadata& tm) {
-                add_host();
-                return add_host_to_topology(tm, hosts.size() - 1);
-            }).get();
-            global_res.stats += rebalance_tablets(e.get_tablet_allocator().local(), stm);
+            add_host();
+            global_res.stats += rebalance_tablets(e);
         };
 
         auto decommission = [&] (host_id host) {
@@ -273,44 +285,22 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             if ((size_t)i == hosts.size()) {
                 throw std::runtime_error(format("No such host: {}", host));
             }
-            stm.mutate_token_metadata([&] (token_metadata& tm) {
-                tm.update_topology(hosts[i], rack1, locator::node::state::being_decommissioned, shard_count);
-                return make_ready_future<>();
-            }).get();
-
-            global_res.stats += rebalance_tablets(e.get_tablet_allocator().local(), stm);
-
-            stm.mutate_token_metadata([&] (token_metadata& tm) {
-                tm.remove_endpoint(host);
-                return make_ready_future<>();
-            }).get();
-            testlog.info("Node decommissioned: {} ({})", hosts[i], ips[i]);
-            hosts.erase(hosts.begin() + i);
-            ips.erase(ips.begin() + i);
-        };
-
-        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-            for (int i = 0; i < n_hosts; ++i) {
-                co_await add_host_to_topology(tm, i);
+            topo.set_node_state(host, service::node_state::decommissioning);
+            global_res.stats += rebalance_tablets(e);
+            if (stm.get()->tablets().has_replica_on(host)) {
+                throw std::runtime_error(format("Host {} still has replicas!", host));
             }
-        }).get();
-
-        auto allocate = [&] (schema_ptr s, int rf, std::optional<int> initial_tablets) {
-            replication_strategy_config_options opts;
-            opts[rack1.dc] = format("{}", rf);
-            network_topology_strategy tablet_rs(replication_strategy_params(opts, initial_tablets));
-            stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-                auto map = co_await tablet_rs.allocate_tablets_for_new_table(s, stm.get(), initial_tablets.value_or(1));
-                tm.tablets().set_tablet_map(s->id(), std::move(map));
-            }).get();
+            topo.set_node_state(host, service::node_state::left);
+            testlog.info("Node decommissioned: {}", host);
+            hosts.erase(hosts.begin() + i);
         };
 
-        auto id1 = add_table(e).get();
-        auto id2 = add_table(e).get();
+        auto ks1 = add_keyspace(e, {{topo.dc(), p.rf1}}, p.tablets1.value_or(1));
+        auto ks2 = add_keyspace(e, {{topo.dc(), p.rf2}}, p.tablets2.value_or(1));
+        auto id1 = add_table(e, ks1).get();
+        auto id2 = add_table(e, ks2).get();
         schema_ptr s1 = e.local_db().find_schema(id1);
         schema_ptr s2 = e.local_db().find_schema(id2);
-        allocate(s1, p.rf1, p.tablets1);
-        allocate(s2, p.rf2, p.tablets2);
 
         auto check_balance = [&] () -> cluster_balance {
             cluster_balance res;
@@ -374,7 +364,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         check_balance();
 
-        rebalance_tablets(e.get_tablet_allocator().local(), stm);
+        rebalance_tablets(e);
 
         global_res.init = global_res.worst = check_balance();
 
