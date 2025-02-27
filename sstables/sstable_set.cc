@@ -126,7 +126,8 @@ sstable_set::sstable_set(std::unique_ptr<sstable_set_impl> impl)
 {}
 
 sstable_set::sstable_set(const sstable_set& x)
-        : _impl(x._impl->clone())
+        : enable_lw_shared_from_this<sstable_set>()
+        , _impl(x._impl->clone())
 {}
 
 sstable_set::sstable_set(sstable_set&&) noexcept = default;
