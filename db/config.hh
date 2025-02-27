@@ -595,6 +595,7 @@ public:
     named_value<int> disk_space_monitor_normal_polling_interval_in_seconds;
     named_value<int> disk_space_monitor_high_polling_interval_in_seconds;
     named_value<float> disk_space_monitor_polling_interval_threshold;
+    named_value<float> critical_disk_utilization_level;
 
     named_value<bool> enable_create_table_with_compact_storage;
 
