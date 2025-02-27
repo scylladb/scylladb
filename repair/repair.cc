@@ -2435,10 +2435,35 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto replicas = info.replicas;
     std::vector<locator::host_id> nodes;
     std::vector<shard_id> shards;
-    shard_id master_shard_id;
+    std::optional<shard_id> master_shard_id;
+    auto& topology = guard.get_token_metadata()->get_topology();
+    auto hosts_filter = info.repair_task_info.repair_hosts_filter;
+    auto dcs_filter = info.repair_task_info.repair_dcs_filter;
     for (auto& r : replicas) {
         auto shard = r.shard;
         if (r.host != myhostid) {
+            if (!hosts_filter.empty()) {
+                auto dc = topology.get_datacenter(r.host);
+                if (!hosts_filter.contains(r.host)) {
+                    rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} skipped",
+                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
+                    continue;
+                } else {
+                    rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} ok",
+                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
+                }
+            }
+            if (!dcs_filter.empty()) {
+                auto dc = topology.get_datacenter(r.host);
+                if (!dcs_filter.contains(dc)) {
+                    rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} skipped",
+                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
+                    continue;
+                } else {
+                    rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} ok",
+                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
+                }
+            }
             nodes.push_back(r.host);
             shards.push_back(shard);
         } else {
@@ -2446,10 +2471,17 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
         }
     }
 
+    if (nodes.empty() || !master_shard_id) {
+        rlogger.info("repair[{}]: Skipped tablet repair for table={}.{} range={} replicas={} global_tablet_id={} hosts_filter={} dcs_filter={}",
+                id.uuid(), keyspace_name, table_name, range, replicas, gid, hosts_filter, dcs_filter);
+        auto flush_time = gc_clock::time_point();
+        co_return flush_time;
+    }
+
     std::vector<tablet_repair_task_meta> task_metas;
     auto ranges_parallelism = std::nullopt;
     auto start = std::chrono::steady_clock::now();
-    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
     auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism);
     task_impl_ptr->sched_by_scheduler = true;
     auto task = co_await _repair_module->make_task(task_impl_ptr, {});

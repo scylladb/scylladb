@@ -273,13 +273,18 @@ class ScyllaRESTAPIClient():
             "token": str(token)
         })
 
-    async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int, timeout: Optional[float] = None, await_completion: bool = True) -> None:
-        res = await self.client.post_json(f"/storage_service/tablets/repair", host=node_ip, timeout=timeout, params={
+    async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int, hosts_filter: Optional[str] = None, dcs_filter: Optional[str] = None, timeout: Optional[float] = None, await_completion: bool = True) -> None:
+        params={
             "ks": ks,
             "table": table,
             "tokens": str(token),
             "await_completion": str(await_completion).lower()
-        })
+        }
+        if hosts_filter:
+            params["hosts_filter"] = hosts_filter
+        if dcs_filter:
+            params["dcs_filter"] = dcs_filter
+        res = await self.client.post_json(f"/storage_service/tablets/repair", host=node_ip, timeout=timeout, params=params)
         return res
 
     async def enable_tablet_balancing(self, node_ip: str) -> None:
