@@ -8,6 +8,7 @@ target_sources(replica
     exceptions.cc
     memtable.cc
     mutation_dump.cc
+    out_of_space_controller.cc
     table.cc
     tablets.cc)
 target_include_directories(replica
