@@ -21,7 +21,6 @@ import os
 import pathlib
 import re
 import resource
-import shutil
 import signal
 import subprocess
 import sys
@@ -33,13 +32,10 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
+from test.conftest import start_s3_mock_services, prepare_dirs
 from test.pylib import coverage_utils
 from test.pylib.cpp.ldap.prepare_instance import try_something_backoff, can_connect
-from test.pylib.host_registry import HostRegistry
-from test.pylib.minio_server import MinioServer
-from test.pylib.s3_proxy import S3ProxyServer
-from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.suite.base import Test, TestSuite, all_modes, output_is_a_tty, palette, path_to
+from test.pylib.suite.base import Test, TestSuite, all_modes, init_testsuite_globals, output_is_a_tty, palette, path_to
 from test.pylib.suite.boost import BoostTest
 from test.pylib.suite.ldap import LdapTest
 from test.pylib.resource_gather import setup_cgroup, run_resource_watcher
@@ -250,23 +246,9 @@ def parse_cmd_line() -> argparse.Namespace:
         if len(missing_coverage_modes) > 0:
             raise RuntimeError(f"The following modes weren't built or ran (using the '--mode' option): {missing_coverage_modes}")
         args.coverage = True
-    def prepare_dir(dirname, pattern):
-        # Ensure the dir exists
-        pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
-        # Remove old artifacts
-        for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
-            pathlib.Path(p).unlink()
 
     args.tmpdir = os.path.abspath(args.tmpdir)
-    prepare_dir(args.tmpdir, "*.log")
-
-    for mode in args.modes:
-        prepare_dir(os.path.join(args.tmpdir, mode), "*.log")
-        prepare_dir(os.path.join(args.tmpdir, mode), "*.reject")
-        prepare_dir(os.path.join(args.tmpdir, mode, "xml"), "*.xml")
-        shutil.rmtree(os.path.join(args.tmpdir, mode, "failed_test"), ignore_errors=True)
-        prepare_dir(os.path.join(args.tmpdir, mode, "failed_test"), "*")
-        prepare_dir(os.path.join(args.tmpdir, mode, "allure"), "*.xml")
+    prepare_dirs(tempdir_base=args.tmpdir, modes=args.modes)
 
     # Get the list of tests configured by configure.py
     try:
@@ -330,21 +312,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 console.print_progress(result)
         return failed
 
-    ms = MinioServer(options.tmpdir, '127.0.0.1', LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
-    await ms.start()
-    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
-
-    hosts = HostRegistry()
-    mock_s3_server = MockS3Server(await hosts.lease_host(), 2012,
-                                  LogPrefixAdapter(logging.getLogger('s3_mock'), {'prefix': 's3_mock'}))
-    await mock_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
-
-    minio_uri = "http://" + os.environ[ms.ENV_ADDRESS] + ":" + os.environ[ms.ENV_PORT]
-    proxy_s3_server = S3ProxyServer(await hosts.lease_host(), 9002, minio_uri, 3, int(time.time()),
-                                    LogPrefixAdapter(logging.getLogger('s3_proxy'), {'prefix': 's3_proxy'}))
-    await proxy_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+    await start_s3_mock_services(minio_tempdir_base=options.tmpdir)
 
     console.print_start_blurb()
     max_failures = options.max_failures
@@ -600,6 +568,9 @@ async def main() -> int:
 
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
     setup_cgroup(options.gather_metrics)
+
+    init_testsuite_globals()
+
     await find_tests(options)
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
