@@ -567,6 +567,8 @@ void client_access_missing_object(const client_maker_function& client_maker) {
     semaphore mem(16 << 20);
     auto client = client_maker(mem);
 
+    abort();
+
     auto close_client = deferred_close(*client);
     BOOST_REQUIRE_EXCEPTION(client->get_object_tagging(name).get(), storage_io_error, [](const storage_io_error& e) {
         return e.code().value() == ENOENT && e.what() == "S3 request failed. Code: 133. Reason: The specified key does not exist."sv;
