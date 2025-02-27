@@ -11,6 +11,7 @@
 
 #include "utils/UUID_gen.hh"
 
+#include "raft/raft.hh"
 #include "service/raft/raft_sys_table_storage.hh"
 
 #include "test/lib/cql_test_env.hh"
@@ -65,7 +66,7 @@ static std::vector<raft::log_entry_ptr> create_test_log() {
         make_lw_shared(raft::log_entry{
             .term = raft::term_t(2),
             .idx = raft::index_t(2),
-            .data = raft::configuration{{raft::config_member{raft::server_address{raft::server_id::create_random_id(), {}}, true}}}}),
+            .data = raft::configuration{{raft::config_member{raft::server_address{raft::server_id::create_random_id(), {}}, raft::can_vote::yes}}}}),
         // dummy
         make_lw_shared(raft::log_entry{
             .term = raft::term_t(3),

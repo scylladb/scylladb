@@ -7,6 +7,7 @@
  */
 #pragma once
 
+#include "raft/raft.hh"
 #include "service/raft/join_node.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/discovery.hh"
@@ -27,9 +28,6 @@ extern const char* const raft_upgrade_doc;
 class migration_manager;
 class raft_group0_client;
 class storage_service;
-
-struct can_vote_tag {};
-using can_vote = bool_class<can_vote_tag>;
 
 // Wrapper for `discovery` which persists the learned peers on disk.
 class persistent_discovery {
@@ -229,13 +227,13 @@ public:
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // `wait_for_raft` must've also been called earlier and returned `true`.
-    future<> set_voter_status(raft::server_id, can_vote, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
+    future<> set_voter_status(raft::server_id, raft::can_vote, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
 
     // Set the voter status of the given servers, other than us, in group 0.
     //
     // Assumes we've finished the startup procedure (`setup_group0()` finished earlier).
     // `wait_for_raft` must've also been called earlier and returned `true`.
-    future<> set_voters_status(const std::unordered_set<raft::server_id>&, can_vote, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
+    future<> set_voters_status(const std::unordered_set<raft::server_id>&, raft::can_vote, abort_source&, std::optional<raft_timeout> timeout = std::nullopt);
 
     // Remove ourselves from group 0.
     //
@@ -275,7 +273,7 @@ public:
     // It is meant to be used as a fallback when a proper handshake procedure
     // cannot be used (e.g. when completing the upgrade or group0 procedures
     // or when joining an old cluster which does not support JOIN_NODE RPC).
-    shared_ptr<group0_handshaker> make_legacy_handshaker(can_vote can_vote);
+    shared_ptr<group0_handshaker> make_legacy_handshaker(raft::can_vote can_vote);
 
     // Waits until all upgrade to raft group 0 finishes and all nodes switched
     // to use_post_raft_procedures.

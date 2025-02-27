@@ -20,6 +20,7 @@
 #include <seastar/util/defer.hh>
 
 #include "direct_failure_detector/failure_detector.hh"
+#include "raft/raft.hh"
 #include "raft/server.hh"
 #include "raft/logical_clock.hh"
 #include "serializer.hh"
@@ -1249,7 +1250,7 @@ using reconfigure_result_t = std::variant<std::monostate,
     timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error, raft::not_a_member>;
 
 future<reconfigure_result_t> reconfigure(
-        const std::vector<std::pair<raft::server_id, bool>>& ids,
+        const std::vector<std::pair<raft::server_id, raft::can_vote>>& ids,
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
         raft::server& server) {
@@ -1285,7 +1286,7 @@ future<reconfigure_result_t> reconfigure(
 }
 
 future<reconfigure_result_t> modify_config(
-        const std::vector<std::pair<raft::server_id, bool>>& added,
+        const std::vector<std::pair<raft::server_id, raft::can_vote>>& added,
         std::vector<raft::server_id> deleted,
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
@@ -1516,7 +1517,7 @@ public:
     }
 
     future<reconfigure_result_t> modify_config(
-            const std::vector<std::pair<raft::server_id, bool>>& added,
+            const std::vector<std::pair<raft::server_id, raft::can_vote>>& added,
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
@@ -1907,7 +1908,7 @@ public:
 
     future<reconfigure_result_t> modify_config(
             raft::server_id id,
-            const std::vector<std::pair<raft::server_id, bool>>& added,
+            const std::vector<std::pair<raft::server_id, raft::can_vote>>& added,
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
@@ -1937,7 +1938,7 @@ public:
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
-        std::vector<std::pair<raft::server_id, bool>> added_voters;
+        std::vector<std::pair<raft::server_id, raft::can_vote>> added_voters;
         for (auto srv: added) {
             added_voters.emplace_back(srv, true);
         }
@@ -2737,12 +2738,12 @@ struct reconfiguration {
 
     future<result_type> execute_modify_config(
             state_type& s, const operation::context& ctx, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
-        std::vector<std::pair<raft::server_id, bool>> added;
+        std::vector<std::pair<raft::server_id, raft::can_vote>> added;
         for (size_t i = 0; i < voters_end; ++i) {
-            added.emplace_back(nodes[i], true);
+            added.emplace_back(nodes[i], raft::can_vote::yes);
         }
         for (size_t i = voters_end; i < members_end; ++i) {
-            added.emplace_back(nodes[i], false);
+            added.emplace_back(nodes[i], raft::can_vote::no);
         }
 
         std::vector<raft::server_id> removed {nodes.begin() + members_end, nodes.end()};
