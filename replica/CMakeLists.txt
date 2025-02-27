@@ -1,24 +1,24 @@
 add_library(replica STATIC)
 target_sources(replica
   PRIVATE
-    distributed_loader.cc
     database.cc
-    table.cc
-    tablets.cc
-    distributed_loader.cc
-    memtable.cc
-    exceptions.cc
     dirty_memory_manager.cc
-    mutation_dump.cc)
+    distributed_loader.cc
+    distributed_loader.cc
+    exceptions.cc
+    memtable.cc
+    mutation_dump.cc
+    table.cc
+    tablets.cc)
 target_include_directories(replica
   PUBLIC
     ${CMAKE_SOURCE_DIR})
 target_link_libraries(replica
   PUBLIC
-    db
     absl::headers
-    wasmtime_bindings
+    db
     Seastar::seastar
+    wasmtime_bindings
     xxHash::xxhash
   PRIVATE
     absl::raw_hash_set)
