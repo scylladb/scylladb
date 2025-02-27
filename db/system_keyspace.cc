@@ -2022,15 +2022,15 @@ future<std::vector<locator::host_id>> system_keyspace::load_peers_ids() {
     co_return ret;
 }
 
-future<std::unordered_map<gms::inet_address, sstring>> system_keyspace::load_peer_features() {
+future<std::unordered_map<locator::host_id, sstring>> system_keyspace::load_peer_features() {
     co_await peers_table_read_fixup();
 
-    const sstring req = format("SELECT peer, supported_features FROM system.{}", PEERS);
-    std::unordered_map<gms::inet_address, sstring> ret;
+    const sstring req = format("SELECT host_id, supported_features FROM system.{}", PEERS);
+    std::unordered_map<locator::host_id, sstring> ret;
     const auto cql_result = co_await execute_cql(req);
     for (const auto& row : *cql_result) {
         if (row.has("supported_features")) {
-            ret.emplace(row.get_as<net::inet_address>("peer"),
+            ret.emplace(locator::host_id(row.get_as<utils::UUID>("host_id")),
                     row.get_as<sstring>("supported_features"));
         }
     }

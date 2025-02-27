@@ -2628,7 +2628,7 @@ bool gossiper::is_safe_for_restart(inet_address endpoint, locator::host_id host_
     return allowed;
 }
 
-std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const {
+std::set<sstring> gossiper::get_supported_features(locator::host_id endpoint) const {
     auto app_state = get_application_state_ptr(endpoint, application_state::SUPPORTED_FEATURES);
     if (!app_state) {
         return {};
@@ -2636,8 +2636,8 @@ std::set<sstring> gossiper::get_supported_features(inet_address endpoint) const 
     return feature_service::to_feature_set(app_state->value());
 }
 
-std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const {
-    std::unordered_map<gms::inet_address, std::set<sstring>> features_map;
+std::set<sstring> gossiper::get_supported_features(const std::unordered_map<locator::host_id, sstring>& loaded_peer_features, ignore_features_of_local_node ignore_local_node) const {
+    std::unordered_map<locator::host_id, std::set<sstring>> features_map;
     std::set<sstring> common_features;
 
     for (auto& x : loaded_peer_features) {
@@ -2650,27 +2650,27 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
     }
 
     for (auto& x : _endpoint_state_map) {
-        auto endpoint = x.first;
-        auto features = get_supported_features(endpoint);
-        if (ignore_local_node && endpoint == get_broadcast_address()) {
+        auto host_id = x.second->get_host_id();
+        auto features = get_supported_features(host_id);
+        if (ignore_local_node && host_id == my_host_id()) {
             logger.debug("Ignore SUPPORTED_FEATURES of local node: features={}", features);
             continue;
         }
         if (features.empty()) {
-            auto it = loaded_peer_features.find(endpoint);
+            auto it = loaded_peer_features.find(host_id);
             if (it != loaded_peer_features.end()) {
-                logger.info("Node {} does not contain SUPPORTED_FEATURES in gossip, using features saved in system table, features={}", endpoint, feature_service::to_feature_set(it->second));
+                logger.info("Node {} does not contain SUPPORTED_FEATURES in gossip, using features saved in system table, features={}", host_id, feature_service::to_feature_set(it->second));
             } else {
-                logger.warn("Node {} does not contain SUPPORTED_FEATURES in gossip or system table", endpoint);
+                logger.warn("Node {} does not contain SUPPORTED_FEATURES in gossip or system table", host_id);
             }
         } else {
             // Replace the features with live info
-            features_map[endpoint] = std::move(features);
+            features_map[host_id] = std::move(features);
         }
     }
 
     if (ignore_local_node) {
-        features_map.erase(get_broadcast_address());
+        features_map.erase(my_host_id());
     }
 
     if (!features_map.empty()) {
@@ -2689,12 +2689,12 @@ std::set<sstring> gossiper::get_supported_features(const std::unordered_map<gms:
     return common_features;
 }
 
-void gossiper::check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<inet_address, sstring>& loaded_peer_features) const {
+void gossiper::check_knows_remote_features(std::set<std::string_view>& local_features, const std::unordered_map<locator::host_id, sstring>& loaded_peer_features) const {
     auto local_endpoint = get_broadcast_address();
     auto common_features = get_supported_features(loaded_peer_features, ignore_features_of_local_node::yes);
     if (boost::range::includes(local_features, common_features)) {
-        logger.info("Feature check passed. Local node {} features = {}, Remote common_features = {}",
-                local_endpoint, local_features, common_features);
+        logger.info("Feature check passed. Local node {}/{} features = {}, Remote common_features = {}",
+                local_endpoint, my_host_id(), local_features, common_features);
     } else {
         throw std::runtime_error(fmt::format("Feature check failed. This node can not join the cluster because it does not understand the feature. Local node {} features = {}, Remote common_features = {}", local_endpoint, local_features, common_features));
     }
