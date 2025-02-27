@@ -13,7 +13,6 @@
 #include <inttypes.h>
 #include <boost/regex.hpp>
 
-#include <boost/range/algorithm/adjacent_find.hpp>
 #include <seastar/core/coroutine.hh>
 
 #include "cql3/statements/create_table_statement.hh"
@@ -173,7 +172,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     }
 
     // Check for duplicate column names
-    auto i = boost::range::adjacent_find(_defined_names, [] (auto&& e1, auto&& e2) {
+    auto i = std::ranges::adjacent_find(_defined_names, [] (auto&& e1, auto&& e2) {
         return e1->text() == e2->text();
     });
     if (i != _defined_names.end()) {
