@@ -167,8 +167,17 @@ struct tablet_task_info {
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
     bool is_user_repair_request() const;
+<<<<<<< HEAD
     static tablet_task_info make_user_repair_request();
     static tablet_task_info make_auto_repair_request();
+||||||| parent of fe4e99d7b3 (locator: add tablet_task_info::selected_by_filters)
+    static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+    static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+=======
+    bool selected_by_filters(const tablet_replica& replica, const topology& topo) const;
+    static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+    static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+>>>>>>> fe4e99d7b3 (locator: add tablet_task_info::selected_by_filters)
     static tablet_task_info make_migration_request();
     static tablet_task_info make_intranode_migration_request();
     static tablet_task_info make_split_request();

@@ -1145,7 +1145,24 @@ bool locator::tablet_task_info::is_user_repair_request() const {
     return request_type == locator::tablet_task_type::user_repair;
 }
 
+<<<<<<< HEAD
 locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request() {
+||||||| parent of fe4e99d7b3 (locator: add tablet_task_info::selected_by_filters)
+locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
+=======
+bool locator::tablet_task_info::selected_by_filters(const tablet_replica& replica, const topology& topo) const {
+    if (!repair_hosts_filter.empty() && !repair_hosts_filter.contains(replica.host)) {
+        return false;
+    }
+    auto dc = topo.get_datacenter(replica.host);
+    if (!repair_dcs_filter.empty() && !repair_dcs_filter.contains(dc)) {
+        return false;
+    }
+    return true;
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
+>>>>>>> fe4e99d7b3 (locator: add tablet_task_info::selected_by_filters)
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
