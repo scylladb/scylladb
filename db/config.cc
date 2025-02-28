@@ -854,7 +854,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
       Related information: Cassandra anti-patterns: Queues and queue-like datasets.
     */
     , tombstone_warn_threshold(this, "tombstone_warn_threshold", value_status::Used, 1000,
-        "The maximum number of tombstones a query can scan before warning.")
+        "The maximum number of tombstones a query can scan before warning. Tombstone warnings are only logged for single-partition queries."
+        " Tombstone logs for range-scans are logged with debug level (querier logger), as it is normal for range-scans to go through many tombstones.")
     , tombstone_failure_threshold(this, "tombstone_failure_threshold", value_status::Unused, 100000,
         "The maximum number of tombstones a query can scan before aborting.")
     , query_tombstone_page_limit(this, "query_tombstone_page_limit", liveness::LiveUpdate, value_status::Used, 10000,
