@@ -1670,21 +1670,20 @@ future<> system_keyspace::build_bootstrap_info() {
     sstring req = format("SELECT bootstrapped FROM system.{} WHERE key = ? ", LOCAL);
     auto op = start_operation();
     auto msg = co_await execute_cql(req, sstring(LOCAL));
-    // FIXME: indent
-        static auto state_map = std::unordered_map<sstring, bootstrap_state>({
-            { "NEEDS_BOOTSTRAP", bootstrap_state::NEEDS_BOOTSTRAP },
-            { "COMPLETED", bootstrap_state::COMPLETED },
-            { "IN_PROGRESS", bootstrap_state::IN_PROGRESS },
-            { "DECOMMISSIONED", bootstrap_state::DECOMMISSIONED }
-        });
-        bootstrap_state state = bootstrap_state::NEEDS_BOOTSTRAP;
+    static auto state_map = std::unordered_map<sstring, bootstrap_state>({
+        { "NEEDS_BOOTSTRAP", bootstrap_state::NEEDS_BOOTSTRAP },
+        { "COMPLETED", bootstrap_state::COMPLETED },
+        { "IN_PROGRESS", bootstrap_state::IN_PROGRESS },
+        { "DECOMMISSIONED", bootstrap_state::DECOMMISSIONED }
+    });
+    bootstrap_state state = bootstrap_state::NEEDS_BOOTSTRAP;
 
-        if (!msg->empty() && msg->one().has("bootstrapped")) {
-            state = state_map.at(msg->one().template get_as<sstring>("bootstrapped"));
-        }
-        co_await container().invoke_on_all([state] (auto& sys_ks) {
-            sys_ks._cache->_state = state;
-        });
+    if (!msg->empty() && msg->one().has("bootstrapped")) {
+        state = state_map.at(msg->one().template get_as<sstring>("bootstrapped"));
+    }
+    co_await container().invoke_on_all([state] (auto& sys_ks) {
+        sys_ks._cache->_state = state;
+    });
 }
 
 }
@@ -2144,13 +2143,12 @@ future<std::optional<T>> system_keyspace::get_scylla_local_param_as(const sstrin
     sstring req = format("SELECT value FROM system.{} WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
     auto op = start_operation();
     auto res = co_await execute_cql(req, key);
-    // FIXME: indent
-        if (res->empty() || !res->one().has("value")) {
-            co_return std::optional<T>();
-        }
-        auto type = data_type_for<T>();
-        co_return std::optional<T>(value_cast<T>(type->deserialize(
-                    type->from_string(res->one().template get_as<sstring>("value")))));
+    if (res->empty() || !res->one().has("value")) {
+        co_return std::optional<T>();
+    }
+    auto type = data_type_for<T>();
+    co_return std::optional<T>(value_cast<T>(type->deserialize(
+                type->from_string(res->one().template get_as<sstring>("value")))));
 }
 
 template
@@ -2681,32 +2679,31 @@ future<service::paxos::paxos_state> system_keyspace::load_paxos_state(partition_
     (void)now;
     auto op = start_operation();
     auto results = co_await execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id().uuid());
-    // FIXME: indent
-        if (results->empty()) {
-            co_return service::paxos::paxos_state();
-        }
-        auto& row = results->one();
-        auto promised = row.has("promise")
-                        ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID();
+    if (results->empty()) {
+        co_return service::paxos::paxos_state();
+    }
+    auto& row = results->one();
+    auto promised = row.has("promise")
+                    ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID();
 
-        std::optional<service::paxos::proposal> accepted;
-        if (row.has("proposal")) {
-            accepted = service::paxos::proposal(row.get_as<utils::UUID>("proposal_ballot"),
-                    ser::deserialize_from_buffer<>(row.get_blob("proposal"),  std::type_identity<frozen_mutation>(), 0));
-        }
+    std::optional<service::paxos::proposal> accepted;
+    if (row.has("proposal")) {
+        accepted = service::paxos::proposal(row.get_as<utils::UUID>("proposal_ballot"),
+                ser::deserialize_from_buffer<>(row.get_blob("proposal"),  std::type_identity<frozen_mutation>(), 0));
+    }
 
-        std::optional<service::paxos::proposal> most_recent;
-        if (row.has("most_recent_commit_at")) {
-            // the value can be missing if it was pruned, supply empty one since
-            // it will not going to be used anyway
-            auto fm = row.has("most_recent_commit") ?
-                     ser::deserialize_from_buffer<>(row.get_blob("most_recent_commit"), std::type_identity<frozen_mutation>(), 0) :
-                     freeze(mutation(s, key));
-            most_recent = service::paxos::proposal(row.get_as<utils::UUID>("most_recent_commit_at"),
-                    std::move(fm));
-        }
+    std::optional<service::paxos::proposal> most_recent;
+    if (row.has("most_recent_commit_at")) {
+        // the value can be missing if it was pruned, supply empty one since
+        // it will not going to be used anyway
+        auto fm = row.has("most_recent_commit") ?
+                    ser::deserialize_from_buffer<>(row.get_blob("most_recent_commit"), std::type_identity<frozen_mutation>(), 0) :
+                    freeze(mutation(s, key));
+        most_recent = service::paxos::proposal(row.get_as<utils::UUID>("most_recent_commit_at"),
+                std::move(fm));
+    }
 
-        co_return service::paxos::paxos_state(promised, std::move(accepted), std::move(most_recent));
+    co_return service::paxos::paxos_state(promised, std::move(accepted), std::move(most_recent));
 }
 
 static int32_t paxos_ttl_sec(const schema& s) {
