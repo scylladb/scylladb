@@ -85,7 +85,7 @@ class PythonTestSuite(TestSuite):
 
             server = ScyllaServer(
                 mode=self.mode,
-                version=get_current_version_description(self.scylla_exe),
+                version=(create_cfg.version or get_current_version_description(self.scylla_exe)),
                 vardir=self.log_dir,
                 logger=create_cfg.logger,
                 cluster_name=create_cfg.cluster_name,
