@@ -1465,11 +1465,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             dst_opt = primary.host;
                         } else {
                            for (auto& replica : tinfo.replicas) {
-                                if (!hosts_filter.empty() && !hosts_filter.contains(replica.host)) {
-                                    continue;
-                                }
-                                auto dc = topo.get_datacenter(replica.host);
-                                if (!dcs_filter.empty() && !dcs_filter.contains(dc)) {
+                                if (!tinfo.repair_task_info.selected_by_filters(replica, topo)) {
                                     continue;
                                 }
                                 dst_opt = replica.host;
