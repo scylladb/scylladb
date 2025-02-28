@@ -970,9 +970,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             api::set_server_init(ctx).get();
 
-            supervisor::notify("starting prometheus API server");
             std::any stop_prometheus;
             if (cfg->prometheus_port()) {
+                supervisor::notify("starting prometheus API server");
                 prometheus_server.start("prometheus").get();
                 stop_prometheus = defer_verbose_shutdown("prometheus API server", [&prometheus_server] {
                     prometheus_server.stop().get();
