@@ -93,7 +93,17 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
-    sstring msg = seastar::format("<{}>{:%h %e %T} scylla-audit: \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\"",
+    std::string escaped_query;
+    escaped_query.reserve(audit_info->query().size() * 1.2);
+    for (auto c : audit_info->query()) {
+        if (c == '"') {
+            escaped_query.push_back('\\');
+            escaped_query.push_back('"');
+        } else {
+            escaped_query.push_back(c);
+        }
+    }
+    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}" category="{}" cl="{}" error="{}" keyspace="{}" query="{}" client_ip="{}" table="{}" username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
@@ -101,7 +111,7 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
                                     cl,
                                     (error ? "true" : "false"),
                                     audit_info->keyspace(),
-                                    audit_info->query(),
+                                    escaped_query,
                                     client_ip,
                                     audit_info->table(),
                                     username);
@@ -117,13 +127,13 @@ future<> audit_syslog_storage_helper::write_login(const sstring& username,
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
-    sstring msg = seastar::format("<{}>{:%h %e %T} scylla-audit: \"{}\", \"AUTH\", \"\", \"\", \"\", \"\", \"{}\", \"{}\", \"{}\"",
+    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="AUTH", cl="", error="{}", keyspace="", query="", client_ip="{}", table="", username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
+                                    (error ? "true" : "false"),
                                     client_ip,
-                                    username,
-                                    (error ? "true" : "false"));
+                                    username);
 
     co_await syslog_send_helper(_sender, _syslog_address, msg.c_str());
 }
