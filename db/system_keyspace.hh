@@ -673,6 +673,7 @@ public:
     system_keyspace(cql3::query_processor& qp, replica::database& db) noexcept;
     ~system_keyspace();
     future<> shutdown();
+    future<> stop();
 
     virtual_tables_registry& get_virtual_tables_registry() { return _virtual_tables_registry; }
 private:

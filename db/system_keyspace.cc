@@ -3527,6 +3527,10 @@ future<> system_keyspace::shutdown() {
     co_return;
 }
 
+future<> system_keyspace::stop() {
+    co_await shutdown();
+}
+
 future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql(const sstring& query_string, const data_value_list& values) {
     return _qp.execute_internal(query_string, values, cql3::query_processor::cache_internal::yes);
 }

@@ -699,7 +699,6 @@ private:
 
             _sys_ks.start(std::ref(_qp), std::ref(_db)).get();
             auto stop_sys_kd = defer_verbose_shutdown("system keyspace", [this] {
-                _sys_ks.invoke_on_all(&db::system_keyspace::shutdown).get();
                 _sys_ks.stop().get();
             });
 
