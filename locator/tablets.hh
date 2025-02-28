@@ -475,6 +475,9 @@ public:
     tablet_replica get_primary_replica(tablet_id id) const;
     tablet_replica get_primary_replica_within_dc(tablet_id id, const topology& topo, sstring dc) const;
 
+    // Returns the replica that matches hosts and dcs filters for tablet_task_info.
+    std::optional<tablet_replica> maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const;
+
     /// Returns a vector of sorted last tokens for tablets.
     future<std::vector<token>> get_sorted_tokens() const;
 
