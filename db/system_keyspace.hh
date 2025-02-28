@@ -129,6 +129,7 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     std::unique_ptr<local_cache> _cache;
     virtual_tables_registry _virtual_tables_registry;
     bool _peers_table_read_fixup_done = false;
+    bool _shutdown = false;
 
     static schema_ptr raft_snapshot_config();
     static schema_ptr local();
