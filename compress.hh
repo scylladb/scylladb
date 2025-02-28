@@ -17,13 +17,19 @@
 #include <seastar/core/sstring.hh>
 #include "seastarx.hh"
 
+namespace gms {
+class feature_service;
+} // namespace gms
+
 class compression_parameters;
 
 class compressor {
 public:
     enum class algorithm {
         lz4,
+        lz4_with_dicts,
         zstd,
+        zstd_with_dicts,
         snappy,
         deflate,
         none,
@@ -102,7 +108,7 @@ public:
     algorithm get_algorithm() const { return _algorithm; }
     std::optional<int> zstd_compression_level() const { return _zstd_compression_level; }
 
-    void validate();
+    void validate(const gms::feature_service&);
     std::map<sstring, sstring> get_options() const;
 
     bool compression_enabled() const { 
