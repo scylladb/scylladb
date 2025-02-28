@@ -238,6 +238,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         assert len(topo_res) != 0
 
         for row in topo_res:
+<<<<<<< HEAD:test/topology/util.py
             assert row.host_id is not None
             assert row.datacenter is not None
             assert row.ignore_msb is not None
@@ -249,6 +250,40 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
             assert row.shard_count is not None
 
             assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
+||||||| parent of 4e055882c1 (test: topology: util: fix the tokens consistency check for left nodes):test/cluster/util.py
+            if row.host_id in live_host_ids:
+                assert row.datacenter is not None
+                assert row.ignore_msb is not None
+                assert row.node_state == "normal"
+                assert row.num_tokens is not None
+                assert row.rack is not None
+                assert row.release_version is not None
+                assert row.supported_features is not None
+                assert row.shard_count is not None
+            else:
+                assert row.host_id is not None
+                assert row.host_id in ignored_host_ids
+                assert row.node_state == "left"
+
+            assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
+=======
+            num_tokens = 0 if row.tokens is None else len(row.tokens)
+            if row.host_id in live_host_ids:
+                assert row.datacenter is not None
+                assert row.ignore_msb is not None
+                assert row.node_state == "normal"
+                assert row.num_tokens is not None
+                assert row.rack is not None
+                assert row.release_version is not None
+                assert row.supported_features is not None
+                assert row.shard_count is not None
+                assert num_tokens == row.num_tokens
+            else:
+                assert row.host_id is not None
+                assert row.host_id in ignored_host_ids
+                assert row.node_state == "left"
+                assert num_tokens == 0
+>>>>>>> 4e055882c1 (test: topology: util: fix the tokens consistency check for left nodes):test/cluster/util.py
 
         assert topo_res[0].committed_cdc_generations is not None
         committed_generations = frozenset(gen[1] for gen in topo_res[0].committed_cdc_generations)
