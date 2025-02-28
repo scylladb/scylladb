@@ -980,7 +980,7 @@ future<bool> raft_group0::wait_for_raft() {
 
 future<> raft_group0::modify_raft_voter_status(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
         abort_source& as, std::optional<raft_timeout> timeout) {
-    co_await run_op_with_retry(as, [this, &voters_add, &voters_del, timeout, &as] -> future<operation_result> {
+    return run_op_with_retry(as, [this, &voters_add, &voters_del, timeout, &as] -> future<operation_result> {
         std::vector<raft::config_member> add;
         add.reserve(voters_add.size() + voters_del.size());
 
@@ -1000,11 +1000,10 @@ future<> raft_group0::modify_raft_voter_status(const std::unordered_set<raft::se
         }
         co_return operation_result::success;
     }, "modify_raft_voter_status->modify_config");
-    co_return;
 }
 
 future<> raft_group0::remove_from_raft_config(raft::server_id id) {
-    co_await run_op_with_retry(_abort_source, [this, id]() -> future<operation_result> {
+    return run_op_with_retry(_abort_source, [this, id] -> future<operation_result> {
         try {
             co_await _raft_gr.group0_with_timeouts().modify_config({}, {id}, &_abort_source, raft_timeout{});
         } catch (const raft::commit_status_unknown& e) {
@@ -1013,7 +1012,6 @@ future<> raft_group0::remove_from_raft_config(raft::server_id id) {
         }
         co_return operation_result::success;
     }, "remove_from_raft_config->modify_config");
-    co_return;
 }
 
 bool raft_group0::joined_group0() const {
