@@ -935,6 +935,7 @@ class ScyllaCluster:
         property_file: dict[str, Any] | None
         config_from_test: dict[str, Any]
         cmdline_from_test: List[str]
+        version: Optional[ScyllaVersionDescription]
         server_encryption: str
 
     def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
@@ -1033,6 +1034,7 @@ class ScyllaCluster:
     async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
+                         version: Optional[ScyllaVersionDescription] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
                          seeds: Optional[List[IPAddress]] = None,
@@ -1089,7 +1091,8 @@ class ScyllaCluster:
             property_file = property_file,
             config_from_test = extra_config,
             server_encryption = server_encryption,
-            cmdline_from_test = cmdline or []
+            cmdline_from_test = cmdline or [],
+            version = version,
         )
 
         server = None
@@ -1128,6 +1131,7 @@ class ScyllaCluster:
     async def add_servers(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
+                          version: Optional[ScyllaVersionDescription] = None,
                           property_file: Union[list[dict[str, Any]], dict[str, Any], None] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
@@ -1145,7 +1149,7 @@ class ScyllaCluster:
                 assert type(property_file) is list and len(property_file) == servers_num
                 return property_file[i]
 
-        return await gather_safely(*(self.add_server(None, cmdline, config, get_property_file(i), start, seeds, server_encryption, expected_error)
+        return await gather_safely(*(self.add_server(None, cmdline, config, version, get_property_file(i), start, seeds, server_encryption, expected_error)
                                       for i in range(servers_num)))
 
     def endpoint(self) -> str:
@@ -1726,10 +1730,12 @@ class ScyllaClusterManager:
 
         data = await request.json()
         replace_cfg = ReplaceConfig(**data["replace_cfg"]) if "replace_cfg" in data else None
+        version = ScyllaVersionDescription(**data["version"]) if "version" in data else None
         s_info = await self.cluster.add_server(
             replace_cfg=replace_cfg,
             cmdline=data.get("cmdline"),
             config=data.get("config"),
+            version=version,
             property_file=data.get("property_file"),
             start=data.get("start", True),
             seeds=data.get("seeds"),
@@ -1743,7 +1749,8 @@ class ScyllaClusterManager:
         """Add new servers concurrently"""
         assert self.cluster
         data = await request.json()
-        s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'),
+        version = ScyllaVersionDescription(**data["version"]) if "version" in data else None
+        s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'), version,
                                                  data.get('property_file'), data.get('start', True),
                                                  data.get('seeds', None), data.get('server_encryption'), data.get('expected_error', None))
         return [s_info.as_dict() for s_info in s_infos]
