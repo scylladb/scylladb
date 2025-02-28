@@ -129,6 +129,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
     locator::load_stats_ptr _tablet_load_stats;
+    serialized_action _tablet_load_stats_refresh;
     // FIXME: make frequency per table in order to reduce work in each iteration.
     //  Bigger tables will take longer to be resized. similar-sized tables can be batched into same iteration.
     static constexpr std::chrono::seconds tablet_load_stats_refresh_interval = std::chrono::seconds(60);
@@ -2815,7 +2816,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Returns true if the state machine was transitioned into tablet resize finalization path.
     future<bool> maybe_start_tablet_resize_finalization(group0_guard, const table_resize_plan& plan);
 
-    future<locator::load_stats> refresh_tablet_load_stats();
+    future<> refresh_tablet_load_stats();
     future<> start_tablet_load_stats_refresher();
 
     // Precondition: the state machine upgrade state is not at upgrade_state::done.
@@ -2850,6 +2851,7 @@ public:
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
+        , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
     {}
@@ -2899,7 +2901,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     rtlogger.debug("Evaluating tablet balance");
 
     if (utils::get_local_injector().enter("tablet_load_stats_refresh_before_rebalancing")) {
-        _tablet_load_stats = make_lw_shared<const locator::load_stats>(co_await refresh_tablet_load_stats());
+        co_await _tablet_load_stats_refresh.trigger();
     }
 
     auto tm = get_token_metadata_ptr();
@@ -2953,7 +2955,7 @@ future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0
     co_return true;
 }
 
-future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
+future<> topology_coordinator::refresh_tablet_load_stats() {
     auto tm = get_token_metadata_ptr();
 
     locator::load_stats stats;
@@ -3037,7 +3039,7 @@ future<locator::load_stats> topology_coordinator::refresh_tablet_load_stats() {
     }
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 
-    co_return std::move(stats);
+    _tablet_load_stats = make_lw_shared<const locator::load_stats>(std::move(stats));
 }
 
 future<> topology_coordinator::start_tablet_load_stats_refresher() {
@@ -3045,7 +3047,7 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
     while (can_proceed()) {
         bool sleep = true;
         try {
-            _tablet_load_stats = make_lw_shared<const locator::load_stats>(co_await refresh_tablet_load_stats());
+            co_await _tablet_load_stats_refresh.trigger();
             _topo_sm.event.broadcast(); // wake up load balancer.
         } catch (raft::request_aborted&) {
             rtlogger.debug("raft topology: Tablet load stats refresher aborted");
@@ -3401,6 +3403,7 @@ future<> topology_coordinator::run() {
 
     co_await _async_gate.close();
     co_await std::move(tablet_load_stats_refresher);
+    co_await _tablet_load_stats_refresh.join();
     co_await std::move(cdc_generation_publisher);
     co_await std::move(gossiper_orphan_remover);
 }
