@@ -202,3 +202,245 @@ async def test_tablet_repair_error_delete(manager: ManagerClient):
 
     await asyncio.gather(repair_task(), del_repair_task());
     await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+<<<<<<< HEAD
+||||||| parent of c40eaa0577 (test: extract repiar check to function)
+
+def get_repair_row_from_disk(server):
+    row_num = 0
+    metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
+    pattern = re.compile("^scylla_repair_row_from_disk_nr")
+    for metric in metrics.split('\n'):
+        if pattern.match(metric) is not None:
+            row_num += int(metric.split()[1])
+
+    return row_num
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_hosts_filter(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+    hosts_filter = f"{hosts[0].host_id},{hosts[1].host_id}"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, hosts_filter=hosts_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_hosts_filter.split(",").sort() == hosts_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    assert row_num_before[0] < row_num_after[0]
+    assert row_num_before[1] < row_num_after[1]
+    assert row_num_before[2] == row_num_after[2]
+
+async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
+    servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
+               await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
+               await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R2'})]
+    cql = manager.get_cql()
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                  "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    table_id = await manager.get_table_id(ks, "test")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    return (servers, cql, hosts, ks, table_id)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_dcs_filter(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
+    dcs_filter = "DC1"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, dcs_filter=dcs_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    assert row_num_before[0] < row_num_after[0]
+    assert row_num_before[1] < row_num_after[1]
+    assert row_num_before[2] == row_num_after[2]
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
+    dcs_filter = "DC1,DC2"
+    hosts_filter = f"{hosts[0].host_id},{hosts[2].host_id}"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, hosts_filter=hosts_filter, dcs_filter=dcs_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    assert row_num_before[0] < row_num_after[0]
+    assert row_num_before[1] == row_num_after[1]
+    assert row_num_before[2] < row_num_after[2]
+=======
+
+def get_repair_row_from_disk(server):
+    row_num = 0
+    metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
+    pattern = re.compile("^scylla_repair_row_from_disk_nr")
+    for metric in metrics.split('\n'):
+        if pattern.match(metric) is not None:
+            row_num += int(metric.split()[1])
+
+    return row_num
+
+def check_repairs(row_num_before: list[int], row_num_after: list[int], expected_repairs: list[int]):
+    assert len(row_num_before) == len(row_num_after)
+    for i, val_before in enumerate(row_num_before):
+        if i in expected_repairs:
+            assert val_before < row_num_after[i]
+        else:
+            assert val_before == row_num_after[i]
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_hosts_filter(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+    hosts_filter = f"{hosts[0].host_id},{hosts[1].host_id}"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, hosts_filter=hosts_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_hosts_filter.split(",").sort() == hosts_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    check_repairs(row_num_before, row_num_after, [0, 1])
+
+async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
+    servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
+               await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
+               await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R2'})]
+    cql = manager.get_cql()
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                  "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+    keys = range(256)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+    table_id = await manager.get_table_id(ks, "test")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    return (servers, cql, hosts, ks, table_id)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_dcs_filter(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
+    dcs_filter = "DC1"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, dcs_filter=dcs_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    check_repairs(row_num_before, row_num_after, [0, 1])
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
+    dcs_filter = "DC1,DC2"
+    hosts_filter = f"{hosts[0].host_id},{hosts[2].host_id}"
+
+    row_num_before = [get_repair_row_from_disk(server) for server in servers]
+
+    token = -1
+    async def repair_task():
+        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, hosts_filter=hosts_filter, dcs_filter=dcs_filter)
+
+    async def check_filter():
+        tablet_task_id = None
+        while tablet_task_id == None:
+            tablet_task_id = await get_tablet_task_id(cql, hosts[0], table_id, token)
+
+        res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
+        assert len(res) == 1
+        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+
+        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+
+    await asyncio.gather(repair_task(), check_filter())
+
+    row_num_after = [get_repair_row_from_disk(server) for server in servers]
+    check_repairs(row_num_before, row_num_after, [0, 2])
+>>>>>>> c40eaa0577 (test: extract repiar check to function)
