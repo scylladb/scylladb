@@ -263,10 +263,17 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         topology_builder topo(e);
         std::vector<host_id> hosts;
+        locator::load_stats stats;
 
         auto add_host = [&] {
-            hosts.push_back(topo.add_node(service::node_state::normal, shard_count));
-            testlog.info("Added new node: {}", hosts.back());
+            auto host = topo.add_node(service::node_state::normal, shard_count);
+            hosts.push_back(host);
+            stats.capacity[host] = default_target_tablet_size * shard_count;
+            testlog.info("Added new node: {}", host);
+        };
+
+        auto make_stats = [&] {
+            return make_lw_shared<locator::load_stats>(stats);
         };
 
         for (int i = 0; i < n_hosts; ++i) {
@@ -277,7 +284,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         auto bootstrap = [&] {
             add_host();
-            global_res.stats += rebalance_tablets(e);
+            global_res.stats += rebalance_tablets(e, make_stats());
         };
 
         auto decommission = [&] (host_id host) {
@@ -286,7 +293,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 throw std::runtime_error(format("No such host: {}", host));
             }
             topo.set_node_state(host, service::node_state::decommissioning);
-            global_res.stats += rebalance_tablets(e);
+            global_res.stats += rebalance_tablets(e, make_stats());
             if (stm.get()->tablets().has_replica_on(host)) {
                 throw std::runtime_error(format("Host {} still has replicas!", host));
             }
@@ -364,7 +371,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         check_balance();
 
-        rebalance_tablets(e);
+        rebalance_tablets(e, make_stats());
 
         global_res.init = global_res.worst = check_balance();
 
