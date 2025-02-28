@@ -6,12 +6,16 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <exception>
+#include <seastar/core/sleep.hh>
+
 #include "db/view/view_update_backlog.hh"
 #include <seastar/core/timed_out_error.hh>
 #include "gms/inet_address.hh"
 #include <seastar/util/defer.hh>
 #include "replica/database.hh"
 #include "view_update_generator.hh"
+#include "seastar/core/abort_source.hh"
 #include "utils/error_injection.hh"
 #include "db/view/view_updating_consumer.hh"
 #include "sstables/sstables.hh"
@@ -407,7 +411,8 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         mutation_reader_opt existings,
         tracing::trace_state_ptr tr_state,
         gc_clock::time_point now,
-        db::timeout_clock::time_point timeout) {
+        db::timeout_clock::time_point timeout,
+        abort_source& abort) {
     auto base_token = m.token();
     auto m_schema = m.schema();
     view_update_builder builder = make_view_update_builder(
@@ -452,7 +457,12 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             update_backlog local_backlog = _db.get_view_update_backlog();
             std::chrono::microseconds throttle_delay =  calculate_view_update_throttling_delay(local_backlog, timeout, _db.get_config().view_flow_control_delay_limit_in_ms());
 
-            co_await seastar::sleep(throttle_delay);
+            try {
+                co_await seastar::sleep_abortable(throttle_delay, abort);
+            } catch (...) {
+                err = std::current_exception();
+                break;
+            };
 
             if (utils::get_local_injector().enter("view_update_limit") && _db.view_update_sem().current() == 0) {
                 err = std::make_exception_ptr(std::runtime_error("View update backlog exceeded the limit"));
@@ -463,6 +473,9 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
                 err = std::make_exception_ptr(view_update_generation_timeout_exception());
                 break;
             }
+        } else if (abort.abort_requested()) {
+            err = abort.abort_requested_exception_ptr();
+            break;
         }
 
         try {

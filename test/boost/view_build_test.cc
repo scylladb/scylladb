@@ -21,6 +21,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/core/abort_source.hh>
 
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_test_env.hh"
@@ -704,6 +705,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         const size_t _max_rows_hard;
         size_t _buffer_rows = 0;
         bool& _ok;
+        abort_source abort;
 
     private:
         static size_t rows_in_limit(size_t l) {
@@ -785,7 +787,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
                 _ok = false;
                 BOOST_FAIL(fmt::format("consumer_verifier::operator(): caught unexpected exception {}", std::current_exception()));
             }
-            return _rl->lock_pk(_collected_muts.back().decorated_key(), true, db::no_timeout, *_rl_stats);
+            return _rl->lock_pk(_collected_muts.back().decorated_key(), true, db::no_timeout, abort, *_rl_stats);
         }
     };
 
@@ -887,6 +889,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
         std::unique_ptr<row_locker> _rl;
         std::unique_ptr<row_locker::stats> _rl_stats;
         bool& _ok;
+        abort_source abort;
 
     private:
         void check(mutation mut) {
@@ -910,7 +913,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
                 _ok = false;
                 BOOST_FAIL(fmt::format("consumer_verifier::operator(): caught unexpected exception {}", std::current_exception()));
             }
-            return _rl->lock_pk(_collected_muts.back().decorated_key(), true, db::no_timeout, *_rl_stats);
+            return _rl->lock_pk(_collected_muts.back().decorated_key(), true, db::no_timeout, abort, *_rl_stats);
         }
     };
 
@@ -973,6 +976,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_empty_mutatio
         std::unique_ptr<row_locker::stats> _rl_stats;
         std::optional<dht::decorated_key> _last_dk;
         bool& _buffer_flushed;
+        abort_source abort;
 
     public:
         consumer_verifier(schema_ptr schema, bool& buffer_flushed)
@@ -983,7 +987,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_empty_mutatio
         future<row_locker::lock_holder> operator()(mutation mut) {
             _buffer_flushed = true;
             _last_dk = mut.decorated_key();
-            return _rl->lock_pk(*_last_dk, true, db::no_timeout, *_rl_stats);
+            return _rl->lock_pk(*_last_dk, true, db::no_timeout, abort, *_rl_stats);
         }
     };
 

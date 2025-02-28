@@ -106,7 +106,7 @@ future<> create_legacy_metadata_table_if_missing(
     return futurize_invoke(create_legacy_metadata_table_if_missing_impl, table_name, qp, cql, mm);
 }
 
-::service::query_state& internal_distributed_query_state() noexcept {
+::service::query_state internal_distributed_query_state(cql3::query_processor& qp) noexcept {
 #ifdef DEBUG
     // Give the much slower debug tests more headroom for completing auth queries.
     static const auto t = 30s;
@@ -115,8 +115,7 @@ future<> create_legacy_metadata_table_if_missing(
 #endif
     static const timeout_config tc{t, t, t, t, t, t, t};
     static thread_local ::service::client_state cs(::service::client_state::internal_tag{}, tc);
-    static thread_local ::service::query_state qs(cs, empty_service_permit());
-    return qs;
+    return ::service::query_state(cs, make_service_permit(qp.start_operation()));
 }
 
 static future<> announce_mutations_with_guard(
@@ -194,9 +193,10 @@ future<> announce_mutations(
         std::optional<::service::raft_timeout> timeout) {
     auto group0_guard = co_await group0_client.start_operation(as, timeout);
     auto timestamp = group0_guard.write_timestamp();
+    auto q_state = internal_distributed_query_state(qp);
     auto muts = co_await qp.get_mutations_internal(
             query_string,
-            internal_distributed_query_state(),
+            q_state,
             timestamp,
             std::move(values));
     std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
@@ -208,9 +208,10 @@ future<> collect_mutations(
         ::service::group0_batch& collector,
         const sstring query_string,
         std::vector<data_value_or_unset> values) {
+    auto q_state = internal_distributed_query_state(qp);
     auto muts = co_await qp.get_mutations_internal(
             query_string,
-            internal_distributed_query_state(),
+            q_state,
             collector.write_timestamp(),
             std::move(values));
     collector.add_mutations(std::move(muts), format("auth internal statement: {}", query_string));

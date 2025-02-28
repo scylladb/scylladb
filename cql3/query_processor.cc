@@ -30,6 +30,7 @@
 #include "utils/hashers.hh"
 #include "utils/error_injection.hh"
 #include "service/migration_manager.hh"
+#include "utils/phased_barrier.hh"
 
 namespace cql3 {
 
@@ -61,8 +62,8 @@ bool query_processor::topology_global_queue_empty() {
     return remote().first.get().ss.topology_global_queue_empty();
 }
 
-static service::query_state query_state_for_internal_call() {
-    return {service::client_state::for_internal_calls(), empty_service_permit()};
+service::query_state query_processor::query_state_for_internal_call() {
+    return {service::client_state::for_internal_calls(), make_service_permit(start_operation())};
 }
 
 query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm)
@@ -522,6 +523,7 @@ future<> query_processor::stop_remote() {
 
 future<> query_processor::stop() {
     co_await _mnotifier.unregister_listener(_migration_subscriber.get());
+    co_await _pending_operations.close();
     co_await _authorized_prepared_cache.stop();
     co_await _prepared_cache.stop();
 }

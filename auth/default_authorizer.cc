@@ -194,10 +194,11 @@ default_authorizer::modify(
             ROLE_NAME,
             RESOURCE_NAME);
     if (legacy_mode(_qp)) {
+        auto q_state = internal_distributed_query_state(_qp);
         co_return co_await _qp.execute_internal(
                 query,
                 db::consistency_level::ONE,
-                internal_distributed_query_state(),
+                q_state,
                 {permissions::to_strings(set), sstring(role_name), resource.name()},
                 cql3::query_processor::cache_internal::no).discard_result();
     }
@@ -222,10 +223,11 @@ future<std::vector<permission_details>> default_authorizer::list_all() const {
             get_auth_ks_name(_qp),
             PERMISSIONS_CF);
 
+    auto q_state = internal_distributed_query_state(_qp);
     const auto results = co_await _qp.execute_internal(
             query,
             db::consistency_level::ONE,
-            internal_distributed_query_state(),
+            q_state,
             {},
             cql3::query_processor::cache_internal::yes);
 
@@ -248,10 +250,11 @@ future<> default_authorizer::revoke_all(std::string_view role_name, ::service::g
                 PERMISSIONS_CF,
                 ROLE_NAME);
         if (legacy_mode(_qp)) {
+            auto q_state = internal_distributed_query_state(_qp);
             co_await _qp.execute_internal(
                     query,
                     db::consistency_level::ONE,
-                    internal_distributed_query_state(),
+                    q_state,
                     {sstring(role_name)},
                     cql3::query_processor::cache_internal::no).discard_result();
         } else {
@@ -330,6 +333,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::gro
                 db::consistency_level::LOCAL_ONE,
                 {name},
                 cql3::query_processor::cache_internal::no);
+        auto q_state = internal_distributed_query_state(_qp);
         for (const auto& r : *res) {
             const sstring query = seastar::format("DELETE FROM {}.{} WHERE {} = ? AND {} = ?",
                     get_auth_ks_name(_qp),
@@ -338,7 +342,7 @@ future<> default_authorizer::revoke_all(const resource& resource, ::service::gro
                     RESOURCE_NAME);
             auto muts = co_await _qp.get_mutations_internal(
                     query,
-                    internal_distributed_query_state(),
+                    q_state,
                     t,
                     {r.get_as<sstring>(ROLE_NAME), name});
             if (muts.size() != 1) {
@@ -365,6 +369,7 @@ void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resour
                 {},
                 cql3::query_processor::cache_internal::no);
         auto ks_prefix = ks_name + "/";
+        auto q_state = internal_distributed_query_state(_qp);
         for (const auto& r : *res) {
             auto name = r.get_as<sstring>(RESOURCE_NAME);
             if (name != ks_name && !name.starts_with(ks_prefix)) {
@@ -378,7 +383,7 @@ void default_authorizer::revoke_all_keyspace_resources(const resource& ks_resour
                     RESOURCE_NAME);
             auto muts = co_await _qp.get_mutations_internal(
                     query,
-                    internal_distributed_query_state(),
+                    q_state,
                     t,
                     {r.get_as<sstring>(ROLE_NAME), name});
             if (muts.size() != 1) {

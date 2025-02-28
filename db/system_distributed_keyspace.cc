@@ -359,40 +359,42 @@ future<> system_distributed_keyspace::stop() {
     return make_ready_future<>();
 }
 
-static service::query_state& internal_distributed_query_state() {
+static service::query_state internal_distributed_query_state(cql3::query_processor& qp) {
     using namespace std::chrono_literals;
     const auto t = 10s;
     static timeout_config tc{ t, t, t, t, t, t, t };
     static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
-    static thread_local service::query_state qs(cs, empty_service_permit());
-    return qs;
+    return service::query_state(cs, make_service_permit(qp.start_operation()));
 };
 
 future<> system_distributed_keyspace::start_view_build(sstring ks_name, sstring view_name) const {
     auto host_id = _sp.local_db().get_token_metadata().get_my_id();
-    return _qp.execute_internal(
+    auto q_state = internal_distributed_query_state(_qp);
+    co_await _qp.execute_internal(
             format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            internal_distributed_query_state(),
+            q_state,
             { std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED" },
             cql3::query_processor::cache_internal::no).discard_result();
 }
 
 future<> system_distributed_keyspace::finish_view_build(sstring ks_name, sstring view_name) const {
     auto host_id = _sp.local_db().get_token_metadata().get_my_id();
-    return _qp.execute_internal(
+    auto q_state = internal_distributed_query_state(_qp);
+    co_await _qp.execute_internal(
             format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            internal_distributed_query_state(),
+            q_state,
             { "SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid() },
             cql3::query_processor::cache_internal::no).discard_result();
 }
 
 future<> system_distributed_keyspace::remove_view(sstring ks_name, sstring view_name) const {
-    return _qp.execute_internal(
+    auto q_state = internal_distributed_query_state(_qp);
+    co_await _qp.execute_internal(
             format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS),
             db::consistency_level::ONE,
-            internal_distributed_query_state(),
+            q_state,
             { std::move(ks_name), std::move(view_name) },
             cql3::query_processor::cache_internal::no).discard_result();
 }
@@ -462,10 +464,11 @@ system_distributed_keyspace::insert_cdc_topology_description(
         const cdc::topology_description& description,
         context ctx) {
     check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
-    return _qp.execute_internal(
+    auto q_state = internal_distributed_query_state(_qp);
+    co_await _qp.execute_internal(
             format("INSERT INTO {}.{} (time, description) VALUES (?,?)", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
+            q_state,
             { gen_id.ts, make_list_value(cdc_generation_description_type, prepare_cdc_generation_description(description)) },
             cql3::query_processor::cache_internal::no).discard_result();
 }
@@ -475,27 +478,27 @@ system_distributed_keyspace::read_cdc_topology_description(
         cdc::generation_id_v1 gen_id,
         context ctx) {
     check_exists(NAME, CDC_TOPOLOGY_DESCRIPTION, _qp.db().real_database());
-    return _qp.execute_internal(
+    auto q_state = internal_distributed_query_state(_qp);
+    auto cql_result = co_await _qp.execute_internal(
             format("SELECT description FROM {}.{} WHERE time = ?", NAME, CDC_TOPOLOGY_DESCRIPTION),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
+            q_state,
             { gen_id.ts },
             cql3::query_processor::cache_internal::no
-    ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> std::optional<cdc::topology_description> {
-        if (cql_result->empty() || !cql_result->one().has("description")) {
-            return {};
-        }
+    );
+    if (cql_result->empty() || !cql_result->one().has("description")) {
+        co_return std::nullopt;
+    }
 
-        utils::chunked_vector<cdc::token_range_description> entries;
+    utils::chunked_vector<cdc::token_range_description> entries;
 
-        auto entries_val = value_cast<list_type_impl::native_type>(
-                cdc_generation_description_type->deserialize(cql_result->one().get_view("description")));
-        for (const auto& e_val: entries_val) {
-            entries.push_back(get_token_range_description_from_value(e_val));
-        }
+    auto entries_val = value_cast<list_type_impl::native_type>(
+            cdc_generation_description_type->deserialize(cql_result->one().get_view("description")));
+    for (const auto& e_val: entries_val) {
+        entries.push_back(get_token_range_description_from_value(e_val));
+    }
 
-        return { std::move(entries) };
-    });
+    co_return std::make_optional<cdc::topology_description>(std::move(entries));
 }
 
 future<>
@@ -528,6 +531,7 @@ system_distributed_keyspace::insert_cdc_generation(
     const size_t L = 60'000'000;
     const auto mutation_size_threshold = std::max(size_t(1), L / (num_replicas * concurrency));
 
+    auto permit = make_service_permit(_qp.start_operation());
     auto s = _qp.db().real_database().find_schema(
         system_distributed_keyspace::NAME_EVERYWHERE, system_distributed_keyspace::CDC_GENERATIONS_V2);
     auto ms = co_await cdc::get_cdc_generation_mutations_v2(s, id, desc, mutation_size_threshold, api::new_timestamp());
@@ -537,7 +541,7 @@ system_distributed_keyspace::insert_cdc_generation(
             db::consistency_level::ALL,
             db::timeout_clock::now() + 60s,
             nullptr, // trace_state
-            empty_service_permit(),
+            permit,
             db::allow_per_partition_rate_limit::no,
             false // raw_counters
         );
@@ -626,6 +630,7 @@ system_distributed_keyspace::create_cdc_desc(
         context ctx) {
     using namespace std::chrono_literals;
 
+    auto permit = make_service_permit(_qp.start_operation());
     auto ms = co_await get_cdc_streams_descriptions_v2_mutation(_qp.db().real_database(), time, desc);
     co_await max_concurrent_for_each(ms, 20, [&] (mutation& m) -> future<> {
         // We use the storage_proxy::mutate API since CQL is not the best for handling large batches.
@@ -634,17 +639,18 @@ system_distributed_keyspace::create_cdc_desc(
             quorum_if_many(ctx.num_token_owners),
             db::timeout_clock::now() + 30s,
             nullptr, // trace_state
-            empty_service_permit(),
+            permit,
             db::allow_per_partition_rate_limit::no,
             false // raw_counters
         );
     });
 
     // Commit the description.
+    auto q_state = internal_distributed_query_state(_qp);
     co_await _qp.execute_internal(
             format("INSERT INTO {}.{} (key, time) VALUES (?, ?)", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
+            q_state,
             { CDC_TIMESTAMPS_KEY, time },
             cql3::query_processor::cache_internal::no).discard_result();
 }
@@ -653,6 +659,8 @@ future<bool>
 system_distributed_keyspace::cdc_desc_exists(
         db_clock::time_point streams_ts,
         context ctx) {
+    auto permit = make_service_permit(_qp.start_operation());
+
     // Reading from this table on a freshly upgraded node that is the first to announce the CDC_TIMESTAMPS
     // schema would most likely result in replicas refusing to return data, telling the node that they can't
     // find the schema. Indeed, it takes some time for the nodes to synchronize their schema; schema is
@@ -678,7 +686,7 @@ system_distributed_keyspace::cdc_desc_exists(
             quorum_if_many(ctx.num_token_owners),
             db::timeout_clock::now() + 10s,
             nullptr, // trace_state
-            empty_service_permit(),
+            permit,
             db::allow_per_partition_rate_limit::no,
             false // raw_counters
         );
@@ -687,10 +695,11 @@ system_distributed_keyspace::cdc_desc_exists(
     }
 
     // At this point replicas know the schema, we can perform the actual read...
+    auto q_state = internal_distributed_query_state(_qp);
     co_return co_await _qp.execute_internal(
             format("SELECT time FROM {}.{} WHERE key = ? AND time = ?", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
+            q_state,
             { CDC_TIMESTAMPS_KEY, streams_ts },
             cql3::query_processor::cache_internal::no
     ).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) -> bool {
@@ -700,10 +709,11 @@ system_distributed_keyspace::cdc_desc_exists(
 
 future<std::map<db_clock::time_point, cdc::streams_version>> 
 system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_older_than, context ctx) {
+    auto q_state = internal_distributed_query_state(_qp);
     auto timestamps_cql = co_await _qp.execute_internal(
             format("SELECT time FROM {}.{} WHERE key = ?", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
+            q_state,
             { CDC_TIMESTAMPS_KEY },
             cql3::query_processor::cache_internal::no);
 
@@ -721,11 +731,11 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
     }
 
     std::map<db_clock::time_point, cdc::streams_version> result;
-    co_await max_concurrent_for_each(first, timestamps.rend(), 5, [this, &ctx, &result] (db_clock::time_point ts) -> future<> {
+    co_await max_concurrent_for_each(first, timestamps.rend(), 5, [this, &ctx, &result, &q_state] (db_clock::time_point ts) -> future<> {
         auto streams_cql = co_await _qp.execute_internal(
                 format("SELECT streams FROM {}.{} WHERE time = ?", NAME, CDC_DESC_V2),
                 quorum_if_many(ctx.num_token_owners),
-                internal_distributed_query_state(),
+                q_state,
                 { ts },
                 cql3::query_processor::cache_internal::no);
 
@@ -743,10 +753,11 @@ system_distributed_keyspace::cdc_get_versioned_streams(db_clock::time_point not_
 
 future<db_clock::time_point> 
 system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
+    auto q_state = internal_distributed_query_state(_qp);
     auto timestamp_cql = co_await _qp.execute_internal(
             format("SELECT time FROM {}.{} WHERE key = ? limit 1", NAME, CDC_TIMESTAMPS),
             quorum_if_many(ctx.num_token_owners),
-            internal_distributed_query_state(),
+            q_state,
             { CDC_TIMESTAMPS_KEY },
             cql3::query_processor::cache_internal::no);
 
@@ -787,7 +798,8 @@ future<qos::service_levels_info> system_distributed_keyspace::get_service_level(
 
 future<> system_distributed_keyspace::set_service_level(sstring service_level_name, qos::service_level_options slo) const {
     static sstring prepared_query = format("INSERT INTO {}.{} (service_level) VALUES (?);", NAME, SERVICE_LEVELS);
-    co_await _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no);
+    auto q_state = internal_distributed_query_state(_qp);
+    co_await _qp.execute_internal(prepared_query, db::consistency_level::ONE, q_state, {service_level_name}, cql3::query_processor::cache_internal::no);
     auto to_data_value = [&] (const qos::service_level_options::timeout_type& tv) {
         return std::visit(overloaded_functor {
             [&] (const qos::service_level_options::unset_marker&) {
@@ -821,21 +833,22 @@ future<> system_distributed_keyspace::set_service_level(sstring service_level_na
             : data_value(qos::service_level_options::to_string(slo.workload));
     co_await _qp.execute_internal(format("UPDATE {}.{} SET timeout = ?, workload_type = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
                 db::consistency_level::ONE,
-                internal_distributed_query_state(),
+                q_state,
                 {to_data_value(slo.timeout),
                     workload,
                     service_level_name},
                 cql3::query_processor::cache_internal::no);
     co_await _qp.execute_internal(format("UPDATE {}.{} SET shares = ? WHERE service_level = ?;", NAME, SERVICE_LEVELS),
                 db::consistency_level::ONE,
-                internal_distributed_query_state(),
+                q_state,
                 {to_data_value_g(slo.shares), service_level_name},
                 cql3::query_processor::cache_internal::no);
 }
 
 future<> system_distributed_keyspace::drop_service_level(sstring service_level_name) const {
     static sstring prepared_query = format("DELETE FROM {}.{} WHERE service_level= ?;", NAME, SERVICE_LEVELS);
-    return _qp.execute_internal(prepared_query, db::consistency_level::ONE, internal_distributed_query_state(), {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
+    auto q_state = internal_distributed_query_state(_qp);
+    co_await _qp.execute_internal(prepared_query, db::consistency_level::ONE, q_state, {service_level_name}, cql3::query_processor::cache_internal::no).discard_result();
 }
 
 }
