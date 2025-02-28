@@ -129,6 +129,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
     locator::load_stats_ptr _tablet_load_stats;
+    std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
     // FIXME: make frequency per table in order to reduce work in each iteration.
     //  Bigger tables will take longer to be resized. similar-sized tables can be batched into same iteration.
@@ -2962,6 +2963,7 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
     static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
     std::unordered_map<table_id, size_t> total_replicas;
+    bool table_load_stats_invalid = false;
 
     for (auto& [dc, nodes] : tm->get_datacenter_token_owners_nodes()) {
         locator::load_stats dc_stats;
@@ -2986,7 +2988,15 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
             auto sub = _as.subscribe(request_abort);
 
             locator::load_stats node_stats;
-            if (_feature_service.tablet_load_stats_v2) {
+            if (!_gossiper.is_alive(dst)) {
+                if (_load_stats_per_node.contains(dst)) {
+                    node_stats = _load_stats_per_node[dst];
+                } else {
+                    rtlogger.debug("raft topology: Unable to refresh table load on {} because it's down.", dst);
+                    table_load_stats_invalid = true;
+                    co_return;
+                }
+            } else if (_feature_service.tablet_load_stats_v2) {
                 node_stats = co_await ser::storage_service_rpc_verbs::send_table_load_stats(&_messaging,
                                                                                             dst,
                                                                                             as,
@@ -2999,6 +3009,7 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
                                                                                       dst_server));
             }
 
+            _load_stats_per_node[dst] = node_stats;
             dc_stats += node_stats;
         });
 
@@ -3037,6 +3048,11 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
         // the average tablet size by dividing total size by tablet count.
         table_load_stats.size_in_bytes /= table_total_replicas;
     }
+
+    if (table_load_stats_invalid) {
+        stats.tables.clear();
+    }
+
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 
     _tablet_load_stats = make_lw_shared<const locator::load_stats>(std::move(stats));
