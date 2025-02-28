@@ -1477,8 +1477,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                            }
                         }
                         if (!dst_opt) {
-                            throw std::runtime_error(fmt::format("Could not find host to perform repair tablet={} replica={} hosts_filter={} dcs_filter={}",
-                                    tablet, tinfo.replicas, hosts_filter, dcs_filter));
+                            co_return;
                         }
                         auto dst = dst_opt.value();
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
