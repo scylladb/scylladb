@@ -54,6 +54,18 @@ static auto syslog_address_helper(const db::config& cfg)
         : unix_domain_addr(_PATH_LOG);
 }
 
+static std::string json_escape(std::string_view str) {
+    std::string result;
+    result.reserve(str.size() * 1.2);
+    for (auto c : str) {
+        if (c == '"' || c == '\\') {
+            result.push_back('\\');
+        }
+        result.push_back(c);
+    }
+    return result;
+}
+
 }
 
 audit_syslog_storage_helper::audit_syslog_storage_helper(cql3::query_processor& qp, service::migration_manager&) :
@@ -93,7 +105,7 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
-    sstring msg = seastar::format("<{}>{:%h %e %T} scylla-audit: \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\", \"{}\"",
+    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}" category="{}" cl="{}" error="{}" keyspace="{}" query="{}" client_ip="{}" table="{}" username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
@@ -101,7 +113,7 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
                                     cl,
                                     (error ? "true" : "false"),
                                     audit_info->keyspace(),
-                                    audit_info->query(),
+                                    json_escape(audit_info->query()),
                                     client_ip,
                                     audit_info->table(),
                                     username);
@@ -117,13 +129,13 @@ future<> audit_syslog_storage_helper::write_login(const sstring& username,
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
-    sstring msg = seastar::format("<{}>{:%h %e %T} scylla-audit: \"{}\", \"AUTH\", \"\", \"\", \"\", \"\", \"{}\", \"{}\", \"{}\"",
+    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="AUTH", cl="", error="{}", keyspace="", query="", client_ip="{}", table="", username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
+                                    (error ? "true" : "false"),
                                     client_ip,
-                                    username,
-                                    (error ? "true" : "false"));
+                                    username);
 
     co_await syslog_send_helper(_sender, _syslog_address, msg.c_str());
 }
