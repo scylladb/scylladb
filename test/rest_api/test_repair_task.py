@@ -104,7 +104,7 @@ def test_repair_task_progress(cql, this_dc, rest_api):
                         for child_ident in status["children_ids"]:
                             # Check if task state is correct.
                             child_status = get_task_status(rest_api, child_ident["task_id"])
-                            assert child_status["state"] == "running", "Incorrect task progress"
+                            assert child_status["state"] in ["created", "running"], "Incorrect task state"
                             assert child_status["progress_completed"] * 2 <= child_status["progress_total"], "Incorrect task progress"
 
                         resp = rest_api.send("POST", f"v2/error_injection/injection/{injection}/message")

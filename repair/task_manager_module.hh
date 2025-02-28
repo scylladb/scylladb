@@ -175,7 +175,9 @@ private:
     std::optional<semaphore> _user_ranges_parallelism;
     uint64_t _ranges_complete = 0;
     gc_clock::time_point _flush_time;
+    optimized_optional<seastar::abort_source::subscription> _update_erm_callback;
 public:
+    bool tablet_repair = false;
     bool sched_by_scheduler = false;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
@@ -194,6 +196,7 @@ public:
             bool small_table_optimization,
             std::optional<int> ranges_parallelism,
             gc_clock::time_point flush_time,
+            bool tablet_repair = false,
             bool sched_by_scheduler = false);
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
@@ -221,7 +224,13 @@ public:
     size_t ranges_size() const noexcept;
 
     virtual future<> release_resources() noexcept override;
+private:
+    future<> maybe_update_erm(tasks::task_manager::module_ptr module, replica::database& db, tasks::task_id task_id, table_id table_id,
+        std::unordered_set<locator::tablet_id> involved_tablets) noexcept;
+    // Requires task to have been registered in task manager.
+    void start_erm_update_backround_fiber() noexcept;
 protected:
+    void on_task_registered() override;
     future<> do_repair_ranges();
     virtual future<tasks::task_manager::task::progress> get_progress() const override;
     future<> run() override;
