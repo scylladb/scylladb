@@ -1083,8 +1083,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 mm_notifier.stop().get();
             });
 
-            supervisor::notify("starting per-shard database core");
-
             sst_dir_semaphore.start(cfg->initial_sstable_loading_concurrency()).get();
             auto stop_sst_dir_sem = defer_verbose_shutdown("sst_dir_semaphore", [&sst_dir_semaphore] {
                 sst_dir_semaphore.stop().get();
@@ -1264,6 +1262,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // because it obtains the list of pre-existing segments for replay, which must
             // not include reserve segments created by active commitlogs.
             db.local().init_commitlog().get();
+            supervisor::notify("starting per-shard database core");
             db.invoke_on_all(&replica::database::start, std::ref(sl_controller)).get();
 
             ::sigquit_handler sigquit_handler(db);
