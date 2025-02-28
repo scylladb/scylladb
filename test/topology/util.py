@@ -243,6 +243,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
         assert len(topo_res) != 0
 
         for row in topo_res:
+            num_tokens = 0 if row.tokens is None else len(row.tokens)
             if row.host_id in live_host_ids:
                 assert row.datacenter is not None
                 assert row.ignore_msb is not None
@@ -252,12 +253,12 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
                 assert row.release_version is not None
                 assert row.supported_features is not None
                 assert row.shard_count is not None
+                assert num_tokens == row.num_tokens
             else:
                 assert row.host_id is not None
                 assert row.host_id in ignored_host_ids
                 assert row.node_state == "left"
-
-            assert (0 if row.tokens is None else len(row.tokens)) == row.num_tokens
+                assert num_tokens == 0
 
         live_topo_res = [row for row in topo_res if row.host_id in live_host_ids]
 
