@@ -399,6 +399,13 @@ tablet_replica tablet_map::get_primary_replica_within_dc(tablet_id id, const top
     return replicas.at(size_t(id) % replicas.size());
 }
 
+std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
+    const auto replicas = get_tablet_info(id).replicas | std::views::filter([&] (const auto& tr) {
+        return tablet_task_info.selected_by_filters(tr, topo);
+    }) | std::ranges::to<tablet_replica_set>();
+    return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
+}
+
 future<std::vector<token>> tablet_map::get_sorted_tokens() const {
     std::vector<token> tokens;
     tokens.reserve(tablet_count());

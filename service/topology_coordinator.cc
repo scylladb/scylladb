@@ -1459,23 +1459,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
                         auto dcs_filter = tinfo.repair_task_info.repair_dcs_filter;
                         const auto& topo = _db.get_token_metadata().get_topology();
-                        std::optional<locator::host_id> dst_opt;
+                        locator::host_id dst;
                         if (hosts_filter.empty() && dcs_filter.empty()) {
                             auto primary = tmap.get_primary_replica(gid.tablet);
-                            dst_opt = primary.host;
+                            dst = primary.host;
                         } else {
-                           for (auto& replica : tinfo.replicas) {
-                                if (!tinfo.repair_task_info.selected_by_filters(replica, topo)) {
-                                    continue;
-                                }
-                                dst_opt = replica.host;
-                                break;
-                           }
+                            auto dst_opt = tmap.maybe_get_selected_replica(gid.tablet, topo, tinfo.repair_task_info);
+                            if (!dst_opt) {
+                                co_return;
+                            }
+                            dst = dst_opt.value().host;
                         }
-                        if (!dst_opt) {
-                            co_return;
-                        }
-                        auto dst = dst_opt.value();
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
                                 dst, _as, raft::server_id(dst.uuid()), gid);
