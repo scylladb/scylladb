@@ -3520,7 +3520,10 @@ system_keyspace::~system_keyspace() {
 }
 
 future<> system_keyspace::shutdown() {
-    _db.unplug_system_keyspace();
+    if (!_shutdown) {
+        _shutdown = true;
+        _db.unplug_system_keyspace();
+    }
     co_return;
 }
 
