@@ -220,6 +220,14 @@ def get_repair_row_from_disk(server):
 
     return row_num
 
+def check_repairs(row_num_before: list[int], row_num_after: list[int], expected_repairs: list[int]):
+    assert len(row_num_before) == len(row_num_after)
+    for i, val_before in enumerate(row_num_before):
+        if i in expected_repairs:
+            assert val_before < row_num_after[i]
+        else:
+            assert val_before == row_num_after[i]
+
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_repair_hosts_filter(manager: ManagerClient):
@@ -247,9 +255,7 @@ async def test_tablet_repair_hosts_filter(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_filter())
 
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
-    assert row_num_before[0] < row_num_after[0]
-    assert row_num_before[1] < row_num_after[1]
-    assert row_num_before[2] == row_num_after[2]
+    check_repairs(row_num_before, row_num_after, [0, 1])
 
 async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
     servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
@@ -292,9 +298,7 @@ async def test_tablet_repair_dcs_filter(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_filter())
 
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
-    assert row_num_before[0] < row_num_after[0]
-    assert row_num_before[1] < row_num_after[1]
-    assert row_num_before[2] == row_num_after[2]
+    check_repairs(row_num_before, row_num_after, [0, 1])
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -324,6 +328,4 @@ async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_filter())
 
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
-    assert row_num_before[0] < row_num_after[0]
-    assert row_num_before[1] == row_num_after[1]
-    assert row_num_before[2] < row_num_after[2]
+    check_repairs(row_num_before, row_num_after, [0, 2])
