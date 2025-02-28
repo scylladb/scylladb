@@ -134,6 +134,43 @@ function get_json_field {
     echo $field_val
 }
 
+function get_repo_name() {
+    local branch=$1
+    local sha1=$2
+    local repo_name
+    local remote_repos
+
+    pushd ${SCYLLA_REPO_PATH} > /dev/null
+
+    # First, try to find the repo from local information
+    repo_name=$(git branch -r --contains "$sha1" 2>/dev/null | \
+        sed -n 's|^ *\(.*\)/.*$|\1|p' | \
+        head -n 1)
+    if [ -n "$repo_name" ]; then
+        echo "$repo_name"
+        return 0
+    fi
+
+    # If not found locally, try fetching from each remote
+    remote_repos=$(git remote -v | awk "/scylladb\/${PRODUCT}.*fetch/{ print \$1 }")
+    remote_name=$(while read -r remote; do
+        git fetch -q "$remote" "$branch" 2>/dev/null
+        if git branch -r --contains "$sha1" | grep -q "$remote"; then
+            echo "$remote"
+            break
+        fi
+    done <<< "$remote_repos")
+
+    popd > /dev/null
+
+    if [ -n "$remote_name" ]; then
+        echo "$remote_name"
+    else
+        echo "error: could not determine remote repository for SHA1 $sha1" >& 2
+        return 1
+    fi
+}
+
 for required in eu-unstrip jq curl git; do
     if ! type $required >& /dev/null; then
         echo "error: missing required program $required, please install first" >&2
@@ -335,12 +372,12 @@ then
     REMOTE_REPO_NAME=origin
 else
     log "${PRODUCT}.git already cloned"
-    REMOTE_REPO_NAME=$(cd ${SCYLLA_REPO_PATH}; git remote -v | awk "/scylladb\/${PRODUCT}.*fetch/{ print \$1 }")
+    REMOTE_REPO_NAME=$(get_repo_name ${BRANCH} ${COMMIT_HASH})
 fi
 
 # We do the checkout unconditionally, it is cheap anyway.
 pushd ${SCYLLA_REPO_PATH} > /dev/null
-git fetch -q ${REMOTE_REPO_NAME} ${BRANCH}
+# we should already have the commit in the local repo, so no need to fetch it
 git checkout -q ${COMMIT_HASH}
 # Skip the other submodules, they are not needed for debugging
 git submodule -q sync
