@@ -267,7 +267,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         if (cleanup_running || topo.requests.empty()) {
             // Ether there is no requests or there is a live node that runs cleanup. Wait for it to complete.
-            return std::move(guard);
+            return guard;
         }
 
         std::optional<std::pair<raft::server_id, topology_request>> next_req;

@@ -253,7 +253,7 @@ public:
             if (!less(rt.position(), range_start) && !less(range_end, rt.end_position())) {
                 // Fully enclosed by this range.
                 SCYLLA_ASSERT(!first);
-                return std::move(rt);
+                return rt;
             }
             auto this_range_rt = rt;
             if (this_range_rt.trim(_schema, range_start, range_end)) {

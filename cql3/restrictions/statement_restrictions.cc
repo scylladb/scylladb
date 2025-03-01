@@ -149,7 +149,7 @@ struct intersection_visitor {
         value_list common;
         common.reserve(std::max(a.size(), b.size()));
         boost::set_intersection(a, b, back_inserter(common), type->as_less_comparator());
-        return std::move(common);
+        return common;
     }
 
     value_set operator()(const interval<managed_bytes>& a, const value_list& b) const {
