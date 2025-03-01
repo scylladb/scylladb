@@ -337,6 +337,7 @@ add_scylla_test(combined_tests
     sstable_set_test.cc
     statement_restrictions_test.cc
     storage_proxy_test.cc
+    streaming_controller_test.cc
     tablets_test.cc
     tracing_test.cc
     user_function_test.cc

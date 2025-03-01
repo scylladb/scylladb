@@ -1203,6 +1203,7 @@ scylla_core = (['message/messaging_service.cc',
                 'node_ops/task_manager_module.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
+                'service/streaming_controller.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )
@@ -1528,6 +1529,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/sstable_set_test.cc',
     'test/boost/statement_restrictions_test.cc',
     'test/boost/storage_proxy_test.cc',
+    'test/boost/streaming_controller_test.cc',
     'test/boost/tablets_test.cc',
     'test/boost/tracing_test.cc',
     'test/boost/user_function_test.cc',
