@@ -105,6 +105,7 @@ async def test_service_levels_upgrade(request, manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
+    # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
     servers = await manager.servers_add(3)
 
     logging.info("Waiting until driver connects to every server")

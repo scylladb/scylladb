@@ -184,6 +184,7 @@ async def test_auth_v2_migration(request, manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_auth_v2_during_recovery(manager: ManagerClient):
+    # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
     servers = await manager.servers_add(3)
     cql, hosts = await manager.get_ready_cql(servers)
 
