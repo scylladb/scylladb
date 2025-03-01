@@ -90,8 +90,8 @@ class TestSuite(ABC):
 
     # All existing test suites, one suite per path/mode.
     suites: Dict[str, 'TestSuite'] = dict()
-    artifacts = ArtifactRegistry()
-    hosts = HostRegistry()
+    artifacts: ArtifactRegistry
+    hosts: HostRegistry
     FLAKY_RETRIES = 5
     _next_id = collections.defaultdict(int) # (test_key -> id)
 
@@ -377,6 +377,11 @@ class Test:
             system_out.text = read_log(self.log_filename)
 
 
+def init_testsuite_globals() -> None:
+    """Create global objects required for a test run."""
+
+    TestSuite.artifacts = ArtifactRegistry()
+    TestSuite.hosts = HostRegistry()
 
 
 def read_log(log_filename: pathlib.Path) -> str:
@@ -478,6 +483,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                      # test for directory to store test temporary data.
                      TMPDIR=os.path.join(options.tmpdir, test.mode),
                      SCYLLA_TEST_ENV='yes',
+                     SCYLLA_TEST_RUNNER="test.py",
                      **env,
                      )
             )
