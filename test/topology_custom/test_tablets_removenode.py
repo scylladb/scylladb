@@ -30,6 +30,23 @@ async def run_async_cl_all(cql, query: str):
 
 
 @pytest.mark.asyncio
+async def test_removenode_with_coordinator_restart(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = ['--logger-log-level', 'load_balancer=debug']
+
+    servers = await manager.servers_add(3, cmdline=cmdline)
+    cql = manager.get_cql()
+
+    ks1 = await create_keyspace(cql, 3, rf=1)
+    await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
+
+    logger.info('Removing a node')
+    await manager.server_stop(servers[2].server_id)
+    await manager.server_restart(servers[0].server_id) # topo coordinator
+    await manager.remove_node(servers[1].server_id, servers[2].server_id)
+
+
+@pytest.mark.asyncio
 async def test_replace(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [

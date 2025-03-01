@@ -58,6 +58,7 @@
 #include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
 #include "utils/assert.hh"
+#include "utils/only_on_shard0.hh"
 #include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
@@ -903,7 +904,8 @@ private:
                 std::ref(_topology_state_machine),
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
-                compression_dict_updated_callback
+                compression_dict_updated_callback,
+                only_on_shard0(&*_disk_space_monitor_shard0)
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
