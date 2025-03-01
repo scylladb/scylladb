@@ -127,19 +127,17 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         await make_server()
 
         if fail_stage in ["cleanup_target", "revert_migration"]:
-            # we'll stop 2 servers, group0 quorum should be there
+            # we'll stop 2 servers, group0 quorum should be there - we need five
+            # nodes to have three remaining
             #
-            # it seems that we need five nodes to have three remaining, but
-            # when removing the 1st node it will be marked as non-voter so to
-            # remove the 2nd node just two remaining will be enough
-            #
-            # also this extra node will be used to call removenode on
+            # also one of the extra nodes will be used to call removenode on
             # removing the 1st node will wait for the operation to go through
             # raft log, and it will not finish before tablet migration. An
             # attempt to remove the 2nd node, to make cleanup_target stage
             # go ahead, will step on the legacy API lock on storage_service,
             # so we need to ask some other node to do it
-            await make_server()
+            for _ in range(2):
+                await make_server()
 
         logger.info(f"Cluster is [{host_ids}]")
 
