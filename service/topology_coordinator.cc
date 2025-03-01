@@ -2284,6 +2284,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     muts.emplace_back(rtbuilder.build());
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                    "bootstrap: read fence completed");
+                    // Make sure the load balancer knows the capacity for the new node immediately.
+                    (void)_tablet_load_stats_refresh.trigger().handle_exception([] (auto ep) {
+                        rtlogger.warn("Error during tablet load stats refresh: {}", ep);
+                    });
                     }
                     break;
                 case node_state::removing: {
