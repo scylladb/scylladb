@@ -10,6 +10,7 @@
 // Helper functions for raft tests
 //
 
+#include "raft/raft.hh"
 #include "utils/assert.hh"
 #include <seastar/core/sharded.hh>
 
@@ -214,7 +215,7 @@ raft::server_address server_addr_from_id(raft::server_id id) {
 }
 
 raft::config_member config_member_from_id(raft::server_id id) {
-    return raft::config_member{server_addr_from_id(id), true};
+    return raft::config_member{server_addr_from_id(id), raft::can_vote::yes};
 }
 
 raft::configuration config_from_ids(std::vector<raft::server_id> ids) {

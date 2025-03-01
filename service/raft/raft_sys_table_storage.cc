@@ -13,6 +13,7 @@
 #include "utils/UUID.hh"
 #include "utils/error_injection.hh"
 
+#include "raft/raft.hh"
 #include "serializer.hh"
 #include "idl/raft_storage.dist.hh"
 #include "serializer_impl.hh"
@@ -144,7 +145,7 @@ future<raft::snapshot_descriptor> raft_sys_table_storage::load_snapshot_descript
         cfg_part.insert(
             raft::config_member{
                 raft::server_address{raft::server_id{row.get_as<utils::UUID>("server_id")}, {}},
-                row.get_as<bool>("can_vote")}
+                row.get_as<raft::can_vote>("can_vote")}
         );
     }
 

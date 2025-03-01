@@ -9,6 +9,7 @@
 #include <source_location>
 #include <fmt/ranges.h>
 
+#include "raft/raft.hh"
 #include "mutation/async_utils.hh"
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"
@@ -600,13 +601,13 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
     group0_log.info("server {} joined group 0 with group id {}", my_id, group0_id);
 }
 
-shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(can_vote can_vote) {
+shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(raft::can_vote can_vote) {
     struct legacy_handshaker : public group0_handshaker {
         service::raft_group0& _group0;
         netw::messaging_service& _ms;
-        service::can_vote _can_vote;
+        raft::can_vote _can_vote;
 
-        legacy_handshaker(service::raft_group0& group0, netw::messaging_service& ms, service::can_vote can_vote)
+        legacy_handshaker(service::raft_group0& group0, netw::messaging_service& ms, raft::can_vote can_vote)
             : _group0(group0)
             , _ms(ms)
             , _can_vote(can_vote) {
@@ -858,16 +859,16 @@ future<> raft_group0::become_nonvoter(abort_source& as, std::optional<raft_timeo
     auto my_id = load_my_id();
     group0_log.info("becoming a non-voter (my id = {})...", my_id);
 
-    co_await modify_raft_voter_status({my_id}, can_vote::no, as, timeout);
+    co_await modify_raft_voter_status({my_id}, raft::can_vote::no, as, timeout);
     group0_log.info("became a non-voter.", my_id);
 }
 
-future<> raft_group0::set_voter_status(raft::server_id node, can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
+future<> raft_group0::set_voter_status(raft::server_id node, raft::can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
     co_return co_await set_voters_status({node}, can_vote, as, timeout);
 }
 
 future<> raft_group0::set_voters_status(
-        const std::unordered_set<raft::server_id>& nodes, can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
+        const std::unordered_set<raft::server_id>& nodes, raft::can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
     if (!(co_await raft_upgrade_complete())) {
         on_internal_error(group0_log, "called set_voter_status before Raft upgrade finished");
     }
@@ -969,12 +970,12 @@ future<bool> raft_group0::wait_for_raft() {
 }
 
 future<> raft_group0::modify_raft_voter_status(
-        const std::unordered_set<raft::server_id>& ids, can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
+        const std::unordered_set<raft::server_id>& ids, raft::can_vote can_vote, abort_source& as, std::optional<raft_timeout> timeout) {
     co_await run_op_with_retry(as, [this, &ids, timeout, can_vote, &as]() -> future<operation_result> {
         std::vector<raft::config_member> add;
         add.reserve(ids.size());
         std::transform(ids.begin(), ids.end(), std::back_inserter(add), [can_vote](raft::server_id id) {
-            return raft::config_member{{id, {}}, static_cast<bool>(can_vote)};
+            return raft::config_member{{id, {}}, can_vote};
         });
 
         try {
@@ -1698,7 +1699,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
-        auto handshaker = make_legacy_handshaker(can_vote::yes); // Voter
+        auto handshaker = make_legacy_handshaker(raft::can_vote::yes); // Voter
         co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks, topology_change_enabled, join_node_request_params{});
     } else {
         upgrade_log.info(
