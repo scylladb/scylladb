@@ -220,11 +220,24 @@ def get_repair_row_from_disk(server):
 
     return row_num
 
+def check_repairs(row_num_before: list[int], row_num_after: list[int], expected_repairs: list[int]):
+    assert len(row_num_before) == len(row_num_after)
+    for i, val_before in enumerate(row_num_before):
+        if i in expected_repairs:
+            assert val_before < row_num_after[i]
+        else:
+            assert val_before == row_num_after[i]
+
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-async def test_tablet_repair_hosts_filter(manager: ManagerClient):
+@pytest.mark.parametrize("included_host_count", [2, 1, 0])
+async def test_tablet_repair_hosts_filter(manager: ManagerClient, included_host_count):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
-    hosts_filter = f"{hosts[0].host_id},{hosts[1].host_id}"
+    hosts_filter = "00000000-0000-0000-0000-000000000000"
+    if included_host_count == 1:
+        hosts_filter = f"{hosts[0].host_id}"
+    elif included_host_count == 2:
+        hosts_filter = f"{hosts[0].host_id},{hosts[1].host_id}"
 
     row_num_before = [get_repair_row_from_disk(server) for server in servers]
 
@@ -247,9 +260,7 @@ async def test_tablet_repair_hosts_filter(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_filter())
 
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
-    assert row_num_before[0] < row_num_after[0]
-    assert row_num_before[1] < row_num_after[1]
-    assert row_num_before[2] == row_num_after[2]
+    check_repairs(row_num_before, row_num_after, [0, 1] if included_host_count == 2 else [])
 
 async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
     servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
@@ -267,9 +278,10 @@ async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraS
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-async def test_tablet_repair_dcs_filter(manager: ManagerClient):
+@pytest.mark.parametrize("dcs_filter_and_res", [("DC1", [0, 1]), ("DC2", []), ("DC3", [])])
+async def test_tablet_repair_dcs_filter(manager: ManagerClient, dcs_filter_and_res):
+    dcs_filter, expected_repairs = dcs_filter_and_res
     servers, cql, hosts, ks, table_id = await prepare_multi_dc_repair(manager)
-    dcs_filter = "DC1"
 
     row_num_before = [get_repair_row_from_disk(server) for server in servers]
 
@@ -292,9 +304,7 @@ async def test_tablet_repair_dcs_filter(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_filter())
 
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
-    assert row_num_before[0] < row_num_after[0]
-    assert row_num_before[1] < row_num_after[1]
-    assert row_num_before[2] == row_num_after[2]
+    check_repairs(row_num_before, row_num_after, expected_repairs)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -324,6 +334,4 @@ async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
     await asyncio.gather(repair_task(), check_filter())
 
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
-    assert row_num_before[0] < row_num_after[0]
-    assert row_num_before[1] == row_num_after[1]
-    assert row_num_before[2] < row_num_after[2]
+    check_repairs(row_num_before, row_num_after, [0, 2])

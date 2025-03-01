@@ -2454,26 +2454,15 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     for (auto& r : replicas) {
         auto shard = r.shard;
         if (r.host != myhostid) {
-            if (!hosts_filter.empty()) {
+            if (!hosts_filter.empty() || !dcs_filter.empty()) {
                 auto dc = topology.get_datacenter(r.host);
-                if (!hosts_filter.contains(r.host)) {
+                if (!info.repair_task_info.selected_by_filters(r, topology)) {
                     rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} skipped",
-                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
+                        id.uuid(), r.host, dc, hosts_filter, dcs_filter);
                     continue;
                 } else {
                     rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} ok",
-                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
-                }
-            }
-            if (!dcs_filter.empty()) {
-                auto dc = topology.get_datacenter(r.host);
-                if (!dcs_filter.contains(dc)) {
-                    rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} skipped",
-                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
-                    continue;
-                } else {
-                    rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} ok",
-                            id.uuid(), r.host, dc, hosts_filter, dcs_filter);
+                        id.uuid(), r.host, dc, hosts_filter, dcs_filter);
                 }
             }
             nodes.push_back(r.host);
