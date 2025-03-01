@@ -2912,7 +2912,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     auto tm = get_token_metadata_ptr();
     auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
     if (plan.empty()) {
-        rtlogger.debug("Tablets are balanced");
+        rtlogger.debug("Tablet load balancer did not make any plan");
         co_return false;
     }
 
