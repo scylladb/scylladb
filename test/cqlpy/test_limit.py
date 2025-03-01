@@ -28,7 +28,8 @@
 #############################################################################
 
 import pytest
-from .util import unique_key_int, new_test_table
+from .util import unique_key_int, new_test_table, new_function, new_aggregate
+from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -148,3 +149,37 @@ def test_limit_single_partition_scan_with_tombstones(cql, table1):
         if i%2 == 0:
             cql.execute(dstmt, [i])
     assert [1,3,5,7] == [x.c for x in cql.execute(f'SELECT c from {table1} WHERE p={p} LIMIT 4')]
+
+# Check that PER PARTITION LIMIT is not allowed with aggregate queries.
+# Reproduces #9879
+def test_limit_aggregate_queries(cql, table1):
+    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT is not allowed with aggregate queries"):
+        cql.execute(f"SELECT count(*) FROM {table1} PER PARTITION LIMIT 1")
+    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT is not allowed with aggregate queries"):
+        cql.execute(f"SELECT min(c) FROM {table1} PER PARTITION LIMIT 1")
+    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT is not allowed with aggregate queries"):
+        cql.execute(f"SELECT max(c) FROM {table1} PER PARTITION LIMIT 1")
+    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT is not allowed with aggregate queries"):
+        cql.execute(f"SELECT avg(c) FROM {table1} PER PARTITION LIMIT 1")
+    with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT is not allowed with aggregate queries"):
+        cql.execute(f"SELECT sum(c) FROM {table1} PER PARTITION LIMIT 1")
+
+# Test the PER PARTITION LIMIT with a UDA
+# This aggregate function multiplies all the values together
+# We first ensure that the aggregate works correctly for 9!
+# Then we test that the PER PARTITION LIMIT is rejected
+# Reproduces #9879
+def test_limit_aggregate_queries_with_uda(cql, table1, test_keyspace):
+    myproduct_function_body = "(acc bigint, val int) RETURNS NULL ON NULL INPUT RETURNS bigint LANGUAGE lua AS 'return acc * val;'"
+    with new_function(cql, test_keyspace, myproduct_function_body) as myproduct_function:
+        aggregate_body = f"(int) SFUNC {myproduct_function} STYPE bigint INITCOND 1"
+        with new_aggregate(cql, test_keyspace, aggregate_body) as myproduct:
+            cql.execute(f"TRUNCATE TABLE {table1}")
+            stmt = cql.prepare(f"INSERT INTO {table1} (p, c) VALUES (?, ?)")
+            for i in range(1,10):
+                cql.execute(stmt, [i, i])
+            # assert that the product of all the values is 9!
+            result = cql.execute(f"SELECT {myproduct}(c) FROM {table1}")
+            assert 362880 == list(result)[0][0]
+            with pytest.raises(InvalidRequest, match="PER PARTITION LIMIT is not allowed with aggregate queries"):
+                cql.execute(f"SELECT {myproduct}(c) FROM {table1} PER PARTITION LIMIT 1")
