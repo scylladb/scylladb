@@ -486,7 +486,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 stderr=log,
                 stdout=log,
                 env=test_env,
-                preexec_fn=resource_gather.put_process_to_cgroup,
+                preexec_fn=resource_gather.set_sid,
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test_running_event.set()

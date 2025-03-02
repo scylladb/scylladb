@@ -17,4 +17,4 @@ def pytest_collect_file(file_path: PosixPath, parent: Collector):
     collection, the only difference in execution, and it's covered by facade
     """
     if file_path.suffix == '.cc':
-        return collect_items(file_path, parent, facade=UnitTestFacade(parent.config))
+        return collect_items(file_path, parent, facade=UnitTestFacade(parent.config, gather_metrics=parent.config.getoption('gather_metrics')))
