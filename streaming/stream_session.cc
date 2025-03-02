@@ -33,6 +33,7 @@
 #include "service/topology_guard.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "db/config.hh"
 #include "idl/streaming.dist.hh"
 
 namespace streaming {
@@ -158,6 +159,8 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                                 break;
                             case stream_mutation_fragments_cmd::error:
                                 return make_exception_future<mutation_fragment_opt>(std::runtime_error("Sender failed"));
+                            case stream_mutation_fragments_cmd::abort:
+                                return make_exception_future<mutation_fragment_opt>(rpc::canceled_error());
                             case stream_mutation_fragments_cmd::end_of_stream:
                                 cmd_status->got_end_of_stream = true;
                                 return make_ready_future<mutation_fragment_opt>();
@@ -220,6 +223,13 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     if (try_catch<seastar::rpc::stream_closed>(ex)) {
                         level = seastar::log_level::debug;
                     }
+                    bool aborted = false;
+                    if (auto nested = try_catch<nested_exception>(ex)) {
+                        if (try_catch<rpc::canceled_error>(nested->inner)) {
+                            level = seastar::log_level::info;
+                            aborted = true;
+                        }
+                    }
                     status = -1;
                     // The status code -2 means error and the table is dropped
                     if (db.local_is_initialized() && mm.local_is_initialized() && co_await table_sync_and_check(db.local(), mm.local(), cf_id)) {
@@ -227,7 +237,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                         status = -2;
                     }
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (receive and distribute phase) for ks={}, cf={}, peer={}: {}",
-                            plan_id, s->ks_name(), s->cf_name(), from, ex);
+                        plan_id, s->ks_name(), s->cf_name(), from, aborted?"Streaming aborted":format("{}",ex));
                 } else {
                     received_partitions = f.get();
                 }
