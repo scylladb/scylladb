@@ -146,6 +146,8 @@ in the same directory as ``scylla.yaml``. You can override this location using t
 
    object-storage-config-file: object-storage-config-file.yaml
 
+.. _aws-s3-configuration:
+
 Configuring AWS S3 access
 -------------------------
 
