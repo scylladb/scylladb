@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "db/view/view_building_worker.hh"
+#include "sstables/shared_sstable.hh"
 #include "utils/assert.hh"
 #include <fmt/std.h>
 #include <seastar/core/coroutine.hh>
@@ -123,7 +125,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
 // Loads SSTables into the main directory (or staging) and returns how many were loaded
 future<size_t>
 distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sharded<replica::database>& db,
-        sharded<db::view::view_builder>& vb, bool needs_view_update, sstring ks, sstring cf) {
+        sharded<db::view::view_builder>& vb, sharded<db::view::view_building_worker>& vbw, bool needs_view_update, sstring ks, sstring cf) {
 
     auto& table = db.local().find_column_family(ks, cf);
     auto new_sstables = std::vector<sstables::shared_sstable>();
@@ -147,23 +149,31 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
         abort();
     });
 
-    co_await coroutine::parallel_for_each(new_sstables, [&vb, &table] (sstables::shared_sstable sst) -> future<> {
-        if (sst->requires_view_building()) {
-            co_await vb.local().register_staging_sstable(sst, table.shared_from_this());
-        }
+    bool any_requires_view_building = std::any_of(new_sstables.begin(), new_sstables.end(), [] (sstables::shared_sstable& sst) {
+        return sst->requires_view_building();
     });
+    if (any_requires_view_building && db.local().find_keyspace(ks).uses_tablets()) {
+        // view building worker scans staging directory on all shards, so one notification is enough
+        co_await vbw.local().notify();
+    } else {
+        co_await coroutine::parallel_for_each(new_sstables, [&vb, &table] (sstables::shared_sstable sst) -> future<> {
+            if (sst->requires_view_building()) {
+                co_await vb.local().register_staging_sstable(sst, table.shared_from_this());
+            }
+        });
+    }
 
     co_return new_sstables.size();
 }
 
 future<>
-distributed_loader::process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sstring ks, sstring cf) {
+distributed_loader::process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sharded<db::view::view_building_worker>& vbw, sstring ks, sstring cf) {
     const auto& rs = db.local().find_keyspace(ks).get_replication_strategy();
     if (rs.is_per_table()) {
         on_internal_error(dblog, "process_upload_dir is not supported with tablets");
     }
 
-    return seastar::async([&db, &vb, ks = std::move(ks), cf = std::move(cf)] {
+    return seastar::async([&db, &vb, &vbw, ks = std::move(ks), cf = std::move(cf)] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get();
 
         sharded<sstables::sstable_directory> directory;
@@ -215,8 +225,8 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         // Move to staging directory to avoid clashes with future uploads. Unique generation number ensures no collisions.
         const bool use_view_update_path = db::view::check_needs_view_update_path(vb.local(), erm->get_token_metadata_ptr(), *global_table, streaming::stream_reason::repair).get();
 
-        size_t loaded = directory.map_reduce0([&db, ks, cf, use_view_update_path, &vb] (sstables::sstable_directory& dir) {
-            return make_sstables_available(dir, db, vb, use_view_update_path, ks, cf);
+        size_t loaded = directory.map_reduce0([&db, ks, cf, use_view_update_path, &vb, &vbw] (sstables::sstable_directory& dir) {
+            return make_sstables_available(dir, db, vb, vbw, use_view_update_path, ks, cf);
         }, size_t(0), std::plus<size_t>()).get();
 
         dblog.info("Loaded {} SSTables", loaded);

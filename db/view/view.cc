@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <optional>
 #include <ranges>
@@ -23,6 +24,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "db/view/view_build_status.hh"
+#include "db/view/view_building_worker.hh"
+#include "dht/i_partitioner_fwd.hh"
+#include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -49,10 +54,19 @@
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
+#include "seastar/core/shard_id.hh"
+#include "seastar/rpc/rpc_types.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/group0_state_machine.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
+#include "timestamp.hh"
+#include "sstables/open_info.hh"
+#include "sstables/sstable_directory.hh"
+#include "sstables/sstables.hh"
 #include "utils/assert.hh"
+#include "utils/disk-error-handler.hh"
 #include "utils/small_vector.hh"
 #include "view_info.hh"
 #include "view_update_checks.hh"
@@ -68,6 +82,7 @@
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
+#include "idl/view.dist.hh"
 
 using namespace std::chrono_literals;
 
@@ -2541,8 +2556,7 @@ static future<> announce_with_raft(
         cql3::query_processor& qp,
         ::service::raft_group0_client& group0_client,
         seastar::abort_source& as,
-        const sstring query_string,
-        std::vector<data_value_or_unset> values,
+        std::function<future<mutation>(api::timestamp_type)> mutation_gen,
         std::string_view description) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -2552,12 +2566,9 @@ static future<> announce_with_raft(
         auto guard = co_await group0_client.start_operation(as);
         auto timestamp = guard.write_timestamp();
 
-        auto muts = co_await qp.get_mutations_internal(
-                query_string,
-                view_builder_query_state(),
-                timestamp,
-                values);
-        std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+        auto mut = co_await mutation_gen(guard.write_timestamp());
+        std::vector<canonical_mutation> cmuts(1);
+        cmuts.emplace_back(std::move(mut));
 
         auto group0_cmd = group0_client.prepare_command(
             ::service::write_mutations{
@@ -2581,12 +2592,10 @@ future<> view_builder::mark_view_build_started(sstring ks_name, sstring view_nam
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
-            const sstring query_string = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)",
-                    db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             auto host_id = _db.get_token_metadata().get_my_id();
-            co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
-                    {std::move(ks_name), std::move(view_name), host_id.uuid(), "STARTED"},
-                    "view builder: mark view build STARTED");
+            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
+                        return _sys_ks.make_view_build_status_mutation(ts, {ks_name, view_name}, host_id, build_status::STARTED);
+                    }, "view builder: mark view build STARTED");
         },
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_add_new_view", utils::wait_for_message(5min));
@@ -2599,12 +2608,10 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
-            const sstring query_string = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
-                    db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
             auto host_id = _db.get_token_metadata().get_my_id();
-            co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
-                    {"SUCCESS", std::move(ks_name), std::move(view_name), host_id.uuid()},
-                    "view builder: mark view build SUCCESS");
+            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name), host_id] (auto ts) {
+                        return _sys_ks.make_view_build_status_update_mutation(ts, {ks_name, view_name}, host_id, build_status::SUCCESS);
+                    }, "view builder: mark view build SUCCESS");
         },
         [this, ks_name, view_name] () -> future<> {
             co_await utils::get_local_injector().inject("view_builder_pause_mark_success", utils::wait_for_message(5min));
@@ -2616,11 +2623,9 @@ future<> view_builder::mark_view_build_success(sstring ks_name, sstring view_nam
 future<> view_builder::remove_view_build_status(sstring ks_name, sstring view_name) {
     co_await write_view_build_status(
         [this, ks_name, view_name] () -> future<> {
-            const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?",
-                    db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
-            co_await announce_with_raft(_qp, _group0_client, _as, std::move(query_string),
-                    {std::move(ks_name), std::move(view_name)},
-                    "view builder: delete view build status");
+            co_await announce_with_raft(_qp, _group0_client, _as, [this, ks_name = std::move(ks_name), view_name = std::move(view_name)] (auto ts) {
+                        return _sys_ks.make_remove_view_build_status_mutation(ts, {ks_name, view_name});
+                    }, "view builder: delete view build status");
         },
         [this, ks_name, view_name] () -> future<> {
             co_await _sys_dist_ks.remove_view(std::move(ks_name), std::move(view_name));
@@ -2692,6 +2697,11 @@ static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_sou
 }
 
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
+    if (_db.features().view_building_coordinator && _db.find_keyspace(ks_name).uses_tablets()) {
+        // skip tablets-based views in view_builder
+        return;
+    }
+
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
@@ -2717,6 +2727,11 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
 }
 
 void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+    if (_db.features().view_building_coordinator && _db.find_keyspace(ks_name).uses_tablets()) {
+        // skip tablets-based views in view_builder
+        return;
+    }
+
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
@@ -2734,6 +2749,11 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
 }
 
 void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
+    if (_db.features().view_building_coordinator && _db.find_keyspace(ks_name).uses_tablets()) {
+        // skip tablets-based views in view_builder
+        return;
+    }
+    
     vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
@@ -2821,21 +2841,11 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     }
 
     auto& qp = sys_ks.query_processor();
-
-    const sstring query_string = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ? AND host_id = ?",
-            db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILD_STATUS_V2);
-
     muts.reserve(muts.size() + db.get_views().size());
-
     // We expect the table to have a row for each existing view, so generate delete mutations for all views.
     for (auto& view : db.get_views()) {
-        auto vb_muts = co_await qp.get_mutations_internal(
-                query_string,
-                view_builder_query_state(),
-                timestamp,
-                {view->ks_name(), view->cf_name(), host_id.uuid()});
-        SCYLLA_ASSERT(vb_muts.size() == 1);
-        muts.push_back(canonical_mutation(std::move(vb_muts[0])));
+        auto mut = co_await sys_ks.make_remove_view_build_status_on_host_mutation(timestamp, {view->ks_name(), view->cf_name()}, host_id);
+        muts.emplace_back(std::move(mut));
     }
 }
 
@@ -3532,5 +3542,313 @@ std::chrono::microseconds calculate_view_update_throttling_delay(db::view::updat
         return std::chrono::duration_cast<std::chrono::microseconds>(budget);
     }
 }
+
+static logging::logger vbw_logger("view_building_worker");
+
+class view_building_worker::consumer {
+    std::vector<view_ptr> _views_to_build;
+    lw_shared_ptr<replica::table> _base;
+    dht::decorated_key _current_key;
+
+    mutation_reader& _reader;
+    reader_permit _permit;
+    shared_ptr<view_update_generator> _gen;
+    gc_clock::time_point _now;
+    abort_source& _as;
+
+    std::deque<mutation_fragment_v2> _fragments;
+    size_t _fragments_memory_usage = 0;
+
+    void add_fragment(auto&& fragment) {
+        _fragments_memory_usage += fragment.memory_usage(*_reader.schema());
+        _fragments.emplace_back(*_reader.schema(), _permit, std::move(fragment));
+        if (_fragments_memory_usage > view_builder::batch_memory_max) {
+            flush_fragments();
+        }
+    }
+
+    void flush_fragments() {
+        _as.check();
+        if (!_fragments.empty()) {
+            _fragments.emplace_front(*_reader.schema(), _permit, partition_start(_current_key, tombstone()));
+            auto base_schema = _base->schema();
+            auto views = with_base_info_snapshot(_views_to_build);
+            auto reader = make_mutation_reader_from_fragments(_reader.schema(), _permit, std::move(_fragments));
+            auto close_reader = defer([&reader] { reader.close().get(); });
+            reader.upgrade_schema(base_schema);
+            _gen->populate_views(
+                    *_base,
+                    std::move(views),
+                    _current_key.token(),
+                    std::move(reader),
+                    _now).get();
+            close_reader.cancel();
+            _fragments.clear();
+            _fragments_memory_usage = 0;
+        }
+    }
+
+public:
+    consumer(std::vector<view_ptr> views_to_build, lw_shared_ptr<replica::table> base, mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, abort_source& as) 
+        : _views_to_build(std::move(views_to_build))
+        , _base(base)
+        , _current_key(dht::minimum_token(), partition_key::make_empty())
+        , _reader(reader)
+        , _permit(std::move(permit))
+        , _gen(std::move(gen))
+        , _now(now)
+        , _as(as)
+        {}
+
+    stop_iteration consume_new_partition(const dht::decorated_key& dk) {
+        if (dk.key().is_empty()) {
+            on_internal_error(vlogger, format("Trying to consume empty partition key {}", dk));
+        }
+        _current_key = std::move(dk);
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(tombstone) {
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
+        if (_as.abort_requested()) {
+            return stop_iteration::yes;
+        }
+        add_fragment(std::move(sr));
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_live) {
+        if (_as.abort_requested()) {
+            return stop_iteration::yes;
+        }
+        if (!is_live) {
+            return stop_iteration::no;
+        }
+        add_fragment(std::move(cr));
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(range_tombstone_change&&) {
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume_end_of_partition() {
+        flush_fragments();
+        return stop_iteration::no;
+    }
+
+    dht::token consume_end_of_stream() {
+        return _current_key.token();
+    }
+};
+
+view_building_worker::view_building_worker(replica::database& db, service::raft_group0_client& group0_client, db::system_keyspace& sys_ks, view_update_generator& vug, sharded<netw::messaging_service>& messaging) 
+    : _db(db)
+    , _group0_client(group0_client)
+    , _sys_ks(sys_ks)
+    , _vug(vug)
+    , _messaging(messaging)
+{
+    if (this_shard_id() == 0) {
+        _staging_detector_fiber = start_staging_detector();
+    }
+    init_messaging_service();
+}
+
+future<> view_building_worker::stop() {
+    _view_building_as.request_abort();
+    _detector_as.request_abort();
+    _cond.broken();
+    co_await uninit_messaging_service();
+    co_await std::move(_staging_detector_fiber);
+}
+
+future<> view_building_worker::build_views_range(table_id base_id, dht::token_range range, std::vector<table_id> views) {
+    _view_building_as = abort_source();
+    
+    auto base_cf = _db.find_column_family(base_id).shared_from_this();
+    auto views_to_build = std::move(views) | std::views::transform([this] (const table_id& view_id) {
+        return view_ptr(_db.find_schema(view_id));
+    }) | std::ranges::to<std::vector>();
+
+    return seastar::async([this, base_cf = std::move(base_cf), range, views_to_build = std::move(views_to_build)] {
+        when_all(base_cf->await_pending_writes(), base_cf->await_pending_streams()).get();
+        flush_base(base_cf, _view_building_as).get();
+        _view_building_as.check();
+
+        vbw_logger.info("Starting to process range {} for base table {}.{}. Views to build: {}", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name(), views_to_build | std::views::transform([] (const view_ptr& view) {
+            return view->cf_name();
+        }));
+
+        reader_permit permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "build_views_range", db::no_timeout, {});
+        auto slice = make_partition_slice(*base_cf->schema());
+
+        bool has_work = true;
+        auto range_to_process = range;
+        while (has_work) {
+            gc_clock::time_point now = gc_clock::now();
+            auto prange = dht::to_partition_range(range_to_process);
+
+            auto reader = base_cf->get_sstable_set().make_local_shard_sstable_reader(
+                    base_cf->schema(), 
+                    permit,
+                    prange,
+                    slice,
+                    nullptr,
+                    streamed_mutation::forwarding::no,
+                    mutation_reader::forwarding::no);
+            auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
+                    *reader.schema(),
+                    now,
+                    slice,
+                    db::view::view_builder::batch_size,
+                    query::max_partitions);
+            auto consumer = compact_for_query_v2<view_building_worker::consumer>(compaction_state, view_building_worker::consumer(
+                    std::move(views_to_build),
+                    std::move(base_cf),
+                    reader,
+                    permit,
+                    _vug.shared_from_this(),
+                    now,
+                    _view_building_as));
+            utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, _view_building_as).get();
+            auto end_token = reader.consume_in_thread(std::move(consumer));
+            vbw_logger.info("Build range {} for base table: {}.{}", dht::token_range(range_to_process.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
+
+            if (reader.is_end_of_stream()) {
+                has_work = false;
+            } else {
+                range_to_process = dht::token_range(end_token, range_to_process.end());
+            }
+            reader.close().get();
+        }
+    });
+}
+
+future<> view_building_worker::notify() {
+    return container().invoke_on(0, [] (view_building_worker& vbw) {
+        vbw._cond.broadcast();
+    });
+}
+
+future<> view_building_worker::start_staging_detector() {
+    using namespace std::chrono_literals;
+    static auto retry_sleep_time = 1s;
+
+    while (!_detector_as.abort_requested()) {
+        bool retry = false;
+        
+        try {
+            co_await detect_staging_sstables();
+            _detector_as.check();
+            co_await _cond.wait();
+        } catch (service::group0_concurrent_modification&) {
+            vbw_logger.warn("group0_concurrent_modification exception while registering staging sstables, retrying in {}", retry_sleep_time);
+            retry = true;
+        } catch (broken_semaphore&) {
+            break;
+        } catch (sleep_aborted&) {
+            break;
+        } catch (...) {
+            vbw_logger.error("Error in staging sstable detector: {}", std::current_exception());
+            retry = true;
+        }
+    
+        if (retry) {
+            co_await sleep(retry_sleep_time);
+        }
+    }
+}
+
+future<> view_building_worker::detect_staging_sstables() {
+    struct staging_sstable_info {
+        unsigned shard;
+        dht::token_range range;
+    };
+
+    auto guard = co_await _group0_client.start_operation(_detector_as);
+    auto current_base = co_await _sys_ks.get_vbc_processing_base();
+    if (!current_base) {
+        co_return;
+    }
+    auto& table = _db.find_column_family(*current_base);
+
+    std::vector<staging_sstable_info> infos;
+    table.get_sstable_set().for_each_sstable([&infos] (const sstables::shared_sstable& sst) {
+        if (sst->state() != sstables::sstable_state::staging) {
+            return;
+        }
+
+        auto shard = sst->get_shards_for_this_sstable()[0];
+        auto first_token = sst->get_first_decorated_key().token();
+        auto last_token = sst->get_last_decorated_key().token();
+        infos.emplace_back(shard, dht::token_range::make({first_token, true}, {last_token, true}));
+    });
+
+    auto erm = table.get_effective_replication_map();
+    const auto& this_node_id = erm->get_token_metadata().get_topology().this_node()->host_id();
+    auto ts = guard.write_timestamp();
+
+    std::vector<canonical_mutation> muts;
+    for (auto& info: infos) {
+        auto mut = co_await _sys_ks.make_vbc_staging_sstable_mutation(ts, this_node_id, info.shard, info.range);
+        muts.emplace_back(std::move(mut));
+    }
+
+    if (!muts.empty()) {
+        service::write_mutations change{ .mutations = std::move(muts) };
+        auto cmd = _group0_client.prepare_command(std::move(change), guard, "vbc staging sstables");
+        co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _detector_as);
+    }
+}
+
+future<> view_building_worker::register_staging_sstables(table_id base_id, dht::token_range_vector ranges) {
+    auto& table = _db.find_column_family(base_id);
+    std::unordered_set<dht::token_range> ranges_set(ranges.begin(), ranges.end());
+
+    sstables::sstable_directory dir(table, sstables::sstable_state::staging, default_io_error_handler_gen());
+    co_await dir.process_sstable_dir(sstables::sstable_directory::process_flags{ .sort_sstables_according_to_owner = true });
+    auto& local_sstables = dir.get_unshared_local_sstables();
+
+    auto table_ptr = table.shared_from_this();
+    for (auto& sst: local_sstables) {
+        auto range = dht::token_range::make({sst->get_first_decorated_key().token(), true}, {sst->get_last_decorated_key().token(), true});
+        
+        if (ranges_set.contains(range)) {
+            co_await _vug.register_staging_sstable(sst, table_ptr);
+        }
+    }
+}
+
+void view_building_worker::init_messaging_service() {
+    ser::view_rpc_verbs::register_build_views_range(&_messaging.local(), [this] (table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views) -> future<> {
+        return container().invoke_on(shard, [base_id, range = std::move(range), views = std::move(views)] (auto& vbr) {
+            return vbr.build_views_range(std::move(base_id), std::move(range), std::move(views));
+        });
+    });
+    ser::view_rpc_verbs::register_abort_vbc_work(&_messaging.local(), [this] (unsigned shard) -> future<rpc::no_wait_type> {
+        co_await container().invoke_on(shard, [] (auto& vbw) {
+            vbw._view_building_as.request_abort();
+        });
+        co_return rpc::no_wait_type{};
+    });
+    ser::view_rpc_verbs::register_register_staging_sstables(&_messaging.local(), [this] (table_id base_id, unsigned shard, dht::token_range_vector ranges) -> future<> {
+        return container().invoke_on(shard, [base_id, ranges = std::move(ranges)] (auto& vbw) {
+            return vbw.register_staging_sstables(base_id, std::move(ranges));
+        });
+    });
+    ser::view_rpc_verbs::register_notify_staging_detector(&_messaging.local(), [this] () -> future<rpc::no_wait_type> {
+        co_await notify();
+        co_return rpc::no_wait_type{};
+    });
+}
+
+future<> view_building_worker::uninit_messaging_service() {
+    return ser::view_rpc_verbs::unregister(&_messaging.local());
+}
+
 } // namespace view
 } // namespace db
