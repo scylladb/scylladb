@@ -487,7 +487,7 @@ public:
             if (is_static) {
                 _in_progress = mutation_fragment(*_schema, permit(), static_row());
             } else {
-                _in_progress = mutation_fragment(*_schema, permit(), clustering_row(std::move(pos.key())));
+                _in_progress = mutation_fragment(*_schema, permit(), clustering_row(pos.key()));
             }
             if (_out_of_range) {
                 ret = push_ready_fragments_out_of_range();
