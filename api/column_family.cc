@@ -48,17 +48,9 @@ std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name) {
     return std::make_tuple(name.substr(0, pos), name.substr(end));
 }
 
-table_id get_uuid(const sstring& ks, const sstring& cf, const replica::database& db) {
-    try {
-        return db.find_uuid(ks, cf);
-    } catch (replica::no_such_column_family& e) {
-        throw bad_param_exception(e.what());
-    }
-}
-
 table_info parse_table_info(const sstring& name, const replica::database& db) {
     auto [ks, cf] = parse_fully_qualified_cf_name(name);
-    return table_info{ .name = cf, .id = get_uuid(ks, cf, db) };
+    return table_info{ .name = cf, .id = validate_table(db, ks, cf) };
 }
 
 future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
@@ -992,7 +984,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
                 }
             }
             std::vector<sstring> res;
-            auto uuid = get_uuid(ks, cf_name, ctx.db.local());
+            auto uuid = validate_table(ctx.db.local(), ks, cf_name);
             replica::column_family& cf = ctx.db.local().find_column_family(uuid);
             res.reserve(cf.get_index_manager().list_indexes().size());
             for (auto&& i : cf.get_index_manager().list_indexes()) {
