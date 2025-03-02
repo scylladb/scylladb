@@ -883,7 +883,7 @@ future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp
 future<std::vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts) {
     auto& db = sp.local_db();
     try {
-        auto& view = db.find_column_family(ks_name, cf_name).schema();
+        const auto& view = db.find_column_family(ks_name, cf_name).schema();
         if (!view->is_view()) {
             throw exceptions::invalid_request_exception("Cannot use DROP MATERIALIZED VIEW on Table");
         }
@@ -892,7 +892,7 @@ future<std::vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, 
         }
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
-        auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
+        auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(view), ts);
         // notifiers must run in seastar thread
         co_await seastar::async([&] {
             db.get_notifier().before_drop_column_family(*view, mutations, ts);
