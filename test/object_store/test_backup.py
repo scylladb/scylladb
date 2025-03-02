@@ -148,6 +148,30 @@ async def test_backup_to_non_existent_bucket(manager: ManagerClient, s3_server):
     assert status['state'] == 'failed'
 
 
+async def test_backup_to_non_existent_endpoint(manager: ManagerClient, s3_server):
+    '''backup should fail if the endpoint is invalid/inaccessible'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    ks, cf = await prepare_snapshot_for_backup(manager, server)
+
+    workdir = await manager.server_get_workdir(server.server_id)
+    cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+    files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
+    assert len(files) > 0
+
+    prefix = f'{cf}/backup'
+    tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', "does_not_exist", s3_server.bucket_name, prefix)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None
+    assert status['state'] == 'failed'
+    assert status['error'] == 'std::invalid_argument (endpoint does_not_exist not found)'
+
 async def do_test_backup_abort(manager: ManagerClient, s3_server,
                                breakpoint_name, min_files, max_files = None):
     '''helper for backup abort testing'''
