@@ -93,4 +93,23 @@ void tablet_options::validate(const map_type& map) {
     }
 }
 
+void tablet_options::combine(const tablet_options& other) {
+    auto combine_optional_with = []<typename T>(std::optional<T> a, std::optional<T> b, auto fn) -> std::optional<T> {
+        if (!a && !b) {
+            return std::nullopt;
+        } else if (a && b) {
+            return fn(*a, *b);
+        } else {
+            return a ? *a : *b;
+        }
+    };
+
+    min_tablet_count = combine_optional_with(min_tablet_count, other.min_tablet_count,
+            [] (ssize_t a, ssize_t b) { return std::max(a,b); });
+    min_per_shard_tablet_count = combine_optional_with(min_per_shard_tablet_count, other.min_per_shard_tablet_count,
+            [] (double a, double b) { return std::max(a,b); });
+    expected_data_size_in_gb = combine_optional_with(expected_data_size_in_gb, other.expected_data_size_in_gb,
+            [] (ssize_t a, ssize_t b) { return a+b; });
+}
+
 } // namespace db
