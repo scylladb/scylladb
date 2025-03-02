@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <yaml-cpp/yaml.h>
 #include <fmt/ranges.h>
 
 #include <seastar/util/closeable.hh>
@@ -115,6 +114,7 @@
 #include "message/dictionary_service.hh"
 #include "utils/disk_space_monitor.hh"
 #include "utils/labels.hh"
+#include "tools/utils.hh"
 
 
 #define P11_KIT_FUTURE_UNSTABLE_API
@@ -189,68 +189,6 @@ public:
     abort_source& as_local_abort_source() { return _abort_sources.local(); }
     sharded<abort_source>& as_sharded_abort_source() { return _abort_sources; }
 };
-
-struct object_storage_endpoint_param {
-    sstring endpoint;
-    s3::endpoint_config config;
-};
-
-namespace YAML {
-template<>
-struct convert<::object_storage_endpoint_param> {
-    static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
-        ep.endpoint = node["name"].as<std::string>();
-        ep.config.port = node["port"].as<unsigned>();
-        ep.config.use_https = node["https"].as<bool>(false);
-        ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
-        ep.config.role_arn = node["iam_role_arn"] ? node["iam_role_arn"].as<std::string>() : "";
-        return true;
-    }
-};
-} // namespace YAML
-
-static future<> read_object_storage_config(db::config& db_cfg) {
-    sstring cfg_name;
-    if (!db_cfg.object_storage_config_file().empty()) {
-        cfg_name = db_cfg.object_storage_config_file();
-    } else {
-        cfg_name = db::config::get_conf_sub("object_storage.yaml").native();
-        if (!co_await file_accessible(cfg_name, access_flags::exists)) {
-            co_return;
-        }
-    }
-
-    auto cfg_file = co_await open_file_dma(cfg_name, open_flags::ro);
-    sstring data;
-    std::exception_ptr ex;
-
-    try {
-        auto sz = co_await cfg_file.size();
-        data = seastar::to_sstring(co_await cfg_file.dma_read_exactly<char>(0, sz));
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    co_await cfg_file.close();
-    if (ex) {
-        co_await coroutine::return_exception_ptr(ex);
-    }
-
-    std::unordered_map<sstring, s3::endpoint_config> cfg;
-    YAML::Node doc = YAML::Load(data.c_str());
-    for (auto&& section : doc) {
-        auto sec_name = section.first.as<std::string>();
-        if (sec_name != "endpoints") {
-            co_await coroutine::return_exception(std::runtime_error(fmt::format("While parsing object_storage config: section {} currently unsupported.", sec_name)));
-        }
-
-        auto endpoints = section.second.as<std::vector<object_storage_endpoint_param>>();
-        for (auto&& ep : endpoints) {
-            cfg[ep.endpoint] = std::move(ep.config);
-        }
-    }
-
-    db_cfg.object_storage_config.set(std::move(cfg));
-}
 
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
