@@ -29,7 +29,8 @@ The command syntax is as follows:
    scylla sstable <operation> <path to SStable>
 
 
-You can specify more than one SStable.
+You can specify more than one SSTable. Additionally, the path to SSTable can point to an S3 fully qualified path in the form of s3://bucket-name/prefix/of/your/sstable/sstable-TOC.txt. To use this feature, you need to have AWS credentials set up in your environment. For more information, see :ref:`Configuring AWS S3 access <aws-s3-configuration>`. Additionally, you must ensure the tool is able to load the correct Scylla YAML file, which can be done using the --scylla-yaml-file parameter or by placing the YAML file in one of the default locations the tool checks.
+
 
 Schema
 ------
