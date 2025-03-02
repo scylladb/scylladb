@@ -150,6 +150,10 @@ bool group0_guard::with_raft() const {
 
 void release_guard(group0_guard guard) {}
 
+gc_clock::duration raft_group0_client::get_history_gc_duration() const {
+    return _history_gc_duration;
+}
+
 void raft_group0_client::set_history_gc_duration(gc_clock::duration d) {
     _history_gc_duration = d;
 }
@@ -231,7 +235,7 @@ future<> raft_group0_client::add_entry_unguarded(group0_command group0_cmd, seas
     }
 }
 
-static utils::UUID generate_group0_state_id(utils::UUID prev_state_id) {
+utils::UUID raft_group0_client::generate_group0_state_id(utils::UUID prev_state_id) {
     auto ts = api::new_timestamp();
     if (prev_state_id != utils::UUID{}) {
         auto lower_bound = utils::UUID_gen::micros_timestamp(prev_state_id);
