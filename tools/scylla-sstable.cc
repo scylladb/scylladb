@@ -14,10 +14,12 @@
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/queue.hh>
+#include <seastar/core/units.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/queue.hh>
 
+#include "init.hh"
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"
@@ -337,7 +339,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
     parallel_for_each(sstable_names, [schema, &sst_man, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
         const auto i = std::distance(sstable_names.begin(), std::find(sstable_names.begin(), sstable_names.end(), sst_name));
-        const auto sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
+        auto sst_path = std::filesystem::path(sst_name);
 
         if (const auto ftype_opt = co_await file_type(sst_path.c_str(), follow_symlink::yes)) {
             if (!ftype_opt) {
@@ -349,10 +351,22 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         }
 
 
+        data_dictionary::storage_options options;
         auto ed = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
-        const auto dir_path = sst_path.parent_path();
-        auto local = data_dictionary::make_local_options(dir_path);
-        auto sst = sst_man.make_sstable(schema, local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
+
+        if (s3::is_s3_fqn(sst_path)) {
+            if (sst_man.config().object_storage_config().empty()) {
+                throw std::invalid_argument("Unable to open SSTable in S3: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
+                                            "valid AWS object storage configuration.");
+            }
+            auto endpoint = sst_man.config().object_storage_config().begin()->first;
+            options = data_dictionary::make_s3_options(endpoint, sst_path);
+        } else {
+            sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
+            const auto dir_path = sst_path.parent_path();
+            options = data_dictionary::make_local_options(dir_path);
+        }
+        auto sst = sst_man.make_sstable(schema, options, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
         try {
             co_await sst->load(schema->get_sharder(), sstables::sstable_open_config{.load_first_and_last_position_metadata = false});
@@ -3508,6 +3522,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             }).get();
             dbcfg.setup_directories();
             sst_log.debug("Successfully read scylla.yaml from {} location of {}", scylla_yaml_path_source, scylla_yaml_path);
+            read_object_storage_config(dbcfg).get();
+            sst_log.debug("Successfully read object storage settings");
         } else {
             dbcfg.experimental_features.set(db::experimental_features_t::all());
             sst_log.debug("Failed to read scylla.yaml from {} location of {}, some functionality may be unavailable", scylla_yaml_path_source, scylla_yaml_path);
@@ -3548,9 +3564,25 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         cache_tracker tracker;
         sstables::directory_semaphore dir_sem(1);
         abort_source abort;
-        sstables::sstables_manager sst_man("scylla_sstable", large_data_handler, dbcfg, feature_service, tracker,
-            memory::stats().total_memory(), dir_sem,
-            [host_id = locator::host_id::create_random_id()] { return host_id; }, abort);
+
+        sstables::storage_manager::config stm_cfg;
+        stm_cfg.s3_clients_memory = 100_MiB;
+        sharded<sstables::storage_manager> sstm;
+        sstm.start(std::ref(dbcfg), stm_cfg).get();
+        auto stop_sstm = defer([&sstm] { sstm.stop().get(); });
+
+        sstables::sstables_manager sst_man(
+            "scylla_sstable",
+            large_data_handler,
+            dbcfg,
+            feature_service,
+            tracker,
+            1_GiB,
+            dir_sem,
+            [host_id = locator::host_id::create_random_id()] { return host_id; },
+            abort,
+            current_scheduling_group(),
+            &sstm.local());
         auto close_sst_man = deferred_close(sst_man);
 
         std::vector<sstables::shared_sstable> sstables;
