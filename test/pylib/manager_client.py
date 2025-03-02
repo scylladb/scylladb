@@ -207,6 +207,11 @@ class ManagerClient():
            To be used when a server was modified outside of this API."""
         await self.client.put_json("/cluster/mark-dirty")
 
+    async def mark_clean(self) -> None:
+        """Manually mark current cluster not dirty.
+           To be used when a current cluster wants to be reused."""
+        await self.client.put_json("/cluster/mark-clean")
+
     async def server_stop(self, server_id: ServerNum) -> None:
         """Stop specified server"""
         logger.debug("ManagerClient stopping %s", server_id)
