@@ -38,6 +38,8 @@ struct tablet_options {
 
     map_type to_map() const;
 
+    void combine(const tablet_options& other);
+
     static sstring to_string(tablet_option_type hint);
     static tablet_option_type from_string(sstring hint_desc);
     static void validate(const map_type& map);

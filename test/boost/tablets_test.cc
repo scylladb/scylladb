@@ -2689,6 +2689,107 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes_with_colocated_tables) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        // 3 shards. default initial scale wants 30 (32) tablets.
+        // keyspace 'initial' wants 2 tablets.
+        topo.add_node(node_state::normal, 3);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
+        e.execute_cql(fmt::format("CREATE TABLE {}.table2 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+        auto table2 = e.local_db().find_schema(ks_name1, "table2")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto get_tablet_count = [&] (table_id table) {
+            auto tm = stm.get();
+            return tm->tablets().get_tablet_map(table).tablet_count();
+        };
+
+        shared_load_stats load_stats;
+        load_stats.set_size(table1, 0);
+        load_stats.set_size(table2, 0);
+
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 2);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 2);
+
+        // min_per_shard_tablet_count wants 5 * 3 = 15 (16) tablets
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
+                                  "WITH tablets = {{'min_per_shard_tablet_count': 5}}", ks_name1)).get();
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 16);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 16);
+
+        // Check that hint can be dropped.
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 WITH tablets = {{}}", ks_name1)).get();
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 2);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 2);
+
+        // Default kicks in if keyspace setting and hint are missing.
+        e.execute_cql(format("ALTER KEYSPACE {} with tablets = {{'enabled': true}}", ks_name1, dc)).get();
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 32);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 32);
+
+        // initial scale can be live-updated.
+        auto& cfg = e.db_config();
+        cfg.tablets_initial_scale_factor(5);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 16);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 16);
+
+        // per-shard goal can be live-updated.
+
+        // merge
+        cfg.tablets_per_shard_goal(1);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 1);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 1);
+
+        // split
+        cfg.tablets_per_shard_goal(100);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 16);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 16);
+
+        // initial scale can be smaller than 1.
+        // 0.5 tablet/shard * 3 shards = 1.5 tablets =~ 2 tablets.
+        cfg.tablets_initial_scale_factor(0.5);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 2);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 2);
+
+        const uint64_t target_tablet_size = service::default_target_tablet_size;
+
+        load_stats.set_size(table1, 4*target_tablet_size);
+        load_stats.set_size(table2, 5*target_tablet_size);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 4);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 4);
+
+        load_stats.set_size(table1, 9*target_tablet_size);
+        load_stats.set_size(table2, 8*target_tablet_size);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 8);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 8);
+
+        load_stats.set_size(table1, 3*target_tablet_size);
+        load_stats.set_size(table2, 3*target_tablet_size);
+        rebalance_tablets(e, &load_stats, {}, nullptr, true, {{table1, table2}});
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table1), 4);
+        BOOST_REQUIRE_EQUAL(get_tablet_count(table2), 4);
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) {
     auto cfg = tablet_cql_test_config();
     cfg.db_config->tablets_initial_scale_factor(10.0);

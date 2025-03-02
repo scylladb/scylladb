@@ -1224,7 +1224,7 @@ public:
         sstring reason;
     };
 
-    tablet_count_and_reason tablet_count_from_min_per_shard_tablet_count(const schema& s,
+    tablet_count_and_reason tablet_count_from_min_per_shard_tablet_count(const table_group& tables,
             const std::unordered_map<sstring, unsigned>& shards_per_dc,
             const tablet_aware_replication_strategy& rs,
             double min_per_shard_tablet_count)
@@ -1241,8 +1241,8 @@ public:
                 continue;
             }
             size_t tablets_in_dc = std::ceil((double)(min_per_shard_tablet_count * shards_in_dc) / rf_in_dc);
-            lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{} in DC {}", tablets_in_dc,
-                    min_per_shard_tablet_count, s.ks_name(), s.cf_name(), dc);
+            lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={} in DC {}", tablets_in_dc,
+                    min_per_shard_tablet_count, tables, dc);
             if (tablets_in_dc > tablet_count) {
                 tablet_count = tablets_in_dc;
                 winning_dc = &dc;
@@ -1267,29 +1267,22 @@ public:
             }
         });
 
-        auto process_table = [&] (table_id table, schema_ptr s, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
-            table_sizing& table_plan = plan.tables[table];
-            table_plan.current_tablet_count = tablet_count;
-            rs_by_table[table] = rs;
-
-            tablet_count_and_reason target_tablet_count = {1, ""};
+        auto process_table = [&] (const table_group& tables, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs) {
+            tablet_count_and_reason target_group_tablet_count = {1, ""};
             auto maybe_apply = [&] (tablet_count_and_reason candidate) {
-                lblogger.debug("Table {} ({}.{}) wants {} tablets due to {}", table, s->ks_name(), s->cf_name(),
-                        candidate.tablet_count, candidate.reason);
-                if (candidate.tablet_count > target_tablet_count.tablet_count) {
-                    target_tablet_count = candidate;
+                if (candidate.tablet_count > target_group_tablet_count.tablet_count) {
+                    target_group_tablet_count = candidate;
                 }
             };
 
             maybe_apply({rs->get_initial_tablets(), "initial"});
 
-            const auto& tablet_options = s->tablet_options();
             if (tablet_options.min_tablet_count) {
                 maybe_apply({tablet_options.min_tablet_count.value(), "min_tablet_count"});
             }
 
             if (tablet_options.expected_data_size_in_gb) {
-                maybe_apply({(tablet_options.expected_data_size_in_gb.value() << 30) / _target_tablet_size,
+                maybe_apply({(tablet_options.expected_data_size_in_gb.value() << 30) / _target_tablet_size / tables.size(),
                         format("expected_data_size_in_gb={}", tablet_options.expected_data_size_in_gb.value())});
             }
 
@@ -1298,55 +1291,99 @@ public:
                     // compatibility with the deprecated "initial" tablet count.
                     (rs->get_initial_tablets() || tablet_options.min_tablet_count) ? 0 : _initial_scale);
             if (min_per_shard_tablet_count) {
-                maybe_apply(tablet_count_from_min_per_shard_tablet_count(*s, shards_per_dc, *rs, min_per_shard_tablet_count));
+                maybe_apply(tablet_count_from_min_per_shard_tablet_count(tables, shards_per_dc, *rs, min_per_shard_tablet_count));
             }
 
-            const auto* table_stats = load_stats_for_table(table);
-            if (table_stats) {
-                auto cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
-                auto avg_tablet_size = table_stats->size_in_bytes / std::max<size_t>(table_plan.current_tablet_count, 1);
-                auto tablet_count_from_size = table_plan.current_tablet_count;
+            auto total_size_ = [&] -> std::optional<size_t> {
+                size_t s = 0;
+                for (auto table : tables) {
+                    const auto* table_stats = load_stats_for_table(table);
+                    if (!table_stats) {
+                        return std::nullopt;
+                    }
+                    s += table_stats->size_in_bytes;
+
+                    auto& table_plan = plan.tables[table];
+                    table_plan.avg_tablet_size = table_stats->size_in_bytes / std::max<size_t>(table_plan.current_tablet_count, 1);
+                }
+                return s;
+            }();
+
+            if (total_size_) {
+                auto total_size = *total_size_;
+
+                auto avg_tablet_size_for_tablet_count = [&] (size_t tablet_count) {
+                    return total_size / std::max<size_t>(tablet_count * tables.size(), 1);
+                };
+
+                auto effective_tablet_count = [&] (table_id table) {
+                    auto tablet_count = plan.tables[table].current_tablet_count;
+                    const auto& cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
+                    if (cur_decision.is_split()) {
+                        tablet_count *= 2;
+                    } else if (cur_decision.is_merge()) {
+                        tablet_count /= 2;
+                    }
+                    return tablet_count;
+                };
+
+                auto current_effective_tablet_count = std::ranges::minmax(tables | std::views::transform(effective_tablet_count));
 
                 // Split based on avg_tablet_size, or if the current resize_decision is split, apply hysteresis,
                 // so it would get cancelled only when crossing back the half-way point.
-                if (avg_tablet_size > target_max_tablet_size() ||
-                    (cur_decision.is_split() && avg_tablet_size >= _target_tablet_size)) {
-                    // TODO: extend to n-way split when needed
-                    tablet_count_from_size *= 2;
-                } else {
+                auto tablet_count_from_size = (current_effective_tablet_count.min + current_effective_tablet_count.max) / 2;
+                if (avg_tablet_size_for_tablet_count(current_effective_tablet_count.max) > target_max_tablet_size()) {
+                    tablet_count_from_size = current_effective_tablet_count.max * 2;
+                } else if (avg_tablet_size_for_tablet_count(current_effective_tablet_count.max) >= _target_tablet_size) {
+                    tablet_count_from_size = current_effective_tablet_count.max;
+                } else if (avg_tablet_size_for_tablet_count(current_effective_tablet_count.min) < target_min_tablet_size()) {
                     // Consider merge. If the current resize_decision is merge, apply hysteresis,
                     // so it would get cancelled only when crossing back the half-way point.
-                    if (avg_tablet_size < target_min_tablet_size() ||
-                        (cur_decision.is_merge() && avg_tablet_size <= _target_tablet_size)) {
-                        tablet_count_from_size /= 2;
-                    }
+                    tablet_count_from_size = current_effective_tablet_count.min / 2;
+                } else if (avg_tablet_size_for_tablet_count(current_effective_tablet_count.min) <= _target_tablet_size) {
+                    tablet_count_from_size = current_effective_tablet_count.min;
                 }
-
-                table_plan.avg_tablet_size = avg_tablet_size;
-                maybe_apply({tablet_count_from_size, format("avg_tablet_size={}", avg_tablet_size)});
+                maybe_apply({tablet_count_from_size, format("avg_tablet_size={}",
+                        avg_tablet_size_for_tablet_count((current_effective_tablet_count.min + current_effective_tablet_count.max) / 2))});
             } else {
                 // When we don't have tablet size info, allow tablet count to increase but not to decrease.
                 // Increasing will always bring us closer to the true target count, since tablet_count_from_size
                 // can only increase the count above it, but decreasing may go against the true target count
                 // if tablet_count_from_size would demand more tablets.
-                maybe_apply({table_plan.current_tablet_count, "current count"});
+                for (auto table : tables) {
+                    table_sizing& table_plan = plan.tables[table];
+                    maybe_apply({table_plan.current_tablet_count, "current count"});
+                }
             }
 
-            table_plan.target_tablet_count = target_tablet_count.tablet_count;
-            table_plan.target_tablet_count_reason = target_tablet_count.reason;
-
-            lblogger.debug("Table {} ({}.{}) target_tablet_count: {} ({})", table, s->ks_name(), s->cf_name(),
-                    table_plan.target_tablet_count, table_plan.target_tablet_count_reason);
+            for (auto table : tables) {
+                table_sizing& table_plan = plan.tables[table];
+                table_plan.target_tablet_count = target_group_tablet_count.tablet_count;
+                table_plan.target_tablet_count_reason = target_group_tablet_count.reason;
+            }
         };
 
-        for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
-            auto [s, rs] = get_schema_and_rs(table);
-            process_table(table, s, rs, tmap->tablet_count());
-            co_await coroutine::maybe_yield();
-        }
+        for_each_table_group([&] (const auto& tables, table_group_processor tg) {
+            db::tablet_options group_tablet_options;
+            const tablet_aware_replication_strategy* group_rs = nullptr;
+            for (auto table : tables) {
+                auto [s, rs] = get_schema_and_rs(table);
+                if (!group_rs) {
+                    group_rs = rs;
+                }
+                group_tablet_options.combine(s->tablet_options());
+
+                plan.tables[table].current_tablet_count = _tm->tablets().get_tablet_map(table).tablet_count();
+                rs_by_table[table] = rs;
+            }
+            process_table(tables, group_tablet_options, group_rs);
+        });
 
         if (new_table) {
-            process_table(new_table->id(), new_table, new_rs, 0);
+            auto table = new_table->id();
+            plan.tables[table].current_tablet_count = 0;
+            rs_by_table[table] = new_rs;
+            process_table({table}, new_table->tablet_options(), new_rs);
         }
 
         // Below section ensures we respect the _tablets_per_shard_goal.
