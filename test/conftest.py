@@ -3,27 +3,75 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from __future__ import annotations
+
+import asyncio
+import glob
+import logging
+import os
+import pathlib
+import shutil
+import sys
+import time
+from typing import TYPE_CHECKING
 
 import pytest
+import universalasync
 
+from test import ALL_MODES, TOP_SRCDIR
+from test.pylib.host_registry import HostRegistry
+from test.pylib.minio_server import MinioServer
 from test.pylib.report_plugin import ReportPlugin
+from test.pylib.s3_proxy import S3ProxyServer
+from test.pylib.s3_server_mock import MockS3Server
+from test.pylib.suite.base import TestSuite, find_suite_config, init_testsuite_globals
+from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
-ALL_MODES = {'debug': 'Debug',
-             'release': 'RelWithDebInfo',
-             'dev': 'Dev',
-             'sanitize': 'Sanitize',
-             'coverage': 'Coverage'}
+if TYPE_CHECKING:
+    from asyncio import AbstractEventLoop
 
-def pytest_addoption(parser):
-    parser.addoption('--mode', choices=ALL_MODES.keys(), action="append", dest="modes",
+    from test.pylib.cpp.item import CppTestFunction
+    from test.pylib.suite.base import Test
+
+
+TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
                      help="Run only tests for given build mode(s)")
-    parser.addoption('--tmpdir', action='store', default='testlog', help='''Path to temporary test data and log files. The data is
-            further segregated per build mode. Default: ./testlog.''', )
+    parser.addoption('--tmpdir', action='store', default=str(TOP_SRCDIR / 'testlog'),
+                     help='Path to temporary test data and log files.  The data is further segregated per build mode.')
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
+
+    # Following option is to use with bare pytest command.
+    #
+    # For compatibility with reasons need to run bare pytest with  --test-py-init option
+    # to run a test.py-compatible pytest session.
+    #
+    # TODO: remove this when we'll completely switch to bare pytest runner.
+    parser.addoption('--test-py-init', action='store_true', default=False,
+                     help='Run pytest session in test.py-compatible mode.  I.e., start all required services, etc.')
+
+    # Options for compatibility with test.py
+    parser.addoption('--save-log-on-success', default=False,
+                        dest="save_log_on_success", action="store_true",
+                        help="Save test log output on success.")
+    parser.addoption('--coverage', action='store_true', default=False,
+                      help="When running code instrumented with coverage support"
+                           "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                           "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
+                           "The lcov files can eventually be used for generating coverage reports")
+    parser.addoption("--cluster-pool-size", type=int,
+                     help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
+                          "CLUSTER_POOL_SIZE can be used to achieve the same")
+    parser.addoption("--extra-scylla-cmdline-options", default=[],
+                     help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
+                          " '--logger-log-level raft=trace --default-log-level error'")
 
 
 @pytest.fixture(scope="session")
-def build_mode(request):
+def build_mode(request: pytest.FixtureRequest) -> str:
     """
     This fixture returns current build mode.
     This is for running tests through the test.py script, where only one mode is passed to the test
@@ -35,10 +83,24 @@ def build_mode(request):
         return mode[0]
     return mode
 
-def pytest_configure(config):
+
+@pytest.fixture(scope="module")
+async def testpy_testsuite(request: pytest.FixtureRequest, build_mode: str) -> TestSuite:
+    suite_config = find_suite_config(path=request.path)
+    return TestSuite.opt_create(path=str(suite_config.parent), options=request.config.option, mode=build_mode)
+
+
+@pytest.fixture(scope="module")
+async def testpy_test(request: pytest.FixtureRequest, testpy_testsuite: TestSuite) -> Test:
+    await testpy_testsuite.add_test(shortname=request.node.name, casename=None)
+    return testpy_testsuite.tests[-1]
+
+
+def pytest_configure(config: pytest.Config) -> None:
     config.pluginmanager.register(ReportPlugin())
 
-def pytest_collection_modifyitems(config, items):
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item | CppTestFunction]) -> None:
     """
     This is a standard pytest method.
     This is needed to modify the test names with dev mode and run id to differ them one from another
@@ -66,3 +128,85 @@ def pytest_collection_modifyitems(config, items):
             if run_id:
                 item._nodeid = f'{item._nodeid}.{run_id}'
                 item.name = f'{item.name}.{run_id}'
+
+
+def prepare_dir(dirname: str, pattern: str) -> None:
+    # Ensure the dir exists
+    pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
+    # Remove old artifacts
+    for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
+        pathlib.Path(p).unlink()
+
+
+def prepare_dirs(tempdir_base: str, modes: list[str]) -> None:
+    prepare_dir(tempdir_base, "*.log")
+    for mode in modes:
+        prepare_dir(os.path.join(tempdir_base, mode), "*.log")
+        prepare_dir(os.path.join(tempdir_base, mode), "*.reject")
+        prepare_dir(os.path.join(tempdir_base, mode, "xml"), "*.xml")
+        shutil.rmtree(os.path.join(tempdir_base, mode, "failed_test"), ignore_errors=True)
+        prepare_dir(os.path.join(tempdir_base, mode, "failed_test"), "*")
+        prepare_dir(os.path.join(tempdir_base, mode, "allure"), "*.xml")
+        if TEST_RUNNER == "pytest":
+            shutil.rmtree(os.path.join(tempdir_base, mode, "pytest"), ignore_errors=True)
+            prepare_dir(os.path.join(tempdir_base, mode, "pytest"), "*")
+
+
+@universalasync.async_to_sync_wraps
+async def start_s3_mock_services(minio_tempdir_base: str) -> None:
+    ms = MinioServer(
+        tempdir_base=minio_tempdir_base,
+        address="127.0.0.1",
+        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
+    )
+    await ms.start()
+    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
+    hosts = HostRegistry()
+    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
+
+    mock_s3_server = MockS3Server(
+        host=await hosts.lease_host(),
+        port=2012,
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
+    )
+    await mock_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
+
+    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
+    proxy_s3_server = S3ProxyServer(
+        host=await hosts.lease_host(),
+        port=9002,
+        minio_uri=minio_uri,
+        max_retries=3,
+        seed=int(time.time()),
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
+    )
+    await proxy_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
+    # we don't need this stuff.
+    if TEST_RUNNER != "pytest" or session.config.getoption("--collect-only"):
+        return
+
+    if not session.config.getoption("--test-py-init"):
+        return
+
+    init_testsuite_globals()
+    TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+
+    # Run stuff just once for the pytest session even running under xdist.
+    if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
+        prepare_dirs(
+            tempdir_base=session.config.getoption("--tmpdir"),
+            modes=session.config.getoption("--mode") or get_configured_modes(),
+        )
+        start_s3_mock_services(minio_tempdir_base=session.config.getoption("--tmpdir"))
+
+
+def pytest_sessionfinish() -> None:
+    if getattr(TestSuite, "artifacts", None) is not None:
+        asyncio.get_event_loop().run_until_complete(TestSuite.artifacts.cleanup_before_exit())

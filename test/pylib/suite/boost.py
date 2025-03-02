@@ -16,8 +16,9 @@ import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
 from scripts import coverage
+from test import path_to
 from test.pylib.scylla_cluster import merge_cmdline_options
-from test.pylib.suite.base import Test, palette, path_to, read_log, run_test
+from test.pylib.suite.base import Test, palette, read_log, run_test
 from test.pylib.suite.unit import UnitTest, UnitTestSuite
 
 if TYPE_CHECKING:
@@ -181,9 +182,9 @@ class BoostTest(Test):
         if self.mode == "coverage":
             self.env.update(coverage.env(self.path))
 
-        self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
+        self.xmlout = self.suite.log_dir / "xml" / f"{self.uname}.xunit.xml"
         boost_args += ['--report_level=no',
-                       '--logger=HRF,test_suite:XML,test_suite,' + self.xmlout]
+                       f'--logger=HRF,test_suite:XML,test_suite,{self.xmlout}']
         boost_args += ['--catch_system_errors=no']  # causes undebuggable cores
         boost_args += ['--color_output=false']
         boost_args += ['--']
