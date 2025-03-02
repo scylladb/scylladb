@@ -21,6 +21,7 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables.hh"
 #include "gms/inet_address.hh"
+#include "gms/feature_service.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "streaming/stream_reason.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
@@ -35,6 +36,7 @@ static logging::logger llog("sstables_loader");
 namespace {
 
 class send_meta_data {
+    replica::database& _db;
     locator::host_id _node;
     seastar::rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> _sink;
     seastar::rpc::source<int32_t> _source;
@@ -59,10 +61,11 @@ private:
         co_return;
     }
 public:
-    send_meta_data(locator::host_id node,
+    send_meta_data(replica::database& db, locator::host_id node,
             seastar::rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> sink,
             seastar::rpc::source<int32_t> source)
-        : _node(std::move(node))
+        : _db(db)
+        , _node(std::move(node))
         , _sink(std::move(sink))
         , _source(std::move(source))
         , _receive_done(make_ready_future<>()) {
@@ -82,10 +85,12 @@ public:
         llog.trace("send_meta_data: send mf to node={}, size={}", _node, size);
         co_return co_await _sink(fmf, streaming::stream_mutation_fragments_cmd::mutation_fragment_data);
     }
-    future<> finish(bool failed) {
+    future<> finish(bool failed, bool aborted) {
         std::exception_ptr eptr;
         try {
-            if (failed) {
+            if (_db.features().load_and_stream_abort_rpc_message && aborted) {
+                co_await _sink(frozen_mutation_fragment(bytes_ostream()), streaming::stream_mutation_fragments_cmd::abort);
+            } else if (failed) {
                 co_await _sink(frozen_mutation_fragment(bytes_ostream()), streaming::stream_mutation_fragments_cmd::error);
             } else {
                 co_await _sink(frozen_mutation_fragment(bytes_ostream()), streaming::stream_mutation_fragments_cmd::end_of_stream);
@@ -446,7 +451,7 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
                         auto [sink, source] = co_await _ms.make_sink_and_source_for_stream_mutation_fragments(reader.schema()->version(),
                                 ops_uuid, cf_id, estimated_partitions, reason, service::default_session_id, node);
                         llog.debug("load_and_stream: ops_uuid={}, make sink and source for node={}", ops_uuid, node);
-                        metas.emplace(node, send_meta_data(node, std::move(sink), std::move(source)));
+                        metas.emplace(node, send_meta_data(_db, node, std::move(sink), std::move(source)));
                         metas.at(node).receive();
                     }
                 }
@@ -465,9 +470,18 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
     }
     co_await reader.close();
     try {
-        co_await coroutine::parallel_for_each(metas.begin(), metas.end(), [failed] (std::pair<const locator::host_id, send_meta_data>& pair) {
+        co_await coroutine::parallel_for_each(metas.begin(), metas.end(), [failed, eptr] (std::pair<const locator::host_id, send_meta_data>& pair) {
             auto& meta = pair.second;
-            return meta.finish(failed);
+            if (eptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const abort_requested_exception&) {
+                    return meta.finish(failed, true);
+                } catch (...) {
+                    // just fall through
+                }
+            }
+            return meta.finish(failed, false);
         });
     } catch (...) {
         failed = true;
