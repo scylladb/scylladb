@@ -10,7 +10,9 @@
 # and automatically setting up the fixtures they need.
 
 import pytest
-
+import logging
+import pathlib
+import boto3
 from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 import json
@@ -22,7 +24,7 @@ import time
 import random
 
 from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
-
+from test.pylib.minio_server import MinioServer
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 
@@ -42,6 +44,14 @@ def pytest_addoption(parser):
     # presence.
     parser.addoption('--omit-scylla-output', action='store_true',
         help='Omit scylla\'s output from the test output')
+
+    s3_options = parser.getgroup("s3-server", description="S3 Server settings")
+    s3_options.addoption('--s3-server-address')
+    s3_options.addoption('--s3-server-port', type=int)
+    s3_options.addoption('--aws-access-key')
+    s3_options.addoption('--aws-secret-key')
+    s3_options.addoption('--aws-region')
+    s3_options.addoption('--s3-server-bucket')
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
