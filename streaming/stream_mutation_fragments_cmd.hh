@@ -16,6 +16,7 @@ enum class stream_mutation_fragments_cmd : uint8_t {
     error,
     mutation_fragment_data,
     end_of_stream,
+    abort,
 };
 
 
