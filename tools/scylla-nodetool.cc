@@ -262,10 +262,13 @@ public:
     }
 };
 
-std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}) {
+std::vector<sstring> get_keyspaces(scylla_rest_client& client, std::optional<sstring> type = {}, std::optional<sstring> replication = {}) {
     std::unordered_map<sstring, sstring> params;
     if (type) {
         params["type"] = *type;
+    }
+    if (replication) {
+        params["replication"] = *replication;
     }
     auto keyspaces_json = client.get("/storage_service/keyspaces", std::move(params));
     std::vector<sstring> keyspaces;
@@ -1414,14 +1417,49 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
     }
 }
 
+static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
+    const std::unordered_map<sstring, sstring> params = {{"replication", "tablets"}};
+    const auto res = client.get("/storage_service/keyspaces", params);
+
+    const auto& ks_array = res.GetArray();
+    const auto is_same_ks = [&] (const auto& json_ks) { return rjson::to_string_view(json_ks) == keyspace; };
+    return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
+}
+
+std::optional<sstring> maybe_get_dcs(scylla_rest_client& client, const bpo::variables_map& vm) {
+    if (vm.contains("in-local-dc")) {
+        const auto res = client.get("/snitch/datacenter");
+        return sstring(rjson::to_string_view(res));
+    } else if (vm.contains("in-dc")) {
+        const auto dcs = vm["in-dc"].as<std::vector<sstring>>();
+        return fmt::to_string(fmt::join(dcs.begin(), dcs.end(), ","));
+    }
+    return std::nullopt;
+}
+
+std::optional<sstring> maybe_get_hosts(const bpo::variables_map& vm) {
+    if (vm.contains("in-hosts")) {
+        const auto hosts = vm["in-hosts"].as<std::vector<sstring>>();
+        return fmt::to_string(fmt::join(hosts.begin(), hosts.end(), ","));
+    }
+    return std::nullopt;
+}
+
 void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     std::vector<sstring> keyspaces, tables;
     if (vm.contains("keyspace")) {
         auto res = parse_keyspace_and_tables(client, vm, true);
+        auto uses_tablets = keyspace_uses_tablets(client, res.keyspace);
+        if (uses_tablets) {
+            throw std::invalid_argument("nodetool repair repairs only vnode keyspaces. To repair tablet keyspaces use nodetool tablet-repair.");
+        }
         keyspaces.push_back(std::move(res.keyspace));
         tables = std::move(res.tables);
     } else {
-        keyspaces = get_keyspaces(client, "non_local_strategy");
+        keyspaces = get_keyspaces(client, "non_local_strategy", "vnodes");
+        if (!get_keyspaces(client, "non_local_strategy", "tablets").empty()) {
+            fmt::print("Warning: only vnode keyspaces will be repaired. To repair tablet keyspaces use nodetool tablet-repair.");
+        }
     }
 
     if (vm.contains("partitioner-range") && (vm.contains("in-dc") || vm.contains("in-hosts"))) {
@@ -1456,9 +1494,8 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         repair_params["ignoreUnreplicatedKeyspaces"] = "true";
     }
 
-    if (vm.contains("in-hosts")) {
-        const auto hosts = vm["in-hosts"].as<std::vector<sstring>>();
-        repair_params["hosts"] = fmt::to_string(fmt::join(hosts.begin(), hosts.end(), ","));
+    if (auto hosts = maybe_get_hosts(vm); hosts.has_value()) {
+        repair_params["hosts"] = std::move(hosts.value());
     }
 
     if (vm.contains("sequential")) {
@@ -1467,12 +1504,8 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         repair_params["parallelism"] = "dc_parallel";
     }
 
-    if (vm.contains("in-local-dc")) {
-        const auto res = client.get("/snitch/datacenter");
-        repair_params["dataCenters"] = sstring(rjson::to_string_view(res));
-    } else if (vm.contains("in-dc")) {
-        const auto dcs = vm["in-dc"].as<std::vector<sstring>>();
-        repair_params["dataCenters"] = fmt::to_string(fmt::join(dcs.begin(), dcs.end(), ","));
+    if (auto dcs = maybe_get_dcs(client, vm); dcs.has_value()) {
+        repair_params["dataCenters"] = std::move(dcs.value());
     }
 
     if (vm.contains("pull")) {
@@ -1800,15 +1833,6 @@ static std::map<sstring, float> get_effective_ownership(scylla_rest_client& clie
     }
 
     return rjson_to_map<float>(client.get(request_str, params));
-}
-
-static bool keyspace_uses_tablets(scylla_rest_client& client, const sstring& keyspace) {
-    const std::unordered_map<sstring, sstring> params = {{"replication", "tablets"}};
-    const auto res = client.get("/storage_service/keyspaces", params);
-
-    const auto& ks_array = res.GetArray();
-    const auto is_same_ks = [&] (const auto& json_ks) { return rjson::to_string_view(json_ks) == keyspace; };
-    return std::find_if(ks_array.begin(), ks_array.end(), is_same_ks) != ks_array.end();
 }
 
 void ring_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -2793,6 +2817,72 @@ void table_stats_operation(scylla_rest_client& client, const bpo::variables_map&
         table_stats_print<yaml_writer>(client, is_included, human_readable);
     } else {
         table_stats_print_plain(client, is_included, human_readable);
+    }
+}
+
+void tablet_repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
+    std::vector<sstring> keyspaces, tables;
+    if (vm.contains("keyspace")) {
+        auto res = parse_keyspace_and_tables(client, vm, true);
+        auto uses_tablets = keyspace_uses_tablets(client, res.keyspace);
+        if (!uses_tablets) {
+            throw std::invalid_argument("nodetool tablet-repair repairs only tablet keyspaces. To repair vnode keyspaces use nodetool repair.");
+        }
+        keyspaces.push_back(std::move(res.keyspace));
+        tables = std::move(res.tables);
+    } else {
+        keyspaces = get_keyspaces(client, "non_local_strategy", "tablets");
+        if (!get_keyspaces(client, "non_local_strategy", "vnodes").empty()) {
+            fmt::print("Warning: only tablet keyspaces will be repaired. To repair vnode keyspaces use nodetool repair.");
+        }
+    }
+
+    std::unordered_map<sstring, sstring> repair_params{{"tokens", "all"}};
+
+    if (vm.contains("tablet-tokens")) {
+        const auto tokens = vm["tablet-tokens"].as<std::vector<sstring>>();
+        repair_params["tokens"] = fmt::to_string(fmt::join(tokens.begin(), tokens.end(), ","));
+    }
+
+    if (auto hosts = maybe_get_hosts(vm); hosts.has_value()) {
+        repair_params["hosts_filter"] = std::move(hosts.value());
+    }
+
+    if (auto dcs = maybe_get_dcs(client, vm); dcs.has_value()) {
+        repair_params["dcs_filter"] = std::move(dcs.value());
+    }
+
+    auto log = [&]<typename... Args> (fmt::format_string<Args...> fmt, Args&&... param) {
+        const auto msg = fmt::format(fmt, param...);
+        using clock = std::chrono::system_clock;
+        const auto n = clock::now();
+        const auto t = clock::to_time_t(n);
+        const auto ms = (n - clock::from_time_t(t)) / 1ms;
+        fmt::print("[{:%F %T},{:03d}] {}\n", fmt::localtime(t), ms, msg);
+    };
+
+    if (!keyspaces.empty()) {
+        auto ks_to_cfs = tables.empty() ? get_ks_to_cfs(client) : std::map<sstring, std::vector<sstring>>{};
+        for (const auto& keyspace : keyspaces) {
+            repair_params["ks"] = keyspace;
+            for (const auto& table : tables.empty() ? ks_to_cfs[keyspace] : tables) {
+                repair_params["table"] = table;
+
+                sstring task_id = client.post("/storage_service/tablets/repair", repair_params).GetObject()["tablet_task_id"].GetString();
+
+                log("Starting tablet repair with id {} on keyspace {}, table {}", task_id, keyspace, table);
+
+                const auto wait_url = format("/task_manager/wait_task/{}", task_id);
+                const auto res = client.post(wait_url);
+                const auto status = res.GetObject();
+
+                if (status["state"] == "failed") {
+                    throw operation_failed_on_scylladb(format("Repair with task_id={} failed", task_id));
+                } else {
+                    log("Repair with task_id={} finished", task_id);
+                }
+            }
+        }
     }
 }
 
@@ -3953,6 +4043,9 @@ replicas until the master data subset is in-sync.
 To repair all of the data in the cluster, you need to run a repair on
 all of the nodes in the cluster, or let ScyllaDB Manager do it for you.
 
+Note that nodetool repair repairs only vnode keyspaces. To repair tablet
+keyspaces use nodetool tablet-repair.
+
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/repair.html")),
                 {
@@ -4269,6 +4362,38 @@ For more information, see: {}"
             },
             {
                 table_stats_operation
+            }
+        },
+        {
+            {
+                "tablet-repair",
+                "Synchronize data between nodes in the background",
+fmt::format(R"(
+When running nodetool tablet-repair on a single node, all tablets of
+the specified keyspace(s) are repaired, even if they have no replica on
+this node.
+
+To repair all of the data in the cluster, it is enough to run
+nodetool tablet-repair on one node only.
+
+Note that nodetool tablet-repair repairs only tablet keyspaces.
+To repair vnode keyspaces use nodetool repair.
+
+For more information, see: {}"
+)", doc_link("operating-scylla/nodetool-commands/tablet-repair.html")),
+                {
+                    typed_option<std::vector<sstring>>("in-dc", "Constrain repair to specific datacenter(s)"),
+                    typed_option<>("in-local-dc", "Constrain repair to the local datacenter only"),
+                    typed_option<std::vector<sstring>>("in-hosts", "Constrain repair to the specific host(s)"),
+                    typed_option<std::vector<sstring>>("tablet-tokens", "Tokens owned by the tablets to repair."),
+                },
+                {
+                    typed_option<sstring>("keyspace", "The keyspace to repair, if missing all keyspaces are repaired", 1),
+                    typed_option<std::vector<sstring>>("table", "The table(s) to repair, if missing all tables are repaired", -1),
+                },
+            },
+            {
+                tablet_repair_operation
             }
         },
         {
