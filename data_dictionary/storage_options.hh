@@ -13,6 +13,7 @@
 #include <variant>
 #include <seastar/core/sstring.hh>
 #include "schema/schema_fwd.hh"
+#include "utils/s3/utils/manip_s3.hh"
 #include "seastarx.hh"
 
 namespace seastar {
@@ -62,6 +63,18 @@ inline storage_options make_local_options(std::filesystem::path dir) {
     so.value = data_dictionary::storage_options::local { .dir = std::move(dir) };
     return so;
 }
+
+inline storage_options make_s3_options(const std::string& endpoint, const std::string& fqn) {
+    std::string bucket;
+    std::string object;
+    s3::s3fqn_to_parts(fqn, bucket, object);
+    object = std::filesystem::path(object).parent_path().string(); // remove the filename and trailing separator from the path
+    storage_options so;
+    so.value = storage_options::s3{.bucket = std::move(bucket), .endpoint = endpoint, .location = std::move(object)};
+
+    return so;
+}
+
 
 } // namespace data_dictionary
 
