@@ -37,7 +37,7 @@ inline void match_compacted_mutation(const mutation_opt& mo, const mutation& m, 
     BOOST_REQUIRE(bool(mo));
     memory::scoped_critical_alloc_section dfg;
     mutation got = *mo;
-    got.partition().compact_for_compaction(*m.schema(), always_gc, got.decorated_key(), query_time, tombstone_gc_state(nullptr));
+    got.partition().compact_for_compaction(*m.schema(), always_gc, got.decorated_key(), query_time, {});
     assert_that(got).is_equal_to(m, ck_ranges);
 }
 

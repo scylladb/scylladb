@@ -69,7 +69,7 @@ bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& s
     if (_unchecked_tombstone_compaction) {
         return true;
     }
-    auto droppable_ratio = sst->estimate_droppable_tombstone_ratio(compaction_time, t.get_tombstone_gc_state(), t.schema());
+    auto droppable_ratio = sst->estimate_droppable_tombstone_ratio(compaction_time, t.get_tombstone_gc_before_getter(), t.schema());
     return droppable_ratio >= _tombstone_threshold;
 }
 
