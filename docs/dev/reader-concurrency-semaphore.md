@@ -59,6 +59,7 @@ Permits are in one of the following states:
 * `active/await` - a previously `active/need_cpu` permit, which needs something other than CPU to proceed, it is waiting on I/O or a remote shards, other permits can be admitted while the permit is in this state, pending resource availability;
 * `inactive` - the permit was marked inactive, it can be evicted to make room for admitting more permits if needed;
 * `evicted` - a former inactive permit which was evicted, the permit has to undergo admission again for the read to resume;
+* `preemptive_aborted` - the permit timed out or was rejected during admission as it was detected the read might time out later during execution;
 
 Note that some older releases will have different names for some of these states or lack some of the states altogether:
 
