@@ -94,3 +94,84 @@ async def test_view_building_with_tablet_split(manager: ManagerClient):
         await wait_for_view_is_built(cql, ks, 'mv')
         rows = await cql.run_async(f"SELECT * FROM {ks}.mv")
         assert len(list(rows)) == keys
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_increase_rf_during_view_building(manager: ManagerClient):
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'view_building_coordinator=debug',
+        '--logger-log-level', 'view_building_worker=debug',
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.enable_injection(servers[0].ip_addr, "view_building_worker_wait_before_consume", one_shot=True)
+
+    cql = manager.get_cql()
+    res = await cql.run_async("SELECT data_center FROM system.local")
+    this_dc = res[0].data_center
+
+    rows = 64
+    async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tbl(id int primary key, v1 int, v2 int)")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.tbl (id, v1, v2) VALUES ({k}, {k}, {k});") for k in range(rows)])
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tbl WHERE v1 IS NOT NULL primary key(id, v1)")
+        async def check_building_tasks_created():
+            tasks = await cql.run_async(f"SELECT * FROM system.view_building_coordinator_tasks")
+            return True if len(tasks) > 0 else None
+        await wait_for(check_building_tasks_created, time.time() + 60)
+
+        servers.append(await manager.server_add(cmdline=cmdline))
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
+
+        await manager.api.message_injection(servers[0].ip_addr, 'view_building_worker_wait_before_consume')
+        await wait_for_view_is_built(cql, ks, "mv")
+        mv_rows = await cql.run_async(f"SELECT * from {ks}.mv")
+        assert len(mv_rows) == rows
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_decrease_rf_during_view_building(manager: ManagerClient):
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'view_building_coordinator=debug',
+        '--logger-log-level', 'view_building_worker=debug',
+    ]
+    servers = await manager.servers_add(2, cmdline=cmdline)
+
+    await manager.api.enable_injection(servers[0].ip_addr, "view_building_worker_wait_before_consume", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, "view_building_worker_wait_before_consume", one_shot=True)
+
+    cql = manager.get_cql()
+    res = await cql.run_async("SELECT data_center FROM system.local")
+    this_dc = res[0].data_center
+
+    rows = 64
+    async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tbl(id int primary key, v1 int, v2 int)")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.tbl (id, v1, v2) VALUES ({k}, {k}, {k});") for k in range(rows)])
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tbl WHERE v1 IS NOT NULL primary key(id, v1)")
+        async def check_building_tasks_created():
+            tasks = await cql.run_async(f"SELECT * FROM system.view_building_coordinator_tasks")
+            return True if len(tasks) > 0 else None
+        await wait_for(check_building_tasks_created, time.time() + 60)
+
+        # there is one tablet and RF=2, so there should be 2 tasks
+        tasks = await cql.run_async(f"SELECT * FROM system.view_building_coordinator_tasks")
+        assert len(tasks) == 2
+
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}}")
+        await asyncio.gather(*[read_barrier(manager.api, server.ip_addr) for server in servers])
+        tasks = await cql.run_async(f"SELECT * FROM system.view_building_coordinator_tasks")
+        assert len(tasks) == 1
+
+        await manager.api.message_injection(servers[0].ip_addr, 'view_building_worker_wait_before_consume')
+        await manager.api.message_injection(servers[1].ip_addr, 'view_building_worker_wait_before_consume')
+        await wait_for_view_is_built(cql, ks, "mv")
+        mv_rows = await cql.run_async(f"SELECT * from {ks}.mv")
+        assert len(mv_rows) == rows
+
