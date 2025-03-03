@@ -91,5 +91,6 @@ add_perf_test(perf_mutation_readers
 add_perf_test(perf_mutation_fragment)
 add_perf_test(perf_vint)
 add_perf_test(perf_row_cache_reads)
+add_perf_test(perf_generic_server)
 add_perf_test(perf_s3_client)
 add_perf_test(perf_sort_by_proximity)
