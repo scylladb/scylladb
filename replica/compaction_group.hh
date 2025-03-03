@@ -72,11 +72,10 @@ private:
     // Update compaction backlog tracker with the same changes applied to the underlying sstable set.
     void backlog_tracker_adjust_charges(const std::vector<sstables::shared_sstable>& old_sstables, const std::vector<sstables::shared_sstable>& new_sstables);
 
-    future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
     // Input SSTables that weren't added to any SSTable set, are considered unused and can be unlinked.
     // An input SSTable remains linked if it wasn't actually compacted, yet compaction manager wants
     // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
-    future<> delete_unused_sstables(sstables::compaction_completion_desc desc);
+    std::vector<sstables::shared_sstable> unused_sstables_for_deletion(sstables::compaction_completion_desc desc) const;
     // Tracks the maximum timestamp observed across all SSTables in this group.
     // This is used by the compacting reader to determine if a memtable contains entries
     // with timestamps that overlap with those in the SSTables of the compaction group.
