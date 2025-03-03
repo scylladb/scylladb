@@ -159,7 +159,7 @@ def get_compaction_stats(cql, table):
             tasks += int(s['task'])
     return tasks, stats
 
-@pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
+@pytest.mark.parametrize("compaction_strategy", ["IncrementalCompactionStrategy", "LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
 def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace, compaction_strategy):
     """
     Test that compactionstats show no pending compaction after major compaction
