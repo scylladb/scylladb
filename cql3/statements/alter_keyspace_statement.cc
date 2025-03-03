@@ -45,15 +45,17 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-static unsigned get_abs_rf_diff(const std::string& curr_rf, const std::string& new_rf) {
+static int parse_rf(const std::string& rf) {
     try {
-        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
-    } catch (std::invalid_argument const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
-    } catch (std::out_of_range const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments to fit into `int` type, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+        const auto value = std::stoi(rf);
+        if (value < 0) {
+            on_internal_error(mylogger, std::format("parse_rf() expects a valid RF value, but it got: {}", rf));
+        }
+        return value;
+    } catch (std::invalid_argument const&) {
+        on_internal_error(mylogger, std::format("parse_rf() expects a valid RF value, but it got: {}", rf));
+    } catch (std::out_of_range const&) {
+        on_internal_error(mylogger, std::format("parse_rf() expects a valid RF value fitting into `int`, but it got: {}", rf));
     }
 }
 
@@ -89,10 +91,10 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
                 unsigned total_abs_rfs_diff = 0;
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
-                    sstring old_rf = "0";
+                    int old_rf_value = 0;
                     if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
                              new_dc_in_current_mapping != current_rf_per_dc.end()) {
-                        old_rf = new_dc_in_current_mapping->second;
+                        old_rf_value = parse_rf(new_dc_in_current_mapping->second);
                     } else if (!qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters().contains(new_dc)) {
                         // This means that the DC listed in ALTER doesn't exist. This error will be reported later,
                         // during validation in abstract_replication_strategy::validate_replication_strategy.
@@ -100,7 +102,11 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         // first we need to report non-existing DCs, then if RFs aren't changed by too much.
                         continue;
                     }
-                    if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2) {
+
+                    const auto new_rf_value = parse_rf(new_rf);
+                    const auto rf_diff = std::abs(new_rf_value - old_rf_value);
+
+                    if (total_abs_rfs_diff += rf_diff; total_abs_rfs_diff >= 2) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
                     }
                 }
