@@ -100,7 +100,7 @@ static future<> mutate_locally(utils::chunked_vector<canonical_mutation> muts, s
     });
 }
 
-static bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db) {
+bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db) {
     if (!db.has_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY)) {
         return false;
     }
@@ -121,7 +121,7 @@ static bool should_flush_system_topology_after_applying(const mutation& mut, con
     return false;
 }
 
-static future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
+future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
     std::vector<frozen_mutation_and_schema> mutations;
     mutations.reserve(cms.size());
     bool need_system_topology_flush = false;
