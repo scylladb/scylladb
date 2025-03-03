@@ -45,7 +45,6 @@
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/aws_sigv4.hh"
-#include "utils/exceptions.hh"
 #include "db_clock.hh"
 #include "utils/log.hh"
 

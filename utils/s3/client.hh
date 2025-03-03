@@ -19,6 +19,7 @@
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
 #include "retry_strategy.hh"
+#include "utils/exceptions.hh"
 #include "utils/s3/client_fwd.hh"
 
 using namespace seastar;
@@ -46,6 +47,7 @@ struct stats {
 };
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
+storage_io_error map_s3_client_exception(std::exception_ptr ex);
 
 class retryable_http_client {
 public:
