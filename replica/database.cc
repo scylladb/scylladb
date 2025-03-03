@@ -1376,17 +1376,7 @@ std::vector<view_ptr> database::get_views() const {
 }
 
 future<> database::create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system) {
-    auto kscfg = make_keyspace_config(*ksm);
-    if (system == system_keyspace::yes) {
-        kscfg.enable_disk_reads = kscfg.enable_disk_writes = kscfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
-        kscfg.enable_cache = _cfg.enable_cache();
-        // don't make system keyspace writes wait for user writes (if under pressure)
-        kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
-    }
-    if (extensions().is_extension_internal_keyspace(ksm->name())) {
-        // don't make internal keyspaces write wait for user writes (if under pressure), and also to avoid possible deadlocks.
-        kscfg.dirty_memory_manager = &_system_dirty_memory_manager;
-    }
+    auto kscfg = make_keyspace_config(*ksm, system);
     keyspace ks(ksm, std::move(kscfg), erm_factory);
     co_await ks.create_replication_strategy(get_shared_token_metadata());
     _keyspaces.emplace(ksm->name(), std::move(ks));
@@ -2106,14 +2096,16 @@ future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::t
 }
 
 keyspace::config
-database::make_keyspace_config(const keyspace_metadata& ksm) {
+database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system) {
     keyspace::config cfg;
-    if (_cfg.data_file_directories().size() > 0) {
+    if (is_system == system_keyspace::yes) {
+        cfg.enable_disk_reads = cfg.enable_disk_writes = cfg.enable_commitlog = !_cfg.volatile_system_keyspace_for_testing();
+        cfg.enable_cache = _cfg.enable_cache();
+    } else if (_cfg.data_file_directories().size() > 0) {
         cfg.enable_disk_writes = !_cfg.enable_in_memory_data_store();
         cfg.enable_disk_reads = true; // we always read from disk
         cfg.enable_commitlog = _cfg.enable_commitlog() && !_cfg.enable_in_memory_data_store();
         cfg.enable_cache = _cfg.enable_cache();
-
     } else {
         cfg.enable_disk_writes = false;
         cfg.enable_disk_reads = false;
@@ -2122,7 +2114,12 @@ database::make_keyspace_config(const keyspace_metadata& ksm) {
     }
     cfg.enable_dangerous_direct_import_of_cassandra_counters = _cfg.enable_dangerous_direct_import_of_cassandra_counters();
     cfg.compaction_enforce_min_threshold = _cfg.compaction_enforce_min_threshold;
-    cfg.dirty_memory_manager = &_dirty_memory_manager;
+    // don't make system or internal keyspace writes wait for user writes (if under pressure)
+    if (is_system || extensions().is_extension_internal_keyspace(ksm.name())) {
+        cfg.dirty_memory_manager = &_system_dirty_memory_manager;
+    } else {
+        cfg.dirty_memory_manager = &_dirty_memory_manager;
+    }
     cfg.streaming_read_concurrency_semaphore = &_streaming_concurrency_sem;
     cfg.compaction_concurrency_semaphore = &_compaction_concurrency_sem;
     cfg.cf_stats = &_cf_stats;

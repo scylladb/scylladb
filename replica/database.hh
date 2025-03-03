@@ -1766,7 +1766,6 @@ public:
     future<> apply(const std::vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
     future<> apply_hint(schema_ptr, const frozen_mutation&, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout);
     future<mutation> apply_counter_update(schema_ptr, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
-    keyspace::config make_keyspace_config(const keyspace_metadata& ksm);
     const sstring& get_snitch_name() const;
     /*!
      * \brief clear snapshot based on a tag
@@ -1859,6 +1858,7 @@ public:
 public:
     bool update_column_family(schema_ptr s);
 private:
+    keyspace::config make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system);
     future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new);
     future<> detach_column_family(table& cf);
 
