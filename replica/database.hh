@@ -370,6 +370,8 @@ struct table_stats {
     int64_t live_sstable_count = 0;
     /** Estimated number of compactions pending for this column family */
     int64_t pending_compactions = 0;
+    /** Number of pending tasks that will potentially perform deletions */
+    int64_t pending_sstable_deletions = 0;
     int64_t memtable_partition_insertions = 0;
     int64_t memtable_partition_hits = 0;
     int64_t memtable_range_tombstone_reads = 0;
@@ -477,11 +479,13 @@ private:
     lw_shared_ptr<const sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
     seastar::gate _sstable_deletion_gate;
-    // This semaphore ensures that an operation like snapshot won't have its selected
-    // sstables deleted by compaction in parallel, a race condition which could
-    // easily result in failure.
-    seastar::named_semaphore _sstable_deletion_sem = {1, named_semaphore_exception_factory{"sstable deletion"}};
-    // Ensures that concurrent updates to sstable set will work correctly
+    // This semaphore ensures that any operation updating the SSTable list and deleting unused
+    // SSTables will be atomic to other concurrent operations.
+    // That means snapshot, for example, won't have its selected sstables deleted by compaction
+    // in parallel, a race condition which could easily result in failure.
+    // Another example is snapshot not being able to see SSTables deleted by tablet cleanup,
+    // while cleanup is in the middle of the list update.
+    // TODO: find a better name for this semaphore.
     seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
     // Initialized when the table is populated via update_sstables_known_generation.
@@ -581,11 +585,23 @@ public:
     // Ensures that concurrent preemptible mutations to sstable lists will produce correct results.
     // User will hold this permit until done with all updates. As soon as it's released, another concurrent
     // attempt to update the lists will be able to proceed.
-    struct sstable_list_builder {
+    struct sstable_list_permit {
         using permit_t = semaphore_units<seastar::named_semaphore_exception_factory>;
         permit_t permit;
 
-        explicit sstable_list_builder(permit_t p) : permit(std::move(p)) {}
+        sstable_list_permit(permit_t p) : permit(std::move(p)) {}
+    };
+    // This permit ensures that the observer won't be able to find the intermediate state left by any
+    // process updating the sstable list. It guarantees atomicity of list updates. That being said,
+    // an iteration over the list should always acquire this permit in order to guarantee stability
+    // during the traversal. For example, that none of the SSTables will be found unlinked.
+    future<sstable_list_permit> get_sstable_list_permit();
+
+    class sstable_list_builder {
+        lw_shared_ptr<table> _t;
+        sstable_list_permit _permit;
+    public:
+        explicit sstable_list_builder(table& t, sstable_list_permit p) : _t(t.shared_from_this()), _permit(std::move(p)) {}
         sstable_list_builder& operator=(const sstable_list_builder&) = delete;
         sstable_list_builder(const sstable_list_builder&) = delete;
 
@@ -602,7 +618,12 @@ public:
                        sstables::sstable_set new_sstable_list,
                        const std::vector<sstables::shared_sstable>& new_sstables,
                        const std::vector<sstables::shared_sstable>& old_sstables);
+
+        future<> delete_sstables_atomically(std::vector<sstables::shared_sstable> sstables_to_remove);
     };
+    // NOTE: Always use this interface for deleting SSTables in the table, since it guarantees
+    // synchronization with concurrent iterations.
+    future<> delete_sstables_atomically(const sstable_list_permit&, std::vector<sstables::shared_sstable> sstables_to_remove);
 
     // Precondition: table needs tablet splitting.
     // Returns true if all storage of table is ready for splitting.
