@@ -4,7 +4,7 @@
 
 import pytest
 import requests
-from .util import new_materialized_view, new_test_table
+from .util import new_materialized_view, new_test_table, unique_name
 from . import nodetool
 import time
 
@@ -159,8 +159,24 @@ def get_compaction_stats(cql, table):
             tasks += int(s['task'])
     return tasks, stats
 
+# When using tablets, the test test_compactionstats_after_major_compaction
+# assumes there is just one tablet - otherwise if there are many, each may
+# have so little data that no compation will be required. So the following
+# fixture is a keyspace that ensures it either uses vnodes or when using
+# tablets - it uses just one.
+@pytest.fixture(scope="module")
+def test_keyspace_1(cql, this_dc, has_tablets, test_keyspace):
+    if has_tablets:
+        name = unique_name()
+        cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true, 'initial': 1 }")
+        yield name
+    else:
+        # The regular test_keyspace is fine, no need to create another one
+        yield test_keyspace
+    cql.execute("DROP KEYSPACE " + name)
+
 @pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
-def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace, compaction_strategy):
+def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace_1, compaction_strategy):
     """
     Test that compactionstats show no pending compaction after major compaction
     """
@@ -170,7 +186,7 @@ def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace,
         extra_strategy_options = ", 'sstable_size_in_mb':1"
         num_sstables *= 4   # Need enough data to trigger level 0 compaction
     value = 'x' * 128*1024
-    with new_test_table(cql, test_keyspace,
+    with new_test_table(cql, test_keyspace_1,
                         schema="p int PRIMARY KEY, v text",
                         extra=f"WITH compression={{}} AND compaction={{'class':'{compaction_strategy}'{extra_strategy_options}}}") as table:
         with nodetool.no_autocompaction_context(cql, table):
