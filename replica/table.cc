@@ -29,7 +29,7 @@
 #include "cell_locking.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
-#include "checked-file-impl.hh"
+#include "utils/checked-file-impl.hh"
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
