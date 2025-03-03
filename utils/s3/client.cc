@@ -490,6 +490,14 @@ future<> client::delete_object_tagging(sstring object_name, seastar::abort_sourc
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
+static sstring format_range_header(const range& range) {
+    auto end_bytes = range.off + range.len - 1;
+    if (end_bytes < range.off) {
+        throw std::overflow_error("End of the range exceeds 64-bits");
+    }
+    return format("bytes={}-{}", range.off, end_bytes);
+}
+
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
@@ -497,11 +505,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
         if (range->len == 0) {
             co_return temporary_buffer<char>();
         }
-        auto end_bytes = range->off + range->len - 1;
-        if (end_bytes < range->off) {
-            throw std::overflow_error("End of the range exceeds 64-bits");
-        }
-        auto range_header = format("bytes={}-{}", range->off, end_bytes);
+        auto range_header = format_range_header(*range);
         s3l.trace("GET {} contiguous range='{}'", object_name, range_header);
         req._headers["Range"] = std::move(range_header);
         expected = http::reply::status_type::partial_content;
@@ -1033,6 +1037,141 @@ data_sink client::make_upload_sink(sstring object_name, seastar::abort_source* a
 
 data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
     return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece, as));
+}
+
+class client::download_source final : public seastar::data_source_impl {
+    static constexpr size_t default_part_size = 10_MiB;
+
+    shared_ptr<client> _client;
+    sstring _object_name;
+    seastar::abort_source* _as;
+
+    using part_buffers = circular_buffer<temporary_buffer<char>>;
+
+    const size_t _part_size;
+    std::deque<part_buffers> _parts;
+    condition_variable _signal;
+    future<> _done;
+
+    void push_buffer(part_buffers& b, temporary_buffer<char>&& buf) {
+        b.push_back(std::move(buf));
+        _signal.signal();
+    }
+
+    future<> download_in_the_background(range);
+    future<> download_part(range, part_buffers& bufs);
+
+public:
+    download_source(shared_ptr<client> cln, sstring object_name, std::optional<range> range, std::optional<size_t> part_size, seastar::abort_source* as)
+        : _client(std::move(cln))
+        , _object_name(std::move(object_name))
+        , _as(as)
+        , _part_size(part_size.value_or(default_part_size))
+        , _done(download_in_the_background(range.value_or(s3::range{ 0, std::numeric_limits<size_t>::max() })))
+    {
+    }
+
+    virtual future<temporary_buffer<char>> get() override;
+    virtual future<> close() override {
+        return std::move(_done);
+    }
+};
+
+data_source client::make_download_source(sstring object_name, std::optional<range> range, std::optional<size_t> part_size, seastar::abort_source* as) {
+    return data_source(std::make_unique<download_source>(shared_from_this(), std::move(object_name), range, part_size, as));
+}
+
+future<> client::download_source::download_in_the_background(range range) {
+    gate bg;
+    // push on part instantly, otherwise .get() can bail out with EOF
+    // before we even find out the object size
+    _parts.emplace_back();
+
+    auto object_size = co_await _client->get_object_size(_object_name, _as);
+    range.off = std::min(range.off, object_size);
+    range.len = std::min(range.len, object_size - range.off);
+
+    std::exception_ptr part_upload_ex;
+
+    while (range.len > 0) {
+        auto h = bg.hold();
+        auto part_len = std::min(range.len, _part_size);
+        std::ignore = download_part(s3::range{ range.off, part_len }, _parts.back()).handle_exception([&part_upload_ex] (auto ex) {
+            if (!part_upload_ex) {
+                part_upload_ex = ex;
+            }
+        }).finally([h = std::move(h)] {});
+        range.off += part_len;
+        range.len -= part_len;
+        _parts.emplace_back();
+    }
+
+    push_buffer(_parts.back(), temporary_buffer<char>());
+    co_await bg.close();
+    if (part_upload_ex) {
+        _signal.broken(std::move(part_upload_ex));
+    }
+}
+
+future<> client::download_source::download_part(range range, part_buffers& part) {
+    auto mem = co_await _client->claim_memory(range.len);
+
+    auto req = http::request::make("GET", _client->_host, _object_name);
+    auto range_header = format_range_header(range);
+    s3l.trace("GET {} download range='{}'", _object_name, range_header);
+    req._headers.emplace(std::make_pair("Range", std::move(range_header)));
+
+    size_t part_consumed = 0;
+    co_await _client->make_request(std::move(req), [this, &part_consumed, start = s3_clock::now(), &part, off = range.off] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        input_stream<char> in = std::move(in_);
+        size_t consumed = 0;
+        s3l.trace("Consuming {} part at {}", _object_name, off);
+        co_await in.consume([this, &consumed, &part_consumed, &part] (temporary_buffer<char> buf) {
+            if (buf.empty()) {
+                return make_ready_future<consumption_result<char>>(stop_consuming(std::move(buf)));
+            }
+            // It can happen that the request fails in the middle and http client
+            // replays one from scratch. In that case the same data will arrive
+            // again and should be skipped
+            if (consumed + buf.size() > part_consumed) {
+                if (consumed < part_consumed) {
+                    consumed += part_consumed - consumed;
+                    buf.trim_front(part_consumed - consumed);
+                }
+                part_consumed += buf.size();
+                consumed += buf.size();
+                push_buffer(part, std::move(buf));
+            } else {
+                consumed += buf.size();
+            }
+            return make_ready_future<consumption_result<char>>(continue_consuming());
+        }).then([&gc, &consumed, start] {
+            gc.read_stats.update(consumed, s3_clock::now() - start);
+        });
+        assert(consumed == part_consumed);
+        push_buffer(part, temporary_buffer<char>());
+        s3l.trace("Consumed {} bytes of {} part at {}", part_consumed, _object_name, off);
+    }, http::reply::status_type::partial_content, _as);
+}
+
+future<temporary_buffer<char>> client::download_source::get() {
+    while (!_parts.empty()) {
+        auto& part = _parts.front();
+        while (part.empty()) {
+            co_await _signal.wait();
+        }
+
+        auto buf = std::move(part.front());
+        part.pop_front();
+        if (!buf.empty()) {
+            co_return buf;
+        }
+
+        assert(part.empty());
+        _parts.pop_front();
+    }
+
+    co_return temporary_buffer<char>();
 }
 
 // unlike upload_sink and upload_jumbo_sink, do_upload_file reads from the
