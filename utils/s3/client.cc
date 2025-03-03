@@ -253,11 +253,6 @@ client::group_client& client::find_or_create_client() {
     return it->second;
 }
 
-inline bool is_redirect_status(http::reply::status_type st) {
-    auto st_i = static_cast<int>(st);
-    return st_i >= 300 && st_i < 400;
-}
-
 storage_io_error map_s3_client_exception(std::exception_ptr ex) {
     seastar::memory::scoped_critical_alloc_section alloc;
 
@@ -285,7 +280,7 @@ storage_io_error map_s3_client_exception(std::exception_ptr ex) {
     } catch (const httpd::unexpected_status_error& e) {
         auto status = e.status();
 
-        if (is_redirect_status(status) || status == http::reply::status_type::not_found) {
+        if (http::reply::classify_status(status) == http::reply::status_class::redirection || status == http::reply::status_type::not_found) {
             return {ENOENT, format("S3 object doesn't exist ({})", status)};
         }
         if (status == http::reply::status_type::forbidden || status == http::reply::status_type::unauthorized) {
