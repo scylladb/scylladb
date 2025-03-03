@@ -1838,27 +1838,31 @@ def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
                    row(2, 1, 3, 2, 3))
 
         # Range queries with PER PARTITION LIMIT
-        assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3),
-                   row(4, 1, 5, 2, 5))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3),
+                       row(4, 1, 5, 2, 5))
 
         # Reproduces #5363:
-        assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3),
-                   row(4, 1, 5, 2, 5))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3),
+                       row(4, 1, 5, 2, 5))
 
         # Range queries with PER PARTITION LIMIT and LIMIT
-        assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 LIMIT 5 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3),
-                   row(4, 1, 5, 2, 5))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 LIMIT 5 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3),
+                       row(4, 1, 5, 2, 5))
 
         # Reproduces #5361, #5363
-        assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assert_rows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3))
 
 # SelectSingleColumn
 def testClusteringColumnRelationsWithCompactStorage(cql, test_keyspace):

@@ -580,27 +580,31 @@ def testGroupByWithRangeNamesQueryWithoutPaging(cql, test_keyspace):
                    row(2, 1, 3, 2, 3))
 
         # Range queries with PER PARTITION LIMIT
-        assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3),
-                   row(4, 1, 5, 2, 5))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3),
+                       row(4, 1, 5, 2, 5))
 
         # Reproduces #5363:
-        assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3),
-                   row(4, 1, 5, 2, 5))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3),
+                       row(4, 1, 5, 2, 5))
 
         # Range queries with PER PARTITION LIMIT and LIMIT
-        assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 LIMIT 5 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3),
-                   row(4, 1, 5, 2, 5))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 LIMIT 5 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3),
+                       row(4, 1, 5, 2, 5))
 
         # Reproduces #5363:
-        assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2 ALLOW FILTERING"),
-                   row(1, 1, 2, 2, 2),
-                   row(2, 1, 3, 2, 3))
+        with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+            assertRows(execute(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2 ALLOW FILTERING"),
+                       row(1, 1, 2, 2, 2),
+                       row(2, 1, 3, 2, 3))
 
 @pytest.mark.xfail(reason="Issue #13109")
 def testGroupByWithStaticColumnsWithoutPaging(cql, test_keyspace):
@@ -1166,23 +1170,26 @@ def testGroupByWithPaging(cql, test_keyspace):
                           row(1, 2, 6, 7, 24))
 
             # Range queries with PER PARTITION LIMIT
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s GROUP BY a, b PER PARTITION LIMIT 3", pageSize),
-                          row(1, 2, 6, 2, 12),
-                          row(1, 4, 12, 2, 24),
-                          row(2, 2, 6, 1, 6),
-                          row(2, 4, 12, 1, 12),
-                          row(4, 8, 24, 1, 24))
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s GROUP BY a, b PER PARTITION LIMIT 3", pageSize),
+                              row(1, 2, 6, 2, 12),
+                              row(1, 4, 12, 2, 24),
+                              row(2, 2, 6, 1, 6),
+                              row(2, 4, 12, 1, 12),
+                              row(4, 8, 24, 1, 24))
 
             # Reproduces #5363:
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s GROUP BY a, b PER PARTITION LIMIT 1", pageSize),
-                          row(1, 2, 6, 2, 12),
-                          row(2, 2, 6, 1, 6),
-                          row(4, 8, 24, 1, 24))
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s GROUP BY a, b PER PARTITION LIMIT 1", pageSize),
+                              row(1, 2, 6, 2, 12),
+                              row(2, 2, 6, 1, 6),
+                              row(4, 8, 24, 1, 24))
 
             # Range query with PER PARTITION LIMIT
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2", pageSize),
-                          row(1, 2, 6, 2, 12),
-                          row(2, 2, 6, 1, 6))
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2", pageSize),
+                              row(1, 2, 6, 2, 12),
+                              row(2, 2, 6, 1, 6))
 
             # Range query without aggregates and with PER PARTITION LIMIT
             assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, c, d FROM %s GROUP BY a, b, c PER PARTITION LIMIT 2", pageSize),
@@ -1335,10 +1342,11 @@ def testGroupByWithPaging(cql, test_keyspace):
 
             # Single partition query with PER PARTITION LIMIT
             # Reproduces #5363:
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a = 1 GROUP BY a, b, c PER PARTITION LIMIT 2",
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):  
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a = 1 GROUP BY a, b, c PER PARTITION LIMIT 2",
                                                pageSize),
-                          row(1, 2, 6, 1, 6),
-                          row(1, 2, 12, 1, 12))
+                              row(1, 2, 6, 1, 6),
+                              row(1, 2, 12, 1, 12))
 
             # Single partition queries without aggregates and with LIMIT
             # Reproduces #5362:
@@ -1396,10 +1404,11 @@ def testGroupByWithPaging(cql, test_keyspace):
 
             # Single partition queries with ORDER BY and PER PARTITION LIMIT
             # Reproduces #5361:
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a = 1 GROUP BY a, b, c ORDER BY b DESC, c DESC PER PARTITION LIMIT 2",
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a = 1 GROUP BY a, b, c ORDER BY b DESC, c DESC PER PARTITION LIMIT 2",
                                                pageSize),
-                          row(1, 4, 24, 2, 24),
-                          row(1, 2, 12, 1, 12))
+                              row(1, 4, 24, 2, 24),
+                              row(1, 2, 12, 1, 12))
 
             # Multi-partitions queries
             assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c",
@@ -1427,19 +1436,21 @@ def testGroupByWithPaging(cql, test_keyspace):
 
             # Multi-partitions queries with PER PARTITION LIMIT
             # Reproduces #5362:
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c PER PARTITION LIMIT 2",
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c PER PARTITION LIMIT 2",
                                                pageSize),
-                          row(1, 2, 6, 1, 6),
-                          row(1, 2, 12, 1, 12),
-                          row(2, 2, 6, 1, 6),
-                          row(2, 4, 12, 1, 12),
-                          row(4, 8, 24, 1, 24))
+                              row(1, 2, 6, 1, 6),
+                              row(1, 2, 12, 1, 12),
+                              row(2, 2, 6, 1, 6),
+                              row(2, 4, 12, 1, 12),
+                              row(4, 8, 24, 1, 24))
 
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c PER PARTITION LIMIT 1",
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, e, count(b), max(e) FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b, c PER PARTITION LIMIT 1",
                                                pageSize),
-                          row(1, 2, 6, 1, 6),
-                          row(2, 2, 6, 1, 6),
-                          row(4, 8, 24, 1, 24))
+                              row(1, 2, 6, 1, 6),
+                              row(2, 2, 6, 1, 6),
+                              row(4, 8, 24, 1, 24))
 
             # Multi-partitions queries without aggregates
             assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, c, d FROM %s WHERE a IN (1, 2, 4) GROUP BY a, b",
@@ -1545,27 +1556,31 @@ def testGroupByWithRangeNamesQueryWithPaging(cql, test_keyspace):
                           row(2, 1, 3, 2, 3))
 
             # Range queries with PER PARTITION LIMIT
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 ALLOW FILTERING", pageSize),
-                          row(1, 1, 2, 2, 2),
-                          row(2, 1, 3, 2, 3),
-                          row(4, 1, 5, 2, 5))
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 ALLOW FILTERING", pageSize),
+                              row(1, 1, 2, 2, 2),
+                              row(2, 1, 3, 2, 3),
+                              row(4, 1, 5, 2, 5))
 
             # Reproduces #5363:
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 ALLOW FILTERING", pageSize),
-                          row(1, 1, 2, 2, 2),
-                          row(2, 1, 3, 2, 3),
-                          row(4, 1, 5, 2, 5))
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 ALLOW FILTERING", pageSize),
+                              row(1, 1, 2, 2, 2),
+                              row(2, 1, 3, 2, 3),
+                              row(4, 1, 5, 2, 5))
 
             # Range queries with PER PARTITION LIMIT and LIMIT
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 LIMIT 5 ALLOW FILTERING", pageSize),
-                          row(1, 1, 2, 2, 2),
-                          row(2, 1, 3, 2, 3),
-                          row(4, 1, 5, 2, 5))
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b = 1 and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 2 LIMIT 5 ALLOW FILTERING", pageSize),
+                              row(1, 1, 2, 2, 2),
+                              row(2, 1, 3, 2, 3),
+                              row(4, 1, 5, 2, 5))
 
             # Reproduces #5361:
-            assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2 ALLOW FILTERING", pageSize),
-                          row(1, 1, 2, 2, 2),
-                          row(2, 1, 3, 2, 3))
+            with pytest.raises(InvalidRequest, match='PER PARTITION LIMIT is not allowed with aggregate queries'):
+                assertRowsNet(execute_with_paging(cql, table, "SELECT a, b, d, count(b), max(d) FROM %s WHERE b IN (1, 2) and c IN (1, 2) GROUP BY a, b PER PARTITION LIMIT 1 LIMIT 2 ALLOW FILTERING", pageSize),
+                              row(1, 1, 2, 2, 2),
+                              row(2, 1, 3, 2, 3))
 
 @pytest.mark.xfail(reason="Issue #21267")
 def testGroupByWithStaticColumnsWithPaging(cql, test_keyspace):
