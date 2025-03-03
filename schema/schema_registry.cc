@@ -169,8 +169,11 @@ void schema_registry::clear() {
     _entries.clear();
 }
 
-schema_ptr schema_registry_entry::load(frozen_schema fs) {
-    _frozen_schema = std::move(fs);
+schema_ptr schema_registry_entry::load(base_and_view_schemas fs) {
+    _frozen_schema = std::move(fs.schema);
+    if (fs.base_schema) {
+        _base_schema = std::move(fs.base_schema);
+    }
     auto s = get_schema();
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
@@ -183,6 +186,9 @@ schema_ptr schema_registry_entry::load(frozen_schema fs) {
 
 schema_ptr schema_registry_entry::load(schema_ptr s) {
     _frozen_schema = frozen_schema(s);
+    if (s->is_view()) {
+        _base_schema = s->view_info()->base_info()->base_schema();
+    }
     _schema = &*s;
     _schema->_registry_entry = this;
     _erase_timer.cancel();
@@ -202,7 +208,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     _state = state::LOADING;
     slogger.trace("Loading {}", _version);
     // Move to background.
-    (void)f.then_wrapped([self = shared_from_this(), this] (future<frozen_schema>&& f) {
+    (void)f.then_wrapped([self = shared_from_this(), this] (future<base_and_view_schemas>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             slogger.trace("Loading of {} aborted", _version);
@@ -231,6 +237,10 @@ schema_ptr schema_registry_entry::get_schema() {
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
+        if (s->is_view()) {
+            // We may encounter a no_such_column_family here, which means that the base table was deleted and we should fail the request
+            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(**_base_schema));
+        }
         _erase_timer.cancel();
         s->_registry_entry = this;
         _schema = &*s;
@@ -249,6 +259,10 @@ void schema_registry_entry::detach_schema() noexcept {
 frozen_schema schema_registry_entry::frozen() const {
     SCYLLA_ASSERT(_state >= state::LOADED);
     return *_frozen_schema;
+}
+
+void schema_registry_entry::update_base_schema(schema_ptr s) {
+    _base_schema = s;
 }
 
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
@@ -324,17 +338,17 @@ schema_ptr global_schema_ptr::get() const {
     if (this_shard_id() == _cpu_of_origin) {
         return _ptr;
     } else {
-        auto registered_schema = [](const schema_registry_entry& e) {
+        auto registered_schema = [](const schema_registry_entry& e, std::optional<schema_ptr> base_schema = std::nullopt) -> schema_ptr {
             schema_ptr ret = local_schema_registry().get_or_null(e.version());
             if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) {
-                    return e.frozen();
+                ret = local_schema_registry().get_or_load(e.version(), [&e, &base_schema](table_schema_version) -> base_and_view_schemas {
+                    return {e.frozen(), base_schema};
                 });
             }
             return ret;
         };
 
-        schema_ptr registered_bs;
+        std::optional<schema_ptr> registered_bs;
         // the following code contains registry entry dereference of a foreign shard
         // however, it is guaranteed to succeed since we made sure in the constructor
         // that _bs_schema and _ptr will have a registry on the foreign shard where this
@@ -343,16 +357,10 @@ schema_ptr global_schema_ptr::get() const {
         if (_base_schema) {
             registered_bs = registered_schema(*_base_schema->registry_entry());
             if (_base_schema->registry_entry()->is_synced()) {
-                registered_bs->registry_entry()->mark_synced();
+                registered_bs.value()->registry_entry()->mark_synced();
             }
         }
-        schema_ptr s = registered_schema(*_ptr->registry_entry());
-        if (s->is_view()) {
-            if (!s->view_info()->base_info()) {
-                // we know that registered_bs is valid here because we make sure of it in the constructors.
-                s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*registered_bs));
-            }
-        }
+        schema_ptr s = registered_schema(*_ptr->registry_entry(), registered_bs);
         if (_ptr->registry_entry()->is_synced()) {
             s->registry_entry()->mark_synced();
         }
@@ -369,25 +377,22 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         if (e) {
             return s;
         } else {
-            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) {
-                return frozen_schema(s);
+            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> base_and_view_schemas {
+                if (s->is_view()) {
+                    if (!s->view_info()->base_info()) {
+                        on_internal_error(slogger, format("Tried to build a global schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
+                    }
+                    return {frozen_schema(s), s->view_info()->base_info()->base_schema()};
+                } else {
+                    return {frozen_schema(s)};
+                }
             });
         }
     };
 
     schema_ptr s = ensure_registry_entry(ptr);
     if (s->is_view()) {
-        if (s->view_info()->base_info()) {
-            _base_schema = ensure_registry_entry(s->view_info()->base_info()->base_schema());
-        } else if (ptr->view_info()->base_info()) {
-            _base_schema = ensure_registry_entry(ptr->view_info()->base_info()->base_schema());
-        } else {
-            on_internal_error(slogger, format("Tried to build a global schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
-        }
-
-        if (!s->view_info()->base_info() || !s->view_info()->base_info()->base_schema()->registry_entry()) {
-            s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*_base_schema));
-        }
+        _base_schema = ensure_registry_entry(s->view_info()->base_info()->base_schema());
     }
     _ptr = s;
 }

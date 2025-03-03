@@ -1837,8 +1837,16 @@ schema_ptr schema::make_reversed() const {
 }
 
 schema_ptr schema::get_reversed() const {
-    return local_schema_registry().get_or_load(reversed(_raw._version), [this] (table_schema_version) {
-        return frozen_schema(make_reversed());
+    return local_schema_registry().get_or_load(reversed(_raw._version), [this] (table_schema_version) -> base_and_view_schemas {
+        auto s = make_reversed();
+
+        if (s->is_view()) {
+            if (!s->view_info()->base_info()) {
+                on_internal_error(dblog, format("Tried to make a reverse schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
+            }
+            return {frozen_schema(s), s->view_info()->base_info()->base_schema()};
+        }
+        return {frozen_schema(s)};
     });
 }
 
