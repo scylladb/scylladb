@@ -1178,6 +1178,18 @@ std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
     return res;
 }
 
+std::vector<sstring> database::get_non_local_strategy_non_tablets_keyspaces() const {
+    std::vector<sstring> res;
+    res.reserve(_keyspaces.size());
+    for (auto const& i : _keyspaces) {
+        auto&& rs = i.second.get_replication_strategy();
+        if (rs.get_type() != locator::replication_strategy_type::local && !rs.uses_tablets()) {
+            res.push_back(i.first);
+        }
+    }
+    return res;
+}
+
 std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() const {
     std::vector<sstring> res;
     res.reserve(_keyspaces.size());
