@@ -53,7 +53,7 @@
 #include "commitlog_entry.hh"
 #include "commitlog_extensions.hh"
 
-#include "checked-file-impl.hh"
+#include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
 
 static logging::logger clogger("commitlog");

@@ -6,7 +6,7 @@
 #include <seastar/util/log.hh>
 #include "utils/assert.hh"
 #include "utils/lister.hh"
-#include "checked-file-impl.hh"
+#include "utils/checked-file-impl.hh"
 
 static seastar::logger llogger("lister");
 

@@ -36,7 +36,7 @@
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
 
-#include "checked-file-impl.hh"
+#include "utils/checked-file-impl.hh"
 
 namespace sstables {
 

@@ -59,7 +59,7 @@
 #include "utils/bloom_filter.hh"
 #include "utils/cached_file.hh"
 #include "utils/stall_free.hh"
-#include "checked-file-impl.hh"
+#include "utils/checked-file-impl.hh"
 #include "db/extensions.hh"
 #include "sstables/partition_index_cache.hh"
 #include "db/large_data_handler.hh"
