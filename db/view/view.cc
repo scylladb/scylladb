@@ -3724,6 +3724,8 @@ future<> view_building_worker::build_views_range(table_id base_id, dht::token_ra
             
             try {
                 utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, _view_building_as).get();
+                utils::get_local_injector().inject("view_building_worker_wait_before_consume", utils::wait_for_message(5min)).get();
+                _view_building_as.check();
                 auto end_token = reader.consume_in_thread(std::move(consumer));
                 vbw_logger.info("Build range {} for base table: {}.{}", dht::token_range(range_to_process.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
 
