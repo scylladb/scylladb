@@ -48,7 +48,7 @@ struct stats {
 };
 
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
-storage_io_error map_s3_client_exception(std::exception_ptr ex);
+[[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
 class client : public enable_shared_from_this<client> {
     class multipart_upload;

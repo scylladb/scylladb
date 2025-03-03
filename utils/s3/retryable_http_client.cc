@@ -9,6 +9,7 @@
 #include "retryable_http_client.hh"
 #include "aws_error.hh"
 #include "client.hh"
+#include "utils/error_injection.hh"
 
 #include <seastar/core/sleep.hh>
 #include <seastar/http/exception.hh>
@@ -20,9 +21,11 @@ namespace aws {
 using namespace seastar;
 retryable_http_client::retryable_http_client(std::unique_ptr<http::experimental::connection_factory>&& factory,
                                              unsigned max_conn,
+                                             error_handler error_func,
                                              http::experimental::client::retry_requests should_retry,
                                              const aws::retry_strategy& retry_strategy)
-    : http(std::move(factory), max_conn, should_retry), _retry_strategy(retry_strategy) {
+    : http(std::move(factory), max_conn, should_retry), _retry_strategy(retry_strategy), _error_handler(std::move(error_func)) {
+    assert(_error_handler);
 }
 
 future<> retryable_http_client::do_retryable_request(http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
@@ -38,6 +41,11 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
     aws::aws_exception request_ex{aws::aws_error{aws::aws_error_type::OK, aws::retryable::yes}};
     while (true) {
         try {
+            // We need to be able to simulate a retry in s3 tests
+            if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
+                throw aws::aws_exception(aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED,
+                    "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
+            }
             e = {};
             co_return co_await (as ? http.make_request(req, handler, *as, std::nullopt) : http.make_request(req, handler, std::nullopt));
         } catch (const aws::aws_exception& ex) {
@@ -53,7 +61,7 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
     }
 
     if (e) {
-        throw s3::map_s3_client_exception(e);
+        _error_handler(e);
     }
 }
 

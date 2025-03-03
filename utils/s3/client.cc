@@ -196,8 +196,7 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
 }
 
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-        : retryable_client(std::move(f), max_conn, http::experimental::client::retry_requests::yes, retry_strategy)
-{
+    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::yes, retry_strategy) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -245,7 +244,7 @@ client::group_client& client::find_or_create_client() {
     return it->second;
 }
 
-storage_io_error map_s3_client_exception(std::exception_ptr ex) {
+[[noreturn]] void map_s3_client_exception(std::exception_ptr ex) {
     seastar::memory::scoped_critical_alloc_section alloc;
 
     try {
@@ -268,21 +267,21 @@ storage_io_error map_s3_client_exception(std::exception_ptr ex) {
         default:
             error_code = EIO;
         }
-        return {error_code, format("S3 request failed. Code: {}. Reason: {}", e.error().get_error_type(), e.what())};
+        throw storage_io_error{error_code, format("S3 request failed. Code: {}. Reason: {}", e.error().get_error_type(), e.what())};
     } catch (const httpd::unexpected_status_error& e) {
         auto status = e.status();
 
         if (http::reply::classify_status(status) == http::reply::status_class::redirection || status == http::reply::status_type::not_found) {
-            return {ENOENT, format("S3 object doesn't exist ({})", status)};
+            throw storage_io_error {ENOENT, format("S3 object doesn't exist ({})", status)};
         }
         if (status == http::reply::status_type::forbidden || status == http::reply::status_type::unauthorized) {
-            return {EACCES, format("S3 access denied ({})", status)};
+            throw storage_io_error {EACCES, format("S3 access denied ({})", status)};
         }
 
-        return {EIO, format("S3 request failed with ({})", status)};
+        throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
     } catch (...) {
         auto e = std::current_exception();
-        return {EIO, format("S3 error ({})", e)};
+        throw storage_io_error {EIO, format("S3 error ({})", e)};
     }
 }
 
