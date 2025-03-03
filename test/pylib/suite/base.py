@@ -432,10 +432,6 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             "detect_stack_use_after_return=1",
             os.getenv("ASAN_OPTIONS"),
         ]
-        ldap_instance_path = os.path.join(
-            os.path.abspath(os.path.join(options.tmpdir, test.mode, 'ldap_instances')),
-            str(ldap_port))
-        saslauthd_mux_path = os.path.join(ldap_instance_path, 'mux')
         if options.manual_execution:
             print('Please run the following shell command, then press <enter>:')
             test_env_string = " ".join([f"{k}={v}" for k,v in test_env.items()])
@@ -486,7 +482,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 stderr=log,
                 stdout=log,
                 env=test_env,
-                preexec_fn=resource_gather.put_process_to_cgroup,
+                preexec_fn=resource_gather.set_sid,
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
             test_running_event.set()

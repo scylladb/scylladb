@@ -16,6 +16,7 @@ from typing import Any, Generator
 
 from test.pylib.host_registry import HostRegistry
 from test.pylib.minio_server import MinioServer
+from test.pylib.resource_gather import setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.util import LogPrefixAdapter
@@ -72,14 +73,14 @@ class PrepareMainProcessEnv:
     The environment settings are saved to a file for later consumption by child processes.
     Class ensures that the necessary subdirectories exist or clean it if it exists
     """
-    def __init__(self, temp_dir: Path, modes: list[str], env_file: Path):
+    def __init__(self, temp_dir: Path, env_file: Path, modes: list[str], gather_metrics: bool = True,):
         self.temp_dir = temp_dir
-        pytest_dirs = [self.temp_dir / mode / 'pytest' for mode in modes]
-        for directory in [self.temp_dir, *pytest_dirs]:
-            if not directory.exists():
-                os.makedirs(directory, exist_ok=True)
-            else:
-                shutil.rmtree(directory)
+        temp_dir.mkdir(exist_ok=True)
+        pytest_dirs = [temp_dir / mode / 'pytest' for mode in modes]
+        for directory in [*pytest_dirs, temp_dir / 'ldap_instances']:
+            shutil.rmtree(directory, ignore_errors=True)
+            directory.mkdir(parents=True, exist_ok=True)
+        self.gather_metrics = gather_metrics
         self.env_file = env_file
         hosts = HostRegistry()
         self.loop = asyncio.new_event_loop()
@@ -98,7 +99,7 @@ class PrepareMainProcessEnv:
         Start the S3 mock server and MinIO for the tests.
         Create a file with environment variables for connecting to them.
         """
-
+        setup_cgroup(self.gather_metrics)
         tasks = [
             self.loop.create_task(self.minio.start()),
             self.loop.create_task(self.mock_s3.start()),
@@ -140,7 +141,7 @@ class PrepareMainProcessEnv:
         self.cleanup()
 
 @contextmanager
-def get_env_manager(temp_dir: Path, is_worker: bool, modes: list[str]) -> Generator[None, Any, None]:
+def get_env_manager(temp_dir: Path, is_worker: bool, gather_metrics: bool, modes: list[str]) -> Generator[None, Any, None]:
     """
     xdist helps to execute test in parallel.
     For that purpose it creates one main controller and workers.
@@ -158,5 +159,5 @@ def get_env_manager(temp_dir: Path, is_worker: bool, modes: list[str]) -> Genera
         with PrepareChildProcessEnv(env_file):
             yield
     else:
-        with PrepareMainProcessEnv(temp_dir, modes, env_file):
+        with PrepareMainProcessEnv(temp_dir, env_file, modes, gather_metrics):
             yield
