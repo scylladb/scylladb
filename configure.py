@@ -610,6 +610,10 @@ perf_tests = set([
     'test/perf/perf_sort_by_proximity',
 ])
 
+perf_standalone_tests = set([
+     'test/perf/perf_generic_server',
+])
+
 raft_tests = set([
     'test/raft/replication_test',
     'test/raft/randomized_nemesis_test',
@@ -644,7 +648,7 @@ lto_binaries = set([
     'scylla'
 ])
 
-tests = scylla_tests | perf_tests | raft_tests
+tests = scylla_tests | perf_tests | perf_standalone_tests | raft_tests
 
 other = set([
     'iotune',
@@ -1470,13 +1474,16 @@ for t in sorted(scylla_tests):
     else:
         deps[t] += scylla_core + alternator + idls + scylla_tests_generic_dependencies
 
+for t in sorted(perf_tests | perf_standalone_tests):
+    deps[t] = [t + '.cc'] + scylla_tests_dependencies
+    deps[t] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
+
 perf_tests_seastar_deps = [
     'seastar/tests/perf/perf_tests.cc'
 ]
 
 for t in sorted(perf_tests):
-    deps[t] = [t + '.cc'] + scylla_tests_dependencies + perf_tests_seastar_deps
-    deps[t] += ['test/perf/perf.cc', 'seastar/tests/perf/linux_perf_event.cc']
+    deps[t] += perf_tests_seastar_deps
 
 deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
