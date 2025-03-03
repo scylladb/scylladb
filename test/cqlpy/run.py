@@ -326,6 +326,7 @@ def run_scylla_cmd(pid, dir):
         '--shutdown-announce-in-ms', '0',
         '--maintenance-socket=workdir',
         '--service-levels-interval-ms=500',
+        '--tablets-initial-scale-factor=1',
         # Avoid unhelpful "guardrails" warnings
         '--minimum-replication-factor-warn-threshold=-1',
         ], env)
@@ -390,6 +391,8 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--max-networking-io-control-blocks=1000')
     if major == [5,4] or major == [2024,1]:
         cmd.append('--force-schema-commit-log=true')
+    if major < [2025,1]:
+        cmd.remove('--tablets-initial-scale-factor=1')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with
