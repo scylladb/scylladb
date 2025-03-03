@@ -1784,3 +1784,38 @@ async def test_concurrent_schema_change_with_compaction_completion(manager: Mana
         await force_minor_compaction()
         await cql.run_async(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'IncrementalCompactionStrategy' }};")
         await force_minor_compaction()
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
+    cmdline = ['--smp=1']
+
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    cql = manager.get_cql()
+    n_tablets = 1
+    n_partitions = 1000
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.servers_see_each_other(servers)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {n_tablets}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY);")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk) VALUES ({k});") for k in range(n_partitions)])
+
+        await inject_error_one_shot_on(manager, "tablet_cleanup_failure_post_deletion", servers)
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+
+        servers.append(await manager.server_add())
+
+        tablet_token = 0
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
+        dst_shard = 0
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token))
+
+        logger.info("Waiting for injected cleanup failure...")
+        await s0_log.wait_for('Cleanup failed for tablet', from_mark=s0_mark)
+
+        await manager.api.take_snapshot(servers[0].ip_addr, ks, "test_snapshot")
