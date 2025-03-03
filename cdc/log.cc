@@ -40,6 +40,7 @@
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "tracing/trace_state.hh"
 #include "stats.hh"
+#include "utils/labels.hh"
 
 namespace std {
 
@@ -67,7 +68,7 @@ void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_
         metrics.add_group(cdc_group_name, {
                 sm::make_total_operations(seastar::format("operations_on_{}_performed_{}", part_name, suffix), count[(size_t)part],
                         sm::description(seastar::format("number of {} CDC operations that processed a {}", suffix, part_name)),
-                        {})
+                        {cdc_label}).set_skip_when_empty()
             });
     };
 
@@ -90,23 +91,23 @@ cdc::stats::stats() {
         _metrics.add_group(cdc_group_name, {
                 sm::make_total_operations("operations_" + kind, counters.unsplit_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(false)}),
+                        {split_label(false), basic_level, cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("operations_" + kind, counters.split_count,
                         sm::description(format("number of {} CDC operations", kind)),
-                        {split_label(true)}),
+                        {split_label(true), basic_level, cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("preimage_selects_" + kind, counters.preimage_selects,
                         sm::description(format("number of {} preimage queries performed", kind)),
-                        {}),
+                        {cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("operations_with_preimage_" + kind, counters.with_preimage_count,
                         sm::description(format("number of {} operations that included preimage", kind)),
-                        {}),
+                        {cdc_label}).set_skip_when_empty(),
 
                 sm::make_total_operations("operations_with_postimage_" + kind, counters.with_postimage_count,
                         sm::description(format("number of {} operations that included postimage", kind)),
-                        {})
+                        {cdc_label}).set_skip_when_empty()
             });
 
         counters.touches.register_metrics(_metrics, kind);
