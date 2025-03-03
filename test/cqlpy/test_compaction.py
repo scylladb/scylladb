@@ -160,7 +160,7 @@ def get_compaction_stats(cql, table):
     return tasks, stats
 
 @pytest.mark.parametrize("compaction_strategy", ["IncrementalCompactionStrategy", "LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
-def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace, compaction_strategy):
+def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace, compaction_strategy, has_tablets):
     """
     Test that compactionstats show no pending compaction after major compaction
     """
@@ -170,9 +170,12 @@ def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace,
         extra_strategy_options = ", 'sstable_size_in_mb':1"
         num_sstables *= 4   # Need enough data to trigger level 0 compaction
     value = 'x' * 128*1024
+    opts = f"WITH compression={{}} AND compaction={{'class':'{compaction_strategy}'{extra_strategy_options}}}"
+    if has_tablets:
+        opts += " AND tablets = {'min_tablet_count': 1}"
     with new_test_table(cql, test_keyspace,
                         schema="p int PRIMARY KEY, v text",
-                        extra=f"WITH compression={{}} AND compaction={{'class':'{compaction_strategy}'{extra_strategy_options}}}") as table:
+                        extra=opts) as table:
         with nodetool.no_autocompaction_context(cql, table):
             for i in range(num_sstables):
                 cql.execute(f"INSERT INTO {table} (p, v) VALUES ({i}, '{value}')")
