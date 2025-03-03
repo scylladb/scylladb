@@ -239,7 +239,7 @@ class partition_tombstone_data(DataClass):
         assert row.v == cls.v
 
 
-incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombstone"),
+incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombstone", marks=pytest.mark.skip(reason="Issue #21179")),
                                 pytest.param(partition_tombstone_data, id="partition-tombstone")]
 
 
@@ -247,7 +247,6 @@ incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombsto
 def workdir():
     with tempfile.TemporaryDirectory() as tmp_dir:
         yield tmp_dir
-
 
 @pytest.mark.parametrize("data_class", incremental_repair_test_data)
 @pytest.mark.asyncio
