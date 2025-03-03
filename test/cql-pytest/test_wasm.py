@@ -47,7 +47,9 @@ def test_fib(cql, test_keyspace, table1, scylla_with_wasm_only):
   (func ${fib_name} (param $n i64) (result i64)
     (if
       (i64.lt_s (local.get $n) (i64.const 2))
-      (return (local.get $n))
+      (then
+        (return (local.get $n))
+      )
     )
     (i64.add
       (call ${fib_name} (i64.sub (local.get $n) (i64.const 1)))
