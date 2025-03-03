@@ -310,7 +310,7 @@ class Test:
         self.suite = suite
         self.allure_dir = pathlib.Path(suite.options.tmpdir) / self.mode / 'allure'
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname.replace("/","_"), self.id)
+        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname.replace("/","."), self.id)
         self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
