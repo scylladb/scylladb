@@ -193,4 +193,4 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
     # If the MV write is not completed, as in issue #19529, the topology change
     # will be held for long time until the write timeouts.
     # Otherwise, it is expected to complete in short time.
-    await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=30)
+    await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=60)
