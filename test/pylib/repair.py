@@ -6,7 +6,7 @@
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
-from test.topology.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace
 
 from cassandra.cluster import Session as CassandraSession
 
