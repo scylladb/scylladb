@@ -1556,8 +1556,22 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         } else {
             tokens_variant = tokens;
         }
+        auto hosts = req->get_query_param("hosts_filter");
+        auto dcs = req->get_query_param("dcs_filter");
 
-        auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant, await_completion);
+        std::unordered_set<locator::host_id> hosts_filter;
+        if (!hosts.empty()) {
+            std::string delim = ",";
+            hosts_filter = std::ranges::views::split(hosts, delim) | std::views::transform([](auto&& h) {
+                try {
+                    return locator::host_id(utils::UUID(std::string_view{h}));
+                } catch (...) {
+                    throw httpd::bad_param_exception(fmt::format("Wrong host_id format {}", h));
+                }
+            }) | std::ranges::to<std::unordered_set>();
+        }
+        auto dcs_filter = locator::tablet_task_info::deserialize_repair_dcs_filter(dcs);
+        auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant, hosts_filter, dcs_filter, await_completion);
         co_return json::json_return_type(res);
     });
 
