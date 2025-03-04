@@ -40,7 +40,7 @@ async def test_cdc_generation_clearing(manager: ManagerClient):
         consistency_level = ConsistencyLevel.ONE)
 
     async def tried_to_remove_new_gen() -> Optional[tuple[int, set[str], list[Host]]]:
-        await log_file1.wait_for("CDC generation publisher fiber has nothing to do. Sleeping.", mark)
+        await log_file1.wait_for("CDC generation publisher fiber has nothing to do. Sleeping.", from_mark=mark)
         new_mark = await log_file1.mark()
 
         cql = manager.get_cql()
@@ -136,7 +136,7 @@ async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient)
         # what it has done in this step. Eventually, the CDC generation publisher will publish all generations and
         # delete the first and second ones.
         await handler.message()
-        await log_file1.wait_for(f"CDC generation publisher fiber sleeps after injection", mark)
+        await log_file1.wait_for(f"CDC generation publisher fiber sleeps after injection", from_mark=mark)
         mark = await log_file1.mark()
         gen_ids = await get_gen_ids()
         assert len(gen_ids) == 2 and first_gen_id not in gen_ids
@@ -144,7 +144,7 @@ async def test_unpublished_cdc_generations_arent_cleared(manager: ManagerClient)
 
         # Allow the CDC generation publisher to finish its job. One generation should remain.
         await handler.message()
-        await log_file1.wait_for(f"CDC generation publisher fiber has nothing to do. Sleeping.", mark)
+        await log_file1.wait_for(f"CDC generation publisher fiber has nothing to do. Sleeping.", from_mark=mark)
         gen_ids = await get_gen_ids()
         assert len(gen_ids) == 1
         await check_system_topology_and_cdc_generations_v3_consistency(manager, [host1, host2, host3])
