@@ -32,6 +32,7 @@
 #include "seastarx.hh"
 #include "sstables/exceptions.hh"
 #include "tombstone_gc.hh"
+#include "utils/pluggable.hh"
 
 namespace db {
 class system_keyspace;
@@ -138,7 +139,7 @@ private:
     // being picked more than once.
     seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
 
-    seastar::shared_ptr<db::system_keyspace> _sys_ks;
+    utils::pluggable<db::system_keyspace> _sys_ks;
 
     std::function<void()> compaction_submission_callback();
     // all registered tables are reevaluated at a constant interval.
@@ -391,7 +392,7 @@ public:
     future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
-    void unplug_system_keyspace() noexcept;
+    future<> unplug_system_keyspace() noexcept;
 
     // Adds a table to the compaction manager.
     // Creates a compaction_state structure that can be used for submitting

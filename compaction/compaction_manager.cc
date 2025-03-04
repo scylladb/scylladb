@@ -458,9 +458,7 @@ future<sstables::compaction_result> compaction_task_executor::compact_sstables(s
 future<> compaction_task_executor::update_history(table_state& t, const sstables::compaction_result& res, const sstables::compaction_data& cdata) {
     auto ended_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.ended_at.time_since_epoch());
 
-    if (_cm._sys_ks) {
-        auto sys_ks = _cm._sys_ks; // hold pointer on sys_ks
-
+    if (auto sys_ks = _cm._sys_ks.get_permit()) {
         co_await utils::get_local_injector().inject("update_history_wait", utils::wait_for_message(120s));
         std::unordered_map<int32_t, int64_t> rows_merged;
         for (size_t id=0; id<res.stats.reader_statistics.rows_merged_histogram.size(); ++id) {
@@ -475,11 +473,9 @@ future<> compaction_task_executor::update_history(table_state& t, const sstables
 }
 
 future<> compaction_manager::get_compaction_history(compaction_history_consumer&& f) {
-    if (!_sys_ks) {
-        return make_ready_future<>();
+    if (auto sys_ks = _sys_ks.get_permit()) {
+        co_await sys_ks->get_compaction_history(std::move(f));
     }
-
-    return _sys_ks->get_compaction_history(std::move(f)).finally([s = _sys_ks] {});
 }
 
 template<std::derived_from<compaction::compaction_task_executor> Executor>
@@ -1158,6 +1154,7 @@ future<> compaction_manager::really_do_stop() noexcept {
     });
     reevaluate_postponed_compactions();
     co_await std::move(_waiting_reevalution);
+    co_await _sys_ks.close();
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
     co_await _compaction_controller.shutdown();
@@ -2294,11 +2291,11 @@ strategy_control& compaction_manager::get_strategy_control() const noexcept {
 }
 
 void compaction_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
-    _sys_ks = sys_ks.shared_from_this();
+    _sys_ks.plug(sys_ks.shared_from_this());
 }
 
-void compaction_manager::unplug_system_keyspace() noexcept {
-    _sys_ks = nullptr;
+future<> compaction_manager::unplug_system_keyspace() noexcept {
+    co_await _sys_ks.unplug();
 }
 
 double compaction_backlog_tracker::backlog() const {
