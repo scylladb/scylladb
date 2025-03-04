@@ -3520,8 +3520,7 @@ system_keyspace::~system_keyspace() {
 }
 
 future<> system_keyspace::shutdown() {
-    _db.unplug_system_keyspace();
-    co_return;
+    co_await _db.unplug_system_keyspace();
 }
 
 future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql(const sstring& query_string, const data_value_list& values) {

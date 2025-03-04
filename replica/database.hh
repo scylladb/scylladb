@@ -1578,7 +1578,7 @@ public:
     future<> drain();
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
-    void unplug_system_keyspace() noexcept;
+    future<> unplug_system_keyspace() noexcept;
 
     void plug_view_update_generator(db::view::view_update_generator& generator) noexcept;
     void unplug_view_update_generator() noexcept;
