@@ -76,7 +76,11 @@ future<> disk_space_monitor::poll() {
 }
 
 future<std::filesystem::space_info> disk_space_monitor::get_filesystem_space() {
-    return engine().file_system_space(_data_dir.native());
+    auto space = co_await engine().file_system_space(_data_dir.native());
+    if (_cfg.capacity_override()) {
+        space.capacity = _cfg.capacity_override();
+    }
+    co_return space;
 }
 
 disk_space_monitor::clock_type::duration disk_space_monitor::get_polling_interval() const noexcept {
