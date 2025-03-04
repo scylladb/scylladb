@@ -39,7 +39,7 @@ controller::~controller()
 {
 }
 
-future<> controller::listen(seastar::sharded<auth::service>& auth_service, db::config& cfg)
+future<> controller::listen(seastar::sharded<auth::service>& auth_service, const db::config& cfg)
 {
     if (_server) {
         return make_ready_future<>();
@@ -61,7 +61,7 @@ future<> controller::listen(seastar::sharded<auth::service>& auth_service, db::c
                 ._total_redis_db_count = cfg.redis_database_count(),
             };
         });
-        return server->start(std::ref(_query_processor), std::ref(auth_service), std::move(get_config)).then([this, server, &cfg, ip, ceo, keepalive]() {
+        return server->start(std::ref(_query_processor), std::ref(auth_service), std::ref(cfg), std::move(get_config)).then([this, server, &cfg, ip, ceo, keepalive]() {
             auto f = make_ready_future();
             struct listen_cfg {
                 socket_address addr;
