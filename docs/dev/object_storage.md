@@ -17,9 +17,9 @@ command line option when launchgin scylla.
 
 ## Configuring AWS S3 access
 
-You can define endpoint details and authentication tokens in the `object_storage.yaml` file. For example:
+You can define endpoint details in the `scylla.yaml` file. For example:
 ```yaml
-endpoints:
+object_storage_endpoints:
   - name: s3.us-east-1.amazonaws.com
     port: 443
     https: true
@@ -28,36 +28,26 @@ endpoints:
 
 ### Local/Development Environment
 
-In a local or development environment, you usually need to add authentication tokens to this file to ensure the client works properly. For instance:
-```yaml
-endpoints:
-  - name: s3.us-east-2.amazonaws.com
-    port: 443
-    https: true
-    aws_region: us-east-2
-    aws_access_key_id: EXAMPLE_ACCESS_KEY_ID
-    aws_secret_access_key: EXAMPLE_SECRET_ACCESS_KEY
+In a local or development environment, you usually need to set authentication tokens in environment variables to ensure the client works properly. For instance:
+```sh
+export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
+export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
 ```
 
 Additionally, you may include an `aws_session_token`, although this is not typically necessary for local or development environments:
 
-```yaml
-endpoints:
-  - name: s3.us-east-2.amazonaws.com
-    port: 443
-    https: true
-    aws_region: us-east-2
-    aws_access_key_id: EXAMPLE_ACCESS_KEY_ID
-    aws_secret_access_key: EXAMPLE_SECRET_ACCESS_KEY
-    aws_session_token: EXAMPLE_TEMPORARY_SESSION_TOKEN
+```sh
+export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
+export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
+export AWS_SESSION_TOKEN=EXAMPLE_TEMPORARY_SESSION_TOKEN
 ```
 ### Important Note
 
-The examples above are intended for development or local environments. You should *never* use this approach in production. The Scylla S3 client will first attempt to access credentials from the file or environment variables. If it fails to obtain credentials, it will then try to retrieve them from the AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
+The examples above are intended for development or local environments. You should *never* use this approach in production. The Scylla S3 client will first attempt to access credentials from environment variables. If it fails to obtain credentials, it will then try to retrieve them from the AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
 
-For the EC2 Instance Metadata Service to function correctly, no additional configuration is required. However, STS requires the IAM Role ARN to be defined in the `object_storage.yaml` file, as shown below:
+For the EC2 Instance Metadata Service to function correctly, no additional configuration is required. However, STS requires the IAM Role ARN to be defined in the `scylla.yaml` file, as shown below:
 ```yaml
-endpoints:
+object_storage_endpoints:
   - name: s3.us-east-1.amazonaws.com
     port: 443
     https: true
@@ -73,20 +63,17 @@ parameters, where `$endpoint_name` should match with the corresponding `name`
 of the configured endpoint in the YAML file above.
 
 In the following example, an endpoint named "s3.us-east-2.amazonaws.com" is
-defined in `object_storage.yaml`, and this endpoint is used when creating the
+defined in `scylla.yaml`, and this endpoint is used when creating the
 keyspace "ks".
 
-in `object_storage.yaml`:
+in `scylla.yaml`:
 
 ```yaml
-endpoints:
+object_storage_endpoints:
   - name: s3.us-east-2.amazonaws.com
     port: 443
     https: true
     aws_region: us-east-2
-    aws_access_key_id: EXAMPLE_ACCESS_KEY_ID
-    aws_secret_access_key: EXAMPLE_SECRET_ACCESS_KEY
-    aws_session_token: EXAMPLE_TEMPORARY_SESSION_TOKEN
 ```
 
 and when creating the keyspace:

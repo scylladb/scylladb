@@ -7,6 +7,7 @@ import pytest
 import time
 import random
 
+from test.pylib.minio_server import MinioServer
 from test.pylib.manager_client import ManagerClient
 from test.object_store.conftest import format_tuples
 from test.object_store.conftest import get_s3_resource
@@ -54,8 +55,9 @@ async def prepare_snapshot_for_backup(manager: ManagerClient, server, snap_name=
 async def test_simple_backup(manager: ManagerClient, s3_server):
     '''check that backing up a snapshot for a keyspace works'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
@@ -94,8 +96,9 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
 async def test_backup_move(manager: ManagerClient, s3_server, move_files):
     '''check that backing up a snapshot by _moving_ sstable to object storage'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
@@ -127,8 +130,9 @@ async def test_backup_move(manager: ManagerClient, s3_server, move_files):
 async def test_backup_to_non_existent_bucket(manager: ManagerClient, s3_server):
     '''backup should fail if the destination bucket does not exist'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
@@ -152,8 +156,9 @@ async def do_test_backup_abort(manager: ManagerClient, s3_server,
                                breakpoint_name, min_files, max_files = None):
     '''helper for backup abort testing'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
@@ -203,8 +208,9 @@ async def do_test_backup_abort(manager: ManagerClient, s3_server,
 async def test_backup_to_non_existent_snapshot(manager: ManagerClient, s3_server):
     '''backup should fail if the snapshot does not exist'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
@@ -247,8 +253,9 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, s3_serve
 async def do_test_simple_backup_and_restore(manager: ManagerClient, s3_server, do_abort = False):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
@@ -381,7 +388,8 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     '''Check that restoring of a cluster with stream scopes works'''
 
     logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks')
-    cfg = { 'object_storage_config_file': str(s3_server.config_file), 'task_ttl_in_seconds': 300 }
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
+    cfg = { 'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300 }
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
     servers = []
     host_ids = {}
