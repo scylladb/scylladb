@@ -250,48 +250,33 @@ static integral_ratio_holder mean_partition_size(replica::column_family& cf) {
     return res;
 }
 
-static std::unordered_map<sstring, uint64_t> merge_maps(std::unordered_map<sstring, uint64_t> a,
-        const std::unordered_map<sstring, uint64_t>& b) {
-    a.insert(b.begin(), b.end());
-    return a;
-}
-
-static json::json_return_type sum_map(const std::unordered_map<sstring, uint64_t>& val) {
-    uint64_t res = 0;
-    for (auto i : val) {
-        res += i.second;
-    }
-    return res;
-}
-
 static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstring name, bool total) {
     auto uuid = parse_table_info(name, ctx.db.local()).id;
     return ctx.db.map_reduce0([uuid, total](replica::database& db) {
-        std::unordered_map<sstring, uint64_t> m;
+        uint64_t bytes_on_disk = 0;
         auto sstables = (total) ? db.find_column_family(uuid).get_sstables_including_compacted_undeleted() :
                 db.find_column_family(uuid).get_sstables();
         for (auto t : *sstables) {
-            m[t->get_filename()] = t->bytes_on_disk();
+            bytes_on_disk += t->bytes_on_disk();
         }
-        return m;
-    }, std::unordered_map<sstring, uint64_t>(), merge_maps).
-            then([](const std::unordered_map<sstring, uint64_t>& val) {
-        return sum_map(val);
+        return bytes_on_disk;
+    }, uint64_t(0), std::plus<>()).then([] (uint64_t val) {
+        return make_ready_future<json::json_return_type>(val);
     });
 }
 
 
 static future<json::json_return_type> sum_sstable(http_context& ctx, bool total) {
-    return map_reduce_cf_raw(ctx, std::unordered_map<sstring, uint64_t>(), [total](replica::column_family& cf) {
-        std::unordered_map<sstring, uint64_t> m;
+    return map_reduce_cf_raw(ctx, uint64_t(0), [total](replica::column_family& cf) {
+        uint64_t bytes_on_disk = 0;
         auto sstables = (total) ? cf.get_sstables_including_compacted_undeleted() :
                 cf.get_sstables();
         for (auto t : *sstables) {
-            m[t->get_filename()] = t->bytes_on_disk();
+            bytes_on_disk += t->bytes_on_disk();
         }
-        return m;
-    },merge_maps).then([](const std::unordered_map<sstring, uint64_t>& val) {
-        return sum_map(val);
+        return bytes_on_disk;
+    }, std::plus<>()).then([] (uint64_t val) {
+        return make_ready_future<json::json_return_type>(val);
     });
 }
 
