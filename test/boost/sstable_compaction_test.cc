@@ -2012,16 +2012,16 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(stats.estimated_tombstone_drop_time.bin.size() == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
         auto uncompacted_size = sst->data_size();
         // Asserts that two keys are equal to within a positive delta
-        tombstone_gc_state gc_state(nullptr);
-        BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(now, gc_state, stcs_schema) - expired) <= 0.1);
+        tombstone_gc_before_getter gc_before_getter;
+        BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(now, gc_before_getter, stcs_schema) - expired) <= 0.1);
         sstable_run run;
         BOOST_REQUIRE(run.insert(sst));
-        BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(now, gc_state, stcs_schema) - expired) <= 0.1);
+        BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(now, gc_before_getter, stcs_schema) - expired) <= 0.1);
 
         auto creator = sst_gen;
         auto info = compact_sstables(env, sstables::compaction_descriptor({ sst }), stcs_table, creator).get();
         BOOST_REQUIRE(info.new_sstables.size() == 1);
-        BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(now, gc_state, stcs_schema) == 0.0f);
+        BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(now, gc_before_getter, stcs_schema) == 0.0f);
         BOOST_REQUIRE_CLOSE(info.new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
 
         std::map<sstring, sstring> options;
@@ -3726,7 +3726,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             gc_before = gc_now - s->gc_grace_seconds();
 
             auto cfc = compact_for_compaction_v2<compacting_sstable_writer_test, compacting_sstable_writer_test>(
-                *s, gc_now, max_purgeable_func, tombstone_gc_state(nullptr), std::move(cr), std::move(purged_cr));
+                *s, gc_now, max_purgeable_func, {}, std::move(cr), std::move(purged_cr));
 
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
             auto compacting = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s));
