@@ -73,11 +73,14 @@ struct server_address {
     }
 };
 
+struct can_vote_tag {};
+using can_vote = bool_class<can_vote_tag>;
+
 struct config_member {
     server_address addr;
-    bool can_vote;
+    can_vote can_vote;
 
-    config_member(server_address addr, bool can_vote)
+    config_member(server_address addr, can_vote can_vote)
         : addr(std::move(addr)), can_vote(can_vote) {
     }
 
