@@ -13,6 +13,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
+#include "service/view_building_coordinator.hh"
 #include "utils/log.hh"
 #include "raft/raft.hh"
 #include "gms/inet_address.hh"
@@ -47,6 +48,10 @@ class server;
 
 namespace service {
 
+namespace vbc {
+class view_building_coordinator;
+}
+
 class raft_group0;
 class tablet_allocator;
 
@@ -72,6 +77,7 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
-        gms::feature_service& feature_service);
+        gms::feature_service& feature_service,
+        vbc::view_building_coordinator* vb_coordinator_ptr);
 
 }
