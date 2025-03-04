@@ -3326,7 +3326,7 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
         fragmented_temporary_buffer buffer, initial;
 
         work(file f, descriptor din, commit_load_reader_func fn, replay_state::impl& sn, position_type o = 0)
-                : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, 0, make_file_input_stream_options())), state(sn), start_off(o) {
+                : f(f), d(din), func(std::move(fn)), fin(make_file_input_stream(f, make_file_input_stream_options())), state(sn), start_off(o) {
         }
         work(work&&) = default;
 
