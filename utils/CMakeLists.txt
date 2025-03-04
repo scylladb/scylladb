@@ -49,6 +49,7 @@ target_sources(utils
     updateable_value.cc
     utf8.cc
     uuid.cc
+    labels.cc
     aws_sigv4.cc
     stream_compressor.cc
     s3/aws_error.cc

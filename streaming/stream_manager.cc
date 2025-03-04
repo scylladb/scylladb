@@ -18,6 +18,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include "db/config.hh"
+#include "utils/labels.hh"
 
 namespace streaming {
 
@@ -60,22 +61,22 @@ stream_manager::stream_manager(db::config& cfg,
                         sm::description("Total number of bytes sent on this shard.")),
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::bootstrap]; },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("bootstrap"), basic_level}),
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::decommission]; },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("decommission"), basic_level}),
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::removenode]; },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("removenode"), basic_level}),
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::rebuild]; },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("rebuild"), basic_level}),
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::repair]; },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("repair"), basic_level}),
 
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::replace]; },
-                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace")}),
+                sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace"), basic_level}),
     });
 }
 

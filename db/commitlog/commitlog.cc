@@ -55,6 +55,7 @@
 
 #include "checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
+#include "utils/labels.hh"
 
 static logging::logger clogger("commitlog");
 
@@ -2063,15 +2064,15 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
 
     _metrics.add_group(metrics_category_name, {
         sm::make_gauge("segments", [this] { return _segments.size(); },
-                       sm::description("Holds the current number of segments.")),
+                       sm::description("Holds the current number of segments."))(basic_level),
 
         sm::make_gauge("allocating_segments", [this] { return std::count_if(_segments.begin(), _segments.end(), [] (const sseg_ptr & s) { return s->is_still_allocating(); }); },
                        sm::description("Holds the number of not closed segments that still have some free space. "
-                                       "This value should not get too high.")),
+                                       "This value should not get too high."))(basic_level),
 
         sm::make_gauge("unused_segments", [this] { return std::count_if(_segments.begin(), _segments.end(), [] (const sseg_ptr & s) { return s->is_unused(); }); },
                        sm::description("Holds the current number of unused segments. "
-                                       "A non-zero value indicates that the disk write path became temporary slow.")),
+                                       "A non-zero value indicates that the disk write path became temporary slow."))(basic_level),
 
         sm::make_counter("alloc", totals.allocation_count,
                        sm::description("Counts number of times a new mutation has been added to a segment. "
@@ -2081,7 +2082,7 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
                        sm::description("Counts number of commitlog write cycles - when the data is written from the internal memory buffer to the disk.")),
 
         sm::make_counter("flush", totals.flush_count,
-                       sm::description("Counts number of times the flush() method was called for a file.")),
+                       sm::description("Counts number of times the flush() method was called for a file."))(basic_level),
 
         sm::make_counter("bytes_written", totals.bytes_written,
                        sm::description("Counts number of bytes written to the disk. "
@@ -2101,25 +2102,25 @@ void db::commitlog::segment_manager::create_counters(const sstring& metrics_cate
 
         sm::make_gauge("pending_allocations", [this] { return pending_allocations(); },
                        sm::description("Holds number of currently pending allocations. "
-                                       "A non-zero value indicates that we have a bottleneck in the disk write flow.")),
+                                       "A non-zero value indicates that we have a bottleneck in the disk write flow."))(basic_level),
 
         sm::make_counter("requests_blocked_memory", totals.requests_blocked_memory,
                        sm::description("Counts number of requests blocked due to memory pressure. "
-                                       "A non-zero value indicates that the commitlog memory quota is not enough to serve the required amount of requests.")),
+                                       "A non-zero value indicates that the commitlog memory quota is not enough to serve the required amount of requests."))(basic_level),
 
         sm::make_counter("flush_limit_exceeded", totals.flush_limit_exceeded,
                        sm::description(
                            seastar::format("Counts number of times a flush limit was exceeded. "
                                            "A non-zero value indicates that there are too many pending flush operations (see pending_flushes) and some of "
-                                           "them will be blocked till the total amount of pending flush operations drops below {}.", cfg.max_active_flushes))),
+                                           "them will be blocked till the total amount of pending flush operations drops below {}.", cfg.max_active_flushes)))(basic_level),
 
         sm::make_gauge("disk_total_bytes", totals.total_size_on_disk,
                        sm::description("Holds size of disk space in bytes reserved for data so far. "
-                                       "A too high value indicates that we have some bottleneck in the writing to sstables path.")),
+                                       "A too high value indicates that we have some bottleneck in the writing to sstables path."))(basic_level),
 
         sm::make_gauge("disk_active_bytes", totals.active_size_on_disk,
                        sm::description("Holds size of disk space in bytes used for data so far. "
-                                       "A too high value indicates that we have some bottleneck in the writing to sstables path.")),
+                                       "A too high value indicates that we have some bottleneck in the writing to sstables path."))(basic_level),
 
         sm::make_gauge("disk_slack_end_bytes", totals.wasted_size_on_disk,
                        sm::description("Holds size of disk space in bytes unused because of segment switching (end slack). "

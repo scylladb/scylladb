@@ -9,6 +9,7 @@
 #include "stats.hh"
 #include "utils/histogram_metrics_helper.hh"
 #include <seastar/core/metrics.hh>
+#include "utils/labels.hh"
 
 namespace alternator {
 
@@ -21,12 +22,12 @@ stats::stats() : api_operations{} {
     _metrics.add_group("alternator", {
 #define OPERATION(name, CamelCaseName) \
                 seastar::metrics::make_total_operations("operation", api_operations.name, \
-                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName)}).set_skip_when_empty(),
+                        seastar::metrics::description("number of operations via Alternator API"), {op(CamelCaseName), alternator_label, basic_level}).set_skip_when_empty(),
 #define OPERATION_LATENCY(name, CamelCaseName) \
                 seastar::metrics::make_histogram("op_latency", \
-                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName)}, [this]{return to_metrics_histogram(api_operations.name.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(), \
+                        seastar::metrics::description("Latency histogram of an operation via Alternator API"), {op(CamelCaseName), alternator_label, basic_level}, [this]{return to_metrics_histogram(api_operations.name.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(), \
 				seastar::metrics::make_summary("op_latency_summary", \
-						                        seastar::metrics::description("Latency summary of an operation via Alternator API"), [this]{return to_metrics_summary(api_operations.name.summary());})(op(CamelCaseName)).set_skip_when_empty(),
+						                        seastar::metrics::description("Latency summary of an operation via Alternator API"), [this]{return to_metrics_summary(api_operations.name.summary());})(op(CamelCaseName))(basic_level)(alternator_label).set_skip_when_empty(),
             OPERATION(batch_get_item, "BatchGetItem")
             OPERATION(batch_write_item, "BatchWriteItem")
             OPERATION(create_backup, "CreateBackup")
@@ -77,39 +78,39 @@ stats::stats() : api_operations{} {
     });
     _metrics.add_group("alternator", {
             seastar::metrics::make_total_operations("unsupported_operations", unsupported_operations,
-                    seastar::metrics::description("number of unsupported operations via Alternator API")),
+                    seastar::metrics::description("number of unsupported operations via Alternator API"))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("total_operations", total_operations,
-                    seastar::metrics::description("number of total operations via Alternator API")),
+                    seastar::metrics::description("number of total operations via Alternator API"))(basic_level)(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("reads_before_write", reads_before_write,
-                    seastar::metrics::description("number of performed read-before-write operations")),
+                    seastar::metrics::description("number of performed read-before-write operations"))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("write_using_lwt", write_using_lwt,
-                    seastar::metrics::description("number of writes that used LWT")),
+                    seastar::metrics::description("number of writes that used LWT"))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("shard_bounce_for_lwt", shard_bounce_for_lwt,
-                    seastar::metrics::description("number writes that had to be bounced from this shard because of LWT requirements")),
+                    seastar::metrics::description("number writes that had to be bounced from this shard because of LWT requirements"))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("requests_blocked_memory", requests_blocked_memory,
-                    seastar::metrics::description("Counts a number of requests blocked due to memory pressure.")),
+                    seastar::metrics::description("Counts a number of requests blocked due to memory pressure."))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("requests_shed", requests_shed,
-                    seastar::metrics::description("Counts a number of requests shed due to overload.")),
+                    seastar::metrics::description("Counts a number of requests shed due to overload."))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_read_total", cql_stats.filtered_rows_read_total,
-                    seastar::metrics::description("number of rows read during filtering operations")),
+                    seastar::metrics::description("number of rows read during filtering operations"))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_matched_total", cql_stats.filtered_rows_matched_total,
                     seastar::metrics::description("number of rows read and matched during filtering operations")),
             seastar::metrics::make_counter("rcu_total", rcu_total,
-                    seastar::metrics::description("total number of consumed read units, counted as half units")).set_skip_when_empty(),
+                    seastar::metrics::description("total number of consumed read units, counted as half units"))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::PUT_ITEM],
-                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("PutItem")}).set_skip_when_empty(),
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("PutItem")})(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::DELETE_ITEM],
-                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("DeleteItem")}).set_skip_when_empty(),
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("DeleteItem")})(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::UPDATE_ITEM],
-                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("UpdateItem")}).set_skip_when_empty(),
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("UpdateItem")})(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::INDEX],
-                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("Index")}).set_skip_when_empty(),
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("Index")})(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
-                    seastar::metrics::description("number of rows read and dropped during filtering operations")),
+                    seastar::metrics::description("number of rows read and dropped during filtering operations"))(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchWriteItem")},
-                    api_operations.batch_write_item_batch_total).set_skip_when_empty(),
+                    api_operations.batch_write_item_batch_total)(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchGetItem")},
-                    api_operations.batch_get_item_batch_total).set_skip_when_empty(),
+                    api_operations.batch_get_item_batch_total)(alternator_label).set_skip_when_empty(),
     });
 }
 

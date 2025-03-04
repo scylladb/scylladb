@@ -60,6 +60,7 @@
 
 #include "transport/cql_protocol_extension.hh"
 #include "utils/bit_cast.hh"
+#include "utils/labels.hh"
 #include "db/config.hh"
 #include "utils/reusable_buffer.hh"
 
@@ -269,10 +270,10 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
                         sm::description("Counts a number of client connections.")),
 
         sm::make_gauge("current_connections", _stats.connections,
-                        sm::description("Holds a current number of client connections.")),
+                        sm::description("Holds a current number of client connections."))(basic_level),
 
         sm::make_counter("requests_served", _stats.requests_served,
-                        sm::description("Counts a number of served requests.")),
+                        sm::description("Counts a number of served requests."))(basic_level),
 
         sm::make_gauge("requests_serving", _stats.requests_serving,
                         sm::description("Holds a number of requests that are being processed right now.")),
@@ -287,7 +288,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
                                             "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
         sm::make_counter("requests_shed", _stats.requests_shed,
                         sm::description("Holds an incrementing counter with the requests that were shed due to overload (threshold configured via max_concurrent_requests_per_shard). "
-                                            "The first derivative of this value shows how often we shed requests due to overload in the \"CQL transport\" component.")),
+                                            "The first derivative of this value shows how often we shed requests due to overload in the \"CQL transport\" component."))(basic_level),
         sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
@@ -306,7 +307,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
 
         transport_metrics.emplace_back(
             sm::make_counter("cql_errors_total", sm::description("Counts the total number of returned CQL errors."),
-                        {label_instance},
+                        {label_instance, basic_level},
                         [this, code = e.first] { auto it = _stats.errors.find(code); return it != _stats.errors.end() ? it->second : 0; }).set_skip_when_empty()
         );
     }

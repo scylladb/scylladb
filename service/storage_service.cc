@@ -115,6 +115,7 @@
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include <csignal>
+#include "utils/labels.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -284,7 +285,7 @@ void storage_service::register_metrics() {
             sm::make_gauge("operation_mode", sm::description("The operation mode of the current node. UNKNOWN = 0, STARTING = 1, JOINING = 2, NORMAL = 3, "
                     "LEAVING = 4, DECOMMISSIONED = 5, DRAINING = 6, DRAINED = 7, MOVING = 8, MAINTENANCE = 9"), [this] {
                 return static_cast<std::underlying_type_t<node_external_status>>(map_operation_mode(_operation_mode));
-            }),
+            })(basic_level),
     });
 }
 
