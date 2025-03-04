@@ -1427,8 +1427,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                   // This means only the local memtables need to be flushed.
                   db.local().flush_all_memtables().get();
                   supervisor::notify("replaying schema commit log - removing old commitlog segments");
-                  //FIXME: discarded future
-                  (void)sch_cl->delete_segments(std::move(paths));
+                  sch_cl->delete_segments(std::move(paths)).get();
               }
             }
 
@@ -1844,8 +1843,16 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     supervisor::notify("replaying commit log - flushing memtables");
                     db.invoke_on_all(&replica::database::flush_all_memtables).get();
                     supervisor::notify("replaying commit log - removing old commitlog segments");
-                    //FIXME: discarded future
-                    (void)cl->delete_segments(std::move(paths));
+
+                    auto chunks = paths | std::views::chunk(size_t(std::ceil(double(paths.size())/smp::count)));
+                    db.invoke_on_all([&chunks](auto& db) {
+                        if (this_shard_id() < chunks.size()) {
+                            auto chunk = chunks[this_shard_id()];
+                            std::vector copy(chunk.begin(), chunk.end());
+                            return db.commitlog()->delete_segments(std::move(copy));
+                        }
+                        return make_ready_future<>();
+                    }).get();
                 }
             }
 
