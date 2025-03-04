@@ -2801,6 +2801,8 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     promise<> deleting_done;
     auto pending_deletes = std::exchange(_pending_deletes, deleting_done.get_future());
 
+    co_await std::move(pending_deletes);
+
     std::exception_ptr recycle_error;
     auto exts = cfg.extensions;
 
@@ -2871,7 +2873,6 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
     if (recycle_error && _recycled_segments.empty()) {
         abort_recycled_list(recycle_error);
     }
-    co_await std::move(pending_deletes);
     deleting_done.set_value();
 }
 
