@@ -163,19 +163,20 @@ static const timeout_config rkp_db_timeout_config {
     5s, 5s, 5s, 5s, 5s, 5s, 5s,
 };
 
-static service::query_state& rkp_db_query_state() {
+static service::query_state rkp_db_query_state(cql3::query_processor& qp) {
     static thread_local service::client_state cs(service::client_state::internal_tag{}, rkp_db_timeout_config);
-    static thread_local service::query_state qs(cs, empty_service_permit());
-    return qs;
+    return service::query_state(cs, make_service_permit(qp.start_operation()));
 }
 
 template<typename... Args>
 future<::shared_ptr<cql3::untyped_result_set>> replicated_key_provider::query(sstring q, Args&& ...params) {
+    auto& qp = _ctxt.get_query_processor().local();
+    auto qs = rkp_db_query_state(qp);
     auto mode = co_await _ctxt.get_storage_service().local().get_operation_mode();
     if (mode != service::storage_service::mode::STARTING) {
         co_return co_await _ctxt.get_query_processor().local().execute_internal(q, { std::forward<Args>(params)...}, cql3::query_processor::cache_internal::no);
     }
-    co_return co_await _ctxt.get_query_processor().local().execute_internal(q, db::consistency_level::ONE, rkp_db_query_state(), { std::forward<Args>(params)...}, cql3::query_processor::cache_internal::no);
+    co_return co_await qp.execute_internal(q, db::consistency_level::ONE, qs, { std::forward<Args>(params)...}, cql3::query_processor::cache_internal::no);
 }
 
 future<> replicated_key_provider::force_blocking_flush() {

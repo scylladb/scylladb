@@ -65,16 +65,17 @@ future<> raft_service_level_distributed_data_accessor::set_service_level(sstring
             ? data_value::make_null(utf8_type)
             : data_value(qos::service_level_options::to_string(slo.workload));
 
-    auto muts = co_await _qp.get_mutations_internal(insert_query, qos_query_state(), mc.write_timestamp(), {service_level_name, timeout_to_data_value(slo.timeout), workload});
+    auto qs = qos_query_state(_qp);
+    auto muts = co_await _qp.get_mutations_internal(insert_query, qs, mc.write_timestamp(), {service_level_name, timeout_to_data_value(slo.timeout), workload});
     auto muts_shares = co_await std::visit(overloaded_functor {
         [&] (const service_level_options::unset_marker& um) -> future<std::vector<mutation>> {
             co_return std::vector<mutation>();
         },
         [&] (const service_level_options::delete_marker& dm) -> future<std::vector<mutation>> {
-            co_return co_await _qp.get_mutations_internal(update_shares_query, qos_query_state(), mc.write_timestamp(), {data_value::make_null(int32_type), data_value(service_level_name)});
+            co_return co_await _qp.get_mutations_internal(update_shares_query, qs, mc.write_timestamp(), {data_value::make_null(int32_type), data_value(service_level_name)});
         },
         [&] (const int32_t& s) -> future<std::vector<mutation>> {
-            co_return co_await _qp.get_mutations_internal(update_shares_query, qos_query_state(), mc.write_timestamp(), {data_value(s), data_value(service_level_name)});
+            co_return co_await _qp.get_mutations_internal(update_shares_query, qs, mc.write_timestamp(), {data_value(s), data_value(service_level_name)});
         }
     }, slo.shares);
 
@@ -88,7 +89,8 @@ future<> raft_service_level_distributed_data_accessor::drop_service_level(sstrin
 
     static sstring delete_query = format("DELETE FROM {}.{} WHERE service_level= ?;", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
 
-    auto muts = co_await _qp.get_mutations_internal(delete_query, qos_query_state(), mc.write_timestamp(), {service_level_name});
+    auto qs = qos_query_state(_qp);
+    auto muts = co_await _qp.get_mutations_internal(delete_query, qs, mc.write_timestamp(), {service_level_name});
     mc.add_mutations(std::move(muts), format("service levels internal statement: {}", delete_query));
 }
 
