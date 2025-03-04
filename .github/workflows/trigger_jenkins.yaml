@@ -1,0 +1,46 @@
+name: Trigger next gating
+
+on:
+  push:
+    branches:
+      - next**
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine Jenkins Job Name
+        run: |
+          if [[ "${{ github.ref_name }}" == "next" ]]; then
+            FOLDER_NAME="scylla-master"
+          elif [[ "${{ github.ref_name }}" == "next-enterprise" ]]; then
+            FOLDER_NAME="scylla-enterprise"
+          else
+            VERSION=$(echo "${{ github.ref_name }}" | awk -F'-' '{print $2}')
+            if [[ "$VERSION" =~ ^202[0-4]\.[0-9]+$ ]]; then
+              FOLDER_NAME="enterprise-$VERSION"
+            elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+              FOLDER_NAME="scylla-$VERSION"
+            fi
+          fi
+          echo "JOB_NAME=${FOLDER_NAME}/job/next" >> $GITHUB_ENV
+
+      - name: Start Jenkins Job
+        uses: scylladb-actions/jenkins-client@v0.1.0
+        with:
+          job_name: ${{ env.JOB_NAME }}
+          base_url: https://jenkins.scylladb.com
+          user: ${{ secrets.JENKINS_USERNAME }}
+          password: ${{ secrets.JENKINS_TOKEN }}
+
+      - name: Notify Slack on Failure
+        if: failure()
+        run: |
+          echo "Action failed, sending Slack alert..."
+          curl -X POST -H 'Content-type: application/json' \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            --data '{
+              "channel": "#releng-team",
+              "text": "🚨 @here '${{ env.JOB_NAME }}' failed to be triggered, please check https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} for more details."
+            }' \
+            https://slack.com/api/chat.postMessage
