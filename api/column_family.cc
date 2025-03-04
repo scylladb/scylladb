@@ -250,15 +250,18 @@ static integral_ratio_holder mean_partition_size(replica::column_family& cf) {
     return res;
 }
 
+static auto count_bytes_on_disk(const replica::column_family& cf, bool total) {
+    uint64_t bytes_on_disk = 0;
+    auto sstables = (total) ? cf.get_sstables_including_compacted_undeleted() : cf.get_sstables();
+    for (auto t : *sstables) {
+        bytes_on_disk += t->bytes_on_disk();
+    }
+    return bytes_on_disk;
+}
+
 static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstring name, bool total) {
     return map_reduce_cf_raw(ctx, name, uint64_t(0), [total](replica::column_family& cf) {
-        uint64_t bytes_on_disk = 0;
-        auto sstables = (total) ? cf.get_sstables_including_compacted_undeleted() :
-                cf.get_sstables();
-        for (auto t : *sstables) {
-            bytes_on_disk += t->bytes_on_disk();
-        }
-        return bytes_on_disk;
+        return count_bytes_on_disk(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
         return make_ready_future<json::json_return_type>(val);
     });
@@ -267,13 +270,7 @@ static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstr
 
 static future<json::json_return_type> sum_sstable(http_context& ctx, bool total) {
     return map_reduce_cf_raw(ctx, uint64_t(0), [total](replica::column_family& cf) {
-        uint64_t bytes_on_disk = 0;
-        auto sstables = (total) ? cf.get_sstables_including_compacted_undeleted() :
-                cf.get_sstables();
-        for (auto t : *sstables) {
-            bytes_on_disk += t->bytes_on_disk();
-        }
-        return bytes_on_disk;
+        return count_bytes_on_disk(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
         return make_ready_future<json::json_return_type>(val);
     });
