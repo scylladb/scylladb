@@ -238,7 +238,8 @@ public:
         topology_state_machine& topology_state_machine,
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
-        std::function<future<void>()> compression_dictionary_updated_callback);
+        std::function<future<void>(std::string_view)> compression_dictionary_updated_callback
+    );
     ~storage_service();
 
     node_ops::task_manager_module& get_node_ops_module() noexcept;
@@ -319,6 +320,14 @@ public:
 
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_token_metadata.get();
+    }
+
+    abort_source& get_abort_source() noexcept {
+        return _abort_source;
+    }
+
+    gms::feature_service& get_feature_service() noexcept {
+        return _feature_service;
     }
 
 private:
@@ -902,7 +911,8 @@ public:
     // but its intended usage is to set up the RPC connections to use the new dictionaries.
     //
     // Must be called on shard 0.
-    future<> compression_dictionary_updated_callback();
+    future<> compression_dictionary_updated_callback(std::string_view name);
+    future<> compression_dictionary_updated_callback_all();
 
     future<> do_cluster_cleanup();
 
@@ -949,6 +959,9 @@ public:
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
     future<> wait_for_topology_not_busy();
 
+    // Gathers a randomly-selected sample of chunks of (decompressed) Data files for the given table,
+    // from across the entire cluster.
+    future<utils::chunked_vector<bytes>> do_sample_sstables(table_id, uint64_t chunk_size, uint64_t n_chunks);
 private:
     future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
@@ -992,7 +1005,9 @@ private:
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;
 
-    std::function<future<void>()> _compression_dictionary_updated_callback;
+    std::function<future<void>(std::string_view)> _compression_dictionary_updated_callback;
+public:
+    std::function<future<std::vector<std::byte>>(std::vector<std::vector<std::byte>>)> _train_dict;
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;

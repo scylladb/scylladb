@@ -183,7 +183,7 @@ storage_service::storage_service(abort_source& abort_source,
     topology_state_machine& topology_state_machine,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
-    std::function<future<void>()> compression_dictionary_updated_callback
+    std::function<future<void>(std::string_view)> compression_dictionary_updated_callback
     )
         : _abort_source(abort_source)
         , _feature_service(feature_service)
@@ -887,9 +887,16 @@ future<> storage_service::update_service_levels_cache(qos::update_both_cache_lev
     co_await _sl_controller.local().update_cache(update_only_effective_cache, ctx);
 }
 
-future<> storage_service::compression_dictionary_updated_callback() {
+future<> storage_service::compression_dictionary_updated_callback_all() {
+    auto all_dict_names = co_await _sys_ks.local().query_all_dict_names();
+    for (const auto& x : all_dict_names) {
+        co_await _compression_dictionary_updated_callback(x);
+    }
+}
+
+future<> storage_service::compression_dictionary_updated_callback(std::string_view name) {
     assert(this_shard_id() == 0);
-    return _compression_dictionary_updated_callback();
+    return _compression_dictionary_updated_callback(name);
 }
 
 // Moves the coroutine lambda onto the heap and extends its
@@ -4742,6 +4749,56 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+future<utils::chunked_vector<bytes>> storage_service::do_sample_sstables(table_id t, uint64_t chunk_size, uint64_t n_chunks) {
+    slogger.debug("do_sample_sstables(): called with table_id={} chunk_size={} n_chunks={}", t, chunk_size, n_chunks);
+    auto& db = _db.local();
+    auto& ms = _messaging.local();
+    std::unordered_map<locator::host_id, uint64_t> estimated_sizes;
+    co_await coroutine::parallel_for_each(
+        db.get_token_metadata().get_host_ids(),
+        [&] (auto h) -> future<> {
+            auto est = co_await ser::storage_service_rpc_verbs::send_estimate_sstable_volume(&ms, h, t);
+            if (est) {
+                estimated_sizes.emplace(h, est);
+            }
+        }
+    );
+    const auto total_size = std::ranges::fold_left(estimated_sizes | std::ranges::views::values, uint64_t(0), std::plus());
+    slogger.debug("do_sample_sstables(): estimate_sstable_volume returned {}, total={}", estimated_sizes, total_size);
+    std::unordered_map<locator::host_id, uint64_t> chunks_per_host;
+    {
+        uint64_t partial_sum = 0;
+        uint64_t covered_samples = 0;
+        for (const auto& [k, v] : estimated_sizes) {
+            partial_sum += v;
+            uint64_t next_covered = static_cast<double>(partial_sum) / total_size * n_chunks;
+            chunks_per_host.emplace(k, next_covered - covered_samples);
+            covered_samples = next_covered;
+        }
+
+        // Just a sanity check
+        auto covered = std::ranges::fold_left(chunks_per_host | std::ranges::views::values, uint64_t(0), std::plus());
+        if (total_size > 0 && covered != n_chunks) {
+            on_internal_error(slogger, "do_sample_sstables(): something went wrong with the sample distribution algorithm");
+        }
+    }
+    slogger.debug("do_sample_sstables(): sending out send_sample_sstables with proportions {}", chunks_per_host);
+    auto samples = co_await seastar::map_reduce(
+        chunks_per_host,
+        [&] (std::pair<locator::host_id, uint64_t> h_s) -> future<utils::chunked_vector<bytes>> {
+            const auto& [h, sz] = h_s;
+            return ser::storage_service_rpc_verbs::send_sample_sstables(&ms, h, t, chunk_size, sz);
+        },
+        utils::chunked_vector<bytes>(),
+        [] (auto v, auto some_samples) {
+            std::ranges::move(some_samples, std::back_inserter(v));
+            return v;
+        }
+    );
+    slogger.debug("do_sample_sstables(): returned {} chunks", samples.size());
+    co_return samples;
+}
+
 future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
     auto& raft_server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
@@ -7185,6 +7242,20 @@ void storage_service::init_messaging_service() {
         return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
             return ss.load_stats_for_tablet_based_tables();
         });
+    });
+    ser::storage_service_rpc_verbs::register_estimate_sstable_volume(&_messaging.local(), [this] (table_id t_id) -> future<uint64_t> {
+        co_return co_await _db.map_reduce0(seastar::coroutine::lambda([&] (replica::database& local_db) -> future<uint64_t> {
+            uint64_t result = 0;
+            auto& t = local_db.get_tables_metadata().get_table(t_id);
+            auto snap = co_await t.take_sstable_set_snapshot();
+            for (const auto& sst : snap) {
+                result += sst.sst->data_size();
+            }
+            co_return result;
+        }), uint64_t(0), std::plus());
+    });
+    ser::storage_service_rpc_verbs::register_sample_sstables(&_messaging.local(), [this] (table_id table, uint64_t chunk_size, uint64_t n_chunks) -> future<utils::chunked_vector<bytes>> {
+        return _db.local().sample_data_files(table, chunk_size, n_chunks);
     });
     ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
         return handle_raft_rpc(dst_id, [params = std::move(params)] (auto& ss) mutable {

@@ -53,7 +53,6 @@ class reader_permit;
 
 class compression_parameters;
 class compressor;
-using compressor_ptr = shared_ptr<compressor>;
 
 namespace sstables {
 
@@ -299,9 +298,12 @@ private:
     // Variables *not* found in the "Compression Info" file (added by update()):
     uint64_t _compressed_file_length = 0;
     uint32_t _full_checksum = 0;
+    compressor_ptr _compressor;
 public:
     // Set the compressor algorithm, please check the definition of enum compressor.
     void set_compressor(compressor_ptr c);
+    compressor& get_compressor() const;
+    void discard_hidden_options();
     // After changing _compression, update() must be called to update
     // additional variables depending on it.    
     void update(uint64_t compressed_file_length);
@@ -359,9 +361,6 @@ public:
     friend class sstable;
 };
 
-// for API query only. Free function just to distinguish it from an accessor in compression
-compressor_ptr get_sstable_compressor(const compression&);
-
 // Note: compression_metadata is passed by reference; The caller is
 // responsible for keeping the compression_metadata alive as long as there
 // are open streams on it. This should happen naturally on a higher level -
@@ -379,7 +378,10 @@ input_stream<char> make_compressed_file_m_format_input_stream(file f,
 
 output_stream<char> make_compressed_file_m_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
-                const compression_parameters& cp);
+                const compression_parameters& cp,
+                compressor_ptr);
+
+
+std::map<sstring, sstring> options_from_compression(const compression& c);
 
 }
-

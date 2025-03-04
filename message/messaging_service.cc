@@ -700,6 +700,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::DEFINITIONS_UPDATE:
     case messaging_verb::TRUNCATE:
     case messaging_verb::TRUNCATE_WITH_TABLETS:
+    case messaging_verb::ESTIMATE_SSTABLE_VOLUME:
+    case messaging_verb::SAMPLE_SSTABLES:
     case messaging_verb::MIGRATION_REQUEST:
     case messaging_verb::SCHEMA_CHECK:
     case messaging_verb::COUNTER_MUTATION:

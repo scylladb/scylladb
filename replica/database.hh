@@ -110,6 +110,8 @@ struct entry_descriptor;
 
 }
 
+class sstable_compressor_factory;
+
 namespace ser {
 template<typename T>
 class serializer;
@@ -1240,6 +1242,8 @@ private:
     void do_update_off_strategy_trigger();
 
     compaction_group* try_get_compaction_group_with_static_sharding() const;
+
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot_impl(dht::token_range tr, bool flush);
 public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
@@ -1265,6 +1269,9 @@ public:
     // all compaction groups that overlap with a given token range. The output is
     // a list of SSTables that represent the snapshot.
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
+
+    // Takes snapshot of current sstable set all compaction groups.
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_sstable_set_snapshot();
 
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
@@ -1631,7 +1638,7 @@ public:
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, const abort_source& abort,
+            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&, const abort_source& abort,
             utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
@@ -1930,6 +1937,13 @@ public:
     /** This callback is going to be called just before the service level is changed **/
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
     virtual future<> on_effective_service_levels_cache_reloaded() override;
+
+    // Returns a vector of file chunks randomly sampled from all Data.db files of this table.
+    future<utils::chunked_vector<bytes>> sample_data_files(
+        table_id id,
+        uint64_t chunk_size,
+        uint64_t n_chunks
+    );
 };
 
 // A helper function to parse the directory name back

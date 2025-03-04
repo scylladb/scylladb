@@ -119,9 +119,9 @@ future<> unset_thrift_controller(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_thrift_controller(ctx, r); });
 }
 
-future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
-    return ctx.http_server.set_routes([&ctx, &ss, &group0_client] (routes& r) {
-            set_storage_service(ctx, r, ss, group0_client);
+future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sys_ks) {
+    return ctx.http_server.set_routes([&ctx, &ss, &group0_client, &sys_ks] (routes& r) {
+            set_storage_service(ctx, r, ss, group0_client, sys_ks);
         });
 }
 

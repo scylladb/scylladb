@@ -14,6 +14,8 @@
 #include "api/scrub_status.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
+#include "schema/schema_builder.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/hash.hh"
 #include <optional>
 #include <sstream>
@@ -1448,6 +1450,153 @@ rest_get_effective_ownership(http_context& ctx, sharded<service::storage_service
         });
 }
 
+static future<float> try_one_compression_config(
+    sstable_compressor_factory& factory,
+    schema_ptr initial_schema,
+    const compression_parameters& params,
+    const utils::chunked_vector<bytes>& validation_samples
+) {
+    auto modified_schema = schema_builder(initial_schema).set_compressor_params(params).build();
+    auto compressor = co_await factory.make_compressor_for_writing(modified_schema);
+    size_t raw_size = 0;
+    size_t compressed_size = 0;
+    std::vector<char> tmp;
+    for (const auto& s : validation_samples) {
+        auto chunk_len = params.chunk_length();
+        for (size_t offset = 0; offset < s.size(); offset += chunk_len) {
+            auto frag = std::string_view(reinterpret_cast<const char*>(s.data()), s.size()).substr(offset);
+            frag = frag.substr(0, std::min<size_t>(chunk_len, frag.size()));
+            raw_size += frag.size();
+            tmp.resize(compressor->compress_max_size(frag.size()));
+            apilog.trace("try_one_compression_config: in_size={}, out_size={}", frag.size(), tmp.size());
+            compressed_size += compressor->compress(frag.data(), frag.size(), tmp.data(), tmp.size());
+        }
+    }
+    if (raw_size == 0) {
+        co_return 0.0f;
+    }
+    co_return float(compressed_size) / raw_size;
+}
+
+static future<float> try_one_compression_config(
+    gms::feature_service& feat,
+    std::span<std::byte> dict,
+    schema_ptr initial_schema,
+    const compression_parameters& params,
+    const utils::chunked_vector<bytes>& validation_samples
+) {
+    auto factory = make_sstable_compressor_factory(feat);
+    co_await factory->set_recommended_dict(initial_schema->id(), dict);
+    co_return co_await try_one_compression_config(*factory, initial_schema, params, validation_samples);
+}
+
+static
+future<json::json_return_type>
+rest_estimate_compression_ratios(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().sstable_compression_dicts) {
+        apilog.warn("estimate_compression_ratios: called before the cluster feature was enabled");
+        throw std::runtime_error("estimate_compression_ratios requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
+    }
+    auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
+    auto cf = api::req_param<sstring>(*req, "cf", {}).value;
+    apilog.debug("estimate_compression_ratios: called with ks={} cf={}", ks, cf);
+
+    auto s = ctx.db.local().find_column_family(ks, cf).schema();
+
+    auto training_sample = co_await ss.local().do_sample_sstables(s->id(), 4096, 4096);
+    auto validation_sample = co_await ss.local().do_sample_sstables(s->id(), 16*1024, 1024);
+    apilog.debug("estimate_compression_ratios: got training sample with {} blocks and validation sample with {}", training_sample.size(), validation_sample.size());
+
+    std::vector<std::vector<std::byte>> tmp;
+    for (const auto& s : training_sample) {
+        auto v = std::as_bytes(std::span(s));
+        tmp.push_back(std::vector<std::byte>(v.begin(), v.end()));
+    }
+    auto dict = co_await ss.invoke_on(0, [tmp = std::move(tmp)] (auto& ss_local) {
+        if (!ss_local._train_dict) {
+            on_internal_error(apilog, "estimate_compression_ratios: _train_dict not plugged");
+        }
+        return ss_local._train_dict(std::move(tmp));
+    });
+    apilog.debug("estimate_compression_ratios: got dict of size {}", dict.size());
+
+    std::vector<ss::map_string_double> res;
+    auto make_result = [](std::string_view key, float value) -> ss::map_string_double {
+        ss::map_string_double x;
+        x.key = sstring(key);
+        x.value = value;
+        return x;
+    };
+
+    using algorithm = compression_parameters::algorithm;
+    for (const auto& algo : {algorithm::lz4, algorithm::zstd}) {
+        for (const auto& chunk_size_kb : {1, 4, 16}) {
+            auto algo_name = compression_parameters::algorithm_to_name(algo);
+            auto params = compression_parameters{std::map<sstring, sstring>{
+                {compression_parameters::CHUNK_LENGTH_KB, std::to_string(chunk_size_kb)},
+                {compression_parameters::SSTABLE_COMPRESSION, sstring(algo_name)},
+            }};
+            auto with_no_dict = co_await try_one_compression_config(ss.local().get_feature_service(), {}, s, params, validation_sample);
+            auto with_past_dict = co_await try_one_compression_config(ctx.db.local().get_user_sstables_manager().get_compressor_factory(), s, params, validation_sample);
+            auto with_future_dict = co_await try_one_compression_config(ss.local().get_feature_service(), dict, s, params, validation_sample);
+            res.push_back(make_result(fmt::format("sstable_compression={}:chunk_length_kb={}:dict=none", algo_name, chunk_size_kb), with_no_dict));
+            res.push_back(make_result(fmt::format("sstable_compression={}:chunk_length_kb={}:dict=past", algo_name, chunk_size_kb), with_past_dict));
+            res.push_back(make_result(fmt::format("sstable_compression={}:chunk_length_kb={}:dict=future", algo_name, chunk_size_kb), with_future_dict));
+        }
+    }
+
+    co_return res;
+}
+
+static
+future<json::json_return_type>
+rest_retrain_dict(http_context& ctx, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sys_ks, std::unique_ptr<http::request> req) {
+    if (!ss.local().get_feature_service().sstable_compression_dicts) {
+        apilog.warn("retrain_dict: called before the cluster feature was enabled");
+        throw std::runtime_error("retrain_dict requires all nodes to support the SSTABLE_COMPRESSION_DICTS cluster feature");
+    }
+    auto ks = api::req_param<sstring>(*req, "keyspace", {}).value;
+    auto cf = api::req_param<sstring>(*req, "cf", {}).value;
+    apilog.debug("retrain_dict: called with ks={} cf={}", ks, cf);
+    const auto& t = ctx.db.local().find_column_family(ks, cf);
+    const auto t_id = t.schema()->id();
+    auto sample = co_await ss.local().do_sample_sstables(t_id, 4096, 4096);
+    apilog.debug("retrain_dict: got sample with {} blocks", sample.size());
+    co_await ss.invoke_on(0, coroutine::lambda([&sample, &sys_ks, &group0_client, &ctx, t_id] (auto& ss_local) -> future<> {
+        std::vector<std::vector<std::byte>> tmp;
+        for (const auto& s : sample) {
+            auto v = std::as_bytes(std::span(s));
+            tmp.push_back(std::vector<std::byte>(v.begin(), v.end()));
+        }
+        if (!ss_local._train_dict) {
+            on_internal_error(apilog, "retrain_dict: _train_dict not plugged");
+        }
+        auto dict = co_await ss_local._train_dict(std::move(tmp));
+        apilog.debug("retrain_dict: got dict of size {}", dict.size());
+        // Publish the dict to system.dicts.
+        while (true) {
+            try {
+                auto name = fmt::format("sstables/{}", t_id);
+                utils::dict_trainer_logger.debug("retrain_dict: trying to publish the dict as {}", name);
+                auto batch = service::group0_batch(co_await group0_client.start_operation(ss_local.get_abort_source()));
+                auto write_ts = batch.write_timestamp();
+                auto new_dict_ts = db_clock::now();
+                auto data = bytes(reinterpret_cast<const bytes::value_type*>(dict.data()), dict.size());
+                auto this_host_id = ctx.db.local().get_token_metadata().get_topology().get_config().this_host_id;
+                mutation publish_new_dict = co_await sys_ks.local().get_insert_dict_mutation(name, std::move(data), this_host_id, new_dict_ts, write_ts);
+                batch.add_mutation(std::move(publish_new_dict), "publish new SSTable compression dictionary");
+                utils::dict_trainer_logger.debug("retrain_dict: committing");
+                co_await std::move(batch).commit(group0_client, ss_local.get_abort_source(), {});
+                utils::dict_trainer_logger.debug("retrain_dict: finished");
+                break;
+            } catch (const service::group0_concurrent_modification&) {
+                utils::dict_trainer_logger.debug("group0_concurrent_modification in retrain_dict, retrying");
+            }
+        }
+    }));
+    co_return json_void();
+}
+
 static
 future<json::json_return_type>
 rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
@@ -1509,21 +1658,23 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
                             info.version = sstable->get_version();
 
                             if (sstable->has_component(sstables::component_type::CompressionInfo)) {
-                                auto& c = sstable->get_compression();
-                                auto cp = sstables::get_sstable_compressor(c);
+                                const auto& cp = sstable->get_compression().get_compressor();
 
                                 ss::named_maps nm;
                                 nm.group = "compression_parameters";
-                                for (auto& p : cp->options()) {
+                                for (auto& p : cp.options()) {
+                                    if (compressor::is_hidden_option_name(p.first)) {
+                                        continue;
+                                    }
                                     ss::mapper e;
                                     e.key = p.first;
                                     e.value = p.second;
                                     nm.attributes.push(std::move(e));
                                 }
-                                if (!cp->options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
+                                if (!cp.options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
                                     ss::mapper e;
                                     e.key = compression_parameters::SSTABLE_COMPRESSION;
-                                    e.value = cp->name();
+                                    e.value = sstring(cp.name());
                                     nm.attributes.push(std::move(e));
                                 }
                                 info.extended_properties.push(std::move(nm));
@@ -1773,7 +1924,7 @@ rest_bind(ks_cf_func func, http_context& ctx) {
     return wrap_ks_cf(ctx, func);
 }
 
-void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sys_ks) {
     ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
     ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
     ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
@@ -1841,6 +1992,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
     ss::get_ownership.set(r, rest_bind(rest_get_ownership, ctx, ss));
     ss::get_effective_ownership.set(r, rest_bind(rest_get_effective_ownership, ctx, ss));
+    ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client, sys_ks));
+    ss::estimate_compression_ratios.set(r, rest_bind(rest_estimate_compression_ratios, ctx, ss));
     ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
     ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
     ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));
