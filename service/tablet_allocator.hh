@@ -228,7 +228,7 @@ public:
     ///
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
-    future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
+    future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {}, std::vector<std::vector<table_id>> colocated_tables = {});
 
     load_balancer_stats_manager& stats();
 

@@ -39,7 +39,7 @@ public:
 
     /// Generates tablet_map for a new table.
     /// Runs under group0 guard.
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count) const = 0;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count, std::optional<table_id> colocated_table = std::nullopt) const = 0;
 
     /// Generates tablet_map for a new table or when increasing replication factor.
     /// For a new table, cur_tablets is initialized with the tablet_count,
