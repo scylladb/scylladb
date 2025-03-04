@@ -1,17 +1,33 @@
-#!/usr/bin/python3
+#
+# Copyright (C) 2023-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
 import os
 import boto3
+import logging
+import pathlib
+
+import pytest
 
 # use minio_server
 from test.pylib.minio_server import MinioServer
-from test.pylib.cql_repl import conftest
-from test.topology.conftest import *
+from test.topology.conftest import (
+    manager,
+    manager_api_sock_path,  # used by `manager_internal` fixture
+    manager_internal,  # used by `manager` fixture
+    pytest_addoption as topology_pytest_addoption,
+    pytest_runtest_makereport,
+    skip_mode_fixture,  # for @skip_mode(...) decorator
+)
 
 
 def pytest_addoption(parser):
+    topology_pytest_addoption(parser)
+
     parser.addoption('--keep-tmp', action='store_true',
                      help="keep the whole temp path")
-    conftest.pytest_addoption(parser)
     # reserved for tests with real S3
     s3_options = parser.getgroup("s3-server", description="S3 Server settings")
     s3_options.addoption('--s3-server-address')
@@ -20,16 +36,6 @@ def pytest_addoption(parser):
     s3_options.addoption('--aws-secret-key')
     s3_options.addoption('--aws-region')
     s3_options.addoption('--s3-server-bucket')
-
-    parser.addoption('--manager-api', action='store', required=True,
-                     help='Manager unix socket path')
-    parser.addoption("--artifacts_dir_url", action='store', type=str, default=None, dest="artifacts_dir_url",
-                     help="Provide the URL to artifacts directory to generate the link to failed tests directory "
-                          "with logs")
-    parser.addoption('--auth_username', action='store', default=None,
-                        help='username for authentication')
-    parser.addoption('--auth_password', action='store', default=None,
-                        help='password for authentication')
 
 
 def format_tuples(tuples=None, **kwargs):

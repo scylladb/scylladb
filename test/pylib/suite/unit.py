@@ -12,8 +12,9 @@ import shlex
 from typing import TYPE_CHECKING
 
 from scripts import coverage
+from test import path_to
 from test.pylib.scylla_cluster import merge_cmdline_options
-from test.pylib.suite.base import Test, TestSuite, palette, path_to, read_log, run_test
+from test.pylib.suite.base import Test, TestSuite, palette, read_log, run_test
 
 if TYPE_CHECKING:
     import argparse

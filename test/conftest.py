@@ -18,31 +18,30 @@ from typing import TYPE_CHECKING
 import pytest
 import universalasync
 
+from test import ALL_MODES, TOP_SRCDIR
 from test.pylib.host_registry import HostRegistry
 from test.pylib.minio_server import MinioServer
 from test.pylib.report_plugin import ReportPlugin
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.suite.base import TestSuite, init_testsuite_globals
+from test.pylib.suite.base import TestSuite, find_suite_config, init_testsuite_globals
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
 
+    from test.pylib.cpp.item import CppTestFunction
+    from test.pylib.suite.base import Test
+
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
 
-ALL_MODES = {'debug': 'Debug',
-             'release': 'RelWithDebInfo',
-             'dev': 'Dev',
-             'sanitize': 'Sanitize',
-             'coverage': 'Coverage'}
 
-def pytest_addoption(parser):
-    parser.addoption('--mode', choices=ALL_MODES.keys(), action="append", dest="modes",
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
                      help="Run only tests for given build mode(s)")
-    parser.addoption('--tmpdir', action='store', default='testlog', help='''Path to temporary test data and log files. The data is
-            further segregated per build mode. Default: ./testlog.''', )
+    parser.addoption('--tmpdir', action='store', default=str(TOP_SRCDIR / 'testlog'),
+                     help='Path to temporary test data and log files.  The data is further segregated per build mode.')
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
 
     # Following option is to use with bare pytest command.
@@ -54,9 +53,25 @@ def pytest_addoption(parser):
     parser.addoption('--test-py-init', action='store_true', default=False,
                      help='Run pytest session in test.py-compatible mode.  I.e., start all required services, etc.')
 
+    # Options for compatibility with test.py
+    parser.addoption('--save-log-on-success', default=False,
+                        dest="save_log_on_success", action="store_true",
+                        help="Save test log output on success.")
+    parser.addoption('--coverage', action='store_true', default=False,
+                      help="When running code instrumented with coverage support"
+                           "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
+                           "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
+                           "The lcov files can eventually be used for generating coverage reports")
+    parser.addoption("--cluster-pool-size", type=int,
+                     help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
+                          "CLUSTER_POOL_SIZE can be used to achieve the same")
+    parser.addoption("--extra-scylla-cmdline-options", default=[],
+                     help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
+                          " '--logger-log-level raft=trace --default-log-level error'")
+
 
 @pytest.fixture(scope="session")
-def build_mode(request):
+def build_mode(request: pytest.FixtureRequest) -> str:
     """
     This fixture returns current build mode.
     This is for running tests through the test.py script, where only one mode is passed to the test
@@ -68,10 +83,24 @@ def build_mode(request):
         return mode[0]
     return mode
 
-def pytest_configure(config):
+
+@pytest.fixture(scope="module")
+async def testpy_testsuite(request: pytest.FixtureRequest, build_mode: str) -> TestSuite:
+    suite_config = find_suite_config(path=request.path)
+    return TestSuite.opt_create(path=str(suite_config.parent), options=request.config.option, mode=build_mode)
+
+
+@pytest.fixture(scope="module")
+async def testpy_test(request: pytest.FixtureRequest, testpy_testsuite: TestSuite) -> Test:
+    await testpy_testsuite.add_test(shortname=request.node.name, casename=None)
+    return testpy_testsuite.tests[-1]
+
+
+def pytest_configure(config: pytest.Config) -> None:
     config.pluginmanager.register(ReportPlugin())
 
-def pytest_collection_modifyitems(config, items):
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item | CppTestFunction]) -> None:
     """
     This is a standard pytest method.
     This is needed to modify the test names with dev mode and run id to differ them one from another
@@ -171,9 +200,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     # Run stuff just once for the pytest session even running under xdist.
     if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
-        temp_dir = os.path.join(session.config.rootpath, "..", session.config.getoption("--tmpdir"))
-        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes())
-        start_s3_mock_services(minio_tempdir_base=temp_dir)
+        prepare_dirs(
+            tempdir_base=session.config.getoption("--tmpdir"),
+            modes=session.config.getoption("--mode") or get_configured_modes(),
+        )
+        start_s3_mock_services(minio_tempdir_base=session.config.getoption("--tmpdir"))
 
 
 def pytest_sessionfinish() -> None:

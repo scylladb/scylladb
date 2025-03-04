@@ -10,9 +10,10 @@ from random import randint
 import pytest
 from pytest import Collector
 
+from test import TOP_SRCDIR
 from test.pylib.cpp.boost.boost_facade import BoostTestFacade
 from test.pylib.cpp.ldap.prepare_instance import get_env_manager
-from test.pylib.cpp.common_cpp_conftest import collect_items, get_modes_to_run, get_root_path, get_combined_tests
+from test.pylib.cpp.common_cpp_conftest import collect_items, get_modes_to_run
 
 
 def pytest_addoption(parser):
@@ -40,8 +41,7 @@ def pytest_runtestloop(session):
     if session.config.getoption('collectonly'):
         yield
         return
-    root_dir = get_root_path(session)
-    temp_dir = root_dir / session.config.getoption('tmpdir')
+    temp_dir = TOP_SRCDIR / session.config.getoption('tmpdir')
     try:
         byte_limit = session.config.getoption('byte-limit')
     except ValueError:
@@ -50,5 +50,5 @@ def pytest_runtestloop(session):
     worker_id = 'master'
     if 'xdist' in sys.modules:
         worker_id = sys.modules['xdist'].get_xdist_worker_id(session)
-    with get_env_manager(root_dir, temp_dir, worker_id, modes, byte_limit):
+    with get_env_manager(TOP_SRCDIR, temp_dir, worker_id, modes, byte_limit):
         yield
