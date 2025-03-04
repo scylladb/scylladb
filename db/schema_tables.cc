@@ -2129,9 +2129,14 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
             class placeholder : public schema_extension {
                 bytes _bytes;
             public:
+                // This support code was written before schema_extension was deprecated, so support it
+                // without warnings
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
                 placeholder(bytes bytes)
                                 : _bytes(std::move(bytes)) {
                 }
+#pragma clang diagnostic pop
                 bytes serialize() const override {
                     return _bytes;
                 }
