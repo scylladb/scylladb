@@ -651,6 +651,16 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+    std::stringstream ss;
+    ss << _client_state.get_remote_address().addr().as_ipv4_address();
+    cd.hostname = ss.str();
+    try {
+        cd.ssl_enabled = tls::is_operational(_fd);
+        cd.ssl_protocol = tls::get_protocol_version(_fd);
+        cd.ssl_cipher_suite = tls::get_cipher_suite(_fd);
+    } catch (const std::invalid_argument&) {
+        cd.ssl_enabled = false;
+    }
     return cd;
 }
 
