@@ -1376,13 +1376,17 @@ public:
 
 public:
     // Must run inside a seastar thread
-    void flush_rows_in_working_row_buf(locator::effective_replication_map_ptr erm, bool small_table_optimization) {
+    void flush_rows_in_working_row_buf(std::optional<small_table_optimization_params> small_table_optimization) {
         if (_dirty_on_master) {
             _dirty_on_master = is_dirty_on_master::no;
         } else {
             return;
         }
-        flush_rows(_schema, _working_row_buf, _repair_writer, erm, small_table_optimization, this);
+        if (small_table_optimization) {
+            flush_rows(_schema, _working_row_buf, _repair_writer, small_table_optimization, this);
+        } else {
+            flush_rows(_schema, _working_row_buf, _repair_writer);
+        }
     }
 
 private:
@@ -1855,7 +1859,7 @@ public:
             repair_hash_set set_diff,
             needs_all_rows_t needs_all_rows,
             locator::host_id remote_node, unsigned node_idx,
-            const locator::effective_replication_map& erm, bool small_table_optimization,
+            std::optional<small_table_optimization_params> small_table_optimization,
             shard_id dst_cpu_id) {
         if (set_diff.empty()) {
             co_return;
@@ -1871,8 +1875,8 @@ public:
                     _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
         }
         if (small_table_optimization) {
-            auto& strat = erm.get_replication_strategy();
-            const auto* tm = &erm.get_token_metadata();
+            auto& strat = small_table_optimization->erm->get_replication_strategy();
+            const auto* tm = &small_table_optimization->erm->get_token_metadata();
             const auto* tmptr = co_await get_tm_for_small_table_optimization_check(tm);
             if (tmptr) {
                 tm = tmptr;
@@ -1919,14 +1923,13 @@ public:
     }
 };
 
-void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, locator::effective_replication_map_ptr erm, bool small_table_optimization, repair_meta* rm) {
+void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization, repair_meta* rm) {
     auto cmp = position_in_partition::tri_compare(*s);
     lw_shared_ptr<mutation_fragment> last_mf;
     lw_shared_ptr<const decorated_key_with_hash> last_dk;
-    bool do_small_table_optimization = erm && small_table_optimization;
-    const auto* tm = do_small_table_optimization ? &erm->get_token_metadata() : nullptr;
+    const auto* tm = small_table_optimization ? &small_table_optimization->erm->get_token_metadata() : nullptr;
 
-    if (do_small_table_optimization && rm) {
+    if (small_table_optimization && rm) {
         const auto* tmptr = rm->get_tm_for_small_table_optimization_check(tm).get();
         if (tmptr) {
             tm = tmptr;
@@ -1939,10 +1942,10 @@ void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_
             continue;
         }
         const auto& dk = r.get_dk_with_hash()->dk;
-        if (do_small_table_optimization) {
+        if (small_table_optimization) {
             // Check if the token is owned by the node
-            auto eps = erm->get_replication_strategy().calculate_natural_endpoints(dk.token(), *tm).get();
-            if (!eps.contains(erm->get_topology().my_host_id())) {
+            auto eps = small_table_optimization->erm->get_replication_strategy().calculate_natural_endpoints(dk.token(), *tm).get();
+            if (!eps.contains(small_table_optimization->erm->get_topology().my_host_id())) {
                 rlogger.trace("master: ignore row, token={}", dk.token());
                 continue;
             }
@@ -2914,7 +2917,7 @@ private:
             throw;
           }
         }
-        master.flush_rows_in_working_row_buf(get_erm(), _small_table_optimization);
+        master.flush_rows_in_working_row_buf(_small_table_optimization ? std::make_optional(small_table_optimization_params{ .erm = get_erm() }) : std::nullopt);
         return op_status::next_step;
     }
 
@@ -2939,7 +2942,7 @@ private:
             if (master.use_rpc_stream()) {
                 ns.state = repair_state::put_row_diff_with_rpc_stream_started;
                 try {
-                    co_await master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, *get_erm(), _small_table_optimization, dst_cpu_id);
+                    co_await master.put_row_diff_with_rpc_stream(std::move(set_diff), needs_all_rows, _all_live_peer_nodes[idx], idx, _small_table_optimization ? std::make_optional(small_table_optimization_params{ .erm = get_erm() }) : std::nullopt, dst_cpu_id);
                     ns.state = repair_state::put_row_diff_with_rpc_stream_finished;
                 } catch (...) {
                     std::exception_ptr ep = std::current_exception();

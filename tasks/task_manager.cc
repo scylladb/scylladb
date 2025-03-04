@@ -132,6 +132,10 @@ task_manager::task::progress task_manager::task::impl::get_binary_progress() con
     };
 }
 
+void task_manager::task::impl::on_task_registered() {
+    // Do nothing by default.
+}
+
 future<task_manager::task::progress> task_manager::task::impl::get_progress() const {
     auto children_num = _children.size();
     if (children_num == 0) {
@@ -378,6 +382,7 @@ future<> task_manager::task::done() const noexcept {
 
 void task_manager::task::register_task() {
     _impl->_module->register_task(shared_from_this());
+    _impl->on_task_registered();
 }
 
 void task_manager::task::unregister_task() noexcept {
@@ -398,6 +403,10 @@ future<std::vector<task_manager::task::task_essentials>> task_manager::task::get
 
 void task_manager::task::set_virtual_parent() noexcept {
     _impl->set_virtual_parent();
+}
+
+task_manager::task::impl& task_manager::task::get_impl() noexcept {
+    return *_impl;
 }
 
 task_manager::virtual_task::impl::impl(module_ptr module) noexcept
@@ -569,6 +578,13 @@ future<utils::chunked_vector<task_stats>> task_manager::module::get_stats(is_int
         }
     }
     co_return stats;
+}
+
+task_manager::task_ptr task_manager::module::maybe_get_local_task(task_id task_id) {
+    if (auto it = get_local_tasks().find(task_id); it != get_local_tasks().end()) {
+        return it->second;
+    }
+    return nullptr;
 }
 
 void task_manager::module::register_task(task_ptr task) {
