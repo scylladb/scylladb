@@ -474,6 +474,9 @@ class partition_slice;
 class schema_extension {
 public:
     virtual ~schema_extension() {};
+    [[deprecated("Use dedicated columns in system_schema.scylla_tables instead")]]
+    schema_extension() = default;
+
     virtual future<> validate(const schema&) const {
         return make_ready_future<>();
     }

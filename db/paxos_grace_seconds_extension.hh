@@ -36,6 +36,10 @@ class paxos_grace_seconds_extension : public schema_extension {
 public:
     static constexpr auto NAME = "paxos_grace_seconds";
 
+    // cdc_extension was written before schema_extension was deprecated, so support it
+    // without warnings
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     paxos_grace_seconds_extension() = default;
     
     explicit paxos_grace_seconds_extension(int32_t seconds)
@@ -52,6 +56,7 @@ public:
     explicit paxos_grace_seconds_extension(const sstring& s)
         : _paxos_gc_sec(std::stoi(s))
     {}
+#pragma clang diagnostic pop
 
     bytes serialize() const override {
         return ser::serialize_to_buffer<bytes>(_paxos_gc_sec);
