@@ -23,26 +23,6 @@ from test.alternator.util import unique_table_name, create_test_table, new_test_
 # using the following tags when creating each table below:
 TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
 
-# Before Alternator Streams is supported with tablets (#16317), let's verify
-# that enabling Streams results in an orderly error. This test should be
-# deleted when #16317 is fixed.
-def test_streams_enable_error_with_tablets(dynamodb, scylla_only):
-    # Test attempting to create a table already with streams
-    with pytest.raises(ClientError, match='ValidationException.*tablets'):
-        with new_test_table(dynamodb,
-            Tags=[{'Key': 'experimental:initial_tablets', 'Value': '4'}],
-            StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
-            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
-            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
-            pass
-    # Test attempting to add a stream to an existing table
-    with new_test_table(dynamodb,
-        Tags=[{'Key': 'experimental:initial_tablets', 'Value': '4'}],
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
-        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
-        with pytest.raises(ClientError, match='ValidationException.*tablets'):
-            table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'});
-
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
 def disable_stream(dynamodbstreams, table):
