@@ -209,6 +209,17 @@ In this example, we will show how to install a nine nodes cluster.
    UN   54.187.142.201  109.54 KB       256     ?               d99967d6-987c-4a54-829d-86d1b921470f    RACK1
    UN   54.187.168.20   109.54 KB       256     ?               2329c2e0-64e1-41dc-8202-74403a40f851    RACK1
 
-See also:
+--------------------------
+Preventing Quorum Loss
+--------------------------
 
+If your cluster is symmetrical, i.e., it has  an even number of datacenters
+with the same number of nodes, consider adding an arbiter DC to mitigate
+the risk of losing a quorum at a minimum cost.
+See :doc:`Preventing Quorum Loss in Symmetrical Multi-DC Clusters </operating-scylla/procedures/cluster-management/arbiter-dc>`
+for details.
+
+------------
+See also:
+------------
 :doc:`Create a ScyllaDB Cluster - Single Data Center (DC) </operating-scylla/procedures/cluster-management/create-cluster>`

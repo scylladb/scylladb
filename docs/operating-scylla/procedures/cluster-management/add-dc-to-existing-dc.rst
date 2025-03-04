@@ -202,6 +202,7 @@ Add New DC
 
 #. If you are using ScyllaDB Monitoring, update the `monitoring stack <https://monitoring.docs.scylladb.com/stable/install/monitoring_stack.html#configure-scylla-nodes-from-files>`_ to monitor it. If you are using ScyllaDB Manager, make sure you install the `Manager Agent <https://manager.docs.scylladb.com/stable/install-scylla-manager-agent.html>`_ and Manager can access the new DC.
 
+.. _add-dc-to-existing-dc-not-connect-clients:
 
 Configure the Client not to Connect to the New DC
 -------------------------------------------------
