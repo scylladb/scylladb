@@ -208,14 +208,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             auto op = table.stream_in_progress();
             auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
             auto& sharder = *sharder_ptr;
-            //FIXME: discarded future.
-            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
-                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
-                make_streaming_consumer(estimated_partitions, reason, topo_guard),
-                std::move(op)
-            ).then_wrapped([this, s, plan_id_ = plan_id, from, sink_ = sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable -> future<> {
-                auto sink = sink_;
-                auto plan_id = plan_id_;
+            auto result_handling_cont = [this, s, plan_id, from, sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable -> future<> {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {
@@ -251,7 +244,13 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                 co_await sink(status).finally([sink] () mutable {
                     return sink.close();
                 });
-            }).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
+            };
+            //FIXME: discarded future.
+            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
+                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
+                make_streaming_consumer(estimated_partitions, reason, topo_guard),
+                std::move(op)
+            ).then_wrapped(std::move(result_handling_cont)).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
                 auto level = seastar::log_level::error;
                 if (try_catch<seastar::rpc::closed_error>(ep)) {
                     level = seastar::log_level::debug;
