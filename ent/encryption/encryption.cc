@@ -374,55 +374,34 @@ public:
         return k;
     }
 
-    shared_ptr<kmip_host> get_kmip_host(const sstring& host) override {
-        auto& cache = _per_thread_kmip_host_cache[this_shard_id()];
-        auto i = cache.find(host);
-        if (i != cache.end()) {
-            return i->second;
+    template<typename HostType, typename CacheType, typename ConfigType>
+    shared_ptr<HostType> get_host(const sstring& host, CacheType& cache, const ConfigType& config_map) {
+        auto& host_cache = cache[this_shard_id()];
+        auto it = host_cache.find(host);
+        if (it != host_cache.end()) {
+            return it->second;
         }
 
-        auto j = _cfg->kmip_hosts().find(host);
-        if (j != _cfg->kmip_hosts().end()) {
-            auto result = ::make_shared<kmip_host>(*this, host, j->second);
-            cache.emplace(host, result);
+        auto config_it = config_map.find(host);
+        if (config_it != config_map.end()) {
+            auto result = ::make_shared<HostType>(*this, host, config_it->second);
+            host_cache.emplace(host, result);
             return result;
         }
 
-        throw std::invalid_argument("No such host: "+ host);
+        throw std::invalid_argument("No such host: " + host);
+    }
+
+    shared_ptr<kmip_host> get_kmip_host(const sstring& host) override {
+        return get_host<kmip_host>(host, _per_thread_kmip_host_cache, _cfg->kmip_hosts());
     }
 
     shared_ptr<kms_host> get_kms_host(const sstring& host) override {
-        auto& cache = _per_thread_kms_host_cache[this_shard_id()];
-        auto i = cache.find(host);
-        if (i != cache.end()) {
-            return i->second;
-        }
-
-        auto j = _cfg->kms_hosts().find(host);
-        if (j != _cfg->kms_hosts().end()) {
-            auto result = ::make_shared<kms_host>(*this, host, j->second);
-            cache.emplace(host, result);
-            return result;
-        }
-
-        throw std::invalid_argument("No such host: "+ host);
+        return get_host<kms_host>(host, _per_thread_kms_host_cache, _cfg->kms_hosts());
     }
 
     shared_ptr<gcp_host> get_gcp_host(const sstring& host) override {
-        auto& cache = _per_thread_gcp_host_cache[this_shard_id()];
-        auto i = cache.find(host);
-        if (i != cache.end()) {
-            return i->second;
-        }
-
-        auto j = _cfg->gcp_hosts().find(host);
-        if (j != _cfg->gcp_hosts().end()) {
-            auto result = ::make_shared<gcp_host>(*this, host, j->second);
-            cache.emplace(host, result);
-            return result;
-        }
-
-        throw std::invalid_argument("No such host: "+ host);
+        return get_host<gcp_host>(host, _per_thread_gcp_host_cache, _cfg->gcp_hosts());
     }
 
 
