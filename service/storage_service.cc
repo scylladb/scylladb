@@ -5944,14 +5944,20 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         slogger.debug("Executing repair for tablet={}", tablet);
         auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
-        tasks::task_info global_tablet_repair_task_info{tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info.tablet_task_id.uuid()}, 0};
+        tasks::task_info global_tablet_repair_task_info;
+        bool filter_alive = false;
+        if (trinfo->stage == locator::tablet_transition_stage::repair) {
+            global_tablet_repair_task_info = {tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info.tablet_task_id.uuid()}, 0};
+        } else {
+            filter_alive = true;
+        }
 
         // Check if the request is still valid.
         // If there is mismatch, it means this repair was canceled and the coordinator moved on.
         if (!trinfo) {
             throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
         }
-        if (trinfo->stage != locator::tablet_transition_stage::repair) {
+        if (trinfo->stage != locator::tablet_transition_stage::repair && trinfo->stage != locator::tablet_transition_stage::rebuild_repair) {
             throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
         }
         if (trinfo->session_id) {
@@ -5963,7 +5969,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
 
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
-        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info);
+        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, filter_alive);
         co_return service::tablet_operation_repair_result{time};
     });
     if (std::holds_alternative<service::tablet_operation_repair_result>(result)) {

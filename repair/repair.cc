@@ -2426,7 +2426,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
-future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info) {
+future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, bool filter_alive) {
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
     auto& db = get_db().local();
@@ -2466,6 +2466,9 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
                     rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} ok",
                         id.uuid(), r.host, dc, hosts_filter, dcs_filter);
                 }
+            }
+            if (filter_alive && !get_gossiper().is_alive(r.host)) {
+                continue;
             }
             nodes.push_back(r.host);
             shards.push_back(shard);
