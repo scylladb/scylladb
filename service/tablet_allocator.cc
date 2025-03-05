@@ -663,6 +663,8 @@ private:
                 return true;
             case tablet_transition_stage::streaming:
                 return true;
+            case tablet_transition_stage::rebuild_repair:
+                return true;
             case tablet_transition_stage::repair:
                 return true;
             case tablet_transition_stage::end_repair:
