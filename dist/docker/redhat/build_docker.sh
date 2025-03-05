@@ -104,6 +104,10 @@ bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-serv
 bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
 bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
+# XXX: This is required to run setup scripts in root-mode with non-root user
+run chown -R scylla:scylla /etc/scylla.d
+
+bconfig --user scylla:scylla
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
 bconfig --env LANG=C.UTF-8
 bconfig --env LANGUAGE=
