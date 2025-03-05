@@ -6081,6 +6081,18 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto range = tmap.get_token_range(tablet.tablet);
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
+        locator::tablet_replica_set read_from{streaming_info.read_from.begin(), streaming_info.read_from.end()};
+        if (trinfo->transition == locator::tablet_transition_kind::rebuild_v2) {
+            // Choose one of the replicas to stream from.
+            auto replica_opt = maybe_get_primary_replica(tablet.tablet, read_from, [&pending_replica = *trinfo->pending_replica] (const auto& tr) {
+                return tr != pending_replica;
+            });
+            if (replica_opt.has_value()) {
+                read_from = { replica_opt.value() };
+            } else {
+                read_from = {};
+            }
+        }
 
         streaming::stream_reason reason = std::invoke([&] {
             switch (trinfo->transition) {
@@ -6115,7 +6127,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 slogger.info("stream_sstable_files: released");
             });
 
-            for (auto src : streaming_info.read_from) {
+            for (auto src : read_from) {
                 // Use file stream for tablet to stream data
                 auto ops_id = streaming::file_stream_id::create_random_id();
                 auto start_time = std::chrono::steady_clock::now();
@@ -6181,7 +6193,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     _gossiper.get_unreachable_members()));
 
             std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint;
-            for (auto r: streaming_info.read_from) {
+            for (auto r: read_from) {
                 ranges_per_endpoint[r.host].emplace_back(range);
             }
             streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));

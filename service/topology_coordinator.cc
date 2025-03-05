@@ -1333,11 +1333,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    dst, _as, raft::server_id(dst.uuid()), gid);
                     })) {
-                        rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
-                        updates.emplace_back(get_mutation_builder()
-                            .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
-                            .del_session(last_token)
-                            .build());
+                        if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2) {
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::rebuild_repair);
+                            updates.emplace_back(get_mutation_builder()
+                                .set_stage(last_token, locator::tablet_transition_stage::rebuild_repair)
+                                .build());
+                        } else {
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
+                            updates.emplace_back(get_mutation_builder()
+                                .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
+                                .del_session(last_token)
+                                .build());
+                        }
                     }
                 }
                     break;
