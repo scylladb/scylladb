@@ -50,7 +50,7 @@ Glossary
       Reduces data inconsistency which can occur when a node is down or there is network congestion. In ScyllaDB, when data is written and there is an unresponsive replica, the coordinator writes itself a hint. When the node recovers, the coordinator sends the node the pending hints to ensure that it has the data it should have received. See :doc:`Hinted Handoff </architecture/anti-entropy/hinted-handoff>`. 
     
     Idempotent   
-      Denoting an element of a set which is unchanged in value when multiplied or otherwise operated on by itself. :doc:`ScyllaDB Counters </features/counters>` are not indepotent because in the case of a write failure, the client cannot safely retry the request.
+      Denoting an element of a set which is unchanged in value when multiplied or otherwise operated on by itself. :doc:`ScyllaDB Counters </features/counters>` are not idempotent because in the case of a write failure, the client cannot safely retry the request.
     
     JBOD
       JBOD or Just another Bunch Of Disks is a non-raid storage system using a server with multiple disks in order to instantiate a separate file system per disk. The benefit is that if a single disk fails, only it needs to be replaced and not the whole disk array. The disadvantage is that free space and load may not be evenly distributed. See the :ref:`FAQ <faq-raid0-required>`.
