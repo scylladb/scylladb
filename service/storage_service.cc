@@ -5990,7 +5990,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         if (!trinfo) {
             throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
         }
-        if (trinfo->stage != locator::tablet_transition_stage::repair) {
+        if (trinfo->stage != locator::tablet_transition_stage::repair && trinfo->stage != locator::tablet_transition_stage::rebuild_repair) {
             throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
         }
         if (trinfo->session_id) {
@@ -5999,11 +5999,20 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
             throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
         }
 
+        tasks::task_info global_tablet_repair_task_info;
+        std::optional<locator::tablet_replica_set> replicas = std::nullopt;
+        if (trinfo->stage == locator::tablet_transition_stage::repair) {
+            global_tablet_repair_task_info = {tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info.tablet_task_id.uuid()}, 0};
+        } else {
+            auto migration_streaming_info = get_migration_streaming_info(get_token_metadata_ptr()->get_topology(), tmap.get_tablet_info(tablet.tablet), *trinfo);
+            replicas = locator::tablet_replica_set{migration_streaming_info.read_from.begin(), migration_streaming_info.read_from.end()};
+        }
+
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
         service::tablet_operation_repair_result result;
         co_await do_with_repair_service(_repair, [&] (repair_service& local_repair) -> future<> {
-            auto time = co_await local_repair.repair_tablet(_address_map, guard, tablet, trinfo->session_id);
+            auto time = co_await local_repair.repair_tablet(_address_map, guard, tablet, trinfo->session_id, std::move(replicas));
             result = service::tablet_operation_repair_result{time};
         });
         co_return result;
