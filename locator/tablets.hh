@@ -218,6 +218,7 @@ enum class tablet_transition_stage {
     allow_write_both_read_old,
     write_both_read_old,
     streaming,
+    rebuild_repair,
     write_both_read_new,
     use_new,
     cleanup,

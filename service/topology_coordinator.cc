@@ -1044,6 +1044,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Next migration of the same tablet is guaranteed to use a different instance.
     struct tablet_migration_state {
         background_action_holder streaming;
+        background_action_holder rebuild_repair;
         background_action_holder cleanup;
         background_action_holder repair;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
@@ -1297,6 +1298,42 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                     }
                     transition_to_with_barrier(locator::tablet_transition_stage::streaming);
+                    break;
+                case locator::tablet_transition_stage::rebuild_repair: {
+                    if (action_failed(tablet_state.rebuild_repair)) {
+                        if (check_excluded_replicas()) {
+                            if (do_barrier()) {
+                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                                updates.emplace_back(get_mutation_builder()
+                                        .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                        .del_session(last_token)
+                                        .build());
+                            }
+                            break;
+                        }
+                    }
+
+                    if (advance_in_background(gid, tablet_state.rebuild_repair, "rebuild_repair", [&] {
+                        if (!trinfo.pending_replica) {
+                            rtlogger.info("Skipped tablet rebuild repair of {} as no pending replica found", gid);
+                            return make_ready_future<>();
+                        }
+                        auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo);
+                        if (tsi.read_from.empty()) {
+                            rtlogger.info("Skipped tablet rebuild repair of {} as no tablet replica was found", gid);
+                            return make_ready_future<>();
+                        }
+                        auto dst = locator::maybe_get_primary_replica(gid.tablet, {tsi.read_from.begin(), tsi.read_from.end()}, [] (const auto& tr) { return true; }).value().host;
+                        rtlogger.info("Initiating repair phase of tablet rebuild host={} tablet={}", dst, gid);
+                        return ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                dst, _as, raft::server_id(dst.uuid()), gid).discard_result();
+                    })) {
+                        rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::streaming);
+                        updates.emplace_back(get_mutation_builder()
+                            .set_stage(last_token, locator::tablet_transition_stage::streaming)
+                            .build());
+                    }
+                }
                     break;
                 // The state "streaming" is needed to ensure that stale stream_tablet() RPC doesn't
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
