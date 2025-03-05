@@ -9,6 +9,7 @@
 #include <seastar/core/coroutine.hh>
 
 #include "consumer.hh"
+#include "db/view/view_building_worker.hh"
 #include "replica/database.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "db/view/view_builder.hh"
@@ -21,11 +22,12 @@ namespace streaming {
 reader_consumer_v2 make_streaming_consumer(sstring origin,
         sharded<replica::database>& db,
         db::view::view_builder& vb,
+        sharded<db::view::view_building_worker>& vbw,
         uint64_t estimated_partitions,
         stream_reason reason,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard) {
-    return [&db, &vb = vb.container(), estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (mutation_reader reader) -> future<> {
+    return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
@@ -43,7 +45,7 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
             // means partition estimation shouldn't be adjusted.
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             reader_consumer_v2 consumer =
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, origin = std::move(origin), offstrategy] (mutation_reader reader) {
+                    [&db, cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, &vbw, origin = std::move(origin), offstrategy] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
@@ -65,11 +67,15 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
                         cf->enable_off_strategy_trigger();
                     }
                     return cf->add_sstable_and_update_cache(sst, offstrategy);
-                }).then([cf, s, sst, use_view_update_path, &vb]() mutable -> future<> {
+                }).then([&db, cf, s, sst, use_view_update_path, &vb, &vbw]() mutable -> future<> {
                     if (!use_view_update_path) {
                         return make_ready_future<>();
                     }
-                    return vb.local().register_staging_sstable(sst, std::move(cf));
+                    if (db.local().find_keyspace(s->ks_name()).uses_tablets()) {
+                        return vbw.local().notify();
+                    } else {
+                        return vb.local().register_staging_sstable(sst, std::move(cf));
+                    }
                 });
             };
             if (!offstrategy) {
