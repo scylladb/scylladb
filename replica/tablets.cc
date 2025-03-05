@@ -100,8 +100,8 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
         data_value(info.request_time),
         data_value(info.sched_nr),
         data_value(info.sched_time),
-        data_value(info.repair_hosts_filter),
-        data_value(info.repair_dcs_filter),
+        data_value(locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)),
+        data_value(locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)),
     });
     return result;
 };
@@ -331,8 +331,8 @@ locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
         value_cast<db_clock::time_point>(dv[2]),
         value_cast<int64_t>(dv[3]),
         value_cast<db_clock::time_point>(dv[4]),
-        value_cast<sstring>(dv[5]),
-        value_cast<sstring>(dv[6]),
+        locator::tablet_task_info::deserialize_repair_hosts_filter(value_cast<sstring>(dv[5])),
+        locator::tablet_task_info::deserialize_repair_dcs_filter(value_cast<sstring>(dv[6])),
     };
     return result;
 }

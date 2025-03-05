@@ -399,6 +399,13 @@ tablet_replica tablet_map::get_primary_replica_within_dc(tablet_id id, const top
     return replicas.at(size_t(id) % replicas.size());
 }
 
+std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
+    const auto replicas = get_tablet_info(id).replicas | std::views::filter([&] (const auto& tr) {
+        return tablet_task_info.selected_by_filters(tr, topo);
+    }) | std::ranges::to<tablet_replica_set>();
+    return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
+}
+
 future<std::vector<token>> tablet_map::get_sorted_tokens() const {
     std::vector<token> tokens;
     tokens.reserve(tablet_count());
@@ -1133,6 +1140,8 @@ auto fmt::formatter<locator::tablet_task_info>::format(const locator::tablet_tas
         {"request_time", fmt::to_string(db_clock::to_time_t(info.request_time))},
         {"sched_nr", fmt::to_string(info.sched_nr)},
         {"sched_time", fmt::to_string(db_clock::to_time_t(info.sched_time))},
+        {"repair_hosts_filter", locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)},
+        {"repair_dcs_filter", locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)},
     };
     return fmt::format_to(ctx.out(), "{}", rjson::print(rjson::from_string_map(ret)));
 };
@@ -1145,16 +1154,71 @@ bool locator::tablet_task_info::is_user_repair_request() const {
     return request_type == locator::tablet_task_type::user_repair;
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request() {
-    long sched_nr = 0;
-    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+bool locator::tablet_task_info::selected_by_filters(const tablet_replica& replica, const topology& topo) const {
+    if (!repair_hosts_filter.empty() && !repair_hosts_filter.contains(replica.host)) {
+        return false;
+    }
+    auto dc = topo.get_datacenter(replica.host);
+    if (!repair_dcs_filter.empty() && !repair_dcs_filter.contains(dc)) {
+        return false;
+    }
+    return true;
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_user_repair_request() {
+locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+    return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
+}
+
+locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
+    long sched_nr = 0;
+    auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
+    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
+}
+
+sstring locator::tablet_task_info::serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter) {
+    sstring res = "";
+    bool first = true;
+    for (const auto& host : filter) {
+        if (!std::exchange(first, false)) {
+            res += ",";
+        }
+        res += host.to_sstring();
+    }
+    return res;
+}
+
+sstring locator::tablet_task_info::serialize_repair_dcs_filter(std::unordered_set<sstring> filter) {
+    sstring res = "";
+    bool first = true;
+    for (const auto& dc : filter) {
+        if (!std::exchange(first, false)) {
+            res += ",";
+        }
+        res += dc;
+    }
+    return res;
+}
+
+std::unordered_set<locator::host_id> locator::tablet_task_info::deserialize_repair_hosts_filter(sstring filter) {
+    if (filter.empty()) {
+        return {};
+    }
+    sstring delim = ",";
+    return std::ranges::views::split(filter, delim) | std::views::transform([](auto&& h) {
+        return locator::host_id(utils::UUID(std::string_view{h}));
+    }) | std::ranges::to<std::unordered_set>();
+}
+
+std::unordered_set<sstring> locator::tablet_task_info::deserialize_repair_dcs_filter(sstring filter) {
+    if (filter.empty()) {
+        return {};
+    }
+    sstring delim = ",";
+    return std::ranges::views::split(filter, delim) | std::views::transform([](auto&& h) {
+        return sstring{std::string_view{h}};
+    }) | std::ranges::to<std::unordered_set>();
 }
 
 locator::tablet_task_info locator::tablet_task_info::make_migration_request() {
