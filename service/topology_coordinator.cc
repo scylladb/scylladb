@@ -1297,7 +1297,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             break;
                         }
                     }
-                    transition_to_with_barrier(locator::tablet_transition_stage::streaming);
+                    if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2) {
+                        transition_to_with_barrier(locator::tablet_transition_stage::rebuild_repair);
+                    } else {
+                        transition_to_with_barrier(locator::tablet_transition_stage::streaming);
+                    }
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
                     if (action_failed(tablet_state.rebuild_repair)) {

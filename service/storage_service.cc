@@ -6097,6 +6097,23 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto range = tmap.get_token_range(tablet.tablet);
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
+        locator::tablet_replica_set read_from{streaming_info.read_from.begin(), streaming_info.read_from.end()};
+        if (trinfo->transition == locator::tablet_transition_kind::rebuild_v2) {
+            auto nearest_hosts = read_from | std::views::transform([] (const auto& tr) {
+                return tr.host;
+            }) | std::ranges::to<host_id_vector_replica_set>();
+            tm->get_topology().sort_by_proximity(trinfo->pending_replica->host, nearest_hosts);
+
+            if (!nearest_hosts.empty()) {
+                auto it = std::find_if(read_from.begin(), read_from.end(), [nearest_host = nearest_hosts[0]] (const auto& tr) { return tr.host == nearest_host; });
+                if (it == read_from.end()) {
+                    on_internal_error(slogger, "Nearest replica not found");
+                }
+                read_from = { *it };
+            } else {
+                read_from = {};
+            }
+        }
 
         streaming::stream_reason reason = std::invoke([&] {
             switch (trinfo->transition) {
@@ -6131,7 +6148,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 slogger.info("stream_sstable_files: released");
             });
 
-            for (auto src : streaming_info.read_from) {
+            for (auto src : read_from) {
                 // Use file stream for tablet to stream data
                 auto ops_id = streaming::file_stream_id::create_random_id();
                 auto start_time = std::chrono::steady_clock::now();
@@ -6197,7 +6214,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     _gossiper.get_unreachable_host_ids()));
 
             std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint;
-            for (auto r: streaming_info.read_from) {
+            for (auto r: read_from) {
                 ranges_per_endpoint[r.host].emplace_back(range);
             }
             streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
