@@ -426,10 +426,8 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
         if (db.features().tablets) {
             if (!_initial_tablets.has_value()) {
                 os << " AND tablets = {'enabled': false}";
-            } else if (_initial_tablets.value() > 0) {
-                os << " AND tablets = {'initial': " << _initial_tablets.value() << "}";
             } else {
-                os << " AND tablets = {'enabled': true}";
+                os << format(" AND tablets = {{'enabled': true{}}}", _initial_tablets.value() ? format(", 'initial': {}", _initial_tablets.value()) : "");
             }
         }
         os << ";";
