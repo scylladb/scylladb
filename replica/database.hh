@@ -1726,6 +1726,8 @@ public:
     lang::manager& lang() noexcept { return _lang_manager; }
     const lang::manager& lang() const noexcept { return _lang_manager; }
 
+    std::optional<table_id> get_base_table_for_tablet_colocation(const schema& s);
+
     service::migration_notifier& get_notifier() { return _mnotifier; }
     const service::migration_notifier& get_notifier() const { return _mnotifier; }
 
