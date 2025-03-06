@@ -838,16 +838,16 @@ future<> sstable::read_toc() noexcept {
                     _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
                     _unrecognized_components.push_back(c);
-                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, filename(component_type::TOC));
+                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, toc_filename());
                 }
             }
             if (!_recognized_components.size()) {
-                throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
+                throw malformed_sstable_exception("Empty TOC", toc_filename());
             }
         });
     } catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
+            throw malformed_sstable_exception(toc_filename() + ": file not found");
         }
         throw;
     }
