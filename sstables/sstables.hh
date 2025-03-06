@@ -515,6 +515,7 @@ public:
     }
 
 private:
+    friend struct component_name;
     sstring filename(component_type f) const {
         auto dir = _storage->prefix();
         return filename(f, std::move(dir));
