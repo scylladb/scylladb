@@ -951,8 +951,8 @@ public:
             return tmap.needs_merge() && _db.column_family_exists(tid) && _db.find_column_family(tid).views().empty();
         };
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
             if (!can_proceed_with_colocation(table, tmap)) {
                 continue;
             }
@@ -2846,8 +2846,8 @@ public:
 
         // Compute tablet load on nodes.
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
 
             co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
@@ -2981,8 +2981,8 @@ public:
         co_await _load_sketch->populate_dc(dc);
         _tablet_count_per_table.clear();
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
             uint64_t total_load = 0;
 
             auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
