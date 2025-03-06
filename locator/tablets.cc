@@ -445,6 +445,10 @@ void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config co
     _repair_scheduler_config = std::move(config);
 }
 
+void tablet_map::set_base_table(table_id base_table) {
+    _base_table = base_table;
+}
+
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
     _transitions.erase(id);
@@ -628,6 +632,10 @@ const tablet_task_info& tablet_map::resize_task_info() const {
 
 const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() const {
     return _repair_scheduler_config;
+}
+
+std::optional<table_id> tablet_map::base_table() const {
+    return _base_table;
 }
 
 static auto to_resize_type(sstring decision) {
