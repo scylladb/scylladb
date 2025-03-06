@@ -1567,11 +1567,7 @@ public:
             }
 
             auto& tmap = _tm->tablets().get_tablet_map(table);
-
-            const auto* table_stats = load_stats_for_table(table);
-            if (!table_stats) {
-                continue;
-            }
+            const auto& table_groups = _tm->tablets().all_table_groups();
 
             auto finalize_decision = [&] {
                 _stats.for_cluster().resizes_finalized++;
@@ -1580,10 +1576,16 @@ public:
 
             // If all replicas have completed split work for the current sequence number, it means that
             // load balancer can emit finalize decision, for split to be completed.
-            if (tmap.needs_split() && table_stats->split_ready_seq_number == tmap.resize_decision().sequence_number) {
-                finalize_decision();
-                lblogger.info("Finalizing resize decision for table {} as all replicas agree on sequence number {}",
-                              table, table_stats->split_ready_seq_number);
+            if (tmap.needs_split()) {
+                bool all_tables_ready = std::ranges::all_of(table_groups.at(table), [&, seq_num = tmap.resize_decision().sequence_number] (table_id table) {
+                    const auto* table_stats = load_stats_for_table(table);
+                    return table_stats && table_stats->split_ready_seq_number == seq_num;
+                });
+                if (all_tables_ready) {
+                    finalize_decision();
+                    lblogger.info("Finalizing resize decision for table {} as all replicas agree on sequence number {}",
+                                  table, tmap.resize_decision().sequence_number);
+                }
             // If all sibling tablets are co-located across all DCs, then merge can be finalized.
             } else if (tmap.needs_merge() && co_await all_sibling_tablet_replicas_colocated(table, tmap) && !bypass_merge_completion()) {
                 finalize_decision();
