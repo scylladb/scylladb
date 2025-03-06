@@ -441,6 +441,10 @@ public:
 ///    tablet_info& info = tmap.get_tablet_info(id);
 ///
 /// A tablet_id obtained from an instance of tablet_map is valid for that instance only.
+///
+/// If the table is co-located with another base table, then the tablet map
+/// doesn't have any tablets and it contains only the base_table value as a
+/// reference to the base table that we should refer to for tablet information.
 class tablet_map {
 public:
     using tablet_container = utils::chunked_vector<tablet_info>;
@@ -455,6 +459,7 @@ private:
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
     repair_scheduler_config _repair_scheduler_config;
+    std::optional<table_id> _base_table;
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
@@ -467,6 +472,11 @@ public:
     ///
     /// \param tablet_count The desired tablets to allocate. Must be a power of two.
     explicit tablet_map(size_t tablet_count);
+
+    /// Constructs a tablet map for a co-located child table.
+    ///
+    /// \param base_table The base table that this table is co-located with.
+    explicit tablet_map(table_id base_table);
 
     /// Returns tablet_id of a tablet which owns a given token.
     tablet_id get_tablet_id(token) const;
@@ -507,6 +517,10 @@ public:
 
     /// Returns the id of the first tablet.
     tablet_id first_tablet() const {
+        // may fail if we're trying to read the tablets of a co-located table that has base_table set.
+        // the tablet map of such table doesn't have tablets. we should refer instead to the base table map to
+        // read tablet information.
+        check_tablet_id(tablet_id(0));
         return tablet_id(0);
     }
 
@@ -581,12 +595,15 @@ public:
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
     const locator::repair_scheduler_config& repair_scheduler_config() const;
+
+    std::optional<table_id> base_table() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
     void set_repair_scheduler_config(locator::repair_scheduler_config config);
+    void set_base_table(table_id base_table);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
