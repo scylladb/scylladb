@@ -651,7 +651,7 @@ future<sstring> sstable_directory::create_pending_deletion_log(opened_directory&
         try {
             auto trim_size = base_dir.native().size() + 1; // Account for the '/' delimiter
             for (const auto& sst : ssts) {
-                auto toc = sst->toc_filename();
+                sstring toc = seastar::to_sstring(sst->toc_filename());
                 if (toc.size() <= trim_size) {
                     on_internal_error(dirlog, fmt::format("Sstable {} outside of basedir {} is scheduled for deletion", toc, base_dir.native()));
                 }

@@ -416,8 +416,8 @@ public:
         return filename(component_type::Data);
     }
 
-    sstring toc_filename() const {
-        return filename(component_type::TOC);
+    component_name toc_filename() const {
+        return component_name(*this, component_type::TOC);
     }
 
     component_name index_filename() const {
