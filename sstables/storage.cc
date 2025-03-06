@@ -431,7 +431,7 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     // Running out of memory here will terminate.
     auto name = [&sst] () noexcept {
         memory::scoped_critical_alloc_section _;
-        return sst.toc_filename();
+        return fmt::to_string(sst.toc_filename());
     }();
 
     try {

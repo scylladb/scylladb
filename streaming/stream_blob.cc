@@ -340,7 +340,7 @@ future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms,
                 }
                 auto sst = co_await sstable_sink->close_and_seal();
                 if (sst) {
-                    auto filename = sst->toc_filename();
+                    auto filename = fmt::to_string(sst->toc_filename());
                     sst = {};
                     co_await load_sstable_for_tablet(meta.ops_id, db, meta.table, sstable_state(meta), std::move(filename), meta.dst_shard_id);
                 }
