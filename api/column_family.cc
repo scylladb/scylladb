@@ -1054,7 +1054,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
 
         return ctx.db.map_reduce0([key, uuid] (replica::database& db) -> future<std::unordered_set<sstring>> {
             auto sstables = co_await db.find_column_family(uuid).get_sstables_by_partition_key(key);
-            co_return sstables | std::views::transform([] (auto s) { return s->get_filename(); }) | std::ranges::to<std::unordered_set>();
+            co_return sstables | std::views::transform([] (auto s) -> sstring { return fmt::to_string(s->get_filename()); }) | std::ranges::to<std::unordered_set>();
         }, std::unordered_set<sstring>(),
         [](std::unordered_set<sstring> a, std::unordered_set<sstring>&& b) mutable {
             a.merge(b);
