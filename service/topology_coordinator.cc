@@ -1305,7 +1305,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
                     if (action_failed(tablet_state.rebuild_repair)) {
-                        if (check_excluded_replicas()) {
+                        bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
+                        if (fail || check_excluded_replicas()) {
                             if (do_barrier()) {
                                 rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
                                 updates.emplace_back(get_mutation_builder()
@@ -1318,6 +1319,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
 
                     if (advance_in_background(gid, tablet_state.rebuild_repair, "rebuild_repair", [&] {
+                        utils::get_local_injector().inject("rebuild_repair_stage_fail",
+                            [] { throw std::runtime_error("rebuild_repair failed due to error injection"); });
                         if (!trinfo.pending_replica) {
                             rtlogger.info("Skipped tablet rebuild repair of {} as no pending replica found", gid);
                             return make_ready_future<>();
