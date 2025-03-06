@@ -3131,21 +3131,42 @@ public:
         _use_tablet_aware_balancing = use_tablet_aware_balancing;
     }
 
+    tablet_map allocate_tablets_for_new_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
+        auto tm = _db.get_shared_token_metadata().get();
+        lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
+        auto lb = make_load_balancer(tm, nullptr, {});
+        auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
+        auto& table_plan = plan.tables[s.id()];
+        if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
+            lblogger.info("Rounding up tablet count from {} to {} for table {}.{}", table_plan.target_tablet_count,
+                    table_plan.target_tablet_count_aligned, s.ks_name(), s.cf_name());
+        }
+        auto tablet_count = table_plan.target_tablet_count_aligned;
+        auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
+        return map;
+    }
+
+    tablet_map allocate_tablets_for_new_table_from_base(table_id base_table_id, const tablet_map& base_map) {
+        return tablet_map(base_table_id);
+    }
+
     void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
-            lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
-            auto lb = make_load_balancer(tm, nullptr, {});
-            auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
-            auto& table_plan = plan.tables[s.id()];
-            if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
-                lblogger.info("Rounding up tablet count from {} to {} for table {}.{}", table_plan.target_tablet_count,
-                        table_plan.target_tablet_count_aligned, s.ks_name(), s.cf_name());
-            }
-            auto tablet_count = table_plan.target_tablet_count_aligned;
-            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
+
+            tablet_map map = std::invoke([&] {
+                if (auto base_table = _db.get_base_table_for_tablet_colocation(s); base_table && _db.features().colocated_tablets) {
+                    auto base_id = *base_table;
+                    const auto& base_map = tm->tablets().get_tablet_map(base_id);
+                    lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
+                    return allocate_tablets_for_new_table_from_base(base_id, base_map);
+                } else {
+                    return allocate_tablets_for_new_table(tablet_rs, s);
+                }
+            });
+
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
         }
     }
