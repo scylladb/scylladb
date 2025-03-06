@@ -7,6 +7,7 @@
 #############################################################################
 
 import contextlib
+import collections
 import glob
 import itertools
 import functools
@@ -16,12 +17,15 @@ import pathlib
 import pytest
 import subprocess
 import tempfile
+import textwrap
 import random
 import re
 import shutil
+import uuid
 from . import nodetool
 from . import util
 from typing import Iterable, Type, Union
+from cassandra.util import Duration
 
 
 def simple_no_clustering_table(cql, keyspace):
@@ -140,6 +144,10 @@ def table_with_counters(cql, keyspace):
     return table, schema
 
 
+def get_sstables_for_table(data_dir, keyspace, table):
+    return glob.glob(os.path.join(data_dir, keyspace, table + '-*', '*-Data.db'))
+
+
 @contextlib.contextmanager
 def scylla_sstable(table_factory, cql, ks, data_dir):
     table, schema = table_factory(cql, ks)
@@ -148,10 +156,10 @@ def scylla_sstable(table_factory, cql, ks, data_dir):
     with open(schema_file, "w") as f:
         f.write(schema)
 
-    sstables = glob.glob(os.path.join(data_dir, ks, table + '-*', '*-Data.db'))
+    sstables = get_sstables_for_table(data_dir, ks, table)
 
     try:
-        yield (schema_file, sstables)
+        yield (table, schema_file, sstables)
     finally:
         cql.execute(f"DROP TABLE {ks}.{table}")
         os.unlink(schema_file)
@@ -170,7 +178,7 @@ def all_sstables(sstables):
 @pytest.mark.parametrize("what", ["index", "compression-info", "summary", "statistics", "scylla-metadata"])
 @pytest.mark.parametrize("which_sstables", [one_sstable, all_sstables])
 def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_data_dir, what, which_sstables):
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         out = subprocess.check_output([scylla_path, "sstable", f"dump-{what}", "--schema-file", schema_file] + which_sstables(sstables))
 
     print(out)
@@ -193,7 +201,7 @@ def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scyl
     if util.keyspace_has_tablets(cql, test_keyspace) and table_factory == table_with_counters:
         request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
 
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", output_format]
         if merge:
             args.append("--merge")
@@ -211,7 +219,7 @@ def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scyl
         simple_clustering_table,
 ])
 def test_scylla_sstable_write(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory):
-    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dump_common_args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json", "--merge"]
             generation = util.unique_key_int()
@@ -319,7 +327,7 @@ end
     with open(script_file, 'w') as f:
         f.write(script)
 
-    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         sst1 = os.path.basename(sstables[0])
         sst2 = os.path.basename(sstables[1])
         def run_scenario(script_args, expected):
@@ -440,7 +448,7 @@ def test_scylla_sstable_script_slice(cql, test_keyspace, scylla_path, scylla_dat
     scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
     script_file = os.path.join(scripts_path, 'slice.lua')
 
-    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(script_consume_test_table_factory, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         reference_summary = summarize_dump(json.loads(subprocess.check_output([scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--merge"] + sstables)))
 
         # same order as in dump
@@ -493,7 +501,7 @@ def test_scylla_sstable_script(cql, request, test_keyspace, scylla_path, scylla_
     scripts_path = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts'))
     slice_script_path = os.path.join(scripts_path, 'slice.lua')
     dump_script_path = os.path.join(scripts_path, 'dump.lua')
-    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (_,schema_file, sstables):
         dump_common_args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json"]
         script_common_args = [scylla_path, "sstable", "script", "--schema-file", schema_file]
 
@@ -1202,7 +1210,7 @@ def test_scylla_sstable_shard_of_vnodes(cql, test_keyspace_vnodes, scylla_path, 
         all_keys_for_shard = _generate_key_for_shard(scylla_path, shards, shard_id)
         keys = itertools.islice(all_keys_for_shard, num_keys)
         table_factory = functools.partial(_simple_table_with_keys, keys=keys)
-        with scylla_sstable(table_factory, cql, test_keyspace_vnodes, scylla_data_dir) as (schema_file, sstables):
+        with scylla_sstable(table_factory, cql, test_keyspace_vnodes, scylla_data_dir) as (_, schema_file, sstables):
             out = subprocess.check_output([scylla_path,
                                            "sstable", "shard-of",
                                            "--vnodes",
@@ -1222,7 +1230,7 @@ def test_scylla_sstable_shard_of_tablets(cql, test_keyspace_tablets, scylla_path
     shard_to_key = {0: 0, 1: 142}
     for shard_id, key in shard_to_key.items():
         table_factory = functools.partial(_simple_table_with_keys, keys=[key])
-        with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (schema_file, sstables):
+        with scylla_sstable(table_factory, cql, test_keyspace_tablets, scylla_data_dir) as (_, schema_file, sstables):
             with nodetool.no_autocompaction_context(cql, "system.tablets"):
                 nodetool.flush_keyspace(cql, "system")
                 out = subprocess.check_output([scylla_path,
@@ -1253,7 +1261,7 @@ def test_scylla_sstable_bad_scylla_yaml(cql, test_keyspace, scylla_path, scylla_
     This test checks that the config is successfully read, even if there are errors.
     Reproduces: https://github.com/scylladb/scylladb/issues/16538
     """
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (schema_file, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         with tempfile.NamedTemporaryFile("w+t") as scylla_yaml:
             scylla_yaml.write("foo: bar")
             scylla_yaml.flush()
@@ -1282,7 +1290,7 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
                                 (?P<id>[^-]+)-          # sstable identifier
                                 (?P<format>\w+)-        # format: 'big'
                                 (?P<component>.*)       # component: e.g., 'Data'""", re.X)
-    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, sstables):
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, _, sstables):
         for fn in sstables:
             stem = pathlib.Path(fn).stem
             matched = sstable_re.match(stem)
@@ -1294,3 +1302,339 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
             # "system.scylla_local" system tables has a different setting. but in a
             # new installation of scylla, this setting does not exist.
             assert sstable_version == "me", f"unexpected sstable format: {sstable_version}"
+
+
+class sstable_query_tester:
+    def __init__(self, cql, scylla_path, sstables, keyspace, table, temp_workdir):
+        self._cql = cql
+        self._scylla_path = scylla_path
+        self._sstables = sstables
+        self._keyspace = keyspace
+        self._table = table
+        self._temp_workdir = temp_workdir
+
+    def test_json(self, query_template):
+        cql_query_result = self._cql.execute(query_template.replace("SELECT", "SELECT JSON").format(f"{self._keyspace}.{self._table}"))
+        cql_query_result = list(map(lambda row: json.loads(row[0]), cql_query_result))
+
+        with open(os.path.join(self._temp_workdir, "query.cql"), "w+t") as query_file:
+            query_file.write(query_template.format(f"scylla_sstable.{self._table}"))
+            query_file.flush()
+
+            sstable_query_result = json.loads(subprocess.check_output([
+                self._scylla_path, "sstable", "query",
+                "--logger-log-level", "scylla-sstable=debug",
+                "--output-format", "json",
+                "--schema-tables",
+                "--query-file", query_file.name] + self._sstables))
+
+        assert sstable_query_result == cql_query_result
+
+    def test_text(self, query_template=None):
+        if query_template is None:
+            cql_query_result = self._cql.execute("SELECT JSON * FROM {}".format(f"{self._keyspace}.{self._table}"))
+        else:
+            cql_query_result = self._cql.execute(query_template.replace("SELECT", "SELECT JSON").format(f"{self._keyspace}.{self._table}"))
+        cql_query_result = list(map(lambda row: json.loads(row[0]), cql_query_result))
+
+        params = [self._scylla_path, "sstable", "query",
+            "--logger-log-level", "scylla-sstable=debug",
+            "--output-format", "text",
+            "--schema-tables"]
+        if query_template is not None:
+            params += ["--query", query_template.format(f"scylla_sstable.{self._table}")]
+        params += self._sstables
+
+        sstable_query_result = subprocess.check_output(params, text=True)
+
+        column_names = []
+        for line_index, line in enumerate(sstable_query_result.split('\n')):
+            if not line:
+                continue
+
+            columns = list(map(str.strip, line.split('|')))
+            if line_index == 0:
+                # header
+                column_names = columns
+            elif line_index == 1:
+                continue # header-body separator line
+            else:
+                # body
+                cql_row = cql_query_result[line_index - 2]
+
+                assert len(columns) == len(cql_row)
+
+                for column_index, column_value in enumerate(columns):
+                    column_name = column_names[column_index]
+
+                    assert column_name in cql_row
+                    assert str(cql_row[column_name]) == column_value
+
+
+scylla_sstable_query_simple_table_param = collections.namedtuple('scylla_sstable_query_simple_table_param',
+                                                                 ['schema', 'insert_statement', 'insert_statement_parameters', 'prepare', 'teardown'])
+
+scylla_sstable_query_simple_all_types_param = scylla_sstable_query_simple_table_param(
+textwrap.dedent("""
+    CREATE TABLE {}.{} (
+        pk int,
+        ck int,
+        col_ascii ascii,
+        col_bigint bigint,
+        col_blob blob,
+        col_boolean boolean,
+        col_date date,
+        col_decimal decimal,
+        col_double double,
+        col_duration duration,
+        col_float float,
+        col_inet inet,
+        col_int int,
+        col_smallint smallint,
+        col_text text,
+        col_time time,
+        col_timestamp timestamp,
+        col_timeuuid timeuuid,
+        col_tinyint tinyint,
+        col_uuid uuid,
+        col_varint varint,
+        PRIMARY KEY (pk, ck)
+    ) WITH
+        compaction = {{'class': 'NullCompactionStrategy'}};
+    """),
+textwrap.dedent("""
+    INSERT INTO {}.{} (
+        pk,
+        ck,
+        col_ascii,
+        col_bigint,
+        col_blob,
+        col_boolean,
+        col_date,
+        col_decimal,
+        col_double,
+        col_duration,
+        col_float,
+        col_inet,
+        col_int,
+        col_smallint,
+        col_text,
+        col_time,
+        col_timestamp,
+        col_timeuuid,
+        col_tinyint,
+        col_uuid,
+        col_varint
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """),
+(
+        0,
+        0,
+        "asasdfasfd",
+        99999999,
+        bytearray(b'\x78\xcc\xaf'),
+        True,
+        "2012-03-04",
+        87689.2123,
+        0.7567645,
+        Duration(months=10, days=1),
+        0.11,
+        "127.0.0.1",
+        100,
+        10,
+        "kjhknnhjhghgsdf",
+        "08:12:54",
+        1299038700000,
+        uuid.UUID("f06fdf50-bdf7-11ef-84c5-e1cf2fa2d062"),
+        1,
+        uuid.UUID("123e4567-e89b-12d3-a456-426655440000"),
+        8876876876,
+),
+    None,
+    None,
+)
+
+my_udt = collections.namedtuple('my_type', ['field_1', 'field_2'])
+
+scylla_sstable_query_simple_collection_types_param = scylla_sstable_query_simple_table_param(
+textwrap.dedent("""
+    CREATE TABLE {}.{} (
+        pk int PRIMARY KEY,
+        col_list list<text>,
+        col_set set<text>,
+        col_map map<int, text>,
+        col_tuple tuple<text, int>,
+        col_udt my_type
+    ) WITH
+        compaction = {{'class': 'NullCompactionStrategy'}};
+"""),
+    "INSERT INTO {}.{} (pk, col_list, col_set, col_map, col_tuple, col_udt) VALUES (?, ?, ?, ?, ?, ?)",
+    (0, ['adads', '3443sd'], {'asdafasdf', 'aasd'}, {1: 'ak', 2: 'pa'}, ('adadad', 1), my_udt(10, 'aasdad')),
+    "CREATE TYPE {}.my_type (field_1 int, field_2 text)",
+    "DROP TYPE {}.my_type",
+)
+
+scylla_sstable_query_simple_counter_param = scylla_sstable_query_simple_table_param(
+textwrap.dedent("""
+    CREATE TABLE {}.{} (
+        pk int PRIMARY KEY,
+        col_counter counter
+    ) WITH
+        compaction = {{'class': 'NullCompactionStrategy'}};
+"""),
+    "UPDATE {}.{} SET col_counter = col_counter + 10 WHERE pk = ?",
+    (0,),
+    None,
+    None,
+)
+
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+@pytest.mark.parametrize("test_table", [
+        scylla_sstable_query_simple_all_types_param,
+        scylla_sstable_query_simple_collection_types_param,
+        scylla_sstable_query_simple_counter_param,
+])
+def test_scylla_sstable_query_data_types(request, cql, test_keyspace, test_table, scylla_path, scylla_data_dir, temp_workdir):
+    """Check read-all queries with all data-types.
+
+    Run the same query via CQL and via scylla-sstable query and check that the
+    results match.
+    Test both with --query-file and the command-line query composition params.
+    Test both json and text output. To reduce the amount of cases, --query-file
+    is tested with json output, while command-line query is tested with text
+    output.
+
+    This test focuses on checkig the correct formatting and handling of all CQL
+    data-types.
+    """
+    if test_table == scylla_sstable_query_simple_counter_param and util.keyspace_has_tablets(cql, test_keyspace):
+        request.node.add_marker(pytest.mark.xfail(reason="counters are not supported with tablets, see #18180"))
+
+    if test_table.prepare is not None:
+        cql.execute(test_table.prepare.format(test_keyspace))
+
+    table = util.unique_name()
+    schema = test_table.schema.format(test_keyspace, table)
+
+    cql.execute(schema)
+
+    insert_statement = cql.prepare(test_table.insert_statement.format(test_keyspace, table))
+    cql.execute(insert_statement, test_table.insert_statement_parameters)
+
+    nodetool.flush(cql, f"{test_keyspace}.{table}")
+    nodetool.flush_keyspace(cql, "system_schema")
+
+    sstables = get_sstables_for_table(scylla_data_dir, test_keyspace, table)
+
+    with nodetool.no_autocompaction_context(cql, "system_schema"):
+        tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
+
+        tester.test_json("SELECT * FROM {}")
+
+    cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+
+    if test_table.teardown is not None:
+        cql.execute(test_table.teardown.format(test_keyspace))
+
+
+def test_scylla_sstable_query_advanced_queries(cql, test_keyspace, scylla_path, scylla_data_dir, temp_workdir):
+    """Check more advanced queries.
+
+    Run the same query via CQL and via scylla-sstable query and check that the
+    results match.
+    Test both with --query-file and the command-line query composition params.
+    Test both json and text output. To reduce the amount of cases, --query-file
+    is tested with json output, while command-line query is tested with text
+    output.
+
+    This test focuses on checkig the correct handling of more advanced queries,
+    which select a subset of fields and use restrictions and even aggregation.
+    No attempt is made to cover all CQL featues.
+    """
+    table = util.unique_name()
+    schema = f"CREATE TABLE {test_keyspace}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+
+    cql.execute(schema)
+
+    insert_statement = cql.prepare(f"INSERT INTO {test_keyspace}.{table} (pk, ck, v) VALUES (?, ?, ?)")
+    for pk in range(0, 10):
+        for ck in range(0, 10):
+            cql.execute(insert_statement, (pk, ck, pk + ck))
+
+    nodetool.flush(cql, f"{test_keyspace}.{table}")
+    nodetool.flush_keyspace(cql, "system_schema")
+
+    sstables = get_sstables_for_table(scylla_data_dir, test_keyspace, table)
+
+    with nodetool.no_autocompaction_context(cql, "system_schema"):
+        tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
+
+        tester.test_text()
+        tester.test_json("SELECT count(*) FROM {} WHERE pk = 0")
+        tester.test_json("SELECT ck, v FROM {} WHERE pk = 0 and ck = 0")
+        tester.test_text("SELECT ck, v FROM {} WHERE pk=0")
+        tester.test_json("SELECT * FROM {} WHERE pk = 0 AND v = 0 ALLOW FILTERING")
+        tester.test_text("SELECT pk, v FROM {} WHERE pk=0 AND v=0 ALLOW FILTERING")
+
+    cql.execute(f"DROP TABLE {test_keyspace}.{table}")
+
+
+def test_scylla_sstable_query_bad_command_line(cql, scylla_path, scylla_data_dir):
+    """Check that not-allowed command line param combinations are refused."""
+    nodetool.flush_keyspace(cql, "system")
+
+    with nodetool.no_autocompaction_context(cql, "system"):
+        sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
+
+        common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--query-file", "whatever.cql"]
+
+        def check(bad_params):
+            res = subprocess.run(common_params + bad_params + sstables, text=True, capture_output=True)
+            assert res.returncode == 1
+            assert res.stdout == ""
+            assert res.stderr.endswith("error processing arguments: cannot provide both -q|--query and --query-file\n")
+
+        check(["-q", "SELECT * FROM system.local"])
+        check(["--query", "SELECT * FROM system.local"])
+
+
+def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
+    """Check that not-allowed command line param combinations are refused."""
+    with nodetool.no_autocompaction_context(cql, "system"):
+        sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
+
+        common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--query"]
+
+        def check(bad_query, expected_error):
+            res = subprocess.run(common_params + [bad_query] + sstables, text=True, capture_output=True)
+            assert res.returncode == 1
+            assert res.stdout == ""
+            assert "error processing arguments: " + expected_error in res.stderr
+
+        check("SELECT * FROM ,", "failed to parse query: exceptions::syntax_exception")
+        check("SELECT * FROM scylla_sstable.columns; SELECT * FROM scylla_sstable.columns;", "expected exactly 1 query, got 2")
+        check("SELECT * FROM foo", "query must have keyspace and the keyspace has to be scylla_sstable")
+        check("SELECT * FROM foo.bar", "query must select from scylla_sstable keyspace, got foo instead")
+        check("SELECT * FROM system.local", "query must select from scylla_sstable keyspace, got system instead")
+        check("SELECT * FROM scylla_sstable.foo", "query must select from local table, got foo instead")
+        check("SELECT * FROM scylla_sstable.tables", "query must select from local table, got tables instead")
+        check("INSERT INTO scylla_sstable.local (key, bootstrapped) VALUES ('local', 'COMPLETED')", "query must be a select query")
+
+
+def test_scylla_sstable_query_temp_dir(cql, scylla_path, scylla_data_dir):
+    """Check that TEMPDIR environment variable is respected.
+
+    This is very hard to test with a positive test, because cql_test_env removes
+    its temp-dir on exit. So we test with a negative test: give an impossible
+    path and check that creating the temp-dir fails.
+    """
+    with nodetool.no_autocompaction_context(cql, "system"):
+        sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
+
+        with tempfile.NamedTemporaryFile("r") as f:
+            args = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local"]
+            res = subprocess.run(args + sstables, text=True, capture_output=True, env={'TEMPDIR': f.name})
+
+        assert res.returncode == 2
+        assert res.stdout == ""
+        assert res.stderr.endswith(f"error running operation: std::filesystem::__cxx11::filesystem_error (error generic:20, filesystem error: temp_directory_path: Not a directory [{f.name}])\n")

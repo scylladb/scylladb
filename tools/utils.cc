@@ -61,7 +61,7 @@ const operation* get_selected_operation(int& ac, char**& av, const std::vector<o
     }
     opts.add(boost::make_shared<bpo::option_description>("operation", bpo::value<sstring>(), "Operation"));
     pos_opts.add("operation", 1);
-    opts.add(boost::make_shared<bpo::option_description>("operation_options", bpo::value<std::vector<sstring>>(), "Operation specific options"));
+    opts.add(boost::make_shared<bpo::option_description>("operation_options", bpo::value<std::vector<std::string>>(), "Operation specific options"));
     pos_opts.add("operation_options", -1);
 
     if (global_options) {

@@ -389,6 +389,7 @@ public:
     bool Uint64(uint64_t i) { return _writer.Uint64(i); }
     bool Double(double d) { return _writer.Double(d); }
     bool RawNumber(std::string_view str) { return _writer.RawNumber(str.data(), str.size(), false); }
+    bool RawValue(std::string_view json, type root_type) { return _writer.RawValue(json.data(), json.size(), root_type); }
     bool String(std::string_view str) { return _writer.String(str.data(), str.size(), false); }
     bool StartObject() { return _writer.StartObject(); }
     bool Key(std::string_view str) { return _writer.Key(str.data(), str.size(), false); }
