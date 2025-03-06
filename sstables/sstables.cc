@@ -3627,6 +3627,10 @@ generation_type::from_string(const std::string& s) {
     }
 }
 
+sstring component_name::format() const {
+    return sst._storage->prefix() + "/" + sst.component_basename(component);
+}
+
 } // namespace sstables
 
 namespace seastar {
