@@ -285,6 +285,18 @@ bool tablet_metadata::has_tablet_map(table_id id) const {
     return _tablets.contains(id);
 }
 
+table_id tablet_metadata::get_base_table(table_id id) const {
+    if (auto it = _base_table.find(id); it != _base_table.end()) {
+        return it->second;
+    } else {
+        return id;
+    }
+}
+
+bool tablet_metadata::is_base_table(table_id id) const {
+    return !_base_table.contains(id);
+}
+
 void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
@@ -292,7 +304,14 @@ void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(t
     }
     auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
     func(*tablet_map_copy);
-    it->second = make_foreign(lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy)));
+    auto new_map_ptr = lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy));
+    // share the tablet map with all co-located tables
+    for (auto colocated_id : _table_groups.at(id)) {
+        if (colocated_id != id) {
+            _tablets[colocated_id] = make_foreign(new_map_ptr);
+        }
+    }
+    it->second = make_foreign(std::move(new_map_ptr));
 }
 
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
@@ -302,7 +321,14 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
     }
     auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
     co_await func(*tablet_map_copy);
-    it->second = make_foreign(lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy)));
+    auto new_map_ptr = lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy));
+    // share the tablet map with all co-located tables
+    for (auto colocated_id : _table_groups.at(id)) {
+        if (colocated_id != id) {
+            _tablets[colocated_id] = make_foreign(new_map_ptr);
+        }
+    }
+    it->second = make_foreign(std::move(new_map_ptr));
 }
 
 future<tablet_metadata> tablet_metadata::copy() const {
@@ -311,6 +337,9 @@ future<tablet_metadata> tablet_metadata::copy() const {
         copy._tablets.emplace(e.first, co_await e.second.copy());
     }
 
+    copy._table_groups = _table_groups;
+    copy._base_table = _base_table;
+
     copy._balancing_enabled = _balancing_enabled;
 
     co_return copy;
@@ -318,6 +347,15 @@ future<tablet_metadata> tablet_metadata::copy() const {
 
 void tablet_metadata::set_tablet_map(table_id id, tablet_map map) {
     auto map_ptr = make_lw_shared<const tablet_map>(std::move(map));
+    if (auto it = _table_groups.find(id); it == _table_groups.end()) {
+        _table_groups[id] = {id};
+    } else {
+        for (auto colocated_id : it->second) {
+            if (colocated_id != id) {
+                _tablets[colocated_id] = map_ptr;
+            }
+        }
+    }
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
         _tablets.emplace(id, std::move(map_ptr));
@@ -326,12 +364,48 @@ void tablet_metadata::set_tablet_map(table_id id, tablet_map map) {
     }
 }
 
-void tablet_metadata::drop_tablet_map(table_id id) {
-    auto it = _tablets.find(id);
-    if (it == _tablets.end()) {
-        return;
+future<> tablet_metadata::set_colocated_table(table_id id, table_id base_id) {
+    if (auto it = _table_groups.find(id); it != _table_groups.end()) {
+        // Allow changing a base table to be a co-located table of another base table, if it doesn't have any other co-located tables.
+        // This shouldn't be used normally except for unit tests.
+        tablet_logger.warn("Changing base table {} to be a co-located table of another base table {}. This should be used only in tests.", id, base_id);
+        if (it->second.size() > 1) {
+            on_internal_error(tablet_logger, format("Table {} is already a base table for {} and cannot be set as a co-located table of another base table.", id, it->second));
+        }
+        _table_groups.erase(it);
     }
-    _tablets.erase(it);
+
+    if (auto it = _base_table.find(id); it == _base_table.end()) {
+        _base_table[id] = base_id;
+        _table_groups[base_id].push_back(id);
+
+        if (!_tablets.contains(base_id)) {
+            on_internal_error(tablet_logger, format("Base table {} of co-located table {} does not have a tablet map", base_id, id));
+        }
+        auto map_ptr = co_await _tablets.at(base_id).copy();
+        _tablets[id] = std::move(map_ptr);
+    } else if (it->second != base_id) {
+        on_internal_error(tablet_logger, format("Cannot set base table {} for table {} because it already has base table {}", base_id, id, it->second));
+    }
+}
+
+void tablet_metadata::drop_tablet_map(table_id id) {
+    if (auto it = _base_table.find(id); it != _base_table.end()) {
+        // it's a co-located table. We need to remove it from the base table's colocated tables list.
+        auto base_id = it->second;
+        if (auto group_it = _table_groups.find(base_id); group_it != _table_groups.end()) {
+            auto& tables = group_it->second;
+            tables.erase(std::remove(tables.begin(), tables.end(), id), tables.end());
+            if (tables.empty()) {
+                _table_groups.erase(group_it);
+            }
+        }
+        _base_table.erase(it);
+    }
+
+    _table_groups.erase(id);
+
+    _tablets.erase(id);
 }
 
 future<> tablet_metadata::clear_gently() {
@@ -347,6 +421,10 @@ future<> tablet_metadata::clear_gently() {
         });
     }
     _tablets.clear();
+
+    co_await utils::clear_gently(_table_groups);
+    co_await utils::clear_gently(_base_table);
+
     co_return;
 }
 
