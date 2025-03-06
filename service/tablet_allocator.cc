@@ -106,6 +106,35 @@ void load_balancer_stats_manager::unregister() {
     _metrics.clear();
 }
 
+template <std::ranges::range R>
+requires std::convertible_to<std::ranges::range_value_t<R>, db::tablet_options>
+db::tablet_options combine_tablet_options(R&& opts) {
+    db::tablet_options combined_opts;
+
+    using data_size_type = decltype(db::tablet_options::expected_data_size_in_gb)::value_type;
+    data_size_type total_expected_data_size_in_gb = 0;
+    size_t total_expected_data_size_in_gb_count = 0;
+
+    for (const auto& opt : opts) {
+        if (opt.min_tablet_count) {
+            combined_opts.min_tablet_count = std::max(combined_opts.min_tablet_count.value_or(0), *opt.min_tablet_count);
+        }
+        if (opt.min_per_shard_tablet_count) {
+            combined_opts.min_per_shard_tablet_count = std::max(combined_opts.min_per_shard_tablet_count.value_or(0), *opt.min_per_shard_tablet_count);
+        }
+        if (opt.expected_data_size_in_gb) {
+            total_expected_data_size_in_gb += *opt.expected_data_size_in_gb;
+            total_expected_data_size_in_gb_count++;
+        }
+    }
+
+    if (total_expected_data_size_in_gb_count) {
+        combined_opts.expected_data_size_in_gb = total_expected_data_size_in_gb / total_expected_data_size_in_gb_count;
+    }
+
+    return combined_opts;
+}
+
 // Used to compare different migration choices in regard to impact on load imbalance.
 // There is a total order on migration_badness such that better migrations are ordered before worse ones.
 struct migration_badness {
@@ -527,12 +556,12 @@ class load_balancer {
 
     const unsigned _tablets_per_shard_goal;
 
-    uint64_t target_max_tablet_size() const noexcept {
-        return _target_tablet_size * 2;
+    uint64_t target_max_tablet_size(uint64_t target_tablet_size) const noexcept {
+        return target_tablet_size * 2;
     }
 
-    uint64_t target_min_tablet_size() const noexcept {
-        return _target_tablet_size / 2;
+    uint64_t target_min_tablet_size(uint64_t target_tablet_size) const noexcept {
+        return target_tablet_size / 2;
     }
 
     struct table_size_desc {
@@ -1228,10 +1257,15 @@ public:
             }
         });
 
-        auto process_table = [&] (table_id table, schema_ptr s, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
+        auto process_table = [&] (table_id table, const locator::table_group_set& tables, schema_ptr s, db::tablet_options tablet_options, const tablet_aware_replication_strategy* rs, size_t tablet_count) {
             table_sizing& table_plan = plan.tables[table];
             table_plan.current_tablet_count = tablet_count;
             rs_by_table[table] = rs;
+
+            // for a group of co-located tablets of size g with average tablet size t, the migration unit
+            // size is g*t. in order to keep the migration unit size reasonable, we set a lower target tablet size
+            // as the group size increases.
+            auto target_tablet_size = _target_tablet_size / tables.size();
 
             tablet_count_and_reason target_tablet_count = {1, ""};
             auto maybe_apply = [&] (tablet_count_and_reason candidate) {
@@ -1244,13 +1278,12 @@ public:
 
             maybe_apply({rs->get_initial_tablets(), "initial"});
 
-            const auto& tablet_options = s->tablet_options();
             if (tablet_options.min_tablet_count) {
                 maybe_apply({tablet_options.min_tablet_count.value(), "min_tablet_count"});
             }
 
             if (tablet_options.expected_data_size_in_gb) {
-                maybe_apply({(tablet_options.expected_data_size_in_gb.value() << 30) / _target_tablet_size,
+                maybe_apply({(tablet_options.expected_data_size_in_gb.value() << 30) / target_tablet_size,
                         format("expected_data_size_in_gb={}", tablet_options.expected_data_size_in_gb.value())});
             }
 
@@ -1262,23 +1295,36 @@ public:
                 maybe_apply(tablet_count_from_min_per_shard_tablet_count(*s, shards_per_dc, *rs, min_per_shard_tablet_count));
             }
 
-            const auto* table_stats = load_stats_for_table(table);
-            if (table_stats) {
+            auto total_size_opt = std::invoke([&] -> std::optional<size_t> {
+                size_t total_size = 0;
+                for (auto table : tables) {
+                    const auto* table_stats = load_stats_for_table(table);
+                    if (!table_stats) {
+                        return std::nullopt;
+                    }
+                    total_size += table_stats->size_in_bytes;
+                }
+                return total_size;
+            });
+
+            if (total_size_opt) {
+                auto total_size = *total_size_opt;
+
                 auto cur_decision = _tm->tablets().get_tablet_map(table).resize_decision();
-                auto avg_tablet_size = table_stats->size_in_bytes / std::max<size_t>(table_plan.current_tablet_count, 1);
+                auto avg_tablet_size = total_size / std::max<size_t>(table_plan.current_tablet_count * tables.size(), 1);
                 auto tablet_count_from_size = table_plan.current_tablet_count;
 
                 // Split based on avg_tablet_size, or if the current resize_decision is split, apply hysteresis,
                 // so it would get cancelled only when crossing back the half-way point.
-                if (avg_tablet_size > target_max_tablet_size() ||
-                    (cur_decision.is_split() && avg_tablet_size >= _target_tablet_size)) {
+                if (avg_tablet_size > target_max_tablet_size(target_tablet_size) ||
+                    (cur_decision.is_split() && avg_tablet_size >= target_tablet_size)) {
                     // TODO: extend to n-way split when needed
                     tablet_count_from_size *= 2;
                 } else {
                     // Consider merge. If the current resize_decision is merge, apply hysteresis,
                     // so it would get cancelled only when crossing back the half-way point.
-                    if (avg_tablet_size < target_min_tablet_size() ||
-                        (cur_decision.is_merge() && avg_tablet_size <= _target_tablet_size)) {
+                    if (avg_tablet_size < target_min_tablet_size(target_tablet_size) ||
+                        (cur_decision.is_merge() && avg_tablet_size <= target_tablet_size)) {
                         tablet_count_from_size /= 2;
                     }
                 }
@@ -1300,14 +1346,22 @@ public:
                     table_plan.target_tablet_count, table_plan.target_tablet_count_reason);
         };
 
-        for (auto&& [table, tmap] : _tm->tablets().all_tables()) {
+        for (const auto& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
             auto [s, rs] = get_schema_and_rs(table);
-            process_table(table, s, rs, tmap->tablet_count());
+
+            auto tablet_options = combine_tablet_options(
+                    tables | std::views::transform([&] (table_id table) { return _db.get_tables_metadata().get_table_if_exists(table); })
+                           | std::views::filter([] (auto t) { return t != nullptr; })
+                           | std::views::transform([] (auto t) { return t->schema()->tablet_options(); })
+            );
+
+            process_table(table, tables, s, tablet_options, rs, tmap.tablet_count());
             co_await coroutine::maybe_yield();
         }
 
         if (new_table) {
-            process_table(new_table->id(), new_table, new_rs, 0);
+            process_table(new_table->id(), {new_table->id()}, new_table, new_table->tablet_options(), new_rs, 0);
         }
 
         // Below section ensures we respect the _tablets_per_shard_goal.
@@ -1427,10 +1481,9 @@ public:
 
         cluster_resize_load resize_load;
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for (auto&& [table, table_plan] : table_sizing_plan.tables) {
+            auto& tmap = _tm->tablets().get_tablet_map(table);
 
-            table_sizing& table_plan = table_sizing_plan.tables[table];
             if (!table_plan.avg_tablet_size) {
                 continue;
             }
