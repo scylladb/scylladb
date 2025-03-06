@@ -1134,6 +1134,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
+        // the load balancer generates migrations only for base tables
+        SCYLLA_ASSERT(get_token_metadata_ptr()->tablets().get_base_table(mig.tablet.table) == mig.tablet.table);
+
         const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
         if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
