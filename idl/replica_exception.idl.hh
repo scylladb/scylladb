@@ -23,12 +23,17 @@ class stale_topology_exception {
 class abort_requested_exception {
 };
 
+class critical_disk_utilization_exception {
+    sstring failed_action();
+};
+
 struct exception_variant {
     std::variant<replica::unknown_exception,
             replica::no_exception,
             replica::rate_limit_exception,
             replica::stale_topology_exception,
-            replica::abort_requested_exception
+            replica::abort_requested_exception,
+            replica::critical_disk_utilization_exception
     > reason;
 };
 
