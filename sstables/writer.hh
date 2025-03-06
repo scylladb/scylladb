@@ -11,6 +11,7 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/fstream.hh>
 #include "sstables/types.hh"
+#include "sstables/component_type.hh"
 #include "checksum_utils.hh"
 #include "vint-serialization.hh"
 #include <seastar/core/byteorder.hh>
@@ -138,8 +139,8 @@ class checksummed_file_writer : public file_writer {
     checksum _c;
     uint32_t _full_checksum;
 public:
-    checksummed_file_writer(data_sink out, size_t buffer_size, sstring filename)
-            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum), std::move(filename))
+    checksummed_file_writer(data_sink out, size_t buffer_size, component_name c)
+            : file_writer(make_checksummed_file_output_stream<ChecksumType>(std::move(out), _c, _full_checksum), std::move(c))
             , _c(uint32_t(std::min(size_t(DEFAULT_CHUNK_SIZE), buffer_size)), {})
             , _full_checksum(ChecksumType::init_checksum()) {}
 
