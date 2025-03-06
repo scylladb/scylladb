@@ -1184,14 +1184,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // FIXME: indent.
             auto s = _db.find_schema(table_id);
             const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            const auto& table_groups = get_token_metadata_ptr()->tablets().all_base_tables();
             // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
             resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
             rtlogger.debug("Generating resize decision for table {} of type {} and sequence number {}",
                            table_id, resize_decision.type_name(), resize_decision.sequence_number);
-            out.emplace_back(
-                replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
-                    .set_resize_decision(std::move(resize_decision), _db.features())
-                    .build());
+            for (auto table_id : table_groups.at(table_id)) {
+                out.emplace_back(
+                    replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
+                        .set_resize_decision(std::move(resize_decision), _db.features())
+                        .build());
+            }
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
@@ -1739,7 +1742,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         std::vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
 
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
+        const auto& table_groups = tm->tablets().all_base_tables();
+        for (auto& base_table_id : plan.resize_plan().finalize_resize) {
+          for (auto table_id : table_groups.at(base_table_id)) {
             auto s = _db.find_schema(table_id);
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
             updates.emplace_back(co_await replica::tablet_map_to_mutation(
@@ -1749,9 +1754,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 s->cf_name(),
                 guard.write_timestamp(),
                 _db.features()));
+          }
 
             // Clears the resize decision for a table.
-            generate_resize_update(updates, guard, table_id, locator::resize_decision{});
+            generate_resize_update(updates, guard, base_table_id, locator::resize_decision{});
         }
 
         updates.emplace_back(
