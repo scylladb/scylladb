@@ -170,14 +170,14 @@ public:
         return s.id;
     }
 
-    void unload(host_id node, shard_id shard) {
+    void unload(host_id node, shard_id shard, load_type load_delta = 1) {
         auto& n = _nodes.at(node);
-        n.update_shard_load(shard, -1);
+        n.update_shard_load(shard, -load_delta);
     }
 
-    void pick(host_id node, shard_id shard) {
+    void pick(host_id node, shard_id shard, load_type load_delta = 1) {
         auto& n = _nodes.at(node);
-        n.update_shard_load(shard, 1);
+        n.update_shard_load(shard, load_delta);
     }
 
     load_type get_load(host_id node) const {
