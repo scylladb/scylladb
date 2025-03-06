@@ -146,7 +146,6 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
 
 void filesystem_storage::open(sstable& sst) {
     touch_temp_dir(sst).get();
-    auto file_path = sst.filename(component_type::TemporaryTOC);
 
     // Writing TOC content to temporary file.
     // If creation of temporary TOC failed, it implies that that boot failed to
@@ -159,7 +158,7 @@ void filesystem_storage::open(sstable& sst) {
                                     open_flags::create |
                                     open_flags::exclusive,
                                     options).get();
-    auto w = file_writer(output_stream<char>(std::move(sink)), std::move(file_path));
+    auto w = file_writer(output_stream<char>(std::move(sink)), component_name(sst, component_type::TemporaryTOC));
 
     bool toc_exists = file_exists(sst.filename(component_type::TOC)).get();
     if (toc_exists) {

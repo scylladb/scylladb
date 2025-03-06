@@ -895,7 +895,7 @@ file_writer::~file_writer() {
         // so auto-close the output_stream so it won't be destructed while open.
         _out.close().get();
     } catch (...) {
-        sstlog.warn("Error while auto-closing {}: {}. Ignored.", get_filename(), std::current_exception());
+        sstlog.warn("Error while auto-closing {}: {}. Ignored.", _component, std::current_exception());
     }
 }
 
@@ -918,7 +918,7 @@ void file_writer::close() {
         _out.close().get();
     } catch (...) {
         auto e = std::current_exception();
-        sstlog.error("Error while closing {}: {}", get_filename(), e);
+        sstlog.error("Error while closing {}: {}", _component, e);
         if (!ex) {
             ex = std::move(e);
         }
@@ -928,18 +928,12 @@ void file_writer::close() {
     }
 }
 
-const char* file_writer::get_filename() const noexcept {
-    return _filename ? _filename->c_str() : "<anonymous output_stream>";
-}
-
 future<file_writer> sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
     // Note: file_writer::make closes the file if file_writer creation fails
     // so we don't need to use with_file_close_on_failure here.
-    return futurize_invoke([this, c] { return filename(c); }).then([this, c, options = std::move(options), oflags] (sstring filename) mutable {
-        return _storage->make_component_sink(*this, c, oflags, std::move(options)).then([filename = std::move(filename)] (data_sink sink) mutable {
-            return file_writer(output_stream<char>(std::move(sink)), std::move(filename));
+        return _storage->make_component_sink(*this, c, oflags, std::move(options)).then([comp = component_name(*this, c)] (data_sink sink) mutable {
+            return file_writer(output_stream<char>(std::move(sink)), std::move(comp));
         });
-    });
 }
 
 void sstable::open_sstable(const sstring& origin) {
