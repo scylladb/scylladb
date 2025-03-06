@@ -894,7 +894,7 @@ void writer::init_file_writers() {
     }
 
     out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get();
-    _index_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), _sst.index_filename());
+    _index_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), fmt::to_string(_sst.index_filename()));
 }
 
 std::unique_ptr<file_writer> writer::close_writer(std::unique_ptr<file_writer>& w) {

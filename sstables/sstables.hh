@@ -420,8 +420,8 @@ public:
         return filename(component_type::TOC);
     }
 
-    sstring index_filename() const {
-        return filename(component_type::Index);
+    component_name index_filename() const {
+        return component_name(*this, component_type::Index);
     }
 
     bool requires_view_building() const noexcept { return _state == sstable_state::staging; }
