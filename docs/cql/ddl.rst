@@ -290,8 +290,8 @@ For instance::
 
 The supported options are the same as :ref:`creating a keyspace <create-keyspace-statement>`.
 
-ALTER KEYSPACE with Tablets :label-caution:`Experimental`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ALTER KEYSPACE with Tablets 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Modifying a keyspace with tablets enabled is possible and doesn't require any special CQL syntax. However, there are some limitations:
 
