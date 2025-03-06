@@ -1147,18 +1147,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return true;
     }
 
-    future<> for_each_tablet_transition(std::function<void(const locator::tablet_map&,
-                                                           schema_ptr,
-                                                           locator::global_tablet_id,
+    future<> for_each_tablet_group_transition(std::function<void(const locator::tablet_map&,
+                                                           table_id,
+                                                           const locator::table_group_set&,
+                                                           locator::tablet_id,
                                                            const locator::tablet_transition_info&)> func) {
         auto tm = get_token_metadata_ptr();
-        for (auto&& [table, tmap] : tm->tablets().all_tables()) {
+        for (auto&& [base_table, tables] : tm->tablets().all_table_groups()) {
             co_await coroutine::maybe_yield();
-            auto s = _db.find_schema(table);
-            for (auto&& [tablet, trinfo]: tmap->transitions()) {
+            const auto& tmap = tm->tablets().get_tablet_map(base_table);
+            for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
-                auto gid = locator::global_tablet_id {table, tablet};
-                func(*tmap, s, gid, trinfo);
+                func(tmap, base_table, tables, tablet, trinfo);
             }
         }
     }
@@ -1269,17 +1269,29 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         });
 
         _tablets_ready = false;
-        co_await for_each_tablet_transition([&] (const locator::tablet_map& tmap,
-                                                 schema_ptr s,
-                                                 locator::global_tablet_id gid,
+        // We operate here on groups of co-located tablets.
+        // The tablets of several tables may be co-located and share the same tablet map, and in
+        // particular their transitions are shared. Therefore, each transition must be handled for
+        // all tablets in a co-location group at once.
+        co_await for_each_tablet_group_transition([&] (const locator::tablet_map& tmap,
+                                                 table_id base_table,
+                                                 const locator::table_group_set& tables,
+                                                 locator::tablet_id tid,
                                                  const locator::tablet_transition_info& trinfo) {
+            // we have `gid` which is the tablet id of the base table of the tablet group, which we use as a
+            // representative of the group for some of the operations - such as logging, and as the key in the _tablets
+            // map where we store the migration state.
+            // `gids` is all the tablet ids of tablets in the co-location group. When we execute some operation such as
+            // streaming, cleanup, etc, we do it for each tablet in `gids`.
+            locator::global_tablet_id gid { base_table, tid };
+            auto gids = tables | std::views::transform([tid] (table_id table) { return locator::global_tablet_id{table, tid}; }) | std::ranges::to<std::vector>();
+
             has_transitions = true;
             auto last_token = tmap.get_last_token(gid.tablet);
             auto& tablet_state = _tablets[gid];
-            table_id table = s->id();
 
             auto get_mutation_builder = [&] () {
-                return replica::tablet_mutation_builder(guard.write_timestamp(), table);
+                return replica::tablet_mutation_builder(guard.write_timestamp(), base_table);
             };
 
             auto transition_to = [&] (locator::tablet_transition_stage stage) {
@@ -1379,8 +1391,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         auto dst = locator::maybe_get_primary_replica(gid.tablet, {tsi.read_from.begin(), tsi.read_from.end()}, [] (const auto& tr) { return true; }).value().host;
                         rtlogger.info("Initiating repair phase of tablet rebuild host={} tablet={}", dst, gid);
-                        return ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                dst, _as, raft::server_id(dst.uuid()), gid).discard_result();
+                        return do_with(gids, [this, dst] (const auto& gids) {
+                            return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
+                                return ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                        dst, _as, raft::server_id(dst.uuid()), gid).discard_result();
+                            });
+                        });
                     })) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::streaming);
                         updates.emplace_back(get_mutation_builder()
@@ -1423,8 +1439,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         rtlogger.info("Initiating tablet streaming ({}) of {} to {}", trinfo.transition, gid, *trinfo.pending_replica);
                         auto dst = trinfo.pending_replica->host;
-                        return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
-                                   dst, _as, raft::server_id(dst.uuid()), gid);
+                        return do_with(gids, [this, dst] (const auto& gids) {
+                            return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
+                                return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
+                                           dst, _as, raft::server_id(dst.uuid()), gid);
+                            });
+                        });
                     })) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
                         updates.emplace_back(get_mutation_builder()
@@ -1485,8 +1505,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             return make_ready_future<>();
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
-                        return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                        return do_with(gids, [this, dst] (const auto& gids) {
+                            return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
+                                return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
+                                                                                           dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                            });
+                        });
                     })) {
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
@@ -1504,8 +1528,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             return make_ready_future<>();
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {} to revert migration", gid, dst);
-                        return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                        return do_with(gids, [this, dst] (const auto& gids) {
+                            return do_for_each(gids, [this, dst] (locator::global_tablet_id gid) {
+                                return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
+                                                                                           dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                            });
+                        });
                     })) {
                         transition_to(locator::tablet_transition_stage::revert_migration);
                     }
@@ -1570,8 +1598,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             dst = dst_opt.value().host;
                         }
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
-                        auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                dst, _as, raft::server_id(dst.uuid()), gid);
+                        auto res = gids.size() > 1 ?
+                                co_await ser::storage_service_rpc_verbs::send_tablet_repair_colocated(&_messaging,
+                                    dst, _as, raft::server_id(dst.uuid()), gid, gids)
+                                : co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                    dst, _as, raft::server_id(dst.uuid()), gid);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
