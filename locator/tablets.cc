@@ -247,6 +247,19 @@ const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     }
 }
 
+std::unordered_map<table_id, std::unordered_set<table_id>>
+tablet_metadata::all_base_tables() const {
+    std::unordered_map<table_id, std::unordered_set<table_id>> m;
+    for (auto&& [table, tmap_] : all_tables()) {
+        m[get_base_table(table)].insert(table);
+    }
+    return m;
+}
+
+table_id tablet_metadata::get_base_table(table_id id) const {
+    return _tablets.at(id)->base_table().value_or(id);
+}
+
 void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
