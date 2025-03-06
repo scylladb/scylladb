@@ -155,7 +155,7 @@ public:
     void rewrite_toc_without_component(component_type component) {
         SCYLLA_ASSERT(component != component_type::TOC);
         _sst->_recognized_components.erase(component);
-        remove_file(_sst->toc_filename()).get();
+        remove_file(fmt::to_string(_sst->toc_filename())).get();
         _sst->_storage->open(*_sst);
         _sst->seal_sstable(false).get();
     }
