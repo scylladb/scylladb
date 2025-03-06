@@ -256,12 +256,12 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
         auto comp = p.second;
         auto src = sstable::filename(_dir.native(), sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, comp);
         auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, dst_gen, sst._format, comp);
-        return do_with(std::move(src), std::move(dst), [this] (const sstring& src, const sstring& dst) mutable {
-            return file_exists(dst).then([&, this] (bool exists) mutable {
+        return do_with(std::move(src), std::move(dst), [] (const sstring& src, const sstring& dst) mutable {
+            return file_exists(dst).then([&] (bool exists) mutable {
                 if (!exists) {
                     return make_ready_future<>();
                 }
-                return same_file(src, dst).then_wrapped([&, this] (future<bool> fut) {
+                return same_file(src, dst).then_wrapped([&] (future<bool> fut) {
                     if (fut.failed()) {
                         auto eptr = fut.get_exception();
                         sstlog.error("Error while linking SSTable: {} to {}: {}", src, dst, eptr);
@@ -271,7 +271,7 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
                     if (!same) {
                         auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
                         sstlog.error("{}", msg);
-                        return make_exception_future<>(malformed_sstable_exception(msg, _dir.native()));
+                        return make_exception_future<>(malformed_sstable_exception(msg));
                     }
                     return make_ready_future<>();
                 });
