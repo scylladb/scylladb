@@ -13,7 +13,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name
 from test.topology.conftest import skip_mode
-from test.topology.util import wait_for_cql_and_get_hosts
+from test.topology.util import new_test_keyspace, wait_for_cql_and_get_hosts
 from test.topology_custom.test_tablets2 import safe_rolling_restart
 from contextlib import nullcontext as does_not_raise
 import time
@@ -954,3 +954,75 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     # ensure all migrations complete
     logger.info("Waiting for migrations to complete")
     await log.wait_for("Tablet load balancer did not make any plan", migration_mark)
+
+async def check_tablet_rebuild_with_repair(manager: ManagerClient, fail: bool):
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    if fail:
+        cfg['error_injections_at_startup'] = ['rebuild_repair_stage_fail']
+    host_ids = []
+    servers = []
+
+    async def make_server():
+        s = await manager.server_add(config=cfg)
+        servers.append(s)
+        host_ids.append(await manager.get_host_id(s.server_id))
+        await manager.api.disable_tablet_balancing(s.ip_addr)
+
+    await make_server()
+    await make_server()
+    await make_server()
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        keys = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        logger.info(f"Tablet is on [{replicas}]")
+        assert len(replicas) == 1 and len(replicas[0].replicas) == 2
+        replicas = [ r[0] for r in replicas[0].replicas ]
+        for h in host_ids:
+            if h not in replicas:
+                new_replica = (h, 0)
+                break
+        else:
+            assert False, "Cannot find node without replica"
+
+        logs = []
+        for s in servers:
+            logs.append(await manager.server_open_log(s.server_id))
+
+        logger.info(f"Adding replica to tablet, host {new_replica[0]}")
+        await manager.api.add_tablet_replica(servers[0].ip_addr, ks, "test", new_replica[0], new_replica[1], 0)
+
+        assert sum([len(await log.grep(rf'.*Will set tablet .* stage to rebuild_repair.*')) for log in logs]) == 1
+
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        logger.info(f"Tablet is now on [{replicas}]")
+        assert len(replicas) == 1
+        replicas = [ r[0] for r in replicas[0].replicas ]
+
+        assert len(replicas) == 2 if fail else len(replicas) == 3
+
+        for h, s in zip(host_ids, servers):
+            host = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 30)
+            if h != host_ids[0]:
+                await read_barrier(manager.api, host[0].address)  # host-0 did the barrier in get_all_tablet_replicas above
+            res = await cql.run_async(f"SELECT COUNT(*) FROM MUTATION_FRAGMENTS({ks}.test)", host=host[0])
+            logger.info(f"Host {h} reports {res} as mutation fragments count")
+            if h in replicas:
+                assert res[0].count != 0
+            else:
+                assert res[0].count == 0
+
+@pytest.mark.asyncio
+async def test_tablet_rebuild(manager: ManagerClient):
+    await check_tablet_rebuild_with_repair(manager, False)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_rebuild_failure(manager: ManagerClient):
+    await check_tablet_rebuild_with_repair(manager, True)
