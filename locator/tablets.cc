@@ -263,7 +263,12 @@ no_such_tablet_map::no_such_tablet_map(const table_id& id)
 
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
-        return *_tablets.at(id);
+        auto& map = *_tablets.at(id);
+        if (auto base_id = map.base_table()) {
+            return *_tablets.at(*base_id);
+        } else {
+            return map;
+        }
     } catch (const std::out_of_range&) {
         throw_with_backtrace<no_such_tablet_map>(id);
     }
@@ -357,6 +362,13 @@ tablet_map::tablet_map(size_t tablet_count)
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
     _tablets.resize(tablet_count);
+}
+
+tablet_map::tablet_map(table_id base_table)
+        : _log2_tablets(0),
+          _base_table(base_table) {
+    // We only refer to the base tablet map, we don't have our own tablets
+    _tablets.resize(0);
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -472,6 +484,10 @@ void tablet_map::set_resize_task_info(tablet_task_info task_info) {
 
 void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config config) {
     _repair_scheduler_config = std::move(config);
+}
+
+void tablet_map::set_base_table(table_id base_table) {
+    _base_table = base_table;
 }
 
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
@@ -663,6 +679,10 @@ const tablet_task_info& tablet_map::resize_task_info() const {
 
 const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() const {
     return _repair_scheduler_config;
+}
+
+std::optional<table_id> tablet_map::base_table() const {
+    return _base_table;
 }
 
 static auto to_resize_type(sstring decision) {
