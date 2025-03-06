@@ -169,6 +169,10 @@ struct colocated_tablets {
 // to same destination.
 struct migration_tablet_set {
     std::variant<global_tablet_id, colocated_tablets> tablet_s;
+    size_t group_size;
+
+    migration_tablet_set(std::variant<global_tablet_id, colocated_tablets> tablet_s, size_t group_size)
+        : tablet_s(std::move(tablet_s)), group_size(group_size) {}
 
     table_id table() const {
         return std::visit(
@@ -191,6 +195,10 @@ struct migration_tablet_set {
                 },
             },
             tablet_s);
+    }
+
+    size_t tablet_count() const {
+        return tablets().size() * group_size;
     }
 
     bool colocated() const {
@@ -951,8 +959,8 @@ public:
             return tmap.needs_merge() && _db.column_family_exists(tid) && _db.find_column_family(tid).views().empty();
         };
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
             if (!can_proceed_with_colocation(table, tmap)) {
                 continue;
             }
@@ -1763,7 +1771,7 @@ public:
         }
     }
 
-    void maybe_erase_colocated_candidate(shard_load& shard_info, const tablet_map& tmap, global_tablet_id tablet) {
+    void maybe_erase_colocated_candidate(shard_load& shard_info, const tablet_map& tmap, global_tablet_id tablet, size_t group_size) {
         if (!tmap.needs_merge()) {
             return;
         }
@@ -1773,7 +1781,7 @@ public:
         }
         auto left_sibling = global_tablet_id{tablet.table, siblings->first};
         auto right_sibling = global_tablet_id{tablet.table, siblings->second};
-        erase_candidate(shard_info, migration_tablet_set{colocated_tablets{left_sibling, right_sibling}});
+        erase_candidate(shard_info, migration_tablet_set(colocated_tablets{left_sibling, right_sibling}, group_size));
     }
 
     void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
@@ -1785,8 +1793,8 @@ public:
                 lblogger.trace("Erasing tablet {} from {}", tablet, r);
                 // Not necessarily all replicas of sibling tablets are co-located, and so we need to
                 // remove them from candidate list using global_tablet_id.
-                erase_candidate(nodes[r.host].shards[r.shard], migration_tablet_set{tablet});
-                maybe_erase_colocated_candidate(nodes[r.host].shards[r.shard], tmap, tablet);
+                erase_candidate(nodes[r.host].shards[r.shard], migration_tablet_set(tablet, tablets.group_size));
+                maybe_erase_colocated_candidate(nodes[r.host].shards[r.shard], tmap, tablet, tablets.group_size);
             }
         }
       }
@@ -1837,7 +1845,7 @@ public:
     }
 
     bool check_convergence(node_load& src_info, node_load& dst_info, const migration_tablet_set& tablet_set) {
-        return check_convergence(src_info, dst_info, tablet_set.tablets().size());
+        return check_convergence(src_info, dst_info, tablet_set.tablet_count());
     }
 
     // Checks whether moving a tablet from shard A to B (intra-node) would go against convergence.
@@ -1851,62 +1859,58 @@ public:
     // Can be called when node_info.drained.
     bool check_intranode_convergence(const node_load& node_info, shard_id src_shard, shard_id dst_shard,
                                     const migration_tablet_set& tablet_set) {
-        return check_intranode_convergence(node_info, src_shard, dst_shard, tablet_set.tablets().size());
+        return check_intranode_convergence(node_info, src_shard, dst_shard, tablet_set.tablet_count());
     }
 
     // Adjusts the load of the source and destination shards in the host where intra-node migration happens.
-    void update_node_load_on_migration(node_load& node_load, host_id host, shard_id src, shard_id dst, global_tablet_id tablet) {
+    void update_node_load_on_migration(node_load& node_load, host_id host, shard_id src, shard_id dst, global_tablet_id tablet, size_t group_size) {
         auto& src_info = node_load.shards[src];
         auto& dst_info = node_load.shards[dst];
-        dst_info.tablet_count++;
-        src_info.tablet_count--;
+        dst_info.tablet_count += group_size;
+        src_info.tablet_count -= group_size;
         dst_info.tablet_count_per_table[tablet.table]++;
         src_info.tablet_count_per_table[tablet.table]--;
     }
 
     // Adjusts the load of the source and destination (host:shard) that were picked for the migration.
-    void update_node_load_on_migration(node_load_map& nodes, tablet_replica src, tablet_replica dst, global_tablet_id source_tablet) {
+    void update_node_load_on_migration(node_load_map& nodes, tablet_replica src, tablet_replica dst, global_tablet_id source_tablet, size_t group_size) {
         {
             auto& target_info = nodes[dst.host];
-            target_info.shards[dst.shard].tablet_count++;
+            target_info.shards[dst.shard].tablet_count += group_size;
             target_info.shards[dst.shard].tablet_count_per_table[source_tablet.table]++;
             target_info.tablet_count_per_table[source_tablet.table]++;
-            target_info.tablet_count += 1;
+            target_info.tablet_count += group_size;
             target_info.update(_target_tablet_size);
         }
 
         auto& src_node_info = nodes[src.host];
         auto& src_shard_info = src_node_info.shards[src.shard];
-        src_shard_info.tablet_count -= 1;
+        src_shard_info.tablet_count -= group_size;
         src_shard_info.tablet_count_per_table[source_tablet.table]--;
         src_node_info.tablet_count_per_table[source_tablet.table]--;
 
-        src_node_info.tablet_count -= 1;
+        src_node_info.tablet_count -= group_size;
         src_node_info.update(_target_tablet_size);
     }
 
     void update_node_load_on_migration(node_load& node_load, host_id host, shard_id src, shard_id dst, const migration_tablet_set& tablet_set) {
         for (auto tablet : tablet_set.tablets()) {
-            update_node_load_on_migration(node_load, host, src, dst, tablet);
+            update_node_load_on_migration(node_load, host, src, dst, tablet, tablet_set.group_size);
         }
     }
 
     void update_node_load_on_migration(node_load_map& nodes, tablet_replica src, tablet_replica dst, const migration_tablet_set& tablet_set) {
         for (auto tablet : tablet_set.tablets()) {
-            update_node_load_on_migration(nodes, src, dst, tablet);
+            update_node_load_on_migration(nodes, src, dst, tablet, tablet_set.group_size);
         }
     }
 
     static void unload(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
-        for (auto _ : tablet_set.tablets()) {
-            sketch.unload(host, shard);
-        }
+        sketch.unload(host, shard, tablet_set.tablet_count());
     }
 
     static void pick(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
-        for (auto _ : tablet_set.tablets()) {
-            sketch.pick(host, shard);
-        }
+        sketch.pick(host, shard, tablet_set.tablet_count());
     }
 
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
@@ -2013,8 +2017,8 @@ public:
             erase_candidates(nodes, tmap, tablets);
 
             update_node_load_on_migration(node_load, host, src, dst, tablets);
-            sketch.pick(host, dst);
-            sketch.unload(host, src);
+            pick(sketch, host, dst, tablets);
+            unload(sketch, host, src, tablets);
         }
 
         co_return plan;
@@ -2172,7 +2176,7 @@ public:
         skip_info_vector skip_infos;
         skip_infos.reserve(skip_info_per_tablet.size());
         for (auto&& [tablet, info] : skip_info_per_tablet) {
-            skip_infos.push_back(std::make_pair(std::move(info), migration_tablet_set{std::move(tablet)}));
+            skip_infos.push_back(std::make_pair(std::move(info), migration_tablet_set(std::move(tablet), tablet_set.group_size)));
         }
         return skip_infos;
     }
@@ -2846,10 +2850,11 @@ public:
 
         // Compute tablet load on nodes.
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            const auto group_size = tables.size();
 
-            co_await tmap.for_each_tablet([&, table = table] (tablet_id tid, const tablet_info& ti) -> future<> {
+            co_await tmap.for_each_tablet([&, table = table, group_size] (tablet_id tid, const tablet_info& ti) -> future<> {
                 auto trinfo = tmap.get_tablet_transition_info(tid);
 
                 // Check if any replica is on a node which has left.
@@ -2871,7 +2876,7 @@ public:
                 // optimistically assuming that they will succeed.
                 for (auto&& replica : get_replicas_for_tablet_load(ti, trinfo)) {
                     if (nodes.contains(replica.host)) {
-                        nodes[replica.host].tablet_count += 1;
+                        nodes[replica.host].tablet_count += group_size;
                         // This invariant is assumed later.
                         if (replica.shard >= nodes[replica.host].shard_count) {
                             auto gtid = global_tablet_id{table, tid};
@@ -2981,8 +2986,9 @@ public:
         co_await _load_sketch->populate_dc(dc);
         _tablet_count_per_table.clear();
 
-        for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
-            auto& tmap = *tmap_;
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            const auto group_size = tables.size();
             uint64_t total_load = 0;
 
             auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
@@ -3001,7 +3007,7 @@ public:
             // even though each tablet replica will be migrated independently. Next invocation of load balancer is able to exclude both
             // sibling if either haven't finished migration yet. That's to prevent load balancer from incorrectly considering that
             // they're not co-located if only one of them completed migration.
-            co_await tmap.for_each_sibling_tablets([&, table = table] (tablet_desc t1, std::optional<tablet_desc> t2) -> future<> {
+            co_await tmap.for_each_sibling_tablets([&, table = table, group_size] (tablet_desc t1, std::optional<tablet_desc> t2) -> future<> {
                 maybe_apply_load(t1);
                 maybe_apply_load(t2);
 
@@ -3026,21 +3032,22 @@ public:
                     if (shard_load_info.tablet_count == 0) {
                         node_load_info.shards_by_load.push_back(replica.shard);
                     }
-                    shard_load_info.tablet_count += tids.size();
-                    shard_load_info.tablet_count_per_table[table] += tids.size();
-                    node_load_info.tablet_count_per_table[table] += tids.size();
-                    total_load += tids.size();
+                    const auto tablet_load = tids.size() * group_size;
+                    shard_load_info.tablet_count += tablet_load;
+                    shard_load_info.tablet_count_per_table[table] += tablet_load;
+                    node_load_info.tablet_count_per_table[table] += tablet_load;
+                    total_load += tablet_load;
                     if (tmap.needs_merge() && tids.size() == 2) {
                         // Exclude both sibling tablets if either haven't finished migration yet. That's to prevent balancer from
                         // un-doing the colocation.
                         if (!migrating(t1) && !migrating(t2)) {
                             auto candidate = colocated_tablets{global_tablet_id{table, t1.tid}, global_tablet_id{table, t2->tid}};
-                            add_candidate(shard_load_info, migration_tablet_set{std::move(candidate)});
+                            add_candidate(shard_load_info, migration_tablet_set(std::move(candidate), group_size));
                         }
                     } else {
                         for (auto tid : tids) {
                             if (!migrating(get_table_desc(tid))) { // migrating tablets are not candidates
-                                add_candidate(shard_load_info, migration_tablet_set{global_tablet_id{table, tid}});
+                                add_candidate(shard_load_info, migration_tablet_set(global_tablet_id{table, tid}, group_size));
                             }
                         }
                     }
