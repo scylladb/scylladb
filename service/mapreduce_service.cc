@@ -304,6 +304,7 @@ locator::token_metadata_ptr mapreduce_service::get_token_metadata_ptr() const no
 }
 
 future<> mapreduce_service::stop() {
+    _abort_outgoing_tasks.request_abort();
     return uninit_messaging_service();
 }
 
@@ -370,6 +371,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch_to_shards(
     std::optional<query::mapreduce_result> result;
     std::vector<future<query::mapreduce_result>> futures;
 
+    _abort_outgoing_tasks.check();
     for (const auto& s : smp::all_cpus()) {
         futures.push_back(container().invoke_on(s, [req, tr_info] (auto& fs) {
             return fs.execute_on_this_shard(req, tr_info);
@@ -377,6 +379,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch_to_shards(
     }
     auto results = co_await when_all_succeed(futures.begin(), futures.end());
 
+    _abort_outgoing_tasks.check();
     mapreduce_aggregates aggrs(req);
     co_return co_await aggrs.with_thread_if_needed([&aggrs, req, results = std::move(results), result = std::move(result)] () mutable {
         for (auto&& r : results) {
@@ -457,6 +460,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
 
     std::optional<dht::partition_range> current_range;
     do {
+        _abort_outgoing_tasks.check();
         while ((current_range = owned_iter.next(*schema))) {
             ranges_owned_by_this_shard.push_back(std::move(*current_range));
             if (ranges_owned_by_this_shard.size() >= max_ranges) {
@@ -490,6 +494,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
             if (_shutdown) {
                 throw std::runtime_error("mapreduce_service is shutting down");
             }
+            _abort_outgoing_tasks.check();
 
             co_await pager->fetch_page(rs_builder, DEFAULT_INTERNAL_PAGING_SIZE, now, timeout);
         }
@@ -497,6 +502,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
         ranges_owned_by_this_shard.clear();
     } while (current_range);
 
+    _abort_outgoing_tasks.check();
     co_return co_await rs_builder.with_thread_if_needed([&req, &rs_builder, reductions = req.reduction_types, tr_state = std::move(tr_state)] {
         auto rs = rs_builder.build();
         auto& rows = rs->rows();
