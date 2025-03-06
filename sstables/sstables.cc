@@ -847,7 +847,7 @@ future<> sstable::read_toc() noexcept {
         });
     } catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw malformed_sstable_exception(toc_filename() + ": file not found");
+            throw malformed_sstable_exception(fmt::format("{}: file not found", toc_filename()));
         }
         throw;
     }
@@ -992,7 +992,7 @@ future<> sstable::do_read_simple(component_type type,
         _metadata_size_on_disk += size;
     }  catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw malformed_sstable_exception(component_name + ": file not found");
+            throw malformed_sstable_exception(fmt::format("{}: file not found", component_name));
         }
         throw;
     } catch (malformed_sstable_exception& e) {
