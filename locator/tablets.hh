@@ -604,6 +604,8 @@ private:
     void check_tablet_id(tablet_id) const;
 };
 
+using table_group_set = utils::small_vector<table_id, 2>;
+
 /// Holds information about all tablets in the cluster.
 ///
 /// When this instance is obtained via token_metadata_ptr, it is immutable
@@ -622,6 +624,7 @@ public:
     // See storage_service::replicate_to_all_cores().
     using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
     using table_to_tablet_map = std::unordered_map<table_id, tablet_map_ptr>;
+    using table_group_map = std::unordered_map<table_id, table_group_set>;
 private:
     table_to_tablet_map _tablets;
 
@@ -633,6 +636,11 @@ public:
     const table_to_tablet_map& all_tables() const { return _tablets; }
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
+
+    table_group_map all_table_groups() const;
+    table_id get_base_table(table_id id) const;
+    bool is_base_table(table_id id) const;
+
 public:
     tablet_metadata() = default;
     // No implicit copy, use copy()
