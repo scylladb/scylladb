@@ -940,6 +940,10 @@ void database::init_schema_commitlog() {
     }).release();
 }
 
+std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s) {
+    return std::nullopt;
+}
+
 future<> database::create_local_system_table(
         schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
     auto ks_name = table->ks_name();

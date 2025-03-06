@@ -163,6 +163,7 @@ public:
 
     gms::feature in_memory_tables { *this, "IN_MEMORY_TABLES"sv };
     gms::feature workload_prioritization { *this, "WORKLOAD_PRIORITIZATION"sv };
+    gms::feature colocated_tablets { *this, "COLOCATED_TABLETS"sv };
     gms::feature file_stream { *this, "FILE_STREAM"sv };
     gms::feature compression_dicts { *this, "COMPRESSION_DICTS"sv };
     gms::feature tablet_options { *this, "TABLET_OPTIONS"sv };
