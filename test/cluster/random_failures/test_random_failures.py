@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import random
@@ -35,7 +36,10 @@ TESTS_COUNT = 1  # number of tests from the whole matrix to run, None to run the
 
 # Following parameters can be adjusted to run same sequence of tests from a previous run.  Look at logs for the values.
 # Also see `pytest_generate_tests()` below for details.
-TESTS_SHUFFLE_SEED = random.randrange(sys.maxsize)  # seed for the tests order randomization
+
+# Seed for the tests order randomization.
+TESTS_SHUFFLE_SEED = int(os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", random.randrange(sys.maxsize)))
+
 ERROR_INJECTIONS_COUNT = len(ERROR_INJECTIONS)  # change it to limit number of error injections
 CLUSTER_EVENTS_COUNT = len(CLUSTER_EVENTS)  # change it to limit number of cluster events
 

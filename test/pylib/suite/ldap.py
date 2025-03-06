@@ -32,7 +32,7 @@ class LdapTest(BoostTest):
         super().__init__(test_no, shortname, args, suite, None, False, None)
 
     async def setup(self, port, options):
-        instances_root = pathlib.Path(options.tmpdir) / self.mode / 'ldap_instances'
+        instances_root = self.suite.log_dir / "ldap_instances"
         byte_limit = options.byte_limit if options.byte_limit else randint(0, 2000)
         project_root = pathlib.Path(os.path.dirname(__file__)).parent.parent.parent
         return setup(project_root=project_root, port=port, instance_root=instances_root, byte_limit=byte_limit)

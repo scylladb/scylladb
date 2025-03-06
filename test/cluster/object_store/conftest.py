@@ -1,9 +1,16 @@
-#!/usr/bin/python3
+#
+# Copyright (C) 2023-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
 import os
 import boto3
 import logging
-import pytest
 import pathlib
+
+import pytest
+
 # use minio_server
 from test.pylib.minio_server import MinioServer
 
