@@ -25,6 +25,7 @@
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 
 using namespace std::string_literals;
 
@@ -87,6 +88,8 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
+                const auto& rack_map = qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_racks();
+
                 unsigned total_abs_rfs_diff = 0;
 
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
@@ -108,6 +111,21 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 
                     if (total_abs_rfs_diff += rf_diff; total_abs_rfs_diff >= 2) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
+                    }
+
+                    // We enforce RF == #racks OR RF == 1 for every DC if the keyspace uses tablets.
+                    // For more context, see: scylladb/scylladb#23071.
+                    const auto rack_count = rack_map.at(new_dc).size();
+
+                    const bool rf_rack_restr_ks = qp.db().get_config().check_experimental(db::experimental_features_t::feature::RF_RACK_RESTRICTED_KEYSPACES);
+                    // RF == 0 is OK. That just means that the user doesn't want to replicate data in that data center.
+                    const bool invalid_rf = new_rf_value != (int64_t) rack_count && new_rf_value != 1 && new_rf_value != 0;
+
+                    if (rf_rack_restr_ks && invalid_rf) {
+                        throw exceptions::invalid_request_exception(seastar::format("Keyspace '{}' uses tablets. "
+                                "That enforces RF == rack count or RF == 1, but your query would violate that in data center '{}': "
+                                "RF={} vs. rack count={}",
+                                _name, new_dc, new_rf_value, rack_count));
                     }
                 }
             }
