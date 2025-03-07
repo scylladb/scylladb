@@ -161,11 +161,11 @@ public:
     }
 
     future<> remove_component(component_type c) {
-        return remove_file(_sst->filename(c));
+        return remove_file(fmt::to_string(_sst->filename(c)));
     }
 
     fs::path filename(component_type c) const {
-        return fs::path(_sst->filename(c));
+        return fs::path(fmt::to_string(_sst->filename(c)));
     }
 
     void set_shards(std::vector<unsigned> shards) {
