@@ -25,6 +25,7 @@
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 
 using namespace std::string_literals;
 
@@ -89,6 +90,9 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+
+                const auto& rack_map = qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_racks();
+
                 unsigned total_abs_rfs_diff = 0;
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
                     int old_rf_value = 0;
@@ -108,6 +112,20 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 
                     if (total_abs_rfs_diff += rf_diff; total_abs_rfs_diff >= 2) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
+                    }
+
+                    // When using tablets, we enforce RF \in {0, 1, #racks} in every data center.
+                    // For more context, see: scylladb/scylladb#23071.
+                    const auto rack_count = rack_map.at(new_dc).size();
+                    const bool restricted_keyspaces = qp.db().get_config().rf_rack_valid_keyspaces();
+                    const bool invalid_rf = (new_rf_value != (int64_t) rack_count) && new_rf_value != 1 && new_rf_value != 0;
+
+                    if (restricted_keyspaces && invalid_rf) {
+                        throw exceptions::invalid_request_exception(seastar::format(
+                                "The option `rf_rack_valid_keyspaces` is enabled. It requires that keyspaces remain RF-rack-valid. "
+                                "Your query would violate that: keyspace '{}' uses tablets and the condition is not satisfied for DC '{}': "
+                                "RF={} vs. rack count={}.",
+                                _name, new_dc, new_rf_value, rack_count));
                     }
                 }
             }
