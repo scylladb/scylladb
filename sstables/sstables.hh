@@ -412,16 +412,16 @@ public:
         return component_basename(_schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
     }
 
-    sstring get_filename() const {
-        return filename(component_type::Data);
+    component_name get_filename() const {
+        return component_name(*this, component_type::Data);
     }
 
-    sstring toc_filename() const {
-        return filename(component_type::TOC);
+    component_name toc_filename() const {
+        return component_name(*this, component_type::TOC);
     }
 
-    sstring index_filename() const {
-        return filename(component_type::Index);
+    component_name index_filename() const {
+        return component_name(*this, component_type::Index);
     }
 
     bool requires_view_building() const noexcept { return _state == sstable_state::staging; }
@@ -454,7 +454,6 @@ public:
     gc_clock::time_point max_data_age() const {
         return _now;
     }
-    std::vector<sstring> component_filenames() const;
 
     utils::observer<sstable&> add_on_closed_handler(std::function<void (sstable&)> on_closed_handler) noexcept {
         return _on_closed.observe(on_closed_handler);
@@ -516,21 +515,17 @@ public:
     }
 
 private:
-    sstring filename(component_type f) const {
-        auto dir = _storage->prefix();
-        return filename(f, std::move(dir));
-    }
-
-    sstring filename(component_type f, sstring dir) const {
-        return filename(dir, _schema->ks_name(), _schema->cf_name(), _version, _generation, _format, f);
-    }
-
+    friend struct component_name;
     friend class sstable_stream_sink_impl;
     friend class filesystem_storage;
     friend class s3_storage;
     friend class tiered_storage;
 
     const size_t sstable_buffer_size;
+
+    component_name filename(component_type f) const {
+        return component_name(*this, f);
+    }
 
     std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
     std::vector<sstring> _unrecognized_components;

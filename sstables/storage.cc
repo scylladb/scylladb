@@ -135,7 +135,7 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
 
     if (!readonly) {
         f = with_file_close_on_failure(std::move(f), [this, &sst, type, name = std::move(name)] (file fd) mutable {
-            return rename_new_file(sst, name.native(), sst.filename(type)).then([fd = std::move(fd)] () mutable {
+            return rename_new_file(sst, name.native(), fmt::to_string(sst.filename(type))).then([fd = std::move(fd)] () mutable {
                 return make_ready_future<file>(std::move(fd));
             });
         });
@@ -146,7 +146,6 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
 
 void filesystem_storage::open(sstable& sst) {
     touch_temp_dir(sst).get();
-    auto file_path = sst.filename(component_type::TemporaryTOC);
 
     // Writing TOC content to temporary file.
     // If creation of temporary TOC failed, it implies that that boot failed to
@@ -159,14 +158,14 @@ void filesystem_storage::open(sstable& sst) {
                                     open_flags::create |
                                     open_flags::exclusive,
                                     options).get();
-    auto w = file_writer(output_stream<char>(std::move(sink)), std::move(file_path));
+    auto w = file_writer(output_stream<char>(std::move(sink)), component_name(sst, component_type::TemporaryTOC));
 
-    bool toc_exists = file_exists(sst.filename(component_type::TOC)).get();
+    bool toc_exists = file_exists(fmt::to_string(sst.filename(component_type::TOC))).get();
     if (toc_exists) {
         // TOC will exist at this point if write_components() was called with
         // the generation of a sstable that exists.
         w.close();
-        remove_file(sst.filename(component_type::TemporaryTOC)).get();
+        remove_file(fmt::to_string(sst.filename(component_type::TemporaryTOC))).get();
         throw std::runtime_error(format("SSTable write failed due to existence of TOC file for generation {} of {}.{}", sst._generation, sst._schema->ks_name(), sst._schema->cf_name()));
     }
 
@@ -184,7 +183,7 @@ future<> filesystem_storage::seal(const sstable& sst) {
     // Guarantee that every component of this sstable reached the disk.
     co_await _dir.sync(sst._write_error_handler);
     // Rename TOC because it's no longer temporary.
-    co_await sst.sstable_write_io_check(rename_file, sst.filename(component_type::TemporaryTOC), sst.filename(component_type::TOC));
+    co_await sst.sstable_write_io_check(rename_file, fmt::to_string(sst.filename(component_type::TemporaryTOC)), fmt::to_string(sst.filename(component_type::TOC)));
     co_await _dir.sync(sst._write_error_handler);
     // If this point was reached, sstable should be safe in disk.
     sstlog.debug("SSTable with generation {} of {}.{} was sealed successfully.", sst._generation, sst._schema->ks_name(), sst._schema->cf_name());
@@ -256,12 +255,12 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
         auto comp = p.second;
         auto src = sstable::filename(_dir.native(), sst._schema->ks_name(), sst._schema->cf_name(), sst._version, sst._generation, sst._format, comp);
         auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, dst_gen, sst._format, comp);
-        return do_with(std::move(src), std::move(dst), [this] (const sstring& src, const sstring& dst) mutable {
-            return file_exists(dst).then([&, this] (bool exists) mutable {
+        return do_with(std::move(src), std::move(dst), [] (const sstring& src, const sstring& dst) mutable {
+            return file_exists(dst).then([&] (bool exists) mutable {
                 if (!exists) {
                     return make_ready_future<>();
                 }
-                return same_file(src, dst).then_wrapped([&, this] (future<bool> fut) {
+                return same_file(src, dst).then_wrapped([&] (future<bool> fut) {
                     if (fut.failed()) {
                         auto eptr = fut.get_exception();
                         sstlog.error("Error while linking SSTable: {} to {}: {}", src, dst, eptr);
@@ -271,7 +270,7 @@ future<> filesystem_storage::check_create_links_replay(const sstable& sst, const
                     if (!same) {
                         auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
                         sstlog.error("{}", msg);
-                        return make_exception_future<>(malformed_sstable_exception(msg, _dir.native()));
+                        return make_exception_future<>(malformed_sstable_exception(msg));
                     }
                     return make_ready_future<>();
                 });
@@ -325,7 +324,7 @@ future<> filesystem_storage::create_links_common(const sstable& sst, sstring dst
     co_await check_create_links_replay(sst, dst_dir, generation, comps);
     // TemporaryTOC is always first, TOC is always last
     auto dst = sstable::filename(dst_dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, generation, sst._format, component_type::TemporaryTOC);
-    co_await sst.sstable_write_io_check(idempotent_link_file, sst.filename(component_type::TOC), std::move(dst));
+    co_await sst.sstable_write_io_check(idempotent_link_file, fmt::to_string(sst.filename(component_type::TOC)), std::move(dst));
     auto dir = opened_directory(dst_dir);
     co_await dir.sync(sst._write_error_handler);
     co_await parallel_for_each(comps, [this, &sst, &dst_dir, generation] (auto p) {
@@ -431,7 +430,7 @@ future<> filesystem_storage::wipe(const sstable& sst, sync_dir sync) noexcept {
     // Running out of memory here will terminate.
     auto name = [&sst] () noexcept {
         memory::scoped_critical_alloc_section _;
-        return sst.toc_filename();
+        return fmt::to_string(sst.toc_filename());
     }();
 
     try {
@@ -570,7 +569,7 @@ sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type)
 
     return std::visit(overloaded_functor {
         [&] (const sstring& prefix) -> sstring {
-            return format("/{}/{}", _bucket, sst.filename(type, prefix));
+            return format("/{}/{}/{}", _bucket, prefix, sst.component_basename(type));
         },
         [&] (const table_id& owner) -> sstring {
             return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
