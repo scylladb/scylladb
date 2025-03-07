@@ -32,6 +32,7 @@ struct load_balancer_dc_stats {
     uint64_t stop_no_candidates = 0;
     uint64_t stop_skip_limit = 0;
     uint64_t stop_batch_size = 0;
+    uint64_t cross_rack_collocations = 0;
 
     load_balancer_dc_stats operator-(const load_balancer_dc_stats& other) const {
         return {
@@ -50,6 +51,7 @@ struct load_balancer_dc_stats {
             stop_no_candidates - other.stop_no_candidates,
             stop_skip_limit - other.stop_skip_limit,
             stop_batch_size - other.stop_batch_size,
+            cross_rack_collocations - other.cross_rack_collocations,
         };
     }
 };
