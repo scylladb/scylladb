@@ -13,6 +13,7 @@
 #include "gms/inet_address.hh"
 #include "repair/repair.hh"
 #include "repair/task_manager_module.hh"
+#include "service/topology_guard.hh"
 #include "tasks/task_manager.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
@@ -177,7 +178,7 @@ private:
 public:
     future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<locator::host_id> hosts = {}, std::unordered_set<locator::host_id> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
 
-    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid);
+    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, service::frozen_topology_guard topo_guard);
 private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
@@ -242,7 +243,8 @@ public:
             table_schema_version schema_version,
             streaming::stream_reason reason,
             gc_clock::time_point compaction_time,
-            abort_source& as);
+            abort_source& as,
+            service::frozen_topology_guard topo_guard);
 
     future<>
     remove_repair_meta(const locator::host_id& from,
@@ -272,7 +274,8 @@ class repair_writer;
 
 future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time);
+        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time,
+        service::frozen_topology_guard topo_guard);
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
