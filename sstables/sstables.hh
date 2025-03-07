@@ -454,7 +454,6 @@ public:
     gc_clock::time_point max_data_age() const {
         return _now;
     }
-    std::vector<sstring> component_filenames() const;
 
     utils::observer<sstable&> add_on_closed_handler(std::function<void (sstable&)> on_closed_handler) noexcept {
         return _on_closed.observe(on_closed_handler);

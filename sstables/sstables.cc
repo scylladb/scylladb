@@ -2235,16 +2235,6 @@ void sstable::validate_originating_host_id() const {
     }
 }
 
-std::vector<sstring> sstable::component_filenames() const {
-    std::vector<sstring> res;
-    for (auto c : sstable_version_constants::get_component_map(_version) | std::views::keys) {
-        if (has_component(c)) {
-            res.emplace_back(filename(c));
-        }
-    }
-    return res;
-}
-
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                     format_types format, sstring component) {
     sstring v = fmt::to_string(version);
