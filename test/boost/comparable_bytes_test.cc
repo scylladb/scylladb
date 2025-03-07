@@ -338,3 +338,20 @@ BOOST_AUTO_TEST_CASE(test_uuid) {
 
     byte_comparable_test(std::move(test_data));
 }
+
+extern std::size_t count_digits(const boost::multiprecision::cpp_int& value);
+BOOST_AUTO_TEST_CASE(test_count_digits) {
+    auto test_precision = [] (boost::multiprecision::cpp_int&& num) {
+        const auto expected_length = num.str().length();
+        BOOST_REQUIRE_EQUAL(count_digits(num), expected_length);
+        BOOST_REQUIRE_EQUAL(count_digits(-num), expected_length);
+    };
+
+    test_precision(boost::multiprecision::cpp_int("0"));
+    test_precision(boost::multiprecision::cpp_int("123"));
+    test_precision(boost::multiprecision::cpp_int("123456"));
+    test_precision(boost::multiprecision::cpp_int("12345600"));
+    test_precision(boost::multiprecision::cpp_int("9999999"));
+    test_precision(boost::multiprecision::cpp_int(
+        "123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"));
+}

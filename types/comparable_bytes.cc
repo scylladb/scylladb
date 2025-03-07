@@ -437,6 +437,38 @@ static void decode_uuid_type(managed_bytes_view& comparable_bytes_view, bytes_os
     write_native_int_array(out, buffer);
 }
 
+// Returns the number of significant digits in the big decimal.
+// For example, the "precision" of 12.34e56 is 4.
+std::size_t count_digits(const boost::multiprecision::cpp_int& value) {
+    // special case 0
+    if (value.is_zero()) {
+        return 1;
+    }
+
+    // Count the number of bits in the value.
+    // The value is stored as array of 'limbs' in boost::multiprecision::cpp_int
+    // and all limbs except the most significant limb will have bits_per_limb.
+    // So, total bits = (num of limbs - 1) * bits per limb + bits in ms limb.
+    const auto& backend = value.backend();
+    const auto limb_count = backend.size();
+    const auto num_bits_in_ms_limb = boost::multiprecision::bits_per_limb - std::countl_zero(backend.limbs()[limb_count - 1]);
+    const auto total_num_bits = (limb_count - 1) * boost::multiprecision::bits_per_limb + num_bits_in_ms_limb;
+
+    // The number of digits = floor(log10(2) * total_num_bits) + 1.
+    // Since total_num_bits is always positive, an explicit cast to std::size is sufficient, making floor() redundant.
+    static const double log10_2 = std::log10(2);
+    auto num_of_digits = std::size_t(log10_2 * total_num_bits) + 1;
+
+    // Adjust for overestimation (e.g., 999 -> 3 digits, not 4)
+    static const boost::multiprecision::cpp_int multiprecision_10(10);
+    boost::multiprecision::cpp_int threshold = boost::multiprecision::pow(multiprecision_10, num_of_digits - 1);
+    if (value < 0 ? (-value < threshold) : (value < threshold)) {
+        num_of_digits--;
+    }
+
+    return num_of_digits;
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
