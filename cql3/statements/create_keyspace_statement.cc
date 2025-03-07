@@ -21,6 +21,7 @@
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/regex.hpp>
 #include <stdexcept>
@@ -91,8 +92,11 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
     // It may happen that the user chooses SimpleStrategy, but they try to enable tablets as well.
     // That's why we need to check the conjunction here.
     const bool uses_tablets = rs->get_type() == locator::replication_strategy_type::network_topology && rs->uses_tablets();
+    // Some tests may want to initially set up a keyspace that doesn't satisfy the RF-rack restriction.
+    // This is a bit ugly and doesn't really follow the philosophy of error injections, but let's keep it here for the sake of testing.
+    const bool ignore_rf_rack_restriction = utils::get_local_injector().is_enabled("dont_check_rf_rack_restriction_injection");
 
-    if (restricted_keyspaces && uses_tablets) {
+    if (restricted_keyspaces && uses_tablets && !ignore_rf_rack_restriction) {
         const auto* nts = static_cast<const locator::network_topology_strategy*>(rs.get());
 
         for (const auto& [dc, rack_map] : tm.get_topology().get_datacenter_racks()) {
