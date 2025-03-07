@@ -729,6 +729,8 @@ private:
     std::unique_ptr<const locator::token_metadata> _small_table_optimization_tm;
     seastar::semaphore _small_table_optimization_tm_sem{1};
     bool _small_table_optimization_tm_calculated = false;
+    service::frozen_topology_guard _frozen_topology_guard;
+    service::topology_guard _topology_guard;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -785,7 +787,8 @@ public:
             size_t nr_peer_nodes,
             std::vector<std::optional<shard_id>> all_live_peer_shards,
             row_level_repair* row_level_repair_ptr,
-            gc_clock::time_point compaction_time)
+            gc_clock::time_point compaction_time,
+            service::frozen_topology_guard topo_guard)
             : _rs(rs)
             , _db(rs.get_db())
             , _messaging(rs.get_messaging())
@@ -826,6 +829,8 @@ public:
             , _repair_hasher(_seed, _schema)
             , _compaction_time(compaction_time)
             , _is_tablet(cf.uses_tablets())
+            , _frozen_topology_guard(topo_guard)
+            , _topology_guard(_frozen_topology_guard)
             {
             if (master) {
                 add_to_repair_meta_for_masters(*this);
@@ -861,9 +866,10 @@ public:
             streaming::stream_reason reason,
             shard_config master_node_shard_config,
             host_id_vector_replica_set all_live_peer_nodes,
-            gc_clock::time_point compaction_time)
+            gc_clock::time_point compaction_time,
+            service::frozen_topology_guard topo_guard)
         : repair_meta(rs, cf, std::move(s), std::move(permit), std::move(range), algo, max_row_buf_size, seed, master, repair_meta_id, reason,
-                std::move(master_node_shard_config), std::move(all_live_peer_nodes), 1, {std::nullopt}, nullptr, compaction_time)
+                std::move(master_node_shard_config), std::move(all_live_peer_nodes), 1, {std::nullopt}, nullptr, compaction_time, topo_guard)
     {
     }
 
@@ -1545,7 +1551,7 @@ public:
             co_await ser::repair_rpc_verbs::send_repair_row_level_start(&_messaging, remote_node,
                 _repair_meta_id, ks_name, cf_name, std::move(range), _algo, _max_row_buf_size, _seed,
                 _master_node_shard_config.shard, _master_node_shard_config.shard_count, _master_node_shard_config.ignore_msb,
-                remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id);
+                remote_partitioner_name, std::move(schema_version), reason, compaction_time, dst_cpu_id, _frozen_topology_guard);
         if (resp && resp->status == repair_row_level_start_status::no_such_column_family) {
             throw replica::no_such_column_family(ks_name, cf_name);
         } else {
@@ -1558,11 +1564,16 @@ public:
     repair_row_level_start_handler(repair_service& repair, locator::host_id from_id, uint32_t src_cpu_id, uint32_t repair_meta_id, sstring ks_name, sstring cf_name,
             dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size,
             uint64_t seed, shard_config master_node_shard_config, table_schema_version schema_version, streaming::stream_reason reason,
-            gc_clock::time_point compaction_time, abort_source& as) {
+            gc_clock::time_point compaction_time, abort_source& as, service::frozen_topology_guard topo_guard) {
         rlogger.debug(">>> Started Row Level Repair (Follower): local={}, peers={}, repair_meta_id={}, keyspace={}, cf={}, schema_version={}, range={}, seed={}, max_row_buf_siz={}",
                 repair.my_host_id(), from_id, repair_meta_id, ks_name, cf_name, schema_version, range, seed, max_row_buf_size);
         try {
-            co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as);
+            // Trigger read barrier to ensure that session_id is visible.
+            auto& mm = repair.get_migration_manager();
+            if (mm.use_raft()) {
+                co_await mm.get_group0_barrier().trigger(mm.get_abort_source());
+            }
+            co_await repair.insert_repair_meta(from_id, src_cpu_id, repair_meta_id, std::move(range), algo, max_row_buf_size, seed, std::move(master_node_shard_config), std::move(schema_version), reason, compaction_time, as, topo_guard);
             co_return repair_row_level_start_response{repair_row_level_start_status::ok};
         } catch (replica::no_such_column_family&) {
             co_return repair_row_level_start_response{repair_row_level_start_status::no_such_column_family};
@@ -2513,22 +2524,30 @@ future<> repair_service::init_ms_handlers() {
     ser::repair_rpc_verbs::register_repair_row_level_start(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id, sstring ks_name,
             sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed,
             unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version,
-            rpc::optional<streaming::stream_reason> reason, rpc::optional<gc_clock::time_point> compaction_time, rpc::optional<shard_id> dst_cpu_id_opt) {
+            rpc::optional<streaming::stream_reason> reason, rpc::optional<gc_clock::time_point> compaction_time, rpc::optional<shard_id> dst_cpu_id_opt,
+            rpc::optional<service::frozen_topology_guard> topo_guard) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
         auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id_opt);
         auto from_id = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return container().invoke_on(shard, [from_id, src_cpu_id, repair_meta_id, ks_name, cf_name,
+<<<<<<< HEAD
                 range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this] (repair_service& local_repair) mutable {
             if (!local_repair._view_builder.local_is_initialized()) {
                 return make_exception_future<repair_row_level_start_response>(std::runtime_error(format("Node {} is not fully initialized for repair, try again later",
                         local_repair.my_host_id())));
             }
+||||||| parent of 928f92c780 (repair: pass session_id to repair_meta)
+                range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this] (repair_service& local_repair) mutable {
+=======
+                range, algo, max_row_buf_size, seed, remote_shard, remote_shard_count, remote_ignore_msb, schema_version, reason, compaction_time, this,
+                topo_guard = topo_guard.value_or(service::default_session_id)] (repair_service& local_repair) mutable {
+>>>>>>> 928f92c780 (repair: pass session_id to repair_meta)
             streaming::stream_reason r = reason ? *reason : streaming::stream_reason::repair;
             const gc_clock::time_point ct = compaction_time ? *compaction_time : gc_clock::now();
             return repair_meta::repair_row_level_start_handler(local_repair, from_id, src_cpu_id, repair_meta_id, std::move(ks_name),
                     std::move(cf_name), std::move(range), algo, max_row_buf_size, seed,
                     shard_config{remote_shard, remote_shard_count, remote_ignore_msb},
-                    schema_version, r, ct, _repair_module->abort_source());
+                    schema_version, r, ct, _repair_module->abort_source(), topo_guard);
         });
     });
     ser::repair_rpc_verbs::register_repair_row_level_stop(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
@@ -2658,6 +2677,8 @@ class row_level_repair {
 
     bool _is_tablet;
 
+    service::frozen_topology_guard _topo_guard;
+
 public:
     row_level_repair(repair::shard_repair_task_impl& shard_task,
             sstring cf_name,
@@ -2665,7 +2686,8 @@ public:
             dht::token_range range,
             std::vector<locator::host_id> all_live_peer_nodes,
             bool small_table_optimization,
-            gc_clock::time_point start_time)
+            gc_clock::time_point start_time,
+            service::frozen_topology_guard topo_guard)
         : _shard_task(shard_task)
         , _cf_name(std::move(cf_name))
         , _table_id(std::move(table_id))
@@ -2675,6 +2697,7 @@ public:
         , _seed(get_random_seed())
         , _start_time(start_time)
         , _is_tablet(_shard_task.db.local().find_column_family(_table_id).uses_tablets())
+        , _topo_guard(topo_guard)
     {
         repair_neighbors r_neighbors = _shard_task.get_repair_neighbors(_range);
         auto& map = r_neighbors.shard_map;
@@ -3071,7 +3094,8 @@ public:
                     _all_live_peer_nodes.size(),
                     _all_live_peer_shards,
                     this,
-                    compaction_time);
+                    compaction_time,
+                    _topo_guard);
             auto auto_stop_master = defer([&master] {
                 try {
                     master.stop().get();
@@ -3182,9 +3206,10 @@ public:
 
 future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         sstring cf_name, table_id table_id, dht::token_range range,
-        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time) {
+        const std::vector<locator::host_id>& all_peer_nodes, bool small_table_optimization, gc_clock::time_point flush_time,
+        service::frozen_topology_guard topo_guard) {
     auto start_time = flush_time;
-    auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, small_table_optimization, start_time);
+    auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, small_table_optimization, start_time, topo_guard);
     co_return co_await repair.run();
 }
 
@@ -3398,7 +3423,8 @@ repair_service::insert_repair_meta(
         table_schema_version schema_version,
         streaming::stream_reason reason,
         gc_clock::time_point compaction_time,
-        abort_source& as) {
+        abort_source& as,
+        service::frozen_topology_guard topo_guard) {
     schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, from_id, src_cpu_id, get_messaging(), as);
     auto& db = get_db();
     reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
@@ -3416,7 +3442,8 @@ repair_service::insert_repair_meta(
             reason,
             std::move(master_node_shard_config),
             host_id_vector_replica_set{from_id},
-            compaction_time);
+            compaction_time,
+            topo_guard);
     rm->set_repair_state_for_local_node(repair_state::row_level_start_started);
     bool insertion = repair_meta_map().emplace(id, rm).second;
     if (!insertion) {

@@ -10,6 +10,7 @@
 
 #include "node_ops/node_ops_ctl.hh"
 #include "repair/repair.hh"
+#include "service/topology_guard.hh"
 #include "streaming/stream_reason.hh"
 #include "tasks/task_manager.hh"
 
@@ -114,15 +115,25 @@ private:
     std::optional<int> _ranges_parallelism;
     size_t _metas_size = 0;
     gc_clock::time_point _flush_time;
+    service::frozen_topology_guard _topo_guard;
 public:
     bool sched_by_scheduler = false;
 public:
+<<<<<<< HEAD
     tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", tasks::task_id::create_null_id(), reason)
+||||||| parent of 928f92c780 (repair: pass session_id to repair_meta)
+    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism)
+        : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", parent_id, reason)
+=======
+    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard)
+        : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", parent_id, reason)
+>>>>>>> 928f92c780 (repair: pass session_id to repair_meta)
         , _keyspace(std::move(keyspace))
         , _tables(std::move(tables))
         , _metas(std::move(metas))
         , _ranges_parallelism(ranges_parallelism)
+        , _topo_guard(topo_guard)
     {
     }
 
@@ -175,6 +186,7 @@ private:
     std::optional<semaphore> _user_ranges_parallelism;
     uint64_t _ranges_complete = 0;
     gc_clock::time_point _flush_time;
+    service::frozen_topology_guard _frozen_topology_guard;
 public:
     bool sched_by_scheduler = false;
 public:
@@ -194,6 +206,7 @@ public:
             bool small_table_optimization,
             std::optional<int> ranges_parallelism,
             gc_clock::time_point flush_time,
+            service::frozen_topology_guard topo_guard,
             bool sched_by_scheduler = false);
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
