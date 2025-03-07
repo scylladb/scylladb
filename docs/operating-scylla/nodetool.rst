@@ -55,6 +55,7 @@ Nodetool
    nodetool-commands/status
    Nodetool stop compaction <nodetool-commands/stop>
    nodetool-commands/tablestats
+   nodetool-commands/tablet-repair
    nodetool-commands/tasks/index
    nodetool-commands/toppartitions
    nodetool-commands/upgradesstables
@@ -115,7 +116,7 @@ Operations that are not listed below are currently not available.
 * :doc:`rebuild </operating-scylla/nodetool-commands/rebuild/>` :code:`[<src-dc-name>]`- Rebuild data by streaming from other nodes
 * :doc:`refresh </operating-scylla/nodetool-commands/refresh/>`- Load newly placed SSTables to the system without restart
 * :doc:`removenode </operating-scylla/nodetool-commands/removenode/>`- Remove node with the provided ID
-* :doc:`repair <nodetool-commands/repair/>`  :code:`<keyspace>` :code:`<table>` - Repair one or more tables
+* :doc:`repair <nodetool-commands/repair/>`  :code:`<keyspace>` :code:`<table>` - Repair one or more vnode tables.
 * :doc:`restore </operating-scylla/nodetool-commands/restore/>` - Load SSTables from a designated bucket in object store into a specified keyspace or table
 * :doc:`resetlocalschema </operating-scylla/nodetool-commands/resetlocalschema/>` - Reset the node's local schema.
 * :doc:`ring <nodetool-commands/ring/>` - The nodetool ring command display the token ring information.
@@ -131,6 +132,7 @@ Operations that are not listed below are currently not available.
 * :doc:`stop </operating-scylla/nodetool-commands/stop/>` - Stop compaction operation.
 * **tablehistograms** see :doc:`cfhistograms <nodetool-commands/cfhistograms/>`
 * :doc:`tablestats </operating-scylla/nodetool-commands/tablestats/>` - Provides in-depth diagnostics regard table. 
+* :doc:`tablet-repair <nodetool-commands/tablet-repair/>`  :code:`<keyspace>` :code:`<table>` - Repair one or more tablet tables.
 * :doc:`tasks </operating-scylla/nodetool-commands/tasks/index>` - Manage tasks manager tasks.
 * :doc:`toppartitions </operating-scylla/nodetool-commands/toppartitions/>` - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
 * :doc:`upgradesstables </operating-scylla/nodetool-commands/upgradesstables>` - Upgrades each table that is not running the latest ScyllaDB version, by rewriting SSTables.
