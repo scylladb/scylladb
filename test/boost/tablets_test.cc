@@ -2944,6 +2944,95 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
     }).get();
 }
 
+// Verify merge can proceed when moving from {RF=3, racks=2} to {RF=3, racks=3}
+//
+// Given replica sets:
+// rack1 { n1, n2, n3 }
+// rack2 { n4, n5, n6 }
+//
+// t0: { n1, n2, n4 }
+// t1: { n3, n5, n6 }
+//
+// New rack is added, RF=#racks, enabling rack awareness, but t0 and t1 aren't present in the new rack yet.
+//
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_after_adding_new_rack) {
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 3;
+        const int n_racks = 3;
+        const int n_hosts = 9; // 3 nodes in each rack.
+        const unsigned shard_count = 1;
+        const unsigned initial_tablets = 2;
+
+        auto set_tablets = [] (token_metadata&, tablet_map& tmap, const rack_vector& racks, const hosts_by_rack_map& hosts_by_rack) {
+            auto& first_rack_hosts = hosts_by_rack.at(racks[0].rack);
+            auto& second_rack_hosts = hosts_by_rack.at(racks[1].rack);
+
+            tmap.set_tablet(tablet_id(0), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {first_rack_hosts[0], shard_id(0)},
+                    tablet_replica {first_rack_hosts[1], shard_id(0)},
+                    tablet_replica {second_rack_hosts[0], shard_id(0)},
+                }
+            });
+            tmap.set_tablet(tablet_id(1), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {first_rack_hosts[2], shard_id(0)},
+                    tablet_replica {second_rack_hosts[1], shard_id(0)},
+                    tablet_replica {second_rack_hosts[2], shard_id(0)},
+                }
+            });
+        };
+
+        do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
+    }).get();
+}
+
+// Verify merge can proceed with multiple racks and RF=N
+//
+// Given replica sets:
+// rack1 { n1, n2 }
+// rack2 { n3, n4 }
+//
+// t0: { n1, n2, n3, n4 }
+// t1: { n2, n1, n4, n3 }
+//
+// With RF=N, t0 and t1 will have to be considered co-located even though t0:n3 and t1:n3 have different ordinal id.
+// Note this only works for table without views, since otherwise it'd break base-view pairing consistency.
+//
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_racks_and_rf_n) {
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 4;
+        const int n_racks = 2;
+        const int n_hosts = 4; // 3 nodes in each rack.
+        const unsigned shard_count = 1;
+        const unsigned initial_tablets = 2;
+
+        auto set_tablets = [] (token_metadata&, tablet_map& tmap, const rack_vector& racks, const hosts_by_rack_map& hosts_by_rack) {
+            auto& first_rack_hosts = hosts_by_rack.at(racks[0].rack);
+            auto& second_rack_hosts = hosts_by_rack.at(racks[1].rack);
+
+            tmap.set_tablet(tablet_id(0), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {first_rack_hosts[0], shard_id(0)},
+                    tablet_replica {first_rack_hosts[1], shard_id(0)},
+                    tablet_replica {second_rack_hosts[0], shard_id(0)},
+                    tablet_replica {second_rack_hosts[1], shard_id(0)},
+                }
+            });
+            tmap.set_tablet(tablet_id(1), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {first_rack_hosts[1], shard_id(0)},
+                    tablet_replica {first_rack_hosts[0], shard_id(0)},
+                    tablet_replica {second_rack_hosts[1], shard_id(0)},
+                    tablet_replica {second_rack_hosts[0], shard_id(0)},
+                }
+            });
+        };
+
+        do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) {
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 3;
