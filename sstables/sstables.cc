@@ -982,8 +982,8 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 
 future<> sstable::do_read_simple(component_type type,
                                  noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) {
-    auto file_path = filename(type);
-    sstlog.debug("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
+    auto component_name = filename(type);
+    sstlog.debug("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), component_name);
     try {
         file fi = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
         uint64_t size = co_await fi.size();
@@ -992,11 +992,11 @@ future<> sstable::do_read_simple(component_type type,
         _metadata_size_on_disk += size;
     }  catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw malformed_sstable_exception(file_path + ": file not found");
+            throw malformed_sstable_exception(component_name + ": file not found");
         }
         throw;
     } catch (malformed_sstable_exception& e) {
-        throw malformed_sstable_exception(e.what(), file_path);
+        throw malformed_sstable_exception(e.what(), component_name);
     }
 }
 
