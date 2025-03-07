@@ -1411,7 +1411,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting system keyspace");
             sys_ks.start(std::ref(qp), std::ref(db)).get();
-            // TODO: stop()?
+            auto stop_sys_ks = defer_verbose_shutdown("system keyspace", [] {
+                sys_ks.stop().get();
+            });
 
             // Initialization of a keyspace is done by shard 0 only. For system
             // keyspace, the procedure  will go through the hardcoded column
