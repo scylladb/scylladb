@@ -1288,7 +1288,6 @@ void sstable::write_statistics() {
 }
 
 void sstable::rewrite_statistics() {
-    auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
     file_output_stream_options options;
@@ -1298,7 +1297,7 @@ void sstable::rewrite_statistics() {
     write(_version, w, _components->statistics);
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
-    sstable_write_io_check(rename_file, file_path, filename(component_type::Statistics)).get();
+    sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
 }
 
 future<> sstable::read_summary() noexcept {
@@ -3516,7 +3515,7 @@ public:
 private:
     future<> load_metadata() const {
         auto metafile = _sst->filename(sstables::component_type::Scylla);
-        if (!co_await file_exists(metafile)) {
+        if (!co_await file_exists(fmt::to_string(metafile))) {
             // for compatibility with streaming a non-scylla table (no scylla component)
             co_return;
         }
