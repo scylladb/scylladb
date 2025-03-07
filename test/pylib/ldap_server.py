@@ -10,11 +10,10 @@ import shutil
 import socket
 import subprocess
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from time import sleep
-from typing import Any, Generator
+
+from test import TOP_SRC_DIR
 
 LDAP_SERVER_CONFIGURATION_FILE = Path('test', 'resource', 'slapd.conf')
 DEFAULT_ENTRIES = ["""dn: dc=example,dc=com
@@ -72,155 +71,6 @@ uniqueMember: uid=jdoe,ou=People,dc=example,dc=com
 """, ]
 
 
-class PrepareChildProcessEnv:
-    """
-    Class responsible to get environment variables from the main thread through the shared file and set them for the process
-    """
-
-    def __init__(self, root_dir, temp_dir: Path, modes: list[str], env_file: Path, byte_limit: int, worker_id):
-        self.id = int(worker_id[2:]) + 1
-        self.temp_dir = temp_dir
-        self.modes = modes
-        self.root_dir = root_dir
-        self.byte_limit = byte_limit
-        self.env_file = env_file
-        self.finalize = None
-
-    def prepare(self) -> None:
-        """
-        Setup LDAP proxy and set environment variables
-        """
-        ldap_port = 5000 + (self.id * 3) % 55000
-
-        timeout = 10
-        sleep_for = 0.01
-        start_time = time.time()
-        while True:
-            if os.path.exists(self.env_file):
-                (self.finalize, _, test_env) = setup(self.root_dir, ldap_port, self.temp_dir / 'ldap_instances',
-                                                     self.byte_limit)
-
-                for key, value in test_env.items():
-                    os.environ[key] = value
-                break
-
-            if time.time() - start_time > timeout:
-                raise TimeoutError(f"Timeout waiting for file {self.env_file}")
-            # Sleep needed to wait when the controller will create a file with environment variables.
-            # Without sleep checking of the file existence will be too fast,
-            # so it will finish before the file is created
-            time.sleep(sleep_for)
-            sleep_for *= 2
-
-
-    def cleanup(self) -> None:
-        """
-        Stop LDAP
-        """
-        if self.finalize:
-            self.finalize()
-
-    def __enter__(self):
-        try:
-            self.prepare()
-        except Exception:
-            self.cleanup()
-            raise
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup()
-
-
-class PrepareMainProcessEnv:
-    """
-    A class responsible for starting additional services needed by tests.
-
-    It starts up a Minio server and an S3 mock server.
-    The environment settings are saved to a file for later consumption by child processes.
-    """
-
-    def __init__(self, root_dir, temp_dir: Path, modes: list[str], env_file: Path, byte_limit: int):
-        self.temp_dir = temp_dir
-        self.modes = modes
-        self.root_dir = root_dir
-        pytest_dirs = [self.temp_dir / mode / 'pytest' for mode in modes]
-        for directory in [self.temp_dir, *pytest_dirs]:
-            if not directory.exists():
-                os.makedirs(directory, exist_ok=True)
-        self.env_file = env_file
-        self.tp_server = subprocess.Popen('toxiproxy-server', stderr=subprocess.DEVNULL)
-
-        def can_connect_to_toxiproxy():
-            return can_connect(('127.0.0.1', 8474))
-
-        if not try_something_backoff(can_connect_to_toxiproxy):
-            raise Exception('Could not connect to toxiproxy')
-        self.ldap_port = 5000
-        self.byte_limit = byte_limit
-        self.finalize = None
-
-    def prepare(self) -> None:
-        """
-        Start the LDAP.
-        Create a file with environment variables for connecting to them.
-        """
-        (self.finalize, _, test_env) = setup(self.root_dir, self.ldap_port, self.temp_dir / 'ldap_instances',
-                                             self.byte_limit)
-
-        for key, value in test_env.items():
-            os.environ[key] = value
-
-        with open(self.env_file, 'w') as file:
-            for key, value in test_env.items():
-                file.write(f"{key}={value}\n")
-
-    def cleanup(self) -> None:
-        """
-        Stop LDAP.
-        Remove the file with environment variables to not mess for consecutive runs.
-        """
-        if os.path.exists(self.env_file):
-            self.env_file.unlink()
-        if self.finalize:
-            self.finalize()
-        if self.tp_server is not None:
-            self.tp_server.terminate()
-
-    def __enter__(self):
-        try:
-            self.prepare()
-        except Exception:
-            self.cleanup()
-            raise
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup()
-
-
-@contextmanager
-def get_env_manager(root_dir: Path, temp_dir: Path, worker_id: str, modes: list[str],
-                    byte_limit: int) -> Generator[None, Any, None]:
-    """
-    xdist helps to execute test in parallel.
-    For that purpose it creates one main controller and workers.
-    Pytest itself doesn't know if it's a worker or controller, so it will execute all fixtures and methods.
-    Tests need S3 mock server and minio to start only once for the whole run, since they can share the one instance and
-    share the environment variables with workers.
-
-    So the part of starting the servers executes on non-workers' machines.
-    That means when xdist isn't used, servers start as intended in the main process.
-    Tests on workers should know the endpoints of the servers, so the controller prepares this information.
-    According classes responsible for configuration controller and workers.
-    """
-    env_file = Path(f"{temp_dir}/test_env").absolute()
-    if worker_id != 'master':
-        with PrepareChildProcessEnv(root_dir, temp_dir, modes, env_file, byte_limit, worker_id):
-            yield
-    else:
-        with PrepareMainProcessEnv(root_dir, temp_dir, modes, env_file, byte_limit):
-            yield
-
-
 def can_connect(address, family=socket.AF_INET):
     s = socket.socket(family)
     try:
@@ -253,7 +103,7 @@ def make_saslauthd_conf(port, instance_path):
     return saslauthd_conf_path
 
 
-def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
+def setup(port: int, instance_root: Path, byte_limit: int):
     instance_path = instance_root / str(port)
     slapd_pid_file = instance_path / 'slapd.pid'
     saslauthd_socket_path = TemporaryDirectory()
@@ -261,7 +111,7 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
     # This will always fail because it lacks the permissions to read the default slapd data
     # folder but it does create the instance folder so we don't want to fail here.
     try:
-        subprocess.check_output(['slaptest', '-f', project_root / LDAP_SERVER_CONFIGURATION_FILE, '-F', instance_path],
+        subprocess.check_output(['slaptest', '-f', TOP_SRC_DIR / LDAP_SERVER_CONFIGURATION_FILE, '-F', instance_path],
                                 stderr=subprocess.DEVNULL)
     except:
         pass
@@ -294,6 +144,8 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
     slapd_proc = subprocess.Popen(['prlimit', '-n1024', 'slapd', '-F', instance_path, '-h', SLAPD_URLS, '-d', '0'])
     saslauthd_conf_path = make_saslauthd_conf(port, instance_path)
     test_env = {"SEASTAR_LDAP_PORT": str(port), "SASLAUTHD_MUX_PATH": os.path.join(saslauthd_socket_path.name, "mux")}
+    for key, value in test_env.items():
+        os.environ[key] = value
 
     saslauthd_proc = subprocess.Popen(
         ['saslauthd', '-d', '-n', '1', '-a', 'ldap', '-O', saslauthd_conf_path, '-m', saslauthd_socket_path.name],
@@ -315,4 +167,4 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
     except:
         finalize()
         raise
-    return finalize, '--byte-limit={}'.format(byte_limit), test_env
+    return finalize

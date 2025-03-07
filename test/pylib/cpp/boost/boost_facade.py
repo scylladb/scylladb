@@ -25,18 +25,31 @@
 #
 from __future__ import annotations
 
+import asyncio
+import collections
 import io
+import logging
 import os
 import subprocess
+import time
 from collections.abc import Sequence
+from functools import cache
 from pathlib import Path
 from xml.etree import ElementTree
+from xml.etree.ElementTree import ParseError
 
-from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
+import allure
+
+from test import TOP_SRC_DIR, BUILD_DIR
+from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
+from test.pylib.cpp.util import make_test_object
+from test.pylib.resource_gather import get_resource_gather
 
 TIMEOUT_DEBUG = 60 * 5 # seconds
 TIMEOUT = 60 * 2 # seconds
-COMBINED_TESTS = Path('build', 'dev', 'test', 'boost', 'combined_tests')
+COMBINED_TESTS = Path('test/boost/combined_tests')
+logger = logging.getLogger(__name__)
+
 
 class BoostTestFacade(CppTestFacade):
     """
@@ -85,7 +98,11 @@ class BoostTestFacade(CppTestFacade):
         mode: str,
         file_name: Path,
         test_args:Sequence[str] = (),
+        env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
+        test = make_test_object(test_name, file_name.parent.name, mode, original_name)
+        resource_gather = get_resource_gather(self.gather_metrics, test=test, tmpdir=str(self.temp_dir))
+        resource_gather.make_cgroup()
         def read_file(name: Path) -> str:
             try:
                 with io.open(name) as f:
@@ -94,13 +111,13 @@ class BoostTestFacade(CppTestFacade):
                 return ''
 
         timeout = TIMEOUT_DEBUG if mode=='debug' else TIMEOUT
-        root_log_dir = self.temp_dir / mode / 'pytest'
+        root_log_dir = self.temp_dir / mode
         log_xml = root_log_dir / f"{test_name}.log"
         stdout_file_path = root_log_dir/ f"{test_name}_stdout.log"
-        stderr_file_path = root_log_dir / f"{test_name}_stderr.log"
         report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
                  '--output_format=XML',
+                 '--report_level=no',
                  f"--report_sink={report_xml}",
                  f"--log_sink={log_xml}",
                  '--catch_system_errors=no',
@@ -114,25 +131,33 @@ class BoostTestFacade(CppTestFacade):
         # Tests are written in the way that everything after '--' passes to the test itself rather than to the test framework
         args.append('--')
         args.extend(test_args)
-        os.chdir(self.temp_dir.parent)
-        p, stderr, stdout = run_process(args, timeout)
+        os.chdir(TOP_SRC_DIR)
+
+        p,out = resource_gather.run_process(args, timeout, env)
 
         with open(stdout_file_path, 'w') as fd:
-            fd.write(stdout)
-        with open(stderr_file_path, 'w') as fd:
-            fd.write(stderr)
+            fd.write(out)
         log = read_file(log_xml)
         report = read_file(report_xml)
 
-        results = self._parse_log(log=log)
+        metrics = resource_gather.get_test_metrics()
+        test_passed = p.returncode == 0
+        resource_gather.write_metrics_to_db(metrics, success=test_passed)
+        resource_gather.remove_cgroup()
+
+        try:
+            results = self._parse_log(log=log)
+        except ParseError:
+            logger.warning('Error parsing the log_sink output. Can be empty or invalid')
+            results = None
 
         if p.returncode != 0:
+            allure.attach(out, name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
                 'for test {test_id} failed (return_code={return_code}):\n'
                 'output file:{stdout}\n'
-                'std error file:{stderr}\n'
                 'log:{log}\n'
                 'report:{report}\n'
                 'command to repeat:{command}'
@@ -145,19 +170,21 @@ class BoostTestFacade(CppTestFacade):
                     executable=executable,
                     test_id=test_name,
                     stdout=stdout_file_path.absolute(),
-                    stderr=stderr_file_path.absolute(),
                     log=log,
                     report=report,
                     command=' '.join(p.args),
                     return_code=p.returncode,
                 ),
             )
-            return [failure], stdout
+            return [failure], out
+
+        report_xml.unlink(missing_ok=True)
+        log_xml.unlink(missing_ok=True)
 
         if results:
-            return results, stdout
+            return results, out
 
-        return None, stdout
+        return None, out
 
     def _parse_log(self, log: str) -> list[CppTestFailure]:
         """
@@ -178,9 +205,35 @@ class BoostTestFacade(CppTestFacade):
         result = []
         for elem in parsed_elements:
             last_checkpoint = elem.find('LastCheckpoint')
-            if last_checkpoint:
+            if last_checkpoint is not None:
                 elem = last_checkpoint
             file_name = elem.attrib['file']
             line_num = int(elem.attrib['line'])
             result.append(CppTestFailure(file_name, line_num, elem.text or ''))
         return result
+
+
+@cache
+def get_combined_tests(session):
+    suites = collections.defaultdict()
+    modes = session.config.getoption('modes')
+    if 'dev' in modes:
+        executable = BUILD_DIR / 'dev' / COMBINED_TESTS
+    else:
+        executable = BUILD_DIR / modes[0] / COMBINED_TESTS
+    args = [executable, '--list_content']
+
+    output = subprocess.check_output(
+        args,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+    )
+    current_suite = ''
+    for line in output.splitlines():
+        if not line.startswith('    '):
+            current_suite = line.strip().rstrip('*')
+            suites[current_suite] = []
+        else:
+            case_name = line.strip().rstrip('*')
+            suites[current_suite].append(case_name)
+    return suites
