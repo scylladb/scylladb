@@ -160,6 +160,12 @@ that has tablets enabled:
 To enable MV and SI for tablet keyspaces, use the `--experimental-features=views-with-tablets`
 configuration option.  See :ref:`Views with tablets <admin-views-with-tablets>` for details.
 
+.. warning::
+
+    If a keyspace has tablets enabled, it must remain :doc:`RF-rack-valid </reference/glossary>`
+    throughout its lifetime. Failing to keep that invariant satisfied may result in data inconsistencies,
+    performance problems, or other issues.
+
 Resharding in keyspaces with tablets enabled has the following limitations:
 
 * ScyllaDB does not support reducing the number of shards after node restart.
