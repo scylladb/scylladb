@@ -280,15 +280,39 @@ Once the patch set is ready to be reviewed, push the branch to the public remote
 
 ### Development environment and source code navigation
 
-Scylla includes a [CMake](https://cmake.org/) file, `CMakeLists.txt`, for use only with development environments (not for building) so that they can properly analyze the source code.
+Scylla includes a [CMake](https://cmake.org/) file, `CMakeLists.txt` that can be used with development environments so
+that they can properly analyze the source code. However, building with CMake is not yet officially supported.
 
-[CLion](https://www.jetbrains.com/clion/) is a commercial IDE offers reasonably good source code navigation and advice for code hygiene, though its C++ parser sometimes makes errors and flags false issues.
+Good IDEs that have support for CMake build toolchain are [CLion](https://www.jetbrains.com/clion/),
+[KDevelop](https://www.kdevelop.org/) and [QtCreator](https://wiki.qt.io/Qt_Creator).
 
-Other good options that directly parse CMake files are [KDevelop](https://www.kdevelop.org/) and [QtCreator](https://wiki.qt.io/Qt_Creator).
+[Eclipse](https://eclipse.org/cdt/) is another open-source option. It doesn't natively work with CMake projects and its
+C++ parser has many issues.
 
-To use the `CMakeLists.txt` file with these programs, define the `FOR_IDE` CMake variable or shell environmental variable.
+#### CLion
 
-[Eclipse](https://eclipse.org/cdt/) is another open-source option. It doesn't natively work with CMake projects, and its C++ parser has many similar issues as CLion.
+[CLion](https://www.jetbrains.com/clion/) is a commercial IDE offers reasonably good source code navigation and advice
+for code hygiene, though its C++ parser sometimes makes errors and flags false issues. In order to enable proper code
+analysis in CLion, the following steps are needed:
+
+1. Get the ScyllaDB source code by following the [Getting the source code](#getting-the-source-code).
+2. Follow the steps in [Dependencies](#dependencies) in order to install the required tools natively into your system.
+   **Don't** follow the *frozen toolchain* part described there, since CMake checks for the build dependencies installed
+   in the system, not in the container image provided by the toolchain.
+3. In CLion, select `File`→`Open` and select the main ScyllaDB directory in order to open the CMake project there. The
+   project should open and fail to process the `CMakeLists.txt`. That's expected.
+4. In CLion, open `File`→`Settings`.
+5. Find and click on `Toolchains` (type *toolchains* into search box).
+6. Select the toolchain you will use, for instance the `Default` one.
+7. Type in the following system-installed tools to be used:
+    - `CMake`: *cmake*
+    - `Build Tool`: *ninja*
+    - `C Compiler`: *clang*
+    - `C++ Compiler`: *clang*
+8. On the `CMake` panel/tab, click on `Reload CMake Project`
+
+After that, CLion should successfully initialize the CMake project (marked by `[Finished]` in the console) and the
+source code editor should provide code analysis support normally from now on.
 
 ### Distributed compilation: `distcc` and `ccache`
 
