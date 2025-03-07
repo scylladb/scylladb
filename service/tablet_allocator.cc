@@ -895,7 +895,7 @@ public:
         co_return all_colocated;
     }
 
-    future<migration_plan> make_merge_colocation_plan(node_load_map& nodes) {
+    future<migration_plan> make_merge_colocation_plan(const dc_name& dc, node_load_map& nodes) {
         migration_plan plan;
         table_resize_plan resize_plan;
 
@@ -922,7 +922,20 @@ public:
                 return bool(t.transition);
             };
 
-            auto first_non_matching_replicas = [] (tablet_replica_set r1, tablet_replica_set r2) -> std::optional<std::pair<tablet_replica, tablet_replica>> {
+            // Enable rack-aware co-location when RF >= #racks, since in this configuration, the amount
+            // of cross-rack migrations can be reduced by ordering the replica set of sibling tablets by
+            // rack, which is crucial for not lowering rack availability, for any given tablet.
+            // When RF < racks, replica set of sibling tablets can be laid out in such a way that the
+            // ordering by rack will actually increase the number cross-rack migrations.
+            auto rack_aware_enabled = std::invoke([&] () {
+                auto& topology = _tm->get_topology();
+                auto [_, rs] = get_schema_and_rs(table);
+                auto dc_rf = rs->get_replication_factor(dc);
+                const auto& racks = topology.get_datacenter_rack_nodes().at(dc);
+                return racks.size() > 1 && dc_rf >= racks.size();
+            });
+
+            auto first_non_matching_replicas = [&] (tablet_replica_set r1, tablet_replica_set r2) -> std::optional<std::pair<tablet_replica, tablet_replica>> {
                 assert(r1.size() == r2.size());
                 // Subtract intersecting (co-located) elements from the replicas set of sibling tablets.
                 // Think for example that tablet 0 and 1 have replicas [n2, n4] and [n1, n2] respectively.
@@ -948,6 +961,26 @@ public:
                     if (r1_it != r1_map.end()) {
                         return std::make_pair(r1_it->second, r2[i]);
                     }
+                }
+                // After subtracting co-located replicas and exhausting intra-node migrations, we might
+                // decide to do rack-aware co-locations to minimize the amount of cross-rack migrations
+                // in order to not reduce availability at rack level.
+                // For example, replica sets of tablets r1 and r2 might be as follow (RF=racks=3):
+                // [r1: (rack1,rack1,rack2)], [r2: (rack1,rack3,rack1)]
+                // Without rack awareness, 2nd replica of r2 in rack3 could be migrated to co-habit 2nd
+                // replica of r1 in rack1, meaning r2 will lose availability since all its replicas will
+                // be on rack 1.
+                // With rack awareness, r1 and r2 replica sets are ordered by rack, while preserving the
+                // order by host id in each rack, to handle RF=N scenario. They'll look like this:
+                // [r1: (rack1,rack1,rack2)], [r2: (rack1,rack1,rack3)]
+                // In the best scenario, there's equal number of replicas in each rack, and co-location
+                // will not have to go across racks even a single time.
+                if (rack_aware_enabled) {
+                    auto cmp = [&topo = _tm->get_topology()] (const tablet_replica& r1, const tablet_replica& r2) {
+                        return topo.get_rack(r1.host) < topo.get_rack(r2.host);
+                    };
+                    std::ranges::stable_sort(r1, cmp);
+                    std::ranges::stable_sort(r2, cmp);
                 }
                 // Since sets had intersection subtracted, the remaining replicas are certainly not co-located.
                 if (r1.size() > 0) {
@@ -1015,6 +1048,13 @@ public:
                 // Emits migration for replica of t2 to co-habit same shard as replica of t1.
                 auto src = ret->second;
                 auto dst = ret->first;
+
+                utils::get_local_injector().inject("disallow_cross_rack_colocation", [&] {
+                    auto& topo = _tm->get_topology();
+                    if (topo.get_rack(src.host) != topo.get_rack(dst.host)) {
+                        on_fatal_internal_error(lblogger, "Cross rack colocation is not allowed, killing the node");
+                    }
+                });
 
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
                 auto skip = check_constraints(src, dst);
@@ -2930,7 +2970,7 @@ public:
         }
 
         if (_tm->tablets().balancing_enabled() && plan.empty()) {
-            auto dc_merge_plan = co_await make_merge_colocation_plan(nodes);
+            auto dc_merge_plan = co_await make_merge_colocation_plan(dc, nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
             plan.merge(std::move(dc_merge_plan));
