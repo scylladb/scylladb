@@ -1042,6 +1042,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Next migration of the same tablet is guaranteed to use a different instance.
     struct tablet_migration_state {
         background_action_holder streaming;
+        background_action_holder rebuild_repair;
         background_action_holder cleanup;
         background_action_holder repair;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
@@ -1250,7 +1251,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             };
 
             auto check_excluded_replicas = [&] {
-                    auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo);
+                    auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(gid.tablet), trinfo, _db.features());
                     for (auto r : tsi.read_from) {
                         if (is_excluded(raft::server_id(r.host.uuid()))) {
                             rtlogger.debug("Aborting streaming of {} because read-from {} is marked as ignored", gid, r);
@@ -1330,6 +1331,49 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         return ser::storage_service_rpc_verbs::send_tablet_stream_data(&_messaging,
                                    dst, _as, raft::server_id(dst.uuid()), gid);
                     })) {
+                        if (trinfo.transition == locator::tablet_transition_kind::rebuild && _db.features().repair_based_tablet_rebuild) {
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::rebuild_repair);
+                            updates.emplace_back(get_mutation_builder()
+                                .set_stage(last_token, locator::tablet_transition_stage::rebuild_repair)
+                                .build());
+                        } else {
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
+                            updates.emplace_back(get_mutation_builder()
+                                .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
+                                .del_session(last_token)
+                                .build());
+                        }
+                    }
+                }
+                    break;
+                case locator::tablet_transition_stage::rebuild_repair: {
+                    if (action_failed(tablet_state.rebuild_repair)) {
+                        bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
+                        if (fail || check_excluded_replicas()) {
+                            if (do_barrier()) {
+                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                                updates.emplace_back(get_mutation_builder()
+                                        .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                        .del_session(last_token)
+                                        .build());
+                            }
+                            break;
+                        }
+                    }
+
+                    if (advance_in_background(gid, tablet_state.rebuild_repair, "rebuild_repair", [&] {
+                        utils::get_local_injector().inject("rebuild_repair_stage_fail",
+                            [] { throw std::runtime_error("rebuild_repair failed due to error injection"); });
+
+                        if (!trinfo.pending_replica) {
+                            rtlogger.info("Skipped tablet rebuild repair of {} as no pending replica found", gid);
+                            return make_ready_future<>();
+                        }
+                        auto dst = trinfo.pending_replica->host;
+                        rtlogger.info("Initiating repair phase of tablet rebuild host={} tablet={}", dst, gid);
+                        return ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                dst, _as, raft::server_id(dst.uuid()), gid).discard_result();
+                    })) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_new);
                         updates.emplace_back(get_mutation_builder()
                             .set_stage(last_token, locator::tablet_transition_stage::write_both_read_new)
@@ -1337,7 +1381,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             .build());
                     }
                 }
-                    break;
+                        break;
                 case locator::tablet_transition_stage::write_both_read_new: {
                     utils::get_local_injector().inject("crash-in-tablet-write-both-read-new", [] {
                         rtlogger.info("crash-in-tablet-write-both-read-new hit, killing the node");

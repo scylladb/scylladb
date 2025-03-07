@@ -49,6 +49,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::both;
         case tablet_transition_stage::streaming:
             return write_replica_set_selector::both;
+        case tablet_transition_stage::rebuild_repair:
+            return write_replica_set_selector::both;
         case tablet_transition_stage::repair:
             return write_replica_set_selector::previous;
         case tablet_transition_stage::end_repair:
@@ -77,6 +79,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::write_both_read_old:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::streaming:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::rebuild_repair:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::repair:
             return read_replica_set_selector::previous;
@@ -112,11 +116,11 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
     , reads(get_selector_for_reads(stage))
 { }
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_migration_info& trinfo) {
-    return get_migration_streaming_info(topo, tinfo, migration_to_transition_info(tinfo, trinfo));
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_migration_info& trinfo, const gms::feature_service& features) {
+    return get_migration_streaming_info(topo, tinfo, migration_to_transition_info(tinfo, trinfo), features);
 }
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology& topo, const tablet_info& tinfo, const tablet_transition_info& trinfo, const gms::feature_service& features) {
     tablet_migration_streaming_info result;
     switch (trinfo.transition) {
         case tablet_transition_kind::intranode_migration:
@@ -128,6 +132,18 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
         case tablet_transition_kind::rebuild:
             if (!trinfo.pending_replica.has_value()) {
                 return result; // No nodes to stream to -> no nodes to stream from
+            }
+
+            if (features.repair_based_tablet_rebuild) {
+                auto s = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end());
+                erase_if(s, [&] (const tablet_replica& r) {
+                    auto* n = topo.find_node(r.host);
+                    return !n || n->is_excluded();
+                });
+                result.stream_weight = locator::tablet_migration_stream_weight_repair;
+                result.read_from = s;
+                result.written_to = std::move(s);
+                return result;
             }
 
             result.written_to.insert(*trinfo.pending_replica);
@@ -510,6 +526,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::write_both_read_old, "write_both_read_old"},
     {tablet_transition_stage::write_both_read_new, "write_both_read_new"},
     {tablet_transition_stage::streaming, "streaming"},
+    {tablet_transition_stage::rebuild_repair, "rebuild_repair"},
     {tablet_transition_stage::repair, "repair"},
     {tablet_transition_stage::end_repair, "end_repair"},
     {tablet_transition_stage::use_new, "use_new"},
