@@ -2944,6 +2944,45 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
     }).get();
 }
 
+// Verify merge can proceed with multiple racks and RF=#racks
+//
+// Given replica sets (not in rack order):
+// rack1 { n1, n2 }
+// rack2 { n3, n4 }
+//
+// t0: { n1, n3 }
+// t1: { n4, n2 }
+//
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_racks_and_rf_equals_racks) {
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 2;
+        const int n_racks = rf;
+        const int n_hosts = 4; // 2 nodes in each rack.
+        const unsigned shard_count = 1;
+        const unsigned initial_tablets = 2;
+
+        auto set_tablets = [] (token_metadata&, tablet_map& tmap, const rack_vector& racks, const hosts_by_rack_map& hosts_by_rack) {
+            auto& first_rack_hosts = hosts_by_rack.at(racks[0].rack);
+            auto& second_rack_hosts = hosts_by_rack.at(racks[1].rack);
+
+            tmap.set_tablet(tablet_id(0), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {first_rack_hosts[0], shard_id(0)},
+                    tablet_replica {second_rack_hosts[0], shard_id(0)},
+                }
+            });
+            tmap.set_tablet(tablet_id(1), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {second_rack_hosts[1], shard_id(0)},
+                    tablet_replica {first_rack_hosts[1], shard_id(0)},
+                }
+            });
+        };
+
+        do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) {
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 3;
