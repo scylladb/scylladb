@@ -237,6 +237,15 @@ future<> resource_manager::stop() noexcept {
     });
 }
 
+future<> resource_manager::drain_hints_for_left_nodes() {
+    for (manager& m : _shard_managers) {
+        // It's safe to discard the future here. It's awaited in `manager::stop()`.
+        (void) m.drain_left_nodes();
+    }
+
+    co_return;
+}
+
 future<> resource_manager::register_manager(manager& m) {
     return with_semaphore(_operation_lock, 1, [this, &m] () {
         return with_semaphore(_space_watchdog.update_lock(), 1, [this, &m] {

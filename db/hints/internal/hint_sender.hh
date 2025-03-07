@@ -66,12 +66,14 @@ class hint_sender {
         stopping,               // stop() was called
         ep_state_left_the_ring, // destination Node is not a part of the ring anymore - usually means that it has been decommissioned
         draining,               // try to send everything out and ignore errors
+        canceled_draining,      // draining was started, but it got canceled
     };
 
     using state_set = enum_set<super_enum<state,
         state::stopping,
         state::ep_state_left_the_ring,
-        state::draining>>;
+        state::draining,
+        state::canceled_draining>>;
 
     struct send_one_file_ctx {
         send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
@@ -139,6 +141,12 @@ public:
     /// \brief Stop the hint_sender - make sure all background sending is complete.
     /// \param should_drain if is drain::yes - drain all pending hints
     future<> stop(drain should_drain) noexcept;
+
+    void cancel_draining();
+
+    bool canceled_draining() const noexcept {
+        return _state.contains(state::canceled_draining);
+    }
 
     /// \brief Add a new segment ready for sending.
     void add_segment(sstring seg_name);
