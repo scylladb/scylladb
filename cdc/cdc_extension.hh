@@ -23,6 +23,10 @@ class cdc_extension : public schema_extension {
 public:
     static constexpr auto NAME = "cdc";
 
+    // cdc_extension was written before schema_extension was deprecated, so support it
+    // without warnings
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     cdc_extension() = default;
     cdc_extension(const options& opts) : _cdc_options(opts) {}
     explicit cdc_extension(std::map<sstring, sstring> tags) : _cdc_options(std::move(tags)) {}
@@ -30,6 +34,7 @@ public:
     explicit cdc_extension(const sstring& s) {
         throw std::logic_error("Cannot create cdc info from string");
     }
+#pragma clang diagnostic pop
     bytes serialize() const override {
         return ser::serialize_to_buffer<bytes>(_cdc_options.to_map());
     }
