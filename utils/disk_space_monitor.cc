@@ -23,10 +23,20 @@ namespace utils {
 seastar::logger dsmlog("disk_space_monitor");
 
 disk_space_monitor::disk_space_monitor(abort_source& as, std::filesystem::path data_dir, config cfg)
-    : _as_sub(as.subscribe([this] () noexcept { _as.request_abort(); }))
+    : _as_sub(as.subscribe([this] () noexcept {
+        _as.request_abort();
+        _poll_cv.broadcast();
+    }))
     , _data_dir(std::move(data_dir))
     , _cfg(std::move(cfg))
-{}
+{
+    _space_source = [this] {
+        return engine().file_system_space(_data_dir.native());
+    };
+    _capacity_observer = make_lw_shared(_cfg.capacity_override.observe([this] (auto) {
+        trigger_poll();
+    }));
+}
 
 disk_space_monitor::~disk_space_monitor() {
     SCYLLA_ASSERT(_poller_fut.available());
@@ -39,6 +49,7 @@ future<> disk_space_monitor::start() {
 
 future<> disk_space_monitor::stop() noexcept {
     _as.request_abort();
+    _poll_cv.broadcast();
     co_await _signal_barrier.advance_and_await();
     co_await std::exchange(_poller_fut, make_ready_future());
 }
@@ -65,7 +76,10 @@ future<> disk_space_monitor::poll() {
             auto passed = clock_type::now() - now;
             auto interval = get_polling_interval();
             if (interval > passed) {
-                co_await sleep_abortable<clock_type>(interval - passed, _as);
+                try {
+                    co_await _poll_cv.wait(interval - passed);
+                } catch (const seastar::condition_variable_timed_out&) {
+                }
             }
         }
     } catch (const sleep_aborted&) {
@@ -75,8 +89,23 @@ future<> disk_space_monitor::poll() {
     }
 }
 
+void disk_space_monitor::trigger_poll() noexcept {
+    _poll_cv.broadcast();
+}
+
 future<std::filesystem::space_info> disk_space_monitor::get_filesystem_space() {
-    return engine().file_system_space(_data_dir.native());
+    auto space = co_await _space_source();
+    if (_cfg.capacity_override()) {
+        auto not_free = space.capacity - space.free;
+        auto not_available = space.capacity - space.available;
+        auto new_capacity = _cfg.capacity_override();
+        space = std::filesystem::space_info{
+            .capacity = new_capacity,
+            .free = new_capacity - std::min(not_free, new_capacity),
+            .available = new_capacity - std::min(not_available, new_capacity)
+        };
+    }
+    co_return space;
 }
 
 disk_space_monitor::clock_type::duration disk_space_monitor::get_polling_interval() const noexcept {

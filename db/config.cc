@@ -543,6 +543,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The directory where the schema commit log is stored. This is a special commitlog instance used for schema and system tables. For optimal write performance, it is recommended the commit log be on a separate disk partition (ideally, a separate physical device) from the data file directories.")
     , data_file_directories(this, "data_file_directories", "datadir", value_status::Used, { },
         "The directory location where table data (SSTables) is stored.")
+    , data_file_capacity(this, "data_file_capacity", liveness::LiveUpdate, value_status::Used, 0,
+        "Total capacity in bytes for storing data files. Used by tablet load balancer to compute storage utilization."
+        " If not set, will use file system's capacity.")
     , hints_directory(this, "hints_directory", value_status::Used, "",
         "The directory where hints files are stored if hinted handoff is enabled.")
     , view_hints_directory(this, "view_hints_directory", value_status::Used, "",
