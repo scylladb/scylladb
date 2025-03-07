@@ -43,21 +43,9 @@ class S3_Server:
         self.secret_key = secret_key
         self.region = region
         self.bucket_name = bucket_name
-        self.config_file = self._get_config_file()
-
-    def _get_config_file(self):
-        # if the test is started by test.py, minio_server.py should set this
-        # env variable for us, but if the test is started manually, there are
-        # chances that this env variable is not set, we would have to create it
-        # by ourselves, so the tests can consume it.
-        conffile = os.environ.get(MinioServer.ENV_CONFFILE)
-        if conffile is None:
-            conffile = os.path.join(self.tempdir, 'object-storage.yaml')
-            MinioServer.create_conf_file(self.address, self.port, self.acc_key, self.secret_key, self.region, conffile)
-        return pathlib.Path(conffile)
 
     def __repr__(self):
-        return f"[unknown] {self.address}:{self.port}/{self.bucket_name}@{self.config_file}"
+        return f"[unknown] {self.address}:{self.port}/{self.bucket_name}"
 
     async def start(self):
         pass
