@@ -27,6 +27,7 @@
 #include "utils/assert.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
+#include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"
 #include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
@@ -671,4 +672,52 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.access_key_id, "");
     BOOST_REQUIRE_EQUAL(creds.secret_access_key, "");
     BOOST_REQUIRE_EQUAL(creds.session_token, "");
+}
+
+BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
+    std::string bucket_name, object_name;
+    // Empty input
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("", bucket_name, object_name), false);
+    BOOST_REQUIRE(bucket_name.empty());
+    BOOST_REQUIRE(object_name.empty());
+    // Incorrect scheme
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("http://bucket/object", bucket_name, object_name), false);
+    BOOST_REQUIRE(bucket_name.empty());
+    BOOST_REQUIRE(object_name.empty());
+    // No scheme
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("/bucket/object", bucket_name, object_name), false);
+    BOOST_REQUIRE_EQUAL(bucket_name.empty(), true);
+    BOOST_REQUIRE_EQUAL(object_name.empty(), true);
+    // Scheme without slashes
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3:", bucket_name, object_name), false);
+    BOOST_REQUIRE_EQUAL(bucket_name.empty(), true);
+    BOOST_REQUIRE_EQUAL(object_name.empty(), true);
+    // Scheme with single slash
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3:/", bucket_name, object_name), true);
+    BOOST_REQUIRE_EQUAL(bucket_name.empty(), true);
+    BOOST_REQUIRE_EQUAL(object_name, "/");
+    // Without bucket
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3://", bucket_name, object_name), true);
+    BOOST_REQUIRE_EQUAL(bucket_name.empty(), true);
+    BOOST_REQUIRE_EQUAL(object_name, "/");
+    // Bucket only, no prefix/object
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3://bucket/", bucket_name, object_name), true);
+    BOOST_REQUIRE_EQUAL(bucket_name, "bucket");
+    BOOST_REQUIRE_EQUAL(object_name, "/");
+    // Same as above, but without trailing slash
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3://bucket", bucket_name, object_name), true);
+    BOOST_REQUIRE_EQUAL(bucket_name, "bucket");
+    BOOST_REQUIRE_EQUAL(object_name, "/");
+    // Bucket and prefix without object
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3://bucket/object", bucket_name, object_name), true);
+    BOOST_REQUIRE_EQUAL(bucket_name, "bucket");
+    BOOST_REQUIRE_EQUAL(object_name, "object");
+    // Bucket and object with object
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3://bucket/prefix1/prefix2/foo.bar", bucket_name, object_name), true);
+    BOOST_REQUIRE_EQUAL(bucket_name, "bucket");
+    BOOST_REQUIRE_EQUAL(object_name, "prefix1/prefix2/foo.bar");
+    // Bucket and object with object and extra slashes
+    BOOST_REQUIRE_EQUAL(s3::s3fqn_to_parts("s3://bucket///prefix1/prefix2//foo.bar", bucket_name, object_name), true);
+    BOOST_REQUIRE_EQUAL(bucket_name, "bucket");
+    BOOST_REQUIRE_EQUAL(object_name, "prefix1/prefix2/foo.bar");
 }
