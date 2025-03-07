@@ -9,6 +9,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.util import wait_for
 from test.topology.conftest import skip_mode
 
 import pytest
@@ -333,3 +334,58 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             await manager.api.flush_keyspace(server.ip_addr, "test")
             await manager.api.keyspace_compaction(server.ip_addr, "test")
         await check()
+
+
+@pytest.mark.parametrize("racks", [2, 3])
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks):
+    cmdline = ['--target-tablet-size-in-bytes', '30000',]
+    config = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
+
+    servers = []
+    rf = racks
+    for rack_id in range(0, racks):
+        rack = f'rack{rack_id+1}'
+        servers.extend(await manager.servers_add(3, config=config, cmdline=cmdline, property_file={'dc': 'mydc', 'rack': rack}))
+
+    cql = manager.get_cql()
+    ks = 'test'
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}};")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
+
+    await inject_error_on(manager, "forbid_cross_rack_migration_attempt", servers)
+
+    total_keys = 400
+    keys = range(total_keys)
+    insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+    for pk in keys:
+        value = random.randbytes(2000)
+        cql.execute(insert, [pk, value])
+
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+    async def finished_splitting():
+        # FIXME: fragile since it's expecting on-disk size will be enough to produce a few splits.
+        #   (raw_data=800k / target_size=30k) = ~26, lower power-of-two is 16. Compression was disabled.
+        #   Per-table hints (min_tablet_count) can be used to improve this.
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        return tablet_count >= 16 or None
+    # Give enough time for split to happen in debug mode
+    await wait_for(finished_splitting, time.time() + 120)
+
+    delete_keys = range(total_keys - 1)
+    await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
+    keys = range(total_keys - 1, total_keys)
+
+    old_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+    async def finished_merging():
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        return tablet_count < old_tablet_count or None
+    await wait_for(finished_merging, time.time() + 120)
