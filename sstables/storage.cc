@@ -570,7 +570,7 @@ sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type)
 
     return std::visit(overloaded_functor {
         [&] (const sstring& prefix) -> sstring {
-            return format("/{}/{}", _bucket, sst.filename(type, prefix));
+            return format("/{}/{}/{}", _bucket, prefix, sst.component_basename(type));
         },
         [&] (const table_id& owner) -> sstring {
             return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
