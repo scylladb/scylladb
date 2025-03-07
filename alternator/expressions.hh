@@ -91,5 +91,12 @@ rjson::value calculate_value(const parsed::value& v,
 rjson::value calculate_value(const parsed::set_rhs& rhs,
         const rjson::value* previous_item);
 
+constexpr const char* CONTEXT_MAIN_TABLE = "MAIN_TABLE";
+constexpr const char* CONTEXT_GSI = "GSI";
+constexpr const char* CONTEXT_LSI = "LSI";
+
+void validate_attr_name_length(const std::string& context, const size_t &attr_name_length, const bool &is_key,
+        const std::string &error_msg_prefix = {});
+
 
 } /* namespace alternator */

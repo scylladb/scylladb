@@ -165,7 +165,9 @@ static std::optional<std::string> resolve_path_component(const std::string& colu
                     fmt::format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
         }
         used_attribute_names.emplace(column_name);
-        return std::string(rjson::to_string_view(*value));
+        auto result = std::string(rjson::to_string_view(*value));
+        validate_attr_name_length(CONTEXT_MAIN_TABLE, result.size(), false, "ExpressionAttributeNames contains invalid value: ");
+        return result;
     }
     return std::nullopt;
 }
@@ -735,6 +737,29 @@ rjson::value calculate_value(const parsed::set_rhs& rhs,
     }
     // Can't happen
     return rjson::null_value();
+}
+
+void validate_attr_name_length(const std::string& context, const size_t &attr_name_length, const bool &is_key,
+            const std::string &error_msg_prefix) {
+    constexpr size_t DYNAMODB_KEY_ATTR_NAME_SIZE_MAX = 255;
+    constexpr size_t DYNAMODB_NONKEY_ATTR_NAME_SIZE_MAX = 65535;
+
+    const size_t max_length = is_key ? DYNAMODB_KEY_ATTR_NAME_SIZE_MAX : DYNAMODB_NONKEY_ATTR_NAME_SIZE_MAX;
+    if (attr_name_length > max_length) {
+        std::string error_msg;
+        if (!error_msg_prefix.empty()) {
+            // we're doing these possibly lengthy string comparisons only when there is a size-related error
+            if (context == CONTEXT_MAIN_TABLE) {
+                error_msg += error_msg_prefix;
+            } else if (context == CONTEXT_GSI) {
+                error_msg += error_msg_prefix + "in Global Secondary Index - ";
+            } else if (context == CONTEXT_LSI) {
+                error_msg += error_msg_prefix + "in Local Secondary Index - ";
+            }
+        }
+        error_msg += fmt::format("Attribute name is too large, must be less than {} bytes", std::to_string(max_length + 1));
+        throw api_error::validation(error_msg);
+    }
 }
 
 } // namespace alternator
