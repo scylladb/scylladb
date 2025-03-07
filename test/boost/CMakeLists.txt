@@ -310,6 +310,7 @@ add_scylla_test(combined_tests
     filtering_test.cc
     group0_cmd_merge_test.cc
     group0_test.cc
+    group0_voter_calculator_test.cc
     index_with_paging_test.cc
     json_cql_query_test.cc
     large_paging_state_test.cc

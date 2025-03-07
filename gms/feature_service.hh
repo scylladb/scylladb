@@ -136,6 +136,7 @@ public:
     gms::feature zero_token_nodes { *this, "ZERO_TOKEN_NODES"sv };
     gms::feature view_build_status_on_group0 { *this, "VIEW_BUILD_STATUS_ON_GROUP0"sv };
     gms::feature views_with_tablets { *this, "VIEWS_WITH_TABLETS"sv };
+    gms::feature group0_limited_voters { *this, "GROUP0_LIMITED_VOTERS"sv };
 
     // Whether to allow fragmented commitlog entries. While this is a node-local feature as such, hide
     // behind a feature to ensure an upgrading cluster appears to be at least functional before using,
