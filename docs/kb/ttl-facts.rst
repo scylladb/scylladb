@@ -63,15 +63,15 @@ Facts About Expiring Data
    .. code-block:: none
 
       gc grace seconds: 0
-      sstable A: token range: [10, 10], timestamp range: [1, 1], ttl: 2, max deletion time: 3 (1+2)
-      sstable B: token range: [10, 10], timestamp range: [1, 5], ttl: 2, max deletion time: 7 (5+2)
-      now: 6
+      sstable A: token range: [10, 10], timestamp range: [1:00, 1:00], ttl: 2, max deletion time: 3:00 (1+2)
+      sstable B: token range: [10, 10], timestamp range: [1:00, 5:00], ttl: 2, max deletion time: 7:00 (5+2)
+      now: 6:00
 
    From this you can see that:
 
-   * SSTable A is fully expired because its max deletion time (3) is lower than now (6).
-   * SSTable B is NOT fully expired because its max deletion time (7) is greater than now (6).
-   * SSTable A will be added as a candidate for fully expired SSTable and will be purged.
+   * SSTable A is fully expired because its max deletion time (3:00) is lower than now (6:00).
+   * SSTable B is NOT fully expired because its max deletion time (7:00) is greater than now (6:00).
+   * SSTable A will be added as a candidate for fully expired SSTable to be purged.
 
    During Compaction:
 
