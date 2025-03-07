@@ -12,8 +12,8 @@
 #include <rapidxml/rapidxml.hpp>
 #endif
 
+#include "aws_error.hh"
 #include <memory>
-#include "utils/s3/aws_error.hh"
 
 namespace aws {
 
@@ -126,6 +126,22 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
     return ret_val;
 }
 
+aws_error aws_error::from_system_error(const std::system_error& system_error) {
+    switch (static_cast<std::errc>(system_error.code().value())) {
+    case std::errc::interrupted:
+    case std::errc::resource_unavailable_try_again:
+    case std::errc::timed_out:
+    case std::errc::connection_aborted:
+    case std::errc::connection_reset:
+    case std::errc::broken_pipe:
+    case std::errc::network_unreachable:
+    case std::errc::host_unreachable:
+        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::yes};
+    default:
+        return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::no};
+    }
+}
+
 const aws_errors& aws_error::get_errors() {
     static const std::unordered_map<std::string_view, const aws_error> aws_error_map{
         {"IncompleteSignature", aws_error(aws_error_type::INCOMPLETE_SIGNATURE, retryable::no)},
@@ -204,7 +220,15 @@ const aws_errors& aws_error::get_errors() {
         {"NoSuchKey", aws_error(aws_error_type::NO_SUCH_KEY, retryable::no)},
         {"ObjectNotInActiveTierError", aws_error(aws_error_type::OBJECT_NOT_IN_ACTIVE_TIER, retryable::no)},
         {"BucketAlreadyExists", aws_error(aws_error_type::BUCKET_ALREADY_EXISTS, retryable::no)},
-        {"InvalidObjectState", aws_error(aws_error_type::INVALID_OBJECT_STATE, retryable::no)}};
+        {"InvalidObjectState", aws_error(aws_error_type::INVALID_OBJECT_STATE, retryable::no)},
+        {"ExpiredTokenException", aws_error(aws_error_type::EXPIRED_TOKEN, retryable::no)},
+        {"InvalidAuthorizationMessageException", aws_error(aws_error_type::INVALID_AUTHORIZATION_MESSAGE, retryable::no)},
+        {"InvalidIdentityToken", aws_error(aws_error_type::INVALID_IDENTITY_TOKEN, retryable::no)},
+        {"IDPCommunicationError", aws_error(aws_error_type::I_D_P_COMMUNICATION_ERROR, retryable::no)},
+        {"IDPRejectedClaim", aws_error(aws_error_type::I_D_P_REJECTED_CLAIM, retryable::no)},
+        {"MalformedPolicyDocument", aws_error(aws_error_type::MALFORMED_POLICY_DOCUMENT, retryable::no)},
+        {"PackedPolicyTooLarge", aws_error(aws_error_type::PACKED_POLICY_TOO_LARGE, retryable::no)},
+        {"RegionDisabledException", aws_error(aws_error_type::REGION_DISABLED, retryable::no)}};
     return aws_error_map;
 }
 

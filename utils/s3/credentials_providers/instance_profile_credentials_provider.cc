@@ -34,7 +34,7 @@ future<> instance_profile_credentials_provider::reload() {
 
 future<> instance_profile_credentials_provider::update_credentials() {
     auto factory = std::make_unique<utils::http::dns_connection_factory>(ec2_metadata_ip, port, false, ec2_md_logger);
-    http::experimental::client http_client(std::move(factory), 1, http::experimental::client::retry_requests::yes);
+    retryable_http_client http_client(std::move(factory), 1, retryable_http_client::ignore_exception, http::experimental::client::retry_requests::yes, retry_strategy);
 
     auto req = http::request::make("PUT", ec2_metadata_ip, "/latest/api/token");
     req._headers["x-aws-ec2-metadata-token-ttl-seconds"] = format("{}", session_duration);
@@ -69,7 +69,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
             creds = parse_creds(creds_response);
         },
         http::reply::status_type::ok);
-    ec2_md_logger.info("Retrieved temporary credentials for IAM role: {}", role);
+    co_await http_client.close();
 }
 
 s3::aws_credentials instance_profile_credentials_provider::parse_creds(const sstring& creds_response) {
