@@ -170,6 +170,7 @@ private:
     cql_server_config _config;
     size_t _max_request_size;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
+    lw_shared_ptr<named_semaphore> _conn_cpu_limit_semaphore;
     utils::updateable_value<bool> _cql_duplicate_bind_variable_names_refer_to_same_variable;
     semaphore& _memory_available;
     seastar::metrics::metric_groups _metrics;
@@ -245,7 +246,7 @@ private:
                 service_permit>;
         static thread_local execution_stage_type _process_request_stage;
     public:
-        connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr);
+        connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units);
         virtual ~connection();
         future<> process_request() override;
         void handle_error(future<>&& f) override;
@@ -337,7 +338,7 @@ private:
     friend class type_codec;
 
 private:
-    virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) override;
+    virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
     future<> advertise_new_connection(shared_ptr<generic_server::connection> conn) override;
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
