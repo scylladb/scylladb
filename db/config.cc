@@ -887,6 +887,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The default timeout for other, miscellaneous operations.\n"
         "\n"
         "Related information: About hinted handoff writes")
+    , external_speculative_retry_timeout_in_ms(this, "external_speculative_retry_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 20*1000,
+        "Additional timeout to wait for a driver-side speculative retry after a query is failed")
     /**
     * @Group Inter-node settings
     */

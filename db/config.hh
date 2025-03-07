@@ -286,6 +286,7 @@ public:
     named_value<uint32_t> truncate_request_timeout_in_ms;
     named_value<uint32_t> write_request_timeout_in_ms;
     named_value<uint32_t> request_timeout_in_ms;
+    named_value<uint32_t> external_speculative_retry_timeout_in_ms;
     named_value<bool> cross_node_timeout;
     named_value<uint32_t> internode_send_buff_size_in_bytes;
     named_value<uint32_t> internode_recv_buff_size_in_bytes;

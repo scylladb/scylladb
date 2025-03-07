@@ -4619,8 +4619,17 @@ private:
         }
         if (kind == error_kind::DISCONNECT && _block_for == _target_count_for_cl) {
             // if the error is because of a connection disconnect and there is no targets to speculate
-            // wait for timeout in hope that the client will issue speculative read
+            // wait for external_speculative_retry_timeout in hope that the client will issue speculative read
             // FIXME: resolver should have access to all replicas and try another one in this case
+            auto external_timeout = std::chrono::milliseconds(_proxy->get_db().local().get_config().external_speculative_retry_timeout_in_ms());
+            if (_timeout.armed() && (_timeout.get_timeout() > storage_proxy::clock_type::now() + external_timeout))
+            {
+                _timeout.cancel();
+                _timeout.set_callback([this](){
+                    fail_request(read_failure_exception(_schema->ks_name(), _schema->cf_name(), _cl, _cl_responses, _failed, _block_for, _data_result));
+                });
+                _timeout.arm(external_timeout);
+            }
             return;
         }
         if (_block_for + _failed > _target_count_for_cl) {
