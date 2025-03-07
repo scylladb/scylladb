@@ -8,7 +8,9 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "db/config.hh"
 #include "exceptions/exceptions.hh"
+#include "locator/network_topology_strategy.hh"
 #include "utils/assert.hh"
 #include <unordered_set>
 #include <vector>
@@ -151,7 +153,9 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
 
     schema_ptr schema = validation::validate_column_family(db, _base_name.get_keyspace(), _base_name.get_column_family());
 
-    if (!db.features().views_with_tablets && db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
+    const locator::abstract_replication_strategy& ars = db.find_keyspace(keyspace()).get_replication_strategy();
+
+    if (!db.features().views_with_tablets && ars.uses_tablets()) {
         throw exceptions::invalid_request_exception(format("Materialized views are not supported on base tables with tablets"));
     }
     if (schema->is_counter()) {
@@ -173,6 +177,50 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
                 "used to TTL undelivered updates. Setting gc_grace_seconds "
                 "too low might cause undelivered updates to expire "
                 "before being replayed.", column_family(), _base_name.get_column_family()));
+    }
+
+    const bool rf_rack_restricted_keyspaces = db.get_config().check_experimental(db::experimental_features_t::feature::RF_RACK_RESTRICTED_KEYSPACES);
+    // Technical note: `tools/schema_loader` uses this function, but does NOT provide an actually valid instance
+    //                 of `data_dictionary::database`. As a result, we may not have access to the underlying
+    //                 `locator::topology`, which is crucial for this logic.
+    //                 However, since in "normal" circumstances, i.e. when it's actually Scylla that calls this function,
+    //                 we should always be able to access this pointer. Hence this form of `if`.
+    if (rf_rack_restricted_keyspaces && ars.uses_tablets() && db.real_database_ptr()) {
+        // With tablets enabled, we want to restrict materialized views to keyspaces that satisfy RF == the number of racks OR RF == 1.
+        //
+        // Long story short, doing that, we want to ensure that:
+        // * pairing the base and view replicas occurs within the same rack,
+        // * there's only one replica per rack,
+        // * tablet replicas never leave their original rack.
+        //
+        // You can find more context about the pre-existing problems and solutions in: scylladb/scylladb#23030.
+        //
+        // Moreover, you can refer to the document "Consistency problems in Materialized Views arising from replica order changes"
+        // for an even broader perspective.
+
+        const locator::topology& topology = db.real_database_ptr()->get_token_metadata().get_topology();
+        // Note that a keyspace can only have tablets enabled if the used replication strategy is NetworkTopologyStrategy, cf.
+        //
+        // "When creating a new keyspace with tablets enabled (the default), you can still disable them on a per-keyspace basis.
+        //  The recommended NetworkTopologyStrategy for keyspaces remains required when using tablets."
+        //
+        // --- "Data Distribution with Tablets" in our documentation.
+        //
+        // That's why we're only considering that case and that's why this cast is correct.
+        const auto* replication_strategy = static_cast<const locator::network_topology_strategy*>(std::addressof(ars));
+
+        for (const auto& [dc, rack_map] : topology.get_datacenter_racks()) {
+            const auto dc_rf = replication_strategy->get_replication_factor(dc);
+            const auto rack_count = rack_map.size();
+
+            // RF = 0 is OK. That just means the user doesn't want to replicate data in that data center.
+            const bool invalid_rf = dc_rf != rack_count && dc_rf != 1 && dc_rf != 0;
+            if (invalid_rf) {
+                throw exceptions::invalid_request_exception(
+                        seastar::format("Mismatched replication factor and rack count (in data center '{}') for keyspace '{}': {} vs. {}",
+                        dc, keyspace(), dc_rf, rack_count));
+            }
+        }
     }
 
     // Gather all included columns, as specified by the select clause

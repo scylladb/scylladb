@@ -25,6 +25,7 @@
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 
 using namespace std::string_literals;
 
@@ -45,15 +46,13 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-static unsigned get_abs_rf_diff(const std::string& curr_rf, const std::string& new_rf) {
+static int64_t parse_rf(const std::string& rf) {
     try {
-        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
+        return std::stoi(rf);
     } catch (std::invalid_argument const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+        on_internal_error(mylogger, std::format("parse_rf() expects integer argument, but got: {}", rf));
     } catch (std::out_of_range const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments to fit into `int` type, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+        on_internal_error(mylogger, std::format("parse_rf() expects integer argument to fit into `int`, but got: {}", rf));
     }
 }
 
@@ -85,14 +84,20 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 
             if (ks.get_replication_strategy().uses_tablets()) {
                 const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
+
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+
+                const auto& rack_map = qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenter_racks();
+
                 unsigned total_abs_rfs_diff = 0;
+
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
-                    sstring old_rf = "0";
+                    int64_t old_rf_value = 0;
+
                     if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
                              new_dc_in_current_mapping != current_rf_per_dc.end()) {
-                        old_rf = new_dc_in_current_mapping->second;
+                        old_rf_value = parse_rf(new_dc_in_current_mapping->second);
                     } else if (!qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters().contains(new_dc)) {
                         // This means that the DC listed in ALTER doesn't exist. This error will be reported later,
                         // during validation in abstract_replication_strategy::validate_replication_strategy.
@@ -100,8 +105,27 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         // first we need to report non-existing DCs, then if RFs aren't changed by too much.
                         continue;
                     }
-                    if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2) {
+
+                    const int64_t new_rf_value = parse_rf(new_rf);
+                    const auto rf_diff = std::abs(new_rf_value - old_rf_value);
+
+                    if (total_abs_rfs_diff += rf_diff; total_abs_rfs_diff >= 2) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
+                    }
+
+                    // We enforce RF == #racks OR RF == 1 for every DC if the keyspace uses tablets.
+                    // For more context, see: scylladb/scylladb#23071.
+                    const auto rack_count = rack_map.at(new_dc).size();
+
+                    const bool rf_rack_restr_ks = qp.db().get_config().check_experimental(db::experimental_features_t::feature::RF_RACK_RESTRICTED_KEYSPACES);
+                    // RF == 0 is OK. That just means that the user doesn't want to replicate data in that data center.
+                    const bool invalid_rf = new_rf_value != (int64_t) rack_count && new_rf_value != 1 && new_rf_value != 0;
+
+                    if (rf_rack_restr_ks && invalid_rf) {
+                        throw exceptions::invalid_request_exception(seastar::format("Keyspace '{}' uses tablets. "
+                                "That enforces RF == rack count or RF == 1, but your query would violate that in data center '{}': "
+                                "RF={} vs. rack count={}",
+                                _name, new_dc, new_rf_value, rack_count));
                     }
                 }
             }

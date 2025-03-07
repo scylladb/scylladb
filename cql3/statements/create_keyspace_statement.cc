@@ -11,6 +11,7 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "locator/network_topology_strategy.hh"
 #include "prepared_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -20,6 +21,7 @@
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"
+#include "utils/error_injection.hh"
 
 #include <boost/regex.hpp>
 #include <stdexcept>
@@ -76,6 +78,44 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
     } catch (const std::runtime_error& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
+
+    const auto& tm = *qp.proxy().get_token_metadata_ptr();
+    const auto& feat = qp.proxy().features();
+    const auto& cfg = qp.db().get_config();
+    auto ksm = _attrs->as_ks_metadata(_name, tm, feat, cfg);
+    auto rs = locator::abstract_replication_strategy::create_replication_strategy(
+            ksm->strategy_name(),
+            locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()));
+
+    const bool restricted_keyspaces = cfg.check_experimental(db::experimental_features_t::feature::RF_RACK_RESTRICTED_KEYSPACES);
+    // At this point, we don't know yet if the replication strategy is NetworkTopologyStrategy!
+    // It may happen that the user chooses SimpleStrategy, but they try to enable tablets as well.
+    // That's why we need to check the conjunction here.
+    const bool uses_tablets = rs->get_type() == locator::replication_strategy_type::network_topology && rs->uses_tablets();
+    // Some tests may want to initially set up a keyspace that doesn't satisfy the RF-rack restriction.
+    // This is a bit ugly and doesn't really follow the philosophy of error injections, but let's keep it here for the sake of testing.
+    const bool ignore_rf_rack_restriction = utils::get_local_injector().is_enabled("dont_check_rf_rack_restriction_injection");
+
+    if (restricted_keyspaces && uses_tablets && !ignore_rf_rack_restriction) {
+        const auto* nts = static_cast<const locator::network_topology_strategy*>(rs.get());
+
+        for (const auto& [dc, rack_map] : tm.get_topology().get_datacenter_racks()) {
+            const auto rack_count = rack_map.size();
+            const auto rf = nts->get_replication_factor(dc);
+
+            // When using tablets, we enforce RF == #racks or RF == 1 in every data center.
+            // For more context, see: scylladb/scylladb#23071.
+            //
+            // We allow for RF == 0. That just means that the user doesn't want to replicate data in that data center.
+            const bool invalid_rf = rf != rack_count && rf != 1 && rf != 0;
+            if (invalid_rf) {
+                throw exceptions::invalid_request_exception(seastar::format("When using tablets, data centers must satisfy "
+                        "RF == rack count or RF == 1. That condition is not satisfied for DC '{}': RF={} vs. rack count={}",
+                        dc, rf, rack_count));
+            }
+        }
+    }
+
 #if 0
     // The strategy is validated through KSMetaData.validate() in announceNewKeyspace below.
     // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,
