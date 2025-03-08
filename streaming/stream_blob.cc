@@ -44,20 +44,16 @@ static sstables::sstable_state sstable_state(const streaming::stream_blob_meta& 
     return meta.sstable_state.value_or(sstables::sstable_state::normal);
 }
 
-static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::database& db, table_id table, sstables::sstable_state state, sstring filename, seastar::shard_id shard) {
-    blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", ops_id, filename, shard);
-    auto s = db.find_column_family(table).schema();
-    auto data_path = std::filesystem::path(filename);
-    auto desc = sstables::parse_path(data_path, s->ks_name(), s->cf_name());
-    co_await db.container().invoke_on(shard, [id = s->id(), desc, state] (replica::database& db) -> future<> {
+static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::database& db, table_id id, sstables::sstable_state state, sstables::entry_descriptor desc, seastar::shard_id shard) {
+    co_await db.container().invoke_on(shard, [id, desc, state, ops_id] (replica::database& db) -> future<> {
         replica::table& t = db.find_column_family(id);
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
         auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, state, desc.version, desc.format);
         co_await sst->load(erm->get_sharder(*t.schema()));
         co_await t.add_sstable_and_update_cache(sst);
+        blogger.info("stream_sstables[{}] Loaded sstable {} successfully", ops_id, sst->toc_filename());
     });
-    blogger.info("stream_sstables[{}] Loaded sstable {} on shard {} successfully", ops_id, filename, shard);
 }
 
 static utils::pretty_printed_throughput get_bw(size_t total_size, std::chrono::steady_clock::time_point start_time) {
@@ -340,9 +336,10 @@ future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms,
                 }
                 auto sst = co_await sstable_sink->close_and_seal();
                 if (sst) {
-                    auto filename = sst->toc_filename();
+                    blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
+                    auto desc = sst->get_descriptor(sstables::component_type::TOC);
                     sst = {};
-                    co_await load_sstable_for_tablet(meta.ops_id, db, meta.table, sstable_state(meta), std::move(filename), meta.dst_shard_id);
+                    co_await load_sstable_for_tablet(meta.ops_id, db, meta.table, sstable_state(meta), std::move(desc), meta.dst_shard_id);
                 }
             },
             std::move(out)
