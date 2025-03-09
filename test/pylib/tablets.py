@@ -78,3 +78,11 @@ async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_
     rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
     return rows[0].tablet_count
+
+async def get_tablet_info(manager, table_id, token):
+    table_id = await get_base_table(manager, table_id)
+    rows = await manager.cql.run_async(f"SELECT * FROM system.tablets where table_id = {table_id}")
+    for row in rows:
+        if row.last_token >= token:
+            return row
+    raise "Tablet not found"
