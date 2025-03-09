@@ -920,6 +920,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
                 for (const auto& table_or_mv : tables_with_mvs) {
                     try {
+                        if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
+                            // Apply the transition only on base tables.
+                            // If this table has a base table then the transition will be applied on the base table, and
+                            // the base table will coordinate the transition for the entire group.
+                            continue;
+                        }
                         locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table_or_mv->id());
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
