@@ -1579,7 +1579,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         break;
                     }
-                    if (advance_in_background({gid}, tablet_state.repair, "repair", [&] () -> future<> {
+                    bool wait = utils::get_local_injector().enter("repair_tablet_wait");
+                    if (!wait && advance_in_background({gid}, tablet_state.repair, "repair", [&] () -> future<> {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
                         if (!valid) {
