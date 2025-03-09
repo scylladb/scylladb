@@ -42,28 +42,28 @@ async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, ke
         replicas=[(HostID(str(host)), shard) for (host, shard) in x.replicas]
     ) for x in rows]
 
-async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
+async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int, is_view: bool = False) -> list[tuple[HostID, int]]:
     """
     Gets tablet replicas of the tablet which owns a given token of a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
 
     :param server: server to query. Can be any live node.
     """
-    rows = await get_all_tablet_replicas(manager, server, keyspace_name, table_name)
+    rows = await get_all_tablet_replicas(manager, server, keyspace_name, table_name, is_view)
     for row in rows:
         if row.last_token >= token:
             return row.replicas
     return []
 
 
-async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> tuple[HostID, int]:
+async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int, is_view: bool = False) -> tuple[HostID, int]:
     """
     Get the first replica of the tablet which owns a given token of a given table.
     This call is guaranteed to see all prior changes applied to group0 tables.
 
     :param server: server to query. Can be any live node.
     """
-    replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token)
+    replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token, is_view)
     return replicas[0]
 
 async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
