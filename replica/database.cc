@@ -941,6 +941,42 @@ void database::init_schema_commitlog() {
 }
 
 std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s, const std::unordered_map<table_id, schema_ptr>& new_cfms) {
+    auto find_schema_from_db_or_new = [this, &new_cfms] (table_id table_id) -> schema_ptr {
+        auto it = new_cfms.find(table_id);
+        if (it != new_cfms.end()) {
+            return it->second;
+        }
+        return find_schema(table_id);
+    };
+
+    // Co-locate a view table with its base table when it has exactly the same partition key - the same columns
+    // in the same order. In this case the tokens of corresponding partitions are equal and we can benefit from
+    // locality of view updates.
+    bool is_colocated_view = std::invoke([&] {
+        if (!s.is_view()) {
+            return false;
+        }
+
+        auto base_schema_ptr = find_schema_from_db_or_new(s.view_info()->base_id());
+
+        if (s.partition_key_size() != base_schema_ptr->partition_key_size()) {
+            return false;
+        }
+
+        auto&& view_pk = s.partition_key_columns();
+        auto&& base_pk = base_schema_ptr->partition_key_columns();
+        for (const auto& [a,b] : std::views::zip(view_pk, base_pk)) {
+            if (a.name() != b.name()) {
+                return false;
+            }
+        }
+        return true;
+    });
+
+    if (is_colocated_view) {
+        return s.view_info()->base_id();
+    }
+
     return std::nullopt;
 }
 
