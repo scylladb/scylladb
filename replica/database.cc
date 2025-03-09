@@ -957,6 +957,13 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
         return s.view_info()->base_id();
     }
 
+    // temporary method to create colocated tables for testing
+    if (s.cf_name().ends_with("colocation")) {
+        auto base_name = s.cf_name().substr(0, s.cf_name().find("_"));
+        auto base_schema_ptr = find_column_family(s.ks_name(), base_name).schema();
+        return base_schema_ptr->id();
+    }
+
     return std::nullopt;
 }
 
