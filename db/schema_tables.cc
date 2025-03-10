@@ -2670,12 +2670,6 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     return result;
 }
 
-std::vector<sstring> all_table_names(schema_features features) {
-    return all_tables(features)
-        | std::views::transform([] (auto schema) { return schema->cf_name(); })
-        | std::ranges::to<std::vector>();
-}
-
 std::vector<table_info> all_table_infos(schema_features features) {
     return all_tables(features)
         | std::views::transform([] (auto schema) { return table_info{ schema->cf_name(), schema->id() }; })

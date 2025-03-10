@@ -200,9 +200,6 @@ extern const sstring version;
 // Returns schema_ptrs for all schema tables supported by given schema_features.
 std::vector<schema_ptr> all_tables(schema_features);
 
-// Like all_tables(), but returns schema::cf_name() of each table.
-std::vector<sstring> all_table_names(schema_features);
-
 // Like all_tables(), but returns table_info of each table.
 std::vector<table_info> all_table_infos(schema_features);
 
