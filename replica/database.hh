@@ -1845,6 +1845,8 @@ public:
         return is_sys_ks ? get_system_sstables_manager() : get_user_sstables_manager();
     }
 
+    sstables::sstables_manager& get_sstables_manager(const schema& s) const;
+
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
     future<dht::token_range_vector> get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm);
