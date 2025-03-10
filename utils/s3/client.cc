@@ -312,7 +312,7 @@ future<> client::do_retryable_request(group_client& gc, http::request req, http:
             }
 
             e = {};
-            co_return co_await (as ? gc.http.make_request(req, handler, *as, std::nullopt) : gc.http.make_request(req, handler, std::nullopt));
+            co_return co_await gc.http.make_request(req, handler, std::nullopt, as);
         } catch (const aws::aws_exception& ex) {
             e = std::current_exception();
             request_ex = ex;

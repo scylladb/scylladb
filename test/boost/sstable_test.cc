@@ -222,8 +222,8 @@ SEASTAR_TEST_CASE(check_statistics_func) {
     auto s = make_schema_for_compressed_sstable();
     return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_statistics().get();
-        const statistics& sst1_s = sst1->get_statistics();
-        const statistics& sst2_s = sst2->get_statistics();
+        const auto& sst1_s = sst1->get_statistics();
+        const auto& sst2_s = sst2->get_statistics();
 
         BOOST_REQUIRE(sst1_s.offsets.elements.size() == sst2_s.offsets.elements.size());
         BOOST_REQUIRE(sst1_s.contents.size() == sst2_s.contents.size());
