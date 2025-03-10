@@ -187,9 +187,9 @@ static future<> save_system_schema_to_keyspace(cql3::query_processor& qp, const 
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
-    co_await coroutine::parallel_for_each(all_table_names(schema_features::full()), [&qp, ksm] (sstring cf) -> future<> {
+    co_await coroutine::parallel_for_each(all_table_infos(schema_features::full()), [&qp, ksm] (table_info ti) -> future<> {
         auto deletion_timestamp = system_keyspace::schema_creation_timestamp() - 1;
-        co_await qp.execute_internal(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
+        co_await qp.execute_internal(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, ti.name,
             deletion_timestamp), { ksm->name() }, cql3::query_processor::cache_internal::yes).discard_result();
     });
     {
