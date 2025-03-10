@@ -15,19 +15,12 @@ version="$(sed 's/-/~/' <build/SCYLLA-VERSION-FILE)"
 release="$(<build/SCYLLA-RELEASE-FILE)"
 
 mode="release"
-type="ubuntu"
 
-if uname -m | grep x86_64 ; then
-  arch="amd64"
-fi
-
-if uname -m | grep aarch64 ; then
-  arch="arm64"
-fi
+arch="$(uname -m)"
 
 
 print_usage() {
-    echo "usage: $0 [--mode mode] [--type ubuntu|pro, default: ubuntu]"
+    echo "usage: $0 [--mode mode]"
     exit 1
 }
 
@@ -35,10 +28,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --mode)
             mode="$2"
-            shift 2
-            ;;
-        --type)
-            type="$2"
             shift 2
             ;;
         *)
@@ -72,24 +61,16 @@ bcp() { buildah copy "$container" "$@"; }
 run() { buildah run "$container" "$@"; }
 bconfig() { buildah config "$@" "$container"; }
 
-if [ "$type" == "pro" ]; then
-  container="$(buildah from docker.io/ubuntu:20.04)"
-  bcp dist/docker/pro-attach-config.yaml /pro-attach-config.yaml
-elif [ "$type" == "ubuntu" ]; then
-  container="$(buildah from docker.io/ubuntu:24.04)"
-else
-  echo "$type is not a valid option. supported values: ubuntu|pro"
-  exit 1
-fi
+container="$(buildah from docker.io/redhat/ubi9-minimal:latest)"
 
 packages=(
-    "build/dist/$config/debian/${product}_$version-$release-1_$arch.deb"
-    "build/dist/$config/debian/$product-server_$version-$release-1_$arch.deb"
-    "build/dist/$config/debian/$product-conf_$version-$release-1_$arch.deb"
-    "build/dist/$config/debian/$product-kernel-conf_$version-$release-1_$arch.deb"
-    "build/dist/$config/debian/$product-node-exporter_$version-$release-1_$arch.deb"
-    "tools/cqlsh/build/debian/$product-cqlsh_$version-$release-1_$arch.deb"
-    "tools/python3/build/debian/$product-python3_$version-$release-1_$arch.deb"
+    "build/dist/$config/redhat/RPMS/$arch/$product-$version-$release.$arch.rpm"
+    "build/dist/$config/redhat/RPMS/$arch/$product-server-$version-$release.$arch.rpm"
+    "build/dist/$config/redhat/RPMS/$arch/$product-conf-$version-$release.$arch.rpm"
+    "build/dist/$config/redhat/RPMS/$arch/$product-kernel-conf-$version-$release.$arch.rpm"
+    "build/dist/$config/redhat/RPMS/$arch/$product-node-exporter-$version-$release.$arch.rpm"
+    "tools/cqlsh/build/redhat/RPMS/$arch/$product-cqlsh-$version-$release.$arch.rpm"
+    "tools/python3/build/redhat/RPMS/$arch/$product-python3-$version-$release.$arch.rpm"
 )
 
 bcp "${packages[@]}" packages/
@@ -103,20 +84,19 @@ bcp dist/docker/docker-entrypoint.py /docker-entrypoint.py
 
 bcp dist/docker/scylla_bashrc /scylla_bashrc
 
-run apt-get -y clean expire-cache
-run apt-get -y update
-run apt-get -y upgrade
-run apt-get -y --no-install-suggests install dialog apt-utils
-run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
-run apt-get -y --no-install-suggests install supervisor python3 python3-yaml curl sudo systemd
-run bash -ec "echo LANG=C.UTF-8 > /etc/default/locale"
-run bash -ec "dpkg -i packages/*.deb"
-run apt-get -y clean all
+bcp LICENSE-ScyllaDB-Source-Available.md /licenses/
+
+run microdnf clean all
+run microdnf --setopt=tsflags=nodocs -y update
+run microdnf --setopt=tsflags=nodocs -y install hostname python3 python3-pip kmod
+run microdnf clean all
+run pip3 install --prefix /usr supervisor
+run bash -ec "echo LANG=C.UTF-8 > /etc/locale.conf"
+run bash -ec "rpm -ivh packages/*.rpm"
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
-run mkdir -p /etc/supervisor.conf.d
 run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
-run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --network-stack posix"/' /etc/default/scylla-server
+run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --network-stack posix"/' /etc/sysconfig/scylla-server
 
 run mkdir -p /opt/scylladb/supervisor
 run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
@@ -124,6 +104,10 @@ bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-serv
 bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
 bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
+# XXX: This is required to run setup scripts in root-mode with non-root user
+run chown -R scylla:scylla /etc/scylla.d
+
+bconfig --user scylla:scylla
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
 bconfig --env LANG=C.UTF-8
 bconfig --env LANGUAGE=
@@ -134,8 +118,14 @@ bconfig --port 10000 --port 9042 --port 9160 --port 9180 --port 7000 --port 7001
 bconfig --volume "/var/lib/scylla"
 bconfig --label org.opencontainers.image.ref.name="ScyllaDB"
 bconfig --label org.opencontainers.image.version="$version-$release"
-bconfig --label description="ScyllaDB Open Source"
-bconfig --label summary="NoSQL data store using the seastar framework, compatible with Apache Cassandra"
+bconfig --label description="ScyllaDB"
+bconfig --label summary="NoSQL data store using the Seastar framework, compatible with Apache Cassandra And Amazon DynamoDB protocols"
+# These are required for Red Hat OpenShift Certification
+bconfig --label name="ScyllaDB"
+bconfig --label maintainer="ScyllaDB, Inc."
+bconfig --label vendor="ScyllaDB, Inc."
+bconfig --label version="$version"
+bconfig --label release="$release"
 
 mkdir -p build/$mode/dist/docker/
 image="oci-archive:build/$mode/dist/docker/$product-$version-$release"
