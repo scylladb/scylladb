@@ -145,14 +145,6 @@ static std::vector<sstring> parse_tables(const sstring& ks_name, const http_cont
     return names;
 }
 
-static std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
-    auto it = query_params.find(param_name);
-    if (it == query_params.end()) {
-        return {};
-    }
-    return parse_tables(ks_name, ctx, it->second);
-}
-
 std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, sstring value) {
     std::vector<table_info> res;
     try {
@@ -921,14 +913,11 @@ static
 future<json::json_return_type>
 rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
-        auto column_families = parse_tables(keyspace, ctx, req->query_parameters, "cf");
-        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, column_families);
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
         auto& db = ctx.db;
-        if (column_families.empty()) {
-            co_await replica::database::flush_keyspace_on_all_shards(db, keyspace);
-        } else {
-            co_await replica::database::flush_tables_on_all_shards(db, keyspace, std::move(column_families));
-        }
+        auto column_families = table_infos | std::views::transform([] (auto ti) { return ti.name; }) | std::ranges::to<std::vector>();
+        co_await replica::database::flush_tables_on_all_shards(db, keyspace, std::move(column_families));
         co_return json_void();
 }
 
