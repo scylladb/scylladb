@@ -2676,6 +2676,12 @@ std::vector<sstring> all_table_names(schema_features features) {
         | std::ranges::to<std::vector>();
 }
 
+std::vector<table_info> all_table_infos(schema_features features) {
+    return all_tables(features)
+        | std::views::transform([] (auto schema) { return table_info{ schema->cf_name(), schema->id() }; })
+        | std::ranges::to<std::vector>();
+}
+
 void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view_ptr& v, schema_ptr base_schema) {
     // Legacy format for a secondary index used a hardcoded "token" column, which ensured a proper
     // order for indexed queries. This "token" column is has been implemented as a computed column
