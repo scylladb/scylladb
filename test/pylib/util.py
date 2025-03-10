@@ -20,8 +20,9 @@ from functools import cache
 
 import random
 import string
+from subprocess import Popen
 
-from typing import Callable, Awaitable, Optional, TypeVar, Any
+from typing import Callable, Awaitable, Optional, TypeVar, Any, Coroutine
 
 import universalasync
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
@@ -30,6 +31,7 @@ from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-modu
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
 from test import TEST_RUNNER
+from test.pylib.ldap_server import start_ldap, try_something_backoff, can_connect
 from test.pylib.host_registry import HostRegistry
 from test.pylib.internal_types import ServerInfo
 from test.pylib.minio_server import MinioServer
@@ -326,6 +328,8 @@ def prepare_dir(dirname: str, pattern: str) -> None:
 
 def prepare_dirs(tempdir_base: str, modes: list[str]) -> None:
     prepare_dir(tempdir_base, "*.log")
+    shutil.rmtree(os.path.join(tempdir_base, "ldap_instances"), ignore_errors=True)
+    prepare_dir(os.path.join(tempdir_base, "ldap_instances"), "*")
     for mode in modes:
         prepare_dir(os.path.join(tempdir_base, mode), "*.log")
         prepare_dir(os.path.join(tempdir_base, mode), "*.reject")
@@ -339,16 +343,26 @@ def prepare_dirs(tempdir_base: str, modes: list[str]) -> None:
 
 
 @universalasync.async_to_sync_wraps
-async def start_s3_mock_services(minio_tempdir_base: str) -> None:
+async def start_3rd_party_services(tempdir_base: pathlib.Path, byte_limit: int):
+    hosts = HostRegistry()
+
+    finalize = start_ldap(
+        host=await hosts.lease_host(),
+        port=5000,
+        instance_root=tempdir_base / 'ldap_instances',
+        byte_limit=byte_limit)
+    async def make_async_finalize():
+        finalize()
+
+    TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
     ms = MinioServer(
-        tempdir_base=minio_tempdir_base,
+        tempdir_base=str(tempdir_base),
         address="127.0.0.1",
         logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
     )
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
 
-    hosts = HostRegistry()
     TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
 
     mock_s3_server = MockS3Server(
