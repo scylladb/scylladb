@@ -509,8 +509,7 @@ private:
      */
     future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id, bool shadow_round);
 
-    template<typename ID>
-    future<> wait_alive_helper(noncopyable_function<std::vector<ID>()> get_nodes, std::chrono::milliseconds timeout);
+    future<> wait_alive_helper(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
 public:
     bool is_alive(locator::host_id id) const;
 
