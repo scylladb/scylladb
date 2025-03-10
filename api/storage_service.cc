@@ -127,24 +127,6 @@ int64_t validate_int(const sstring& param) {
     return std::atoll(param.c_str());
 }
 
-// splits a request parameter assumed to hold a comma-separated list of table names
-// verify that the tables are found, otherwise a bad_param_exception exception is thrown
-// containing the description of the respective no_such_column_family error.
-static std::vector<sstring> parse_tables(const sstring& ks_name, const http_context& ctx, sstring value) {
-    if (value.empty()) {
-        return map_keys(ctx.db.local().find_keyspace(ks_name).metadata().get()->cf_meta_data());
-    }
-    std::vector<sstring> names = split(value, ",");
-    try {
-        for (const auto& table_name : names) {
-            ctx.db.local().find_column_family(ks_name, table_name);
-        }
-    } catch (const replica::no_such_column_family& e) {
-        throw bad_param_exception(e.what());
-    }
-    return names;
-}
-
 std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, sstring value) {
     std::vector<table_info> res;
     try {
@@ -245,7 +227,7 @@ future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snap
     });
     rp.process(*req);
     info.keyspace = validate_keyspace(ctx, *rp.get("keyspace"));
-    info.column_families = parse_tables(info.keyspace, ctx, *rp.get("cf"));
+    info.column_families = parse_table_infos(info.keyspace, ctx, *rp.get("cf")) | std::views::transform([] (auto ti) { return ti.name; }) | std::ranges::to<std::vector>();
     auto scrub_mode_opt = rp.get("scrub_mode");
     auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
 
