@@ -1640,7 +1640,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                     stop_signal.as_local_abort_source(), raft_gr.local(), messaging,
                     gossiper.local(), feature_service.local(), sys_ks.local(), group0_client, dbcfg.gossip_scheduling_group};
 
-            checkpoint(stop_signal, "starting talet allocator");
+            checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg;
             distributed<service::tablet_allocator> tablet_allocator;
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
