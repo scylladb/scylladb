@@ -41,6 +41,12 @@ struct entry_descriptor {
         : generation(generation), version(version), format(format), component(component), state(state) {}
 };
 
+struct basic_info {
+    generation_type generation;
+    sstring origin;
+    int64_t size;
+};
+
 // Parses sstable file path extracting entry_descriptor from it. Returns the descriptor
 // and the keyspace.table pair of strings.
 std::tuple<entry_descriptor, sstring, sstring> parse_path(const std::filesystem::path& sst_path);

@@ -26,6 +26,13 @@ def random_string(length=10, chars=string.ascii_uppercase + string.digits):
 def random_bytes(length=10):
     return bytearray(random.getrandbits(8) for _ in range(length))
 
+# sleep to let a ttl (of `seconds`) expire and
+# the commitlog minimum gc time, in seconds,
+# to be greater than the tombstone deletion time
+def sleep_till_whole_second(seconds=1):
+    t = time.time()
+    time.sleep(seconds - (t - int(t)))
+
 # A function for picking a unique name for test keyspace or table.
 # This name doesn't need to be quoted in CQL - it only contains
 # lowercase letters, numbers, and underscores, and starts with a letter.
