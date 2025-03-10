@@ -32,14 +32,13 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
-from test.conftest import start_s3_mock_services, prepare_dirs
 from test.pylib import coverage_utils
 from test.pylib.cpp.ldap.prepare_instance import try_something_backoff, can_connect
 from test.pylib.suite.base import Test, TestSuite, all_modes, init_testsuite_globals, output_is_a_tty, palette, path_to
 from test.pylib.suite.boost import BoostTest
 from test.pylib.suite.ldap import LdapTest
 from test.pylib.resource_gather import setup_cgroup, run_resource_watcher
-from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja
+from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja, prepare_dirs, start_s3_mock_services
 
 if TYPE_CHECKING:
     from typing import List
