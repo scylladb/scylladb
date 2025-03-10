@@ -80,9 +80,10 @@ bool authorize_against_this_response(temporary_buffer<char> resp, sstring socket
     return result.get();
 }
 
+int pid = getpid();
 /// Temp file name unique to this test run and this suffix.
 sstring tmpfile(const sstring& suffix) {
-    return seastar::format("saslauthd_authenticator_test.tmpfile.{}.{}", ldap_port, suffix);
+    return seastar::format("saslauthd_authenticator_test.tmpfile.{}.{}.{}", ldap_port, suffix, pid);
 }
 
 shared_ptr<db::config> make_config() {
