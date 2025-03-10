@@ -18,6 +18,7 @@
 #include "db/snapshot-ctl.hh"
 #include "db/snapshot/backup_task.hh"
 #include "schema/schema_fwd.hh"
+#include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
 #include "utils/error_injection.hh"
 
@@ -118,19 +119,31 @@ future<> backup_task_impl::do_backup() {
 
 future<> backup_task_impl::process_snapshot_dir() {
     auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    size_t num_sstable_comps = 0;
 
     try {
+        snap_log.debug("backup_task: listing {}", _snapshot_dir.native());
         size_t total = 0;
         while (auto component_ent = co_await snapshot_dir_lister.get()) {
             const auto& name = component_ent->name;
             auto file_path = _snapshot_dir / name;
             auto st = co_await file_stat(file_path.native());
             total += st.size;
-            _files.emplace_back(name);
+            try {
+                auto desc = sstables::parse_path(file_path, "", "");
+                const auto& gen = desc.generation;
+                _sstable_comps[gen].emplace_back(name);
+                ++num_sstable_comps;
+            } catch (const sstables::malformed_sstable_exception&) {
+                _files.emplace_back(name);
+            }
         }
         _total_progress.total = total;
+        snap_log.debug("backup_task: found {} SSTables consisting of {} component files, and {} non-sstable files",
+            _sstable_comps.size(), num_sstable_comps, _files.size());
     } catch (...) {
         _ex = std::current_exception();
+        snap_log.error("backup_task: listing {} failed: {}", _snapshot_dir.native(), _ex);
     }
 
     co_await snapshot_dir_lister.close();
@@ -143,14 +156,18 @@ future<> backup_task_impl::uploads_worker() {
     gate uploads;
 
     try {
-        for (auto it = _files.begin(); it != _files.end() && !_ex; ++it) {
+        while (!_ex) {
             auto gh = uploads.hold();
 
             // Pre-upload break point. For testing abort in actual s3 client usage.
             co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
+            auto name_opt = dequeue();
+            if (!name_opt) {
+                break;
+            }
             // okay to drop future since uploads is always closed before exiting the function
-            std::ignore = backup_file(std::move(*it), upload_permit(std::move(gh)));
+            std::ignore = backup_file(std::move(*name_opt), upload_permit(std::move(gh)));
             co_await coroutine::maybe_yield();
             co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
             if (impl::_as.abort_requested()) {
@@ -178,6 +195,30 @@ future<> backup_task_impl::backup_file(sstring name, upload_permit permit) {
         if (!_ex) {
             _ex = std::current_exception();
         }
+    }
+}
+
+std::optional<std::string> backup_task_impl::dequeue() {
+    if (_files.empty()) {
+        dequeue_sstable();
+    }
+    if (_files.empty()) {
+        return std::nullopt;
+    }
+    auto ret = std::move(_files.back());
+    _files.pop_back();
+    return ret;
+}
+
+void backup_task_impl::dequeue_sstable() {
+    auto to_backup = _sstable_comps.begin();
+    if (to_backup == _sstable_comps.end()) {
+        return;
+    }
+    auto ent = _sstable_comps.extract(to_backup);
+    snap_log.debug("Backing up SSTable generation {}", ent.key());
+    for (auto& name : ent.mapped()) {
+        _files.emplace_back(std::move(name));
     }
 }
 

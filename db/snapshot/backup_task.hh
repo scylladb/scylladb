@@ -12,11 +12,15 @@
 #include <filesystem>
 #include <exception>
 #include <vector>
+#include <unordered_map>
 
 #include <seastar/core/gate.hh>
 
 #include "utils/s3/client_fwd.hh"
+#include "utils/small_vector.hh"
 #include "tasks/task_manager.hh"
+#include "sstables/component_type.hh"
+#include "sstables/generation_type.hh"
 
 namespace db {
 class snapshot_ctl;
@@ -35,6 +39,9 @@ class backup_task_impl : public tasks::task_manager::task::impl {
 
     std::exception_ptr _ex;
     std::vector<sstring> _files;
+    using comps_vector = utils::small_vector<std::string, sstables::num_component_types>;
+    using comps_map = std::unordered_map<sstables::generation_type, comps_vector>;
+    comps_map _sstable_comps;
 
     future<> do_backup();
     future<> upload_component(sstring name);
@@ -44,6 +51,9 @@ class backup_task_impl : public tasks::task_manager::task::impl {
         gate::holder gh;
     };
     future<> backup_file(sstring name, upload_permit permit);
+    // Returns a disengaged optional when done
+    std::optional<std::string> dequeue();
+    void dequeue_sstable();
 
 protected:
     virtual future<> run() override;
