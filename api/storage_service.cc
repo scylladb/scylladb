@@ -916,7 +916,7 @@ rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req)
         auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
         auto& db = ctx.db;
-        co_await replica::database::flush_tables_on_all_shards(db, keyspace, std::move(table_infos));
+        co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));
         co_return json_void();
 }
 

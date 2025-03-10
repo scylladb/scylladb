@@ -2405,7 +2405,7 @@ static future<> force_new_commitlog_segments(std::unique_ptr<db::commitlog>& cl1
     }
 }
 
-future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::vector<table_info> table_names) {
+future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::vector<table_info> tables) {
     /**
      * #14870 
      * To ensure tests which use nodetool flush to force data
@@ -2416,9 +2416,8 @@ future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std
     */
     return sharded_db.invoke_on_all([] (replica::database& db) {
         return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
-    }).then([&, ks_name, table_names = std::move(table_names)] {
-        return parallel_for_each(table_names, [&, ks_name] (const auto& ti) {
-            (void)ks_name;
+    }).then([&, tables = std::move(tables)] {
+        return parallel_for_each(tables, [&] (const auto& ti) {
             return flush_table_on_all_shards(sharded_db, ti.id);
         });
     });
