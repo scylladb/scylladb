@@ -48,5 +48,7 @@ custom_args:
         - '-c1 -m2G'
     bloom_filter_test:
         - '-c1'
+    s3_test:
+        - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
