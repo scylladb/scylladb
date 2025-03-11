@@ -2807,6 +2807,52 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     }, tablet_cql_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tablet_options_with_colocated_tablets) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        topo.add_node(node_state::normal, 3);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': 32}}", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        // table2 has 64 tablets/shard in dc2, should not be scaled down.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1_colocation (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': 8}}", ks_name1)).get();
+        auto table2 = e.local_db().find_schema(ks_name1, "table1_colocation")->id();
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0);
+        load_stats.set_size(table2, 0);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 32);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 32);
+        }
+
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
+                                  "WITH tablets = {{'min_tablet_count': 2}}", ks_name1)).get();
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 8);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 8);
+        }
+    }, tablet_cql_test_config()).get();
+}
+
 // This test verifies that per-table tablet count is adjusted
 // in reaction to changes of relevant config and schema options.
 SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
