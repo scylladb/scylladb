@@ -49,6 +49,10 @@ namespace cql3 {
     class query_processor;
 }
 
+namespace utils {
+class disk_space_monitor;
+}
+
 namespace service {
 
 class client_state;
@@ -192,6 +196,9 @@ public:
     virtual sharded<service::topology_state_machine>& get_topology_state_machine() = 0;
 
     data_dictionary::database data_dictionary();
+
+    // Call only on shard0.
+    virtual utils::disk_space_monitor& disk_space_monitor() = 0;
 
     virtual sharded<qos::service_level_controller>& service_level_controller_service() = 0;
 

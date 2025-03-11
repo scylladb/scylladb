@@ -347,8 +347,10 @@ class load_balancer {
     using global_shard_id = tablet_replica;
     using shard_id = seastar::shard_id;
 
-    // Represents metric for per-node load which we want to equalize between nodes.
-    // It's an average per-shard load in terms of tablet count.
+    // Represents metric for load which we want to equalize between shards or nodes.
+    // Load balancer equalizes storage utilization.
+    // It is assumed that each tablet has equal size and that shards and nodes can have different capacity.
+    // So we equalize: tablet_count * target_tablet_size / capacity_in_bytes.
     using load_type = double;
 
     using table_candidates_map = std::unordered_map<table_id, std::unordered_set<migration_tablet_set>>;
@@ -404,10 +406,12 @@ class load_balancer {
         host_id id;
         uint64_t shard_count = 0;
         uint64_t tablet_count = 0;
+        std::optional<uint64_t> capacity; // Invariant: bool(capacity) || drained.
         bool drained = false;
         const locator::node* node; // never nullptr
 
         // The average shard load on this node.
+        // Valid only when "capacity" is set.
         load_type avg_load = 0;
 
         absl::flat_hash_map<table_id, size_t> tablet_count_per_table;
@@ -419,6 +423,12 @@ class load_balancer {
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
         utils::chunked_vector<skipped_candidate> skipped_candidates;
+
+        std::optional<double> capacity_per_shard() const {
+            return capacity.transform([&] (auto cap) {
+                return double(cap) / shard_count;
+            });
+        }
 
         const sstring& dc() const {
             return node->dc_rack().dc;
@@ -432,13 +442,38 @@ class load_balancer {
             return node->get_state();
         }
 
-        // Call when tablet_count changes.
-        void update() {
-            avg_load = get_avg_load(tablet_count);
+        // Call when tablet_count or capacity changes.
+        void update(uint64_t target_tablet_size) {
+            if (auto load = get_avg_load(tablet_count, target_tablet_size)) {
+                avg_load = *load;
+            }
         }
 
-        load_type get_avg_load(uint64_t tablets) const {
+        // Result engaged when !drained.
+        std::optional<load_type> get_avg_load(uint64_t tablets, uint64_t target_tablet_size) const {
+            return capacity.transform([&] (auto capacity) {
+                return load_type(tablets * target_tablet_size) / capacity;
+            });
+        }
+
+        double tablets_per_shard(uint64_t tablets) const {
             return double(tablets) / shard_count;
+        }
+
+        double tablets_per_shard() const {
+            return tablets_per_shard(tablet_count);
+        }
+
+        // Result engaged for !drained nodes.
+        std::optional<load_type> shard_load(shard_id shard, uint64_t target_tablet_size) const {
+            return shard_load(shard, shards[shard].tablet_count, target_tablet_size);
+        }
+
+        // Result engaged for !drained nodes.
+        std::optional<load_type> shard_load(shard_id shard, uint64_t shard_tablet_count, uint64_t target_tablet_size) const {
+            return capacity_per_shard().transform([&] (auto cap_per_shard) {
+                return load_type(shard_tablet_count * target_tablet_size) / cap_per_shard;
+            });
         }
 
         auto shards_by_load_cmp() {
@@ -617,10 +652,12 @@ class load_balancer {
     replica::database& _db;
     token_metadata_ptr _tm;
     std::optional<locator::load_sketch> _load_sketch;
+    // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     dc_name _dc;
     size_t _total_capacity_shards; // Total number of non-drained shards in the balanced node set.
     size_t _total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
+    uint64_t _total_capacity_storage; // Total storage of non-drained nodes in the balanced node set.
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
     std::unordered_set<host_id> _skiplist;
@@ -1332,26 +1369,31 @@ public:
         _stats.for_dc(_dc).candidates_evaluated++;
 
         auto& node_info = nodes[dst.host];
-        size_t total_load = _tablet_count_per_table[table];
-        size_t total_shard_count = _total_capacity_shards;
 
-        // Load per shard in a perfectly balanced state.
-        // Assumes each shard has same capacity.
-        double desired_load_per_shard = double(total_load) / total_shard_count;
+        // Size of all tablet replicas of the table in bytes.
+        uint64_t table_size = _tablet_count_per_table[table] * _target_tablet_size;
+
+        if (node_info.drained) {
+            // Moving a tablet to a drained node is always bad.
+            // We may not have capacity information for the drained node, so we can't evaluate exact badness.
+            return migration_badness{0, 0, table_size, table_size};
+        }
+
+        double ideal_table_load = double(table_size) / _total_capacity_storage;
 
         // max number of tablets per shard to keep perfect distribution.
-        // Rounded up because we don't want to consider movement which is within the best possible
-        // per-shard distribution as bad.
-        double shard_balance_threshold = std::ceil(desired_load_per_shard);
-        auto new_shard_load = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
-        auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / total_load;
+        double shard_balance_threshold = ideal_table_load;
+        auto new_tablet_count_per_shard = node_info.shards[dst.shard].tablet_count_per_table[table] + 1;
+        auto new_shard_load = *node_info.shard_load(dst.shard, new_tablet_count_per_shard, _target_tablet_size);
+        auto dst_shard_badness = (new_shard_load - shard_balance_threshold) / table_size;
         lblogger.trace("Table {} @{} shard balance threshold: {}, dst: {} ({:.4f})", table, dst,
                        shard_balance_threshold, new_shard_load, dst_shard_badness);
 
         // max number of tablets per node to keep perfect distribution.
-        double node_balance_threshold = std::ceil(desired_load_per_shard * node_info.shard_count);
-        size_t new_node_load = node_info.tablet_count_per_table[table] + 1;
-        auto dst_node_badness = (new_node_load - node_balance_threshold) / total_load;
+        double node_balance_threshold = ideal_table_load;
+        size_t new_tablet_count_per_node = node_info.tablet_count_per_table[table] + 1;
+        load_type new_node_load = *node_info.get_avg_load(new_tablet_count_per_node, _target_tablet_size);
+        auto dst_node_badness = (new_node_load - node_balance_threshold) / table_size;
         lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
                        node_balance_threshold, new_node_load, dst_node_badness);
 
@@ -1363,33 +1405,29 @@ public:
         _stats.for_dc(_dc).candidates_evaluated++;
 
         auto& node_info = nodes[src.host];
-        size_t total_load = _tablet_count_per_table[table];
-        size_t total_shard_count = _total_capacity_shards;
 
-        // Load per shard in a perfectly balanced state.
-        // Assumes each shard has same capacity.
-        double desired_load_per_shard = double(total_load) / total_shard_count;
+        // Size of all tablet replicas of the table in bytes.
+        uint64_t table_size = _tablet_count_per_table[table] * _target_tablet_size;
 
-        // For determining impact on leaving, round down, because we don't want to consider movement which is within
-        // the best possible per-shard distribution as bad.
-        double leaving_shard_balance_threshold = std::floor(desired_load_per_shard);
-        auto new_shard_load = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
+        if (node_info.drained) {
+            // Moving a tablet away from a drained node is always good.
+            return migration_badness{-1, -1, 0, 0};
+        }
 
-        auto src_shard_badness = node_info.drained
-                ? 0 // Moving a tablet away from a drained node is always good.
-                : (leaving_shard_balance_threshold - new_shard_load) / total_load;
+        double ideal_table_load = double(table_size) / _total_capacity_storage;
 
+        double leaving_shard_balance_threshold = ideal_table_load;
+        auto new_tablet_count_per_shard = node_info.shards[src.shard].tablet_count_per_table[table] - 1;
+        auto new_shard_load = *node_info.shard_load(src.shard, new_tablet_count_per_shard, _target_tablet_size);
+        auto src_shard_badness = (leaving_shard_balance_threshold - new_shard_load) / table_size;
         lblogger.trace("Table {} @{} shard balance threshold: {}, src: {} ({:.4f})", table, src,
                        leaving_shard_balance_threshold, new_shard_load, src_shard_badness);
 
         // max number of tablets per node to keep perfect distribution.
-        double leaving_node_balance_threshold = std::floor(desired_load_per_shard * node_info.shard_count);
-        size_t new_node_load = node_info.tablet_count_per_table[table] - 1;
-
-        auto src_node_badness = node_info.drained
-                ? 0 // Moving a tablet away from a drained node is always good.
-                : (leaving_node_balance_threshold - new_node_load) / total_load;
-
+        double leaving_node_balance_threshold = ideal_table_load;
+        size_t new_tablet_count_per_node = node_info.tablet_count_per_table[table] - 1;
+        auto new_node_load = *node_info.get_avg_load(new_tablet_count_per_node, _target_tablet_size);
+        auto src_node_badness = (leaving_node_balance_threshold - new_node_load) / table_size;
         lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", table, src,
                        leaving_node_balance_threshold, new_node_load, src_node_badness);
 
@@ -1504,6 +1542,13 @@ public:
     // so convergence is reached where the node we picked as source has lower load, or will have lower
     // load post-movement, than the node we picked as the destination.
     bool check_convergence(node_load& src_info, node_load& dst_info, unsigned delta = 1) {
+        if (src_info.drained) {
+            return true;
+        }
+        if (dst_info.drained) {
+            return false;
+        }
+
         // Allow migrating only from candidate nodes which have higher load than the target.
         if (src_info.avg_load <= dst_info.avg_load) {
             lblogger.trace("Load inversion: src={} (avg_load={}), dst={} (avg_load={})",
@@ -1512,8 +1557,8 @@ public:
         }
 
         // Prevent load inversion post-movement which can lead to oscillations.
-        if (src_info.get_avg_load(src_info.tablet_count - delta) <
-            dst_info.get_avg_load(dst_info.tablet_count + delta)) {
+        if (*src_info.get_avg_load(src_info.tablet_count - delta, _target_tablet_size) <
+            *dst_info.get_avg_load(dst_info.tablet_count + delta, _target_tablet_size)) {
             lblogger.trace("Load inversion post-movement: src={} (avg_load={}), dst={} (avg_load={})",
                            src_info.id, src_info.avg_load, dst_info.id, dst_info.avg_load);
             return false;
@@ -1528,12 +1573,16 @@ public:
 
     // Checks whether moving a tablet from shard A to B (intra-node) would go against convergence.
     // Returns false if the tablet should not be moved, and true if it may be moved.
-    bool check_convergence(const shard_load& src_info, const shard_load& dst_info, unsigned delta = 1) {
-        return src_info.tablet_count > dst_info.tablet_count + delta;
+    // Can be called when node_info.drained.
+    bool check_intranode_convergence(const node_load& node_info, shard_id src_shard, shard_id dst_shard,
+                                     unsigned delta = 1) {
+        return node_info.shards[src_shard].tablet_count > node_info.shards[dst_shard].tablet_count + delta;
     }
 
-    bool check_convergence(const shard_load& src_info, const shard_load& dst_info, const migration_tablet_set& tablet_set) {
-        return check_convergence(src_info, dst_info, tablet_set.tablets().size());
+    // Can be called when node_info.drained.
+    bool check_intranode_convergence(const node_load& node_info, shard_id src_shard, shard_id dst_shard,
+                                    const migration_tablet_set& tablet_set) {
+        return check_intranode_convergence(node_info, src_shard, dst_shard, tablet_set.tablets().size());
     }
 
     // Adjusts the load of the source and destination shards in the host where intra-node migration happens.
@@ -1554,7 +1603,7 @@ public:
             target_info.shards[dst.shard].tablet_count_per_table[source_tablet.table]++;
             target_info.tablet_count_per_table[source_tablet.table]++;
             target_info.tablet_count += 1;
-            target_info.update();
+            target_info.update(_target_tablet_size);
         }
 
         auto& src_node_info = nodes[src.host];
@@ -1564,7 +1613,7 @@ public:
         src_node_info.tablet_count_per_table[source_tablet.table]--;
 
         src_node_info.tablet_count -= 1;
-        src_node_info.update();
+        src_node_info.update(_target_tablet_size);
     }
 
     void update_node_load_on_migration(node_load& node_load, host_id host, shard_id src, shard_id dst, const migration_tablet_set& tablet_set) {
@@ -1647,12 +1696,11 @@ public:
             });
 
             auto& src_info = node_load.shards[src];
-            auto& dst_info = node_load.shards[dst];
 
             // Convergence check
 
             // When in shuffle mode, exit condition is guaranteed by running out of candidates or by load limit.
-            if (!shuffle && (src == dst || !check_convergence(src_info, dst_info))) {
+            if (!shuffle && (src == dst || !check_intranode_convergence(node_load, src, dst))) {
                 lblogger.debug("Node {} is balanced", host);
                 break;
             }
@@ -1669,7 +1717,7 @@ public:
             auto tablets = candidate.tablets;
 
             // Recheck convergence to avoid oscillations if co-located tablets are being migrated together.
-            if (!shuffle && (src == dst || !check_convergence(src_info, dst_info, tablets))) {
+            if (!shuffle && (src == dst || !check_intranode_convergence(node_load, src, dst, tablets))) {
                 lblogger.debug("Node {} is balanced", host);
                 break;
             }
@@ -1928,7 +1976,7 @@ public:
                 auto& new_target_info = nodes[new_target];
 
                 // Skip movements which may harm convergence.
-                if (!src_node_info.drained && !check_convergence(src_node_info, new_target_info, tablets)) {
+                if (!check_convergence(src_node_info, new_target_info, tablets)) {
                     continue;
                 }
 
@@ -2071,20 +2119,21 @@ public:
     }
 
     future<> log_table_load(node_load_map& nodes, table_id table) {
-        size_t total_load = 0;
+        load_type total_load = 0;
         size_t shard_count = 0;
-        size_t max_shard_load = 0;
+        load_type max_shard_load = 0;
 
         for (auto&& [host, node] : nodes) {
             if (node.drained) {
                 continue;
             }
             shard_count += node.shard_count;
-            size_t this_node_max_shard_load = 0;
-            size_t node_load = 0;
+            load_type this_node_max_shard_load = 0;
+            load_type node_load = 0;
             for (shard_id shard = 0; shard < node.shard_count; shard++) {
                 co_await coroutine::maybe_yield();
-                auto load = node.shards[shard].tablet_count_per_table[table];
+                load_type load = double(node.shards[shard].tablet_count_per_table[table]) * _target_tablet_size
+                        / *node.capacity_per_shard();
                 total_load += load;
                 node_load += load;
                 max_shard_load = std::max(max_shard_load, load);
@@ -2126,8 +2175,9 @@ public:
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 shard_id shard = 0;
                 for (auto&& shard_load : node_load.shards) {
-                    lblogger.debug("shard {}: all tablets: {}, candidates: {}, tables: {}", tablet_replica {host, shard},
-                                   shard_load.tablet_count, shard_load.candidate_count(), shard_load.tablet_count_per_table);
+                    lblogger.debug("shard {}: load: {}, tablets: {}, candidates: {}, tables: {}", tablet_replica {host, shard},
+                                   node_load.shard_load(shard, _target_tablet_size), shard_load.tablet_count,
+                                   shard_load.candidate_count(), shard_load.tablet_count_per_table);
                     shard++;
                 }
             }
@@ -2270,13 +2320,16 @@ public:
             // Pick best target shard.
 
             auto dst = global_shard_id {target, _load_sketch->get_least_loaded_shard(target)};
-            lblogger.trace("target shard: {}, load={}", dst.shard, target_info.shards[dst.shard].tablet_count);
+            lblogger.trace("target shard: {}, tablets={}, load={}", dst.shard,
+                           target_info.shards[dst.shard].tablet_count,
+                           target_info.shard_load(dst.shard, _target_tablet_size));
 
             if (lblogger.is_enabled(seastar::log_level::trace)) {
                 shard_id shard = 0;
                 for (auto&& shard_load : target_info.shards) {
-                    lblogger.trace("shard {}: all tablets: {}, candidates: {}, tables: {}", tablet_replica {dst.host, shard},
-                                   shard_load.tablet_count, shard_load.candidate_count(), shard_load.tablet_count_per_table);
+                    lblogger.trace("shard {}: load: {}, tablets: {}, candidates: {}, tables: {}", tablet_replica{dst.host, shard},
+                                   target_info.shard_load(shard, _target_tablet_size), shard_load.tablet_count,
+                                   shard_load.candidate_count(), shard_load.tablet_count_per_table);
                     shard++;
                 }
             }
@@ -2480,6 +2533,12 @@ public:
             if (!load.shard_count) {
                 throw std::runtime_error(format("Shard count of {} not found in topology", host));
             }
+            if (!_db.features().tablet_load_stats_v2) {
+                // This way load calculation will hold tablet count.
+                load.capacity = _target_tablet_size * load.shard_count;
+            } else if (_table_load_stats && _table_load_stats->capacity.contains(host)) {
+                load.capacity = _table_load_stats->capacity.at(host);
+            }
         };
 
         _tm->for_each_token_owner([&] (const locator::node& node) {
@@ -2574,15 +2633,27 @@ public:
 
         plan.set_has_nodes_to_drain(!nodes_to_drain.empty());
 
+        // Invariant: node.capacity || node.drained
+        for (auto& [host, node] : nodes) {
+            if (node.drained) {
+                continue;
+            }
+            if (!node.capacity) {
+                lblogger.info("Cannot balance because capacity of node {} (or more) is unknown", host);
+                co_return plan;
+            }
+        }
+
         // Compute load imbalance.
 
         _total_capacity_shards = 0;
         _total_capacity_nodes = 0;
+        _total_capacity_storage = 0;
         load_type max_load = 0;
         load_type min_load = 0;
         std::optional<host_id> min_load_node = std::nullopt;
         for (auto&& [host, load] : nodes) {
-            load.update();
+            load.update(_target_tablet_size);
             _stats.for_node(dc, host).load = load.avg_load;
 
             if (!load.drained) {
@@ -2595,6 +2666,7 @@ public:
                 }
                 _total_capacity_shards += load.shard_count;
                 _total_capacity_nodes++;
+                _total_capacity_storage += *load.capacity;
             }
         }
 
@@ -2605,8 +2677,10 @@ public:
                 read += shard_load.streaming_read_load;
                 write += shard_load.streaming_write_load;
             }
-            lblogger.info("Node {}: rack={} avg_load={} tablets={} shards={} state={} stream_read={} stream_write={}",
-                          host, load.rack(), load.avg_load, load.tablet_count, load.shard_count, load.state(), read, write);
+            lblogger.info("Node {}: dc={} rack={} load={} tablets={} shards={} tablets/shard={} state={} cap={}"
+                                " stream_read={} stream_write={}",
+                         host, dc, load.rack(), load.avg_load, load.tablet_count, load.shard_count,
+                         load.tablets_per_shard(), load.state(), load.capacity, read, write);
         }
 
         if (!min_load_node) {

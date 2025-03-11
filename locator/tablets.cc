@@ -668,9 +668,16 @@ table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexce
     return *this;
 }
 
+load_stats load_stats::from_v1(load_stats_v1&& stats) {
+    return { .tables = std::move(stats.tables) };
+}
+
 load_stats& load_stats::operator+=(const load_stats& s) {
     for (auto& [id, stats] : s.tables) {
         tables[id] += stats;
+    }
+    for (auto& [host, cap] : s.capacity) {
+        capacity[host] = cap;
     }
     return *this;
 }

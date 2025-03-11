@@ -10,6 +10,7 @@
  */
 
 #include "storage_service.hh"
+#include "utils/disk_space_monitor.hh"
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
 #include "raft/raft.hh"
@@ -189,7 +190,8 @@ storage_service::storage_service(abort_source& abort_source,
     topology_state_machine& topology_state_machine,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
-    std::function<future<void>()> compression_dictionary_updated_callback
+    std::function<future<void>()> compression_dictionary_updated_callback,
+    utils::disk_space_monitor* disk_space_monitor
     )
         : _abort_source(abort_source)
         , _feature_service(feature_service)
@@ -223,6 +225,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _view_builder(view_builder)
         , _topology_state_machine(topology_state_machine)
         , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
+        , _disk_space_monitor(disk_space_monitor)
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
     tm.register_module(_tablets_module->get_name(), _tablets_module);
@@ -6673,6 +6676,9 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
         co_return std::move(load_stats);
     }, locator::load_stats{}, std::plus<locator::load_stats>());
 
+    auto this_host = _db.local().get_token_metadata().get_my_id();
+    load_stats.capacity[this_host] = _disk_space_monitor->space().capacity;
+
     co_return std::move(load_stats);
 }
 
@@ -7238,6 +7244,13 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id) {
         return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
             return ss.load_stats_for_tablet_based_tables();
+        });
+    });
+    ser::storage_service_rpc_verbs::register_table_load_stats_v1(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id) {
+        return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
+            return ss.load_stats_for_tablet_based_tables().then([] (auto stats) {
+                return locator::load_stats_v1{ .tables = std::move(stats.tables) };
+            });
         });
     });
     ser::join_node_rpc_verbs::register_join_node_request(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, service::join_node_request_params params) {
