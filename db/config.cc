@@ -1193,6 +1193,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Enables SSTable compression with shared dictionaries (for tables which opt in). If set to false, this node won't write any new SSTables using dictionary compression. Option not for regular usage, but for unforeseen problems that call for disabling dictionaries.")
     , sstable_compression_dictionaries_memory_budget_fraction(this, "sstable_compression_dictionaries_memory_budget_fraction", liveness::LiveUpdate, value_status::Used, 0.01,
         "Fall back to compression without dictionaries if RAM usage by dictionaries is greater or equal to this fraction of the shard's memory.")
+    , sstable_compression_dictionaries_retrain_period_in_seconds(this, "sstable_compression_dictionaries_retrain_period_in_seconds", liveness::LiveUpdate, value_status::Used, 86400,
+        "Minimum age of the current compression dictionary before another dictionary for this table is trained.")
+    , sstable_compression_dictionaries_autotrainer_tick_period_in_seconds(this, "sstable_compression_dictionaries_autotrainer_tick_period_in_seconds", liveness::LiveUpdate, value_status::Used, 900,
+        "The period with which automatic dictionary training is attempted.")
     , uuid_sstable_identifiers_enabled(this,
             "uuid_sstable_identifiers_enabled", liveness::LiveUpdate, value_status::Used, true, "If set to true, each newly created sstable will have a UUID "
             "based generation identifier, and such files are not readable by previous Scylla versions.")

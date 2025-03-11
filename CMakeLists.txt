@@ -174,6 +174,7 @@ target_sources(scylla-main
     compress.cc
     converting_mutation_partition_applier.cc
     counters.cc
+    dict_autotrainer.cc
     direct_failure_detector/failure_detector.cc
     duration.cc
     exceptions/exceptions.cc
