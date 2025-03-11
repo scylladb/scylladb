@@ -837,3 +837,10 @@ maintenance_socket: ignore
 # Note that creating keyspaces with tablets enabled or disabled is irreversible.
 # The `tablets` option cannot be changed using `ALTER KEYSPACE`.
 enable_tablets: true
+
+#
+# Alternator options
+#
+# Maximum number of items in single BatchWriteItem command. Default is 100.
+# Note: DynamoDB has a hard-coded limit of 25.
+# alternator_max_items_in_batch_write: 100

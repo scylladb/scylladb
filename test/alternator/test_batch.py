@@ -443,17 +443,17 @@ def test_batch_write_item_large_broken_connection(test_table_sn, request, dynamo
 # DynamoDB limits the number of items written by a BatchWriteItem operation
 # to 25, even if they are small. Exceeding this limit results in a
 # ValidationException error - and none of the items in the batch are written.
+# Default limit for ScyllaDB is set to 100, hence we check against 105.
 # Reproduces #5057
-@pytest.mark.xfail(reason="Issue #5057")
 def test_batch_write_item_too_many(test_table_sn):
     p = random_string()
     with pytest.raises(ClientError, match='ValidationException.*length'):
         test_table_sn.meta.client.batch_write_item(RequestItems = {
-            test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i}}} for i in range(30)]
+            test_table_sn.name: [{'PutRequest': {'Item': {'p': p, 'c': i}}} for i in range(105)]
     })
     with pytest.raises(ClientError, match='ValidationException.*length'):
         test_table_sn.meta.client.batch_write_item(RequestItems = {
-            test_table_sn.name: [{'DeleteRequest': {'Key': {'p': p, 'c': i}}} for i in range(30)]
+            test_table_sn.name: [{'DeleteRequest': {'Key': {'p': p, 'c': i}}} for i in range(105)]
     })
 
 # According to the DynamoDB documentation, a single BatchGetItem operation is
