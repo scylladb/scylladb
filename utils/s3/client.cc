@@ -303,7 +303,7 @@ future<> client::make_request(http::request req, reply_handler_ext handle_ex, st
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
     s3l.trace("HEAD {}", object_name);
     auto req = http::request::make("HEAD", _host, object_name);
-    return make_request(std::move(req), std::move(handler), std::nullopt, as);
+    return make_request(std::move(req), std::move(handler), http::reply::status_type::ok, as);
 }
 
 future<uint64_t> client::get_object_size(sstring object_name, seastar::abort_source* as) {
@@ -389,7 +389,7 @@ future<tag_set> client::get_object_tagging(sstring object_name, seastar::abort_s
         auto input = std::move(in);
         auto body = co_await util::read_entire_stream_contiguous(input);
         retval = parse_tagging(body);
-    }, std::nullopt, as);
+    }, http::reply::status_type::ok, as);
     co_return tags;
 }
 
@@ -421,7 +421,7 @@ future<> client::put_object_tagging(sstring object_name, tag_set tagging, seasta
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
     });
-    co_await make_request(std::move(req), ignore_reply, std::nullopt, as);
+    co_await make_request(std::move(req), ignore_reply, http::reply::status_type::ok, as);
 }
 
 future<> client::delete_object_tagging(sstring object_name, seastar::abort_source* as) {
@@ -499,7 +499,7 @@ future<> client::put_object(sstring object_name, temporary_buffer<char> buf, sea
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_stats.update(len, s3_clock::now() - start);
         return ignore_reply(rep, std::move(in));
-    }, std::nullopt, as);
+    }, http::reply::status_type::ok, as);
 }
 
 future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs, seastar::abort_source* as) {
@@ -525,7 +525,7 @@ future<> client::put_object(sstring object_name, ::memory_data_sink_buffers bufs
     co_await make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
         gc.write_stats.update(len, s3_clock::now() - start);
         return ignore_reply(rep, std::move(in));
-    }, std::nullopt, as);
+    }, http::reply::status_type::ok, as);
 }
 
 future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
@@ -680,7 +680,7 @@ future<> client::multipart_upload::start_upload() {
             co_await coroutine::return_exception(std::runtime_error("cannot initiate upload"));
         }
         s3l.trace("created uploads for {} -> id = {}", _object_name, _upload_id);
-    }, std::nullopt, _as);
+    }, http::reply::status_type::ok, _as);
 }
 
 future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
@@ -736,7 +736,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         _part_etags[part_number] = std::move(etag);
         gc.write_stats.update(size, s3_clock::now() - start);
         return make_ready_future<>();
-    }, std::nullopt, _as).handle_exception([this, part_number] (auto ex) {
+    }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
     }).finally([gh = std::move(gh)] {});
@@ -789,7 +789,7 @@ future<> client::multipart_upload::finalize_upload() {
         }
         // If we reach this point it means the request succeeded. However, the body payload was already consumed, so no response handler was invoked. At
         // this point it is ok since we are not interested in parsing this particular response
-    });
+    }, http::reply::status_type::ok);
     _upload_id = ""; // now upload_started() returns false
 }
 
@@ -897,7 +897,7 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
                     return make_ready_future<>();
                 });
             });
-        }, std::nullopt, _as).handle_exception([this, part_number] (auto ex) {
+        }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             // ... the exact exception only remains in logs
             s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
         });
@@ -1053,7 +1053,7 @@ class client::do_upload_file : private multipart_upload {
             _part_etags[part_number] = std::move(etag);
             gc.write_stats.update(part_size, s3_clock::now() - start);
             return make_ready_future();
-        }, std::nullopt, _as).handle_exception([this, part_number] (auto ex) {
+        }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
             s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
         }).finally([gh = std::move(gh)] {});
     }
@@ -1124,7 +1124,7 @@ class client::do_upload_file : private multipart_upload {
         co_await _client->make_request(std::move(req), [len, start = s3_clock::now()] (group_client& gc, const auto& rep, auto&& in) {
             gc.write_stats.update(len, s3_clock::now() - start);
             return ignore_reply(rep, std::move(in));
-        }, std::nullopt, _as);
+        }, http::reply::status_type::ok, _as);
     }
 
 public:
@@ -1398,8 +1398,7 @@ future<> client::bucket_lister::start_listing() {
                     auto list = parse_list_of_objects(std::move(body));
                     names = std::move(list.first);
                     continuation_token = std::move(list.second);
-                }
-            );
+                }, http::reply::status_type::ok);
         } catch (...) {
             _queue.abort(std::current_exception());
             co_return;
