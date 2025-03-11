@@ -115,7 +115,8 @@ future<> backup_task_impl::do_backup() {
 
     co_await process_snapshot_dir();
 
-    co_await _sharded_worker.start(std::ref(_snap_ctl.db()), _table_id);
+    _backup_shard = this_shard_id();
+    co_await _sharded_worker.start(std::ref(_snap_ctl.db()), _table_id, std::ref(*this));
 
     try {
         co_await uploads_worker();
@@ -146,6 +147,7 @@ future<> backup_task_impl::process_snapshot_dir() {
                 auto desc = sstables::parse_path(file_path, "", "");
                 const auto& gen = desc.generation;
                 _sstable_comps[gen].emplace_back(name);
+                _sstables_in_snapshot.insert(desc.generation);
                 ++num_sstable_comps;
 
                 // When the SSTable is only linked-to by the snapshot directory,
@@ -258,9 +260,35 @@ void backup_task_impl::dequeue_sstable() {
     }
 }
 
-backup_task_impl::worker::worker(const replica::database& db, table_id t)
+void backup_task_impl::on_sstable_deletion(sstables::generation_type gen) {
+    if (_sstable_comps.contains(gen)) {
+        _deleted_sstables.push_back(gen);
+    }
+}
+
+backup_task_impl::worker::worker(const replica::database& db, table_id t, backup_task_impl& task)
     : _manager(db.get_sstables_manager(*db.find_schema(t)))
+    , _task(task)
 {
+    _manager.subscribe(*this);
+}
+
+future<> backup_task_impl::worker::deleted_sstable(sstables::generation_type gen) const {
+    // The notification is called for any sstable, so `gen` may belong
+    // to another table, or to an sstable that was created after the snapshot
+    // was taken.
+    // To avoid needless call to submit_to on another shard (which is expensive),
+    // check if `gen` was included in the snapshot.
+    //
+    // Note: looking up gen in `_sstables_in_snapshot` is safe, although it was
+    // created on `backup_shard`, since it is immutable after `process_snapshot_dir` is done.
+    if (_task._sstables_in_snapshot.contains(gen)) {
+        snap_log.debug("SSTable with generation {} was deleted from the table", gen);
+        return smp::submit_to(_task._backup_shard, [this, gen] {
+            _task.on_sstable_deletion(gen);
+        });
+    }
+    return make_ready_future();
 }
 
 future<> backup_task_impl::run() {

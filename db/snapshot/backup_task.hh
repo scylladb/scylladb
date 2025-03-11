@@ -13,6 +13,7 @@
 #include <exception>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
@@ -22,6 +23,7 @@
 #include "tasks/task_manager.hh"
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
+#include "sstables/sstables_manager_subscription.hh"
 
 namespace replica {
     class database;
@@ -51,18 +53,24 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     std::vector<sstring> _files;
     using comps_vector = utils::small_vector<std::string, sstables::num_component_types>;
     using comps_map = std::unordered_map<sstables::generation_type, comps_vector>;
-    comps_map _sstable_comps;
+    comps_map _sstable_comps;   // Keeps all sstable components to back up, extract entries once queued for upload
+    std::unordered_set<sstables::generation_type> _sstables_in_snapshot; // Keeps all sstable generations in snapshot
     std::vector<sstables::generation_type> _deleted_sstables;
+    shard_id _backup_shard;
 
-    class worker {
+    class worker : sstables::sstables_manager_event_handler {
         sstables::sstables_manager& _manager;
+        backup_task_impl& _task;
 
     public:
-        worker(const replica::database& db, table_id t);
+        worker(const replica::database& db, table_id t, backup_task_impl& task);
 
         sstables::sstables_manager& manager() const noexcept {
             return _manager;
         }
+
+    private:
+        virtual future<> deleted_sstable(sstables::generation_type gen) const override;
     };
     sharded<worker> _sharded_worker;
 
@@ -78,6 +86,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     // Returns a disengaged optional when done
     std::optional<std::string> dequeue();
     void dequeue_sstable();
+    void on_sstable_deletion(sstables::generation_type gen);
 
 protected:
     virtual future<> run() override;
