@@ -1976,10 +1976,8 @@ void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm
         kn_msg = "all keyspaces";
     } else {
         if (kt_list.size() == 1 && split_kt(kt_list.front())) {
-            auto res = split_kt(kt_list.front());
-            params["kn"] = std::move(res->first);
-            params["cf"] = std::move(res->second);
             kn_msg = kt_list.front();
+            std::tie(params["kn"], params["cf"]) = *split_kt(kn_msg);
         } else {
             params["kn"] = fmt::to_string(fmt::join(kt_list.begin(), kt_list.end(), ","));
             if (vm.contains("table")) {
