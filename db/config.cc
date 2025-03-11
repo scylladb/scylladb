@@ -1282,6 +1282,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "the same endpoint used in the request. The string 'disabled' "
         "disables the DescribeEndpoints operation. Any other string is the "
         "fixed value that will be returned by DescribeEndpoints operations.")
+    // alternator_max_items_in_batch_write matches DynamoDB behaviour of size limit, but with different value - for DynamoDB it's 25
+    // (see DynamoDB's documentation for BatchWriteItem command)
+    , alternator_max_items_in_batch_write(this, "alternator_max_items_in_batch_write", value_status::Used, 100, "Maximum amount of items in single BatchItemWrite call.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , redis_port(this, "redis_port", value_status::Used, 0, "Port on which the REDIS transport listens for clients.")
     , redis_ssl_port(this, "redis_ssl_port", value_status::Used, 0, "Port on which the REDIS TLS native transport listens for clients.")

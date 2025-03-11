@@ -2764,9 +2764,19 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     rjson::value& request_items = request["RequestItems"];
     auto start_time = std::chrono::steady_clock::now();
 
+    const auto maximum_batch_write_size = _proxy.data_dictionary().get_config().alternator_max_items_in_batch_write();
+
+    size_t total_items = 0;
+    for (auto it = std::as_const(request_items).MemberBegin(); it != std::as_const(request_items).MemberEnd(); ++it) {
+        total_items += it->value.Size();
+    }
+    if (total_items > maximum_batch_write_size) {
+        co_return api_error::validation(fmt::format("Invalid length of BatchWriteItem command, got {} items, "
+            "maximum is {} (from configuration variable alternator_max_items_in_batch_write)", total_items, maximum_batch_write_size));
+    }
+
     std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders;
     mutation_builders.reserve(request_items.MemberCount());
-    uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
         tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
@@ -2789,7 +2799,6 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                     co_return api_error::validation("Provided list of item keys contains duplicates");
                 }
                 used_keys.insert(std::move(mut_key));
-                batch_size++;
             } else if (r_name == "DeleteRequest") {
                 const rjson::value& key = (r->value)["Key"];
                 mutation_builders.emplace_back(schema, put_or_delete_item(
@@ -2800,7 +2809,6 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                     co_return api_error::validation("Provided list of item keys contains duplicates");
                 }
                 used_keys.insert(std::move(mut_key));
-                batch_size++;
             } else {
                 co_return api_error::validation(fmt::format("Unknown BatchWriteItem request type: {}", r_name));
             }
@@ -2811,7 +2819,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         co_await verify_permission(_enforce_authorization, client_state, b.first, auth::permission::MODIFY);
     }
 
-    _stats.api_operations.batch_write_item_batch_total += batch_size;
+    _stats.api_operations.batch_write_item_batch_total += total_items;
     co_return co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([start_time, this] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
