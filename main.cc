@@ -24,6 +24,7 @@
 #include "tasks/task_manager.hh"
 #include "utils/assert.hh"
 #include "utils/build_id.hh"
+#include "utils/only_on_shard0.hh"
 #include "supervisor.hh"
 #include "replica/database.hh"
 #include <seastar/core/reactor.hh>
@@ -1207,6 +1208,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 .normal_polling_interval = cfg->disk_space_monitor_normal_polling_interval_in_seconds,
                 .high_polling_interval = cfg->disk_space_monitor_high_polling_interval_in_seconds,
                 .polling_interval_threshold = cfg->disk_space_monitor_polling_interval_threshold,
+                .capacity_override = cfg->data_file_capacity
             };
             if (data_dir_set.get_paths().empty()) {
                 throw std::runtime_error("data_dir_set must be non-empty");
@@ -1776,7 +1778,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
                 std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map),
-                compression_dict_updated_callback
+                compression_dict_updated_callback,
+                only_on_shard0(&*disk_space_monitor_shard0)
             ).get();
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {

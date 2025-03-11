@@ -15,12 +15,33 @@
 #include "service/topology_mutation.hh"
 #include "service/topology_state_machine.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "service/tablet_allocator_fwd.hh"
 #include "locator/host_id.hh"
+#include "locator/tablets.hh"
 #include "test/lib/log.hh"
 #include "version.hh"
 
 #include <atomic>
 
+struct shared_load_stats {
+    locator::load_stats stats;
+
+    locator::load_stats_ptr get() {
+        return make_lw_shared(stats);
+    }
+
+    void set_size(table_id table, size_t size_in_bytes) {
+        stats.tables[table].size_in_bytes = size_in_bytes;
+    }
+
+    void set_split_ready_seq_number(table_id table, size_t seq_number) {
+        stats.tables[table].split_ready_seq_number = seq_number;
+    }
+
+    void set_capacity(locator::host_id host, size_t capacity) {
+        stats.capacity[host] = capacity;
+    }
+};
 
 /// Modifies topology inside a given cql_test_env.
 /// Local node's membership is not affected, but it belongs to a different DC than those produced by this builder.
@@ -53,6 +74,7 @@ private:
     int _rack_id;
     sstring _dc;
     sstring _rack;
+    shared_load_stats _load_stats;
 private:
     inet_address make_node_address(int n) {
         assert(n > 0);
@@ -141,6 +163,14 @@ public:
         return start_new_rack();
     }
 
+    locator::load_stats_ptr get_load_stats() {
+        return _load_stats.get();
+    }
+
+    shared_load_stats& get_shared_load_stats() {
+        return _load_stats;
+    }
+
     locator::host_id add_node(service::node_state state = service::node_state::normal,
                               unsigned shard_count = 1,
                               std::optional<endpoint_dc_rack> rack_override = {})
@@ -155,6 +185,7 @@ public:
 
         abort_source as;
         auto& client = _env.get_raft_group0_client();
+        _load_stats.set_capacity(id, service::default_target_tablet_size * shard_count);
 
         while (true) {
             auto guard = client.start_operation(as).get();

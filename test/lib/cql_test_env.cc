@@ -58,6 +58,7 @@
 #include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
 #include "utils/assert.hh"
+#include "utils/only_on_shard0.hh"
 #include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
@@ -607,6 +608,7 @@ private:
                 .normal_polling_interval = cfg->disk_space_monitor_normal_polling_interval_in_seconds,
                 .high_polling_interval = cfg->disk_space_monitor_high_polling_interval_in_seconds,
                 .polling_interval_threshold = cfg->disk_space_monitor_polling_interval_threshold,
+                .capacity_override = cfg->data_file_capacity,
             };
             _disk_space_monitor_shard0.emplace(abort_sources.local(), data_dir_path, dsm_cfg);
             _disk_space_monitor_shard0->start().get();
@@ -908,7 +910,8 @@ private:
                 std::ref(_topology_state_machine),
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
-                compression_dict_updated_callback
+                compression_dict_updated_callback,
+                only_on_shard0(&*_disk_space_monitor_shard0)
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
@@ -1155,6 +1158,10 @@ public:
 
     virtual sharded<qos::service_level_controller>& service_level_controller_service() override {
         return _sl_controller;
+    }
+
+    utils::disk_space_monitor& disk_space_monitor() override {
+        return *_disk_space_monitor_shard0;
     }
 
     db::config& db_config() override {
