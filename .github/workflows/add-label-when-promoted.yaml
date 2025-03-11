@@ -7,7 +7,7 @@ on:
       - branch-*.*
       - enterprise
   pull_request_target:
-    types: [labeled]
+    types: [labeled, unlabeled]
     branches: [master, next, enterprise]
 
 jobs:
@@ -64,8 +64,17 @@ jobs:
             echo "Label does not match the required pattern."
             echo "backport_label=false" >> $GITHUB_OUTPUT
           fi
+      - name: check if 'scylladbbot/backport_error' label was removed
+        id: check_backport_error_label
+        run: |
+          label_name="${{ github.event.label.name }}"
+          if [[ "$label_name" == scylladbbot/backport_error ]]; then
+            echo "backport_error_label=true" >> $GITHUB_OUTPUT
+          else
+            echo "backport_error_label=false" >> $GITHUB_OUTPUT
+          fi
       - name: Run auto-backport.py when label was added
-        if: ${{ github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed' }}
+        if: ${{ github.event_name == 'pull_request_target' && steps.check_label.outputs.backport_label == 'true' && github.event.pull_request.state == 'closed' && steps.check_backport_error_label.outputs.backport_error_label == 'false' }}
         env:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }}
