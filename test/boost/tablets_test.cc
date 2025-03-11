@@ -1389,11 +1389,14 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 
 static
 void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
-    for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
+    const auto& table_groups = tm.tablets().all_base_tables();
+    for (auto [base_table_id, resize_decision] : plan.resize_plan().resize) {
+      for (auto table_id : table_groups.at(base_table_id)) {
         tm.tablets().mutate_tablet_map(table_id, [&] (tablet_map& tmap) {
             resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
             tmap.set_resize_decision(resize_decision);
         });
+      }
     }
 }
 
@@ -1401,10 +1404,12 @@ static
 future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migration_plan& plan) {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
+    auto tm = stm.get();
+    const auto& table_groups = tm->tablets().all_base_tables();
     bool changed = false;
 
-    for (auto table_id : plan.resize_plan().finalize_resize) {
-        auto tm = stm.get();
+    for (auto base_table_id : plan.resize_plan().finalize_resize) {
+      for (auto table_id : table_groups.at(base_table_id)) {
         const auto& old_tmap = tm->tablets().get_tablet_map(table_id);
 
         auto new_tmap = co_await talloc.resize_tablets(tm, table_id);
@@ -1417,6 +1422,7 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
             tm.tablets().set_tablet_map(table_id, std::move(new_tmap));
             return make_ready_future<>();
         });
+      }
     }
 
     if (changed) {
@@ -1434,13 +1440,16 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
+    const auto& table_groups = tm.tablets().all_base_tables();
     for (auto&& mig : plan.migrations()) {
-        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+      for (auto table : table_groups.at(mig.tablet.table)) {
+        tm.tablets().mutate_tablet_map(table, [&] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             testlog.trace("Replacing tablet {} replica from {} to {}", mig.tablet.tablet, mig.src, mig.dst);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
             tmap.set_tablet(mig.tablet.tablet, tinfo);
         });
+      }
     }
     apply_resize_plan(tm, plan);
 }
