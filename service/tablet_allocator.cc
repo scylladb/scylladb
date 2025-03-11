@@ -8,6 +8,7 @@
 
 #include "locator/tablets.hh"
 #include "replica/tablets.hh"
+#include "replica/tablet_mutation_builder.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "replica/database.hh"
 #include "service/migration_listener.hh"
@@ -3158,7 +3159,20 @@ public:
         auto&& rs = ks.get_replication_strategy();
         if (rs.uses_tablets()) {
             auto tm = _db.get_shared_token_metadata().get();
+            const auto& table_groups = tm->tablets().all_base_tables();
             lblogger.debug("Dropping tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
+            if (auto group = table_groups.find(s.id()); group != table_groups.end() && group->second.size() > 1) {
+                // if we have child tables pointing to this table, remove the
+                // references to avoid references to non-existing map
+                for (auto t : group->second) {
+                    if (t != s.id()) {
+                        muts.emplace_back(
+                            replica::tablet_mutation_builder(ts, t)
+                                .del_base_table()
+                                .build());
+                    }
+                }
+            }
             muts.emplace_back(make_drop_tablet_map_mutation(s.id(), ts));
         }
     }
