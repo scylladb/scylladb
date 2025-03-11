@@ -43,6 +43,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     using comps_vector = utils::small_vector<std::string, sstables::num_component_types>;
     using comps_map = std::unordered_map<sstables::generation_type, comps_vector>;
     comps_map _sstable_comps;
+    std::vector<sstables::generation_type> _deleted_sstables;
 
     future<> do_backup();
     future<> upload_component(sstring name);

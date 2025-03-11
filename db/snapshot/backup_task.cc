@@ -136,6 +136,14 @@ future<> backup_task_impl::process_snapshot_dir() {
                 const auto& gen = desc.generation;
                 _sstable_comps[gen].emplace_back(name);
                 ++num_sstable_comps;
+
+                // When the SSTable is only linked-to by the snapshot directory,
+                // it is already deleted from the table's base directory, and
+                // therefore it better be uploaded earlier to free-up its capacity.
+                if (desc.component == sstables::component_type::Data && st.number_of_links == 1) {
+                    snap_log.debug("backup_task: SSTable with generation {} is already deleted from the table", gen);
+                    _deleted_sstables.push_back(gen);
+                }
             } catch (const sstables::malformed_sstable_exception&) {
                 _files.emplace_back(name);
             }
@@ -216,6 +224,20 @@ void backup_task_impl::dequeue_sstable() {
     auto to_backup = _sstable_comps.begin();
     if (to_backup == _sstable_comps.end()) {
         return;
+    }
+    // Prioritize stables that were already deleted
+    // for the table, to free up their capacity earlier.
+    while (!_deleted_sstables.empty()) {
+        auto gen = _deleted_sstables.back();
+        _deleted_sstables.pop_back();
+        auto it = _sstable_comps.find(gen);
+        // It is possible that the sstable was already backed up
+        // so silently skip this generation
+        // and keep looking for another candidate
+        if (it != _sstable_comps.end()) {
+            to_backup = it;
+            break;
+        }
     }
     auto ent = _sstable_comps.extract(to_backup);
     snap_log.debug("Backing up SSTable generation {}", ent.key());
