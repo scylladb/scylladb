@@ -464,3 +464,58 @@ async def test_tablet_split_and_merge(manager: ManagerClient, split_table: str):
 
         other_tablet_count = await get_tablet_count(manager, servers[0], ks, other_table)
         assert tablet_count == other_tablet_count
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_revert_migration(manager: ManagerClient):
+    cfg = {'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+    servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await cql.run_async(f"CREATE TABLE {ks}.test_colocation (pk int PRIMARY KEY, c int);")
+
+        table = 'test'
+
+        total_keys = 200
+        keys = range(total_keys)
+        def populate(keys, tab):
+            insert = cql.prepare(f"INSERT INTO {ks}.{tab}(pk, c) VALUES(?, ?)")
+            for pk in keys:
+                value = pk+1
+                cql.execute(insert, [pk, value])
+        populate(keys, 'test')
+        populate(keys, 'test_colocation')
+
+        async def check():
+            logger.info("Checking table")
+            cql = manager.get_cql()
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
+            assert len(rows) == len(keys)
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test_colocation BYPASS CACHE;")
+            assert len(rows) == len(keys)
+
+        await check()
+
+        await inject_error_one_shot_on(manager, "stream_tablet_fail", servers)
+        await inject_error_on(manager, "stream_tablet_move_to_cleanup", servers)
+
+        servers.append(await manager.server_add(config=cfg, cmdline=cmdline))
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+        logger.info("Migrate the tablet to node 2")
+        tablet_token = 0 # Doesn't matter since there is one tablet
+        replica = await get_tablet_replica(manager, servers[0], ks, table, tablet_token)
+        await manager.api.move_tablet(servers[0].ip_addr, ks, table, replica[0], replica[1], s1_host_id, 0, tablet_token)
+        logger.info("Migration done")
+
+        await assert_colocation(manager, servers[0], ks, 'test', 'test_colocation')
+
+        await check()

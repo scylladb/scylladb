@@ -6041,6 +6041,8 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         if (pending_replica->host != tm->get_my_id()) {
             throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
         }
+        utils::get_local_injector().inject("stream_tablet_fail",
+            [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
 
         auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
