@@ -2879,6 +2879,114 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     }, tablet_cql_test_config()).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tablet_options_with_colocated_tablets) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        topo.add_node(node_state::normal, 3);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': 32}}", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1_colocation (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': 8}}", ks_name1)).get();
+        auto table2 = e.local_db().find_schema(ks_name1, "table1_colocation")->id();
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0);
+        load_stats.set_size(table2, 0);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 32);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 32);
+        }
+
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
+                                  "WITH tablets = {{'min_tablet_count': 2}}", ks_name1)).get();
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 8);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 8);
+        }
+    }, tablet_cql_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1(tmap);
+            tablet_map tmap2(tmap);
+
+            tmap2.set_base_table(table1);
+
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            tmeta.set_tablet_map(table2, std::move(tmap2));
+            return make_ready_future<>();
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+
+        const uint64_t target_tablet_size = service::default_target_tablet_size;
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        // avg tablet size = 3.5 * target > 2 * target
+        load_stats.set_size(table1, 3*target_tablet_size);
+        load_stats.set_size(table2, 4*target_tablet_size);
+
+        rebalance_tablets(e, &load_stats);
+
+        auto tablet_count_after_split = stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        BOOST_REQUIRE_EQUAL(tablet_count_after_split, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(tablet_count_after_split, 2);
+
+        // avg tablet size = (0.6 / 2) * target = 0.3 * target < 0.5 * target
+        load_stats.set_size(table1, 1.1*target_tablet_size);
+        load_stats.set_size(table2, 0.1*target_tablet_size);
+
+        rebalance_tablets(e, &load_stats);
+
+        auto tablet_count_after_merge = stm.get()->tablets().get_tablet_map(table1).tablet_count();
+        BOOST_REQUIRE_EQUAL(tablet_count_after_merge, stm.get()->tablets().get_tablet_map(table2).tablet_count());
+        BOOST_REQUIRE_EQUAL(tablet_count_after_merge, 1);
+    }).get();
+}
+
 // This test verifies that per-table tablet count is adjusted
 // in reaction to changes of relevant config and schema options.
 SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
