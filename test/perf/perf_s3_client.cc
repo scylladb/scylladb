@@ -158,9 +158,9 @@ int main(int argc, char** argv) {
         sharded<tester> test;
         plog.info("Creating");
         co_await test.start(dur, sks, part_size, oname, osz);
-        plog.info("Starting");
-        co_await test.invoke_on_all(&tester::start);
         try {
+            plog.info("Starting");
+            co_await test.invoke_on_all(&tester::start);
             plog.info("Running");
             if (upload) {
                 co_await test.invoke_on_all(&tester::run_upload);
