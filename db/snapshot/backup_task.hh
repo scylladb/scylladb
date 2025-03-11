@@ -22,6 +22,14 @@
 #include "sstables/component_type.hh"
 #include "sstables/generation_type.hh"
 
+namespace replica {
+    class database;
+}
+
+namespace sstables {
+class sstables_manager;
+}
+
 namespace db {
 class snapshot_ctl;
 
@@ -44,6 +52,18 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     using comps_map = std::unordered_map<sstables::generation_type, comps_vector>;
     comps_map _sstable_comps;
     std::vector<sstables::generation_type> _deleted_sstables;
+
+    class worker {
+        sstables::sstables_manager& _manager;
+
+    public:
+        worker(const replica::database& db, table_id t);
+
+        sstables::sstables_manager& manager() const noexcept {
+            return _manager;
+        }
+    };
+    sharded<worker> _sharded_worker;
 
     future<> do_backup();
     future<> upload_component(sstring name);

@@ -112,7 +112,15 @@ future<> backup_task_impl::do_backup() {
 
     co_await process_snapshot_dir();
 
-    co_await uploads_worker();
+    co_await _sharded_worker.start(std::ref(_snap_ctl.db()), _table_id);
+
+    try {
+        co_await uploads_worker();
+    } catch (...) {
+        _ex = std::current_exception();
+    }
+
+    co_await _sharded_worker.stop();
 
     if (_ex) {
         co_await coroutine::return_exception_ptr(std::move(_ex));
@@ -244,6 +252,11 @@ void backup_task_impl::dequeue_sstable() {
     for (auto& name : ent.mapped()) {
         _files.emplace_back(std::move(name));
     }
+}
+
+backup_task_impl::worker::worker(const replica::database& db, table_id t)
+    : _manager(db.get_sstables_manager(*db.find_schema(t)))
+{
 }
 
 future<> backup_task_impl::run() {
