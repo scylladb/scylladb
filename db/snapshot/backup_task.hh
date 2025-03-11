@@ -15,6 +15,7 @@
 #include <unordered_map>
 
 #include <seastar/core/gate.hh>
+#include <seastar/core/semaphore.hh>
 
 #include "utils/s3/client_fwd.hh"
 #include "utils/small_vector.hh"
@@ -71,6 +72,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     future<> uploads_worker();
     struct upload_permit {
         gate::holder gh;
+        semaphore_units<> units;
     };
     future<> backup_file(sstring name, upload_permit permit);
     // Returns a disengaged optional when done

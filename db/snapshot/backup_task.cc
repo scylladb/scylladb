@@ -20,6 +20,9 @@
 #include "schema/schema_fwd.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_directory.hh"
+#include "sstables/sstables_manager.hh"
+#include "sstables/component_type.hh"
 #include "utils/error_injection.hh"
 
 extern logging::logger snap_log;
@@ -176,6 +179,7 @@ future<> backup_task_impl::uploads_worker() {
     try {
         while (!_ex) {
             auto gh = uploads.hold();
+            auto units = co_await _sharded_worker.local().manager().dir_semaphore().get_units(1, _as);
 
             // Pre-upload break point. For testing abort in actual s3 client usage.
             co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
@@ -185,7 +189,7 @@ future<> backup_task_impl::uploads_worker() {
                 break;
             }
             // okay to drop future since uploads is always closed before exiting the function
-            std::ignore = backup_file(std::move(*name_opt), upload_permit(std::move(gh)));
+            std::ignore = backup_file(std::move(*name_opt), upload_permit(std::move(gh), std::move(units)));
             co_await coroutine::maybe_yield();
             co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
             if (impl::_as.abort_requested()) {
