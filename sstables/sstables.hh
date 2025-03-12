@@ -1118,7 +1118,7 @@ future<> init_metrics();
 class file_io_extension {
 public:
     virtual ~file_io_extension() {}
-    virtual future<file> wrap_file(sstable&, component_type, file, open_flags flags) = 0;
+    virtual future<file> wrap_file(const sstable&, component_type, file, open_flags flags) = 0;
     // optionally return a map of attributes for a given sstable,
     // suitable for "describe".
     // This would preferably be interesting info on what/why the extension did
