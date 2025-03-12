@@ -12,6 +12,7 @@ import glob
 import itertools
 import functools
 import json
+import logging
 import os
 import pathlib
 import pytest
@@ -26,6 +27,9 @@ from . import nodetool
 from . import util
 from typing import Iterable, Type, Union
 from cassandra.util import Duration
+
+
+logger = logging.getLogger(__name__)
 
 
 def simple_no_clustering_table(cql, keyspace):
@@ -1590,6 +1594,7 @@ def test_scylla_sstable_query_bad_command_line(cql, scylla_path, scylla_data_dir
 
         def check(bad_params):
             res = subprocess.run(common_params + bad_params + sstables, text=True, capture_output=True)
+            logger.debug(f"scylla-sstable call result: {res}")
             assert res.returncode == 1
             assert res.stdout == ""
             assert res.stderr.endswith("error processing arguments: cannot provide both -q|--query and --query-file\n")
@@ -1607,6 +1612,7 @@ def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
 
         def check(bad_query, expected_error):
             res = subprocess.run(common_params + [bad_query] + sstables, text=True, capture_output=True)
+            logger.debug(f"scylla-sstable call result: {res}")
             assert res.returncode == 1
             assert res.stdout == ""
             assert "error processing arguments: " + expected_error in res.stderr
@@ -1634,6 +1640,8 @@ def test_scylla_sstable_query_temp_dir(cql, scylla_path, scylla_data_dir):
         with tempfile.NamedTemporaryFile("r") as f:
             args = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local"]
             res = subprocess.run(args + sstables, text=True, capture_output=True, env={'TEMPDIR': f.name})
+
+        logger.debug(f"scylla-sstable call result: {res}")
 
         assert res.returncode == 2
         assert res.stdout == ""
