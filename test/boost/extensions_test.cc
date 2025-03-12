@@ -71,7 +71,7 @@ SEASTAR_TEST_CASE(simple_sstable_extension) {
 
     class dummy_ext : public file_io_extension {
     public:
-        future<file> wrap_file(sstable& t, component_type type, file, open_flags flags) override {
+        future<file> wrap_file(const sstable& t, component_type type, file, open_flags flags) override {
             if (type == component_type::Data && t.get_schema()->cf_name() == "cf") {
                 ++counter;
             }
