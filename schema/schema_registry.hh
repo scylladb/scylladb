@@ -22,8 +22,13 @@ class schema_ctxt;
 
 class schema_registry;
 
-using async_schema_loader = std::function<future<frozen_schema>(table_schema_version)>;
-using schema_loader = std::function<frozen_schema(table_schema_version)>;
+struct base_and_view_schemas {
+    frozen_schema schema;
+    std::optional<schema_ptr> base_schema;
+};
+
+using async_schema_loader = std::function<future<base_and_view_schemas>(table_schema_version)>;
+using schema_loader = std::function<base_and_view_schemas(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
 public:
@@ -61,6 +66,8 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
 
     std::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
+    std::optional<schema_ptr> _base_schema;// engaged when state == LOADED for view schemas
+
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
     const ::schema* _schema = nullptr;
@@ -77,7 +84,7 @@ public:
     schema_registry_entry(schema_registry_entry&&) = delete;
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
-    schema_ptr load(frozen_schema);
+    schema_ptr load(base_and_view_schemas);
     schema_ptr load(schema_ptr);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
@@ -87,6 +94,9 @@ public:
     future<> maybe_sync(std::function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
+    // Updates the frozen base schema for a view, should be called when updating the base info
+    // Is not needed when we set the base info for the first time - that means this schema is not in the registry
+    void update_base_schema(schema_ptr);
     // Can be called from other shards
     frozen_schema frozen() const;
     // Can be called from other shards
@@ -108,6 +118,7 @@ public:
 // alive the registry will keep its entry. To ensure remote nodes can query current node
 // for schema version, make sure that schema_ptr for the request is alive around the call.
 //
+// Schemas of views returned by this registry always have base_info set.
 class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
@@ -125,6 +136,7 @@ public:
     void init(const db::schema_ctxt&);
 
     // Looks up schema by version or loads it using supplied loader.
+    // If the schema refers to a view, the loader must return both view and base schemas.
     schema_ptr get_or_load(table_schema_version, const schema_loader&);
 
     // Looks up schema by version or returns an empty pointer if not available.
@@ -134,6 +146,7 @@ public:
     // deferring. The loader is copied must be alive only until this method
     // returns. If the loader fails, the future resolves with
     // schema_version_loading_failed.
+    // If the schema refers to a view, the loader must return both view and base schemas.
     future<schema_ptr> get_or_load(table_schema_version, const async_schema_loader&);
 
     // Looks up schema version. Throws schema_version_not_found when not found
@@ -149,6 +162,7 @@ public:
     // the schema which was passed as argument.
     // The schema instance pointed to by the argument will be attached to the registry
     // entry and will keep it alive.
+    // If the schema refers to a view, it must have base_info set.
     schema_ptr learn(const schema_ptr&);
 
     // Removes all entries from the registry. This in turn removes all dependencies
