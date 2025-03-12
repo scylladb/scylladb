@@ -1951,6 +1951,14 @@ public:
     /** This callback is going to be called just before the service level is changed **/
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
     virtual future<> on_effective_service_levels_cache_reloaded() override;
+
+    // Verify that the existing keyspaces are all RF-rack-valid.
+    //
+    // Preconditions:
+    // * the option `rf_rack_valid_keyspaces` in enabled,
+    // * the passed `locator::topology` reference must contain a complete list
+    //   of racks and data centers in the cluster.
+    void check_rf_rack_validity(const locator::topology&) const;
 };
 
 // A helper function to parse the directory name back
