@@ -2382,6 +2382,15 @@ void system_keyspace::mark_writable() {
     }
 }
 
+static service::query_state& internal_system_query_state() {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
+
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<replica::database>& db, schema_ptr schema) {
     return replica::query_mutations(db, schema, query::full_partition_range, schema->full_slice(), db::no_timeout);
@@ -2952,15 +2961,6 @@ future<system_keyspace::auth_version_t> system_keyspace::get_auth_version() {
 future<std::optional<mutation>> system_keyspace::get_auth_version_mutation() {
     return get_scylla_local_mutation(_db, AUTH_VERSION_KEY);
 }
-
-static service::query_state& internal_system_query_state() {
-    using namespace std::chrono_literals;
-    const auto t = 10s;
-    static timeout_config tc{ t, t, t, t, t, t, t };
-    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
-    static thread_local service::query_state qs(cs, empty_service_permit());
-    return qs;
-};
 
 future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type ts, db::system_keyspace::auth_version_t version) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
