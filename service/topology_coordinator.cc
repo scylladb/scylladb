@@ -1537,7 +1537,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // we don't handle them here.
             // we only need to handle stages like repair which work on independent tables and not on table groups.
             switch (trinfo.stage) {
-                case locator::tablet_transition_stage::allow_write_both_read_old:
+                case locator::tablet_transition_stage::allow_write_both_read_old: {
+                    auto base_table = get_token_metadata_ptr()->tablets().get_base_table(table);
+                    if (base_table != table) {
+                        auto& base_tmap = get_token_metadata_ptr()->tablets().get_tablet_map(base_table);
+                        auto base_trinfo = base_tmap.get_tablet_transition_info(gid.tablet);
+                        SCYLLA_ASSERT(base_trinfo && base_trinfo->stage == locator::tablet_transition_stage::allow_write_both_read_old);
+                    }
+                }
+                    break;
                 case locator::tablet_transition_stage::write_both_read_old:
                 case locator::tablet_transition_stage::streaming:
                 case locator::tablet_transition_stage::write_both_read_new:

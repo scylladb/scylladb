@@ -928,6 +928,7 @@ private:
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();
     future<> track_upgrade_progress_to_topology_coordinator(sharded<service::storage_proxy>& proxy);
 
+    void generate_migration_update(std::vector<canonical_mutation>& updates, table_id table, dht::token last_token, locator::tablet_replica_set new_replicas, locator::tablet_transition_kind kind, api::timestamp_type ts, std::optional<locator::tablet_task_info> migration_task_info = std::nullopt);
     future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
     future<service::group0_guard> get_guard_for_tablet_update();
     future<bool> exec_tablet_update(service::group0_guard guard, std::vector<canonical_mutation> updates, sstring reason);
