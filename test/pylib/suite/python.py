@@ -154,6 +154,7 @@ class PythonTest(Test):
         self.args = [
             "-s",  # don't capture print() output inside pytest
             "--log-level=DEBUG",   # Capture logs
+            "-vv",
             "-o",
             "junit_family=xunit2",
             "-o",

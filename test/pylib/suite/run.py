@@ -47,6 +47,7 @@ class RunTest(Test):
         self.xmlout = os.path.join(suite.options.tmpdir, self.mode, "xml", self.uname + ".xunit.xml")
         self.args = [
             "--junit-xml={}".format(self.xmlout),
+            "-vv",
             "-o",
             "junit_suite_name={}".format(self.suite.name)
         ]
