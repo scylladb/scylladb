@@ -140,6 +140,9 @@ public:
     void add_per_partition_rate_limit_extension();
     void add_tags_extension();
     void add_tombstone_gc_extension();
+    void add_paxos_grace_seconds_extension();
+
+    void add_all_default_extensions();
 
     /// True iff the feature is enabled.
     bool check_experimental(experimental_features_t::feature f) const;
