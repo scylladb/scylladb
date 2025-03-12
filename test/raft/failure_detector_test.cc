@@ -12,7 +12,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/testing/test_case.hh>
 
-#include "direct_failure_detector/failure_detector.hh"
+#include "service/direct_failure_detector/failure_detector.hh"
 
 #include "test/raft/helpers.hh"
 
