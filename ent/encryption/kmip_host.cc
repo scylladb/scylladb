@@ -753,8 +753,7 @@ std::tuple<kmip_host::impl::kmip_data_list, unsigned int> kmip_host::impl::make_
                         const_cast<char*>(info.options.key_namespace.c_str()))
                         );
     }
-    sstring type, mode, padd;
-    std::tie(type, mode, padd) = parse_key_spec_and_validate_defaults(info.info.alg);
+    auto [type, mode, padding] = parse_key_spec_and_validate_defaults(info.info.alg);
 
     try {
         auto crypt_alg = from_str(&KMIP_string_to_CRYPTOGRAPHIC_ALGORITHM, type, "cryptographic algorithm");
@@ -954,7 +953,7 @@ future<shared_ptr<symmetric_key>> kmip_host::impl::find_key(const id_type& id) {
 
             sstring alg;
             sstring mode;
-            sstring padd;
+            sstring padding;
 
             // "Get" result
             auto kdl_res = KMIP_CMD_get_batch(cmd, 0);
@@ -1003,7 +1002,7 @@ future<shared_ptr<symmetric_key>> kmip_host::impl::find_key(const id_type& id) {
                     mode = tag_to_string(&KMIP_BLOCK_CIPHER_MODE_to_string, attr_val->data32);
                     break;
                 case KMIP_TAG_PADDING_METHOD:
-                    padd = tag_to_string(&KMIP_PADDING_METHOD_to_string, attr_val->data32);
+                    padding = tag_to_string(&KMIP_PADDING_METHOD_to_string, attr_val->data32);
                     break;
                 default:
                     break;
@@ -1013,11 +1012,11 @@ future<shared_ptr<symmetric_key>> kmip_host::impl::find_key(const id_type& id) {
             if (alg.empty()) {
                 throw configuration_error("Could not find algorithm");
             }
-            if (mode.empty() != padd.empty()) {
+            if (mode.empty() != padding.empty()) {
                 throw configuration_error("Invalid block mode/padding");
             }
 
-            auto str = mode.empty() || padd.empty() ? alg : alg + "/" + mode + "/" + padd;
+            auto str = mode.empty() || padding.empty() ? alg : alg + "/" + mode + "/" + padding;
             key_info derived_info{ str, keylen*8};
 
             kmip_log.trace("{}: Found {}:{} {}", _name, uuid, derived_info.alg, derived_info.len);

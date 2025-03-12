@@ -88,22 +88,22 @@ encryption::parse_key_spec(const sstring& alg) {
 
     auto type = m[1].str();
     auto mode = m[2].str();
-    auto padd = m[3].str();
+    auto pad = m[3].str();
 
     std::transform(type.begin(), type.end(), type.begin(), ::tolower);
     std::transform(mode.begin(), mode.end(), mode.begin(), ::tolower);
-    std::transform(padd.begin(), padd.end(), padd.begin(), ::tolower);
+    std::transform(pad.begin(), pad.end(), pad.begin(), ::tolower);
 
     static constexpr std::string_view padding = "padding";
-    if (padd.ends_with(padding)) {
-        padd.resize(padd.size() - padding.size());
+    if (pad.ends_with(padding)) {
+        pad.resize(pad.size() - padding.size());
     }
 
-    return std::make_tuple<sstring, sstring, sstring>(type, mode, padd);
+    return std::make_tuple<sstring, sstring, sstring>(type, mode, pad);
 }
 
 std::tuple<sstring, sstring, sstring> encryption::parse_key_spec_and_validate_defaults(const sstring& alg) {
-    auto [type, mode, padd] = parse_key_spec(alg);
+    auto [type, mode, padding] = parse_key_spec(alg);
 
     // openssl AND kmip server(s?) does not allow missing block mode. so default one.
     if (mode.empty()) {
@@ -115,14 +115,14 @@ std::tuple<sstring, sstring, sstring> encryption::parse_key_spec_and_validate_de
     // (note: pcks5 is sortof a misnomeanor here, as in the Sun world, it
     // sort of means "pkcs7 with automatic block size" - which is pretty
     // much how things are in the OpenSSL universe as well)
-    if (padd == "no") {
-        padd = "";
+    if (padding == "no") {
+        padding = "";
     }
-    if (!padd.empty() && padd != "pkcs5" && padd != "pkcs" && padd != "pkcs7") {
-        throw std::invalid_argument("non-supported padding option: " + padd);
+    if (!padding.empty() && padding != "pkcs5" && padding != "pkcs" && padding != "pkcs7") {
+        throw std::invalid_argument("non-supported padding option: " + padding);
     }
 
-    return { type, mode, padd };
+    return { type, mode, padding };
 }
 
 encryption::symmetric_key::symmetric_key(const key_info& info, const bytes& key)
@@ -134,8 +134,7 @@ encryption::symmetric_key::symmetric_key(const key_info& info, const bytes& key)
         throw std::bad_alloc();
     }
 
-    sstring type, mode, padd;
-    std::tie(type, mode, padd) = parse_key_spec_and_validate_defaults(info.alg);
+    auto [type, mode, padding] = parse_key_spec_and_validate_defaults(info.alg);
 
     // Note: we are using some types here that are explicitly marked as "unsupported - placeholder"
     // in gnutls.
@@ -209,7 +208,7 @@ encryption::symmetric_key::symmetric_key(const key_info& info, const bytes& key)
 
     _iv_len = EVP_CIPHER_CTX_iv_length(*this);
     _block_size = EVP_CIPHER_CTX_block_size(*this);
-    _padding = !padd.empty();
+    _padding = !padding.empty();
 
 }
 
