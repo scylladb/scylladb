@@ -4581,7 +4581,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
                 return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
-        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state);
+        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state, can_always_purge);
         auto close_rd = deferred_close(rd1);
         rd1.fill_buffer().get(); // cache_mutation_reader compacts cache on fill buffer
 
