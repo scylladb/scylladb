@@ -1944,6 +1944,12 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     // assume failure until proven otherwise
     auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
 
+    utils::get_local_injector().inject("database_apply", [&s] () {
+        if (!is_system_keyspace(s->ks_name())) {
+            throw std::runtime_error("injected error");
+        }
+    });
+
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
     // initied from datadir.
