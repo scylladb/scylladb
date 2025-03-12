@@ -4582,7 +4582,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
                 return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
-        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state);
+        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state, can_always_purge);
         auto close_rd = deferred_close(rd1);
         rd1.fill_buffer().get(); // cache_mutation_reader compacts cache on fill buffer
 
@@ -4660,7 +4660,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         set_cells_timestamp_to_min(cp.clustered_row(*s.schema(), ck3));
 
         {
-            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state);
+            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
             auto close_rd1 = deferred_close(rd1);
             rd1.fill_buffer().get();
 
@@ -4672,7 +4672,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         }
 
         {
-            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state);
+            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
             auto close_rd2 = deferred_close(rd2);
             rd2.fill_buffer().get();
 
