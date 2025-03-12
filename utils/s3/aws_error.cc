@@ -13,6 +13,7 @@
 #endif
 
 #include "aws_error.hh"
+#include <gnutls/gnutls.h>
 #include <memory>
 
 namespace aws {
@@ -140,6 +141,25 @@ aws_error aws_error::from_system_error(const std::system_error& system_error) {
     default:
         return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::no};
     }
+}
+
+aws_error aws_error::from_maybe_nested_exception(const std::exception& maybe_nested_error) {
+    const std::exception* current_exception = &maybe_nested_error;
+    while (current_exception) {
+        if (auto sys_error = dynamic_cast<const std::system_error*>(current_exception)) {
+            return from_system_error(*sys_error);
+        }
+        try {
+            std::rethrow_if_nested(*current_exception);
+        } catch (const std::exception& inner) {
+            current_exception = &inner;
+            continue;
+        } catch (...) {
+            break;
+        }
+        current_exception = nullptr;
+    }
+    return {aws_error_type::UNKNOWN, maybe_nested_error.what(), retryable::no};
 }
 
 const aws_errors& aws_error::get_errors() {
