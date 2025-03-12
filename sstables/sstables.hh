@@ -1119,6 +1119,11 @@ class file_io_extension {
 public:
     virtual ~file_io_extension() {}
     virtual future<file> wrap_file(const sstable&, component_type, file, open_flags flags) = 0;
+
+    // same intent as wrap_file, but a data_sink, i.e. write-only, simplified
+    // output device. Default impl will call wrap_file and generate a wrapper object.
+    virtual future<data_sink> wrap_sink(const sstable&, component_type, data_sink);
+
     // optionally return a map of attributes for a given sstable,
     // suitable for "describe".
     // This would preferably be interesting info on what/why the extension did

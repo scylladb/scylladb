@@ -82,6 +82,9 @@
 
 #include "release.hh"
 #include "utils/build_id.hh"
+#include "utils/io-wrappers.hh"
+
+#include <boost/lexical_cast.hpp>
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -3635,6 +3638,18 @@ generation_type::from_string(const std::string& s) {
         int64_t lsb = decode_base36(match[4]);
         return generation_type{utils::UUID_gen::get_time_UUID_raw(timestamp, lsb)};
     }
+}
+
+future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_type c, data_sink sink) {
+    file dummy = create_noop_file();
+    auto f = co_await wrap_file(sst, c, std::move(dummy), open_flags::wo);
+
+    if (!f) {
+        co_return sink;
+    }
+    co_await f.close();
+    f = co_await wrap_file(sst, c, create_file_for_sink(std::move(sink)), open_flags::wo);
+    co_return co_await make_file_data_sink(std::move(f), file_output_stream_options{});
 }
 
 } // namespace sstables
