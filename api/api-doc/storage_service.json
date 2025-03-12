@@ -2836,7 +2836,7 @@
                "nickname":"repair_tablet",
                "method":"POST",
                "summary":"Repair a tablet",
-               "type":"void",
+               "type":"tablet_repair_result",
                "produces":[
                   "application/json"
                ],
@@ -3309,6 +3309,15 @@
                 "items":{
                     "$ref":"sstable"
                 }
+            }
+        }
+      },
+      "tablet_repair_result":{
+        "id":"tablet_repair_result",
+        "description":"Tablet repair result",
+        "properties":{
+            "tablet_task_id":{
+                "type":"string"
             }
         }
       }
