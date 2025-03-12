@@ -28,7 +28,7 @@ retryable_http_client::retryable_http_client(std::unique_ptr<http::experimental:
     assert(_error_handler);
 }
 
-future<> retryable_http_client::do_retryable_request(http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
+future<> retryable_http_client::do_retryable_request(http::request& req, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
     // TODO: the http client does not check abort status on entry, and if
     // we're already aborted when we get here we will paradoxally not be
     // interrupted, because no registration etc will be done. So do a quick
@@ -71,13 +71,13 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
     }
 }
 
-future<> retryable_http_client::make_request(http::request req,
-                                             http::experimental::client::reply_handler handle,
+future<> retryable_http_client::make_request(http::request& req,
+                                             http::experimental::client::reply_handler& handle,
                                              std::optional<http::reply::status_type> expected,
                                              seastar::abort_source* as) {
     co_await do_retryable_request(
-        std::move(req),
-        [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep,
+        req,
+        [&handle, expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep,
                                                                                                   input_stream<char>&& in) mutable -> future<> {
             auto payload = std::move(in);
             auto status_class = http::reply::classify_status(rep._status);
@@ -93,9 +93,18 @@ future<> retryable_http_client::make_request(http::request req,
             if (rep._status != expected) {
                 co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
             }
-            co_await handler(rep, std::move(payload));
+            co_await handle(rep, std::move(payload));
         },
         as);
+}
+
+future<> retryable_http_client::make_request(http::request&& req,
+                                             http::experimental::client::reply_handler&& handler,
+                                             std::optional<http::reply::status_type> expected,
+                                             abort_source* as) {
+    auto request = std::move(req);
+    auto reply_handler = std::move(handler);
+    co_await make_request(request, reply_handler, expected, as);
 }
 
 future<> retryable_http_client::close() {
