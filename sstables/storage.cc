@@ -22,6 +22,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
@@ -125,6 +126,23 @@ future<> filesystem_storage::rename_new_file(const sstable& sst, sstring from_na
     });
 }
 
+static future<file> maybe_wrap_file(const sstable& sst, component_type type, open_flags flags, future<file> f) {
+    if (type != component_type::TOC && type != component_type::TemporaryTOC) {
+        for (auto * ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
+            f = with_file_close_on_failure(std::move(f), [ext, &sst, type, flags] (file f) {
+               return ext->wrap_file(sst, type, f, flags).then([f](file nf) mutable {
+                   return nf ? nf : std::move(f);
+               });
+            });
+        }
+    }
+    return f;
+}
+
+static future<file> maybe_wrap_file(const sstable& sst, component_type type, open_flags flags, file f) {
+    return maybe_wrap_file(sst, type, flags, make_ready_future<file>(std::move(f)));
+}
+
 future<file> filesystem_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
     auto create_flags = open_flags::create | open_flags::exclusive;
     auto readonly = (flags & create_flags) != create_flags;
@@ -141,7 +159,7 @@ future<file> filesystem_storage::open_component(const sstable& sst, component_ty
         });
     }
 
-    return f;
+    return maybe_wrap_file(sst, type, flags, std::move(f));
 }
 
 void filesystem_storage::open(sstable& sst) {
@@ -588,17 +606,35 @@ void s3_storage::open(sstable& sst) {
 }
 
 future<file> s3_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
-    co_return _client->make_readable_file(make_s3_object_name(sst, type), _as);
+    return maybe_wrap_file(sst, type, flags, _client->make_readable_file(make_s3_object_name(sst, type), _as));
+}
+
+static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type, data_sink sink) {
+    if (type != component_type::TOC && type != component_type::TemporaryTOC) {
+        for (auto* ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
+            std::exception_ptr p;
+            try {
+                sink = co_await ext->wrap_sink(sst, type, std::move(sink));
+            } catch (...) {
+                p = std::current_exception();
+            }
+            if (p) {
+                co_await sink.close();
+                std::rethrow_exception(std::move(p));
+            }
+        }
+    }
+    co_return sink;
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
     SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
-    co_return _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as);
+    return maybe_wrap_sink(sst, type, _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as));
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    co_return _client->make_upload_sink(make_s3_object_name(sst, type), _as);
+    return maybe_wrap_sink(sst, type, _client->make_upload_sink(make_s3_object_name(sst, type), _as));
 }
 
 future<> s3_storage::seal(const sstable& sst) {
