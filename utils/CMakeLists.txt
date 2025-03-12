@@ -54,6 +54,7 @@ target_sources(utils
     stream_compressor.cc
     s3/aws_error.cc
     s3/client.cc
+    s3/retryable_http_client.cc
     s3/retry_strategy.cc
     s3/credentials_providers/aws_credentials_provider.cc
     s3/credentials_providers/environment_aws_credentials_provider.cc
