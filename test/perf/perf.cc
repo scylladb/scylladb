@@ -103,7 +103,7 @@ std::ostream&
 operator<<(std::ostream& os, const aggregated_perf_results& result) {
     for (const auto& s : {"throughput", "instructions_per_op", "cpu_cycles_per_op"}) {
         auto& t = result.stats.at(s);
-        fmt::print(os, "\n{:>19}: mean={:.2f} standard-deviation={:.2f} median={:.2f} median-absolute-deviation={:.2f} maximum={:.2f} minimum={:.2f}",
+        fmt::print(os, "{}:\n\tmean=   {:.2f} standard-deviation={:.2f}\n\tmedian= {:.2f} median-absolute-deviation={:.2f}\n\tmaximum={:.2f} minimum={:.2f}\n",
                 s, t.mean, t.stdev, t.median, t.median_absolute_deviation, t.max, t.min);
     }
     return os;
