@@ -141,18 +141,20 @@ struct migration_badness {
     double src_node_badness = 0;
     double dst_shard_badness = 0;
     double dst_node_badness = 0;
+    size_t group_size = 0;
     bool bad;
 
     migration_badness()
         : bad(false)
     {}
 
-    migration_badness(double src_shard_badness, double src_node_badness, double dst_shard_badness, double dst_node_badness)
+    migration_badness(double src_shard_badness, double src_node_badness, double dst_shard_badness, double dst_node_badness, size_t group_size)
         : src_shard_badness(src_shard_badness)
         , src_node_badness(src_node_badness)
         , dst_shard_badness(dst_shard_badness)
         , dst_node_badness(dst_node_badness)
-        , bad(src_shard_badness > 0 || src_node_badness > 0 || dst_shard_badness > 0 || dst_node_badness > 0)
+        , group_size(group_size)
+        , bad(src_shard_badness > 0 || src_node_badness > 0 || dst_shard_badness > 0 || dst_node_badness > 0 || group_size > 1)
     {}
 
     double node_badness() const {
@@ -171,6 +173,13 @@ struct migration_badness {
         // Prefer candidates with no across-node badness to those with across-node badness.
         // Then, prefer those with lowest shard badness.
         // We want to balance nodes first as balancing nodes internally between shards is cheap.
+        if (group_size != other.group_size) {
+            // Prefer candidates with smaller group size first.
+            // A candidate with a large group size may fail to migrate because
+            // it would cause load inversion, while a smaller candidate could
+            // migrate without load inversion.
+            return group_size < other.group_size;
+        }
         if (node_badness() == other.node_badness()) {
             return shard_badness() < other.shard_badness();
         }
@@ -246,7 +255,7 @@ template<>
 struct fmt::formatter<service::migration_badness> : fmt::formatter<std::string_view> {
     template <typename FormatContext>
     auto format(const service::migration_badness& badness, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{s: {:.4f}, n: {:.4f}}}", badness.shard_badness(), badness.node_badness());
+        return fmt::format_to(ctx.out(), "{{s: {:.4f}, n: {:.4f}, g: {}}}", badness.shard_badness(), badness.node_badness(), badness.group_size);
     }
 };
 
@@ -1632,7 +1641,7 @@ public:
     }
 
     // Evaluates impact on load balance of migrating a single tablet of a given table to dst.
-    migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst) {
+    migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst, size_t group_size) {
         _stats.for_dc(_dc).candidates_evaluated++;
 
         auto& node_info = nodes[dst.host];
@@ -1643,7 +1652,7 @@ public:
         if (node_info.drained) {
             // Moving a tablet to a drained node is always bad.
             // We may not have capacity information for the drained node, so we can't evaluate exact badness.
-            return migration_badness{0, 0, table_size, table_size};
+            return migration_badness{0, 0, table_size, table_size, group_size};
         }
 
         double ideal_table_load = double(table_size) / _total_capacity_storage;
@@ -1664,11 +1673,11 @@ public:
         lblogger.trace("Table {} @{} node balance threshold: {}, dst: {} ({:.4f})", table, dst,
                        node_balance_threshold, new_node_load, dst_node_badness);
 
-        return migration_badness{0, 0, dst_shard_badness, dst_node_badness};
+        return migration_badness{0, 0, dst_shard_badness, dst_node_badness, group_size};
     }
 
     // Evaluates impact on load balance of migrating a single tablet of a given table from src.
-    migration_badness evaluate_src_badness(node_load_map& nodes, table_id table, tablet_replica src) {
+    migration_badness evaluate_src_badness(node_load_map& nodes, table_id table, tablet_replica src, size_t group_size) {
         _stats.for_dc(_dc).candidates_evaluated++;
 
         auto& node_info = nodes[src.host];
@@ -1678,7 +1687,7 @@ public:
 
         if (node_info.drained) {
             // Moving a tablet away from a drained node is always good.
-            return migration_badness{-1, -1, 0, 0};
+            return migration_badness{-1, -1, 0, 0, 0};
         }
 
         double ideal_table_load = double(table_size) / _total_capacity_storage;
@@ -1698,13 +1707,13 @@ public:
         lblogger.trace("Table {} @{} node balance threshold: {}, src: {} ({:.4f})", table, src,
                        leaving_node_balance_threshold, new_node_load, src_node_badness);
 
-        return migration_badness{src_shard_badness, src_node_badness, 0, 0};
+        return migration_badness{src_shard_badness, src_node_badness, 0, 0, group_size};
     }
 
     // Evaluates impact on load balance of migrating a single tablet of a given table from src to dst.
-    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst) {
-        auto src_badness = evaluate_src_badness(nodes, table, src);
-        auto dst_badness = evaluate_dst_badness(nodes, table, dst);
+    migration_badness evaluate_candidate(node_load_map& nodes, table_id table, tablet_replica src, tablet_replica dst, size_t group_size) {
+        auto src_badness = evaluate_src_badness(nodes, table, src, group_size);
+        auto dst_badness = evaluate_dst_badness(nodes, table, dst, group_size);
 
         if (src.host == dst.host) {
             src_badness.src_node_badness = 0;
@@ -1715,7 +1724,8 @@ public:
             src_badness.shard_badness(),
             src_badness.node_badness(),
             dst_badness.shard_badness(),
-            dst_badness.node_badness()
+            dst_badness.node_badness(),
+            group_size
         };
     }
 
@@ -1732,8 +1742,9 @@ public:
 
         for (auto&& [table, tablets] : shard_info.candidates) {
             if (!tablets.empty()) {
-                auto badness = evaluate_candidate(nodes, table, src, dst);
-                auto candidate = migration_candidate{*tablets.begin(), src, dst, badness};
+                const auto& cand = *tablets.begin();
+                auto badness = evaluate_candidate(nodes, table, src, dst, cand.group_size);
+                auto candidate = migration_candidate{cand, src, dst, badness};
                 lblogger.trace("Candidate: {}", candidate);
                 if (!best_candidate || candidate.badness < best_candidate->badness) {
                     best_candidate = candidate;
@@ -2216,7 +2227,7 @@ public:
                 -> future<migration_candidate> {
             if (drain_skipped) {
                 auto source_tablets = src_node_info.skipped_candidates.back().tablets;
-                auto badness = evaluate_candidate(nodes, source_tablets.table(), src, dst);
+                auto badness = evaluate_candidate(nodes, source_tablets.table(), src, dst, source_tablets.group_size);
                 co_return migration_candidate{source_tablets, src, dst, badness};
             } else {
                 auto&& src_shard_info = src_node_info.shards[src.shard];
@@ -2243,7 +2254,7 @@ public:
                     continue;
                 }
 
-                auto badness = evaluate_dst_badness(nodes, tablets.table(), tablet_replica{new_target, 0});
+                auto badness = evaluate_dst_badness(nodes, tablets.table(), tablet_replica{new_target, 0}, tablets.group_size);
                 if (!min_dst_host || badness.dst_node_badness < min_dst_badness.dst_node_badness) {
                     min_dst_badness = badness;
                     min_dst_host = new_target;
@@ -2268,7 +2279,7 @@ public:
                     co_await coroutine::maybe_yield();
                     auto new_dst = tablet_replica{host, new_dst_shard};
 
-                    auto badness = evaluate_dst_badness(nodes, tablets.table(), new_dst);
+                    auto badness = evaluate_dst_badness(nodes, tablets.table(), new_dst, tablets.group_size);
                     if (!min_dst || badness < min_dst_badness) {
                         min_dst_badness = badness;
                         min_dst = new_dst;
@@ -2288,7 +2299,8 @@ public:
                     migration_badness{src_badness.shard_badness(),
                                       src_badness.node_badness(),
                                       min_dst_badness.shard_badness(),
-                                      min_dst_badness.node_badness()}
+                                      min_dst_badness.node_badness(),
+                                      tablets.group_size}
             };
 
             lblogger.trace("candidate: {}", candidate);
@@ -2304,7 +2316,7 @@ public:
             // Consider better alternatives.
             if (drain_skipped) {
                 auto tablets = src_node_info.skipped_candidates.back().tablets;
-                auto badness = evaluate_src_badness(nodes, tablets.table(), src);
+                auto badness = evaluate_src_badness(nodes, tablets.table(), src, tablets.group_size);
                 co_await evaluate_targets(tablets, src, badness);
             } else {
                 // Find a better candidate.
@@ -2325,7 +2337,7 @@ public:
                             lblogger.trace("No src candidates for table {} on shard {}", table, new_src);
                             continue;
                         }
-                        auto badness = evaluate_src_badness(nodes, table, new_src);
+                        auto badness = evaluate_src_badness(nodes, table, new_src, 0);
                         if (!min_src || badness < min_src_badness) {
                             min_src_badness = badness;
                             min_src = new_src;
