@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <sstream>
 #include <cryptopp/sha.h>
+#include "utils/io-wrappers.hh"
 
 future<sstring> generate_file_hash(sstring filename) {
     auto f = co_await seastar::open_file_dma(filename, seastar::open_flags::ro);
@@ -258,3 +259,115 @@ SEASTAR_THREAD_TEST_CASE(test_file_stream_inject_error) {
 SEASTAR_THREAD_TEST_CASE(test_unsupported_file_ops) {
     do_test_unsupported_file_ops();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_sink_wrapper) {
+    std::vector<temporary_buffer<char>> bufs;
+
+    auto sink = create_memory_sink(bufs);
+    auto file = create_file_for_sink(std::move(sink));
+
+    auto wa = file.disk_write_dma_alignment();
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<unsigned> dist(0u, 255u);
+
+    constexpr auto n_bufs = 11;
+
+    std::vector<temporary_buffer<char>> src;
+    src.reserve(n_bufs);
+    for (int i = 0; i < n_bufs; ++i) {
+        temporary_buffer<char> buf(wa);
+        std::generate(buf.get_write(), buf.get_write() + wa, [&] {
+            return (char)dist(gen);
+        });
+        src.emplace_back(std::move(buf));
+    }
+
+    uint64_t pos = 0;
+    for (auto& buf : src) {
+        pos += file.dma_write(pos, buf.get(), buf.size()).get();
+    }
+
+    auto final_len = n_bufs * wa - wa/3;
+    file.truncate(final_len).get();
+    file.flush().get();
+    file.close().get();
+
+    auto res = std::accumulate(bufs.begin(), bufs.end(), size_t(0), [](size_t s, auto& buf) {
+        return s + buf.size();
+    });
+
+    BOOST_REQUIRE_EQUAL(final_len, res);
+
+    temporary_buffer<char> lin1(wa*n_bufs), lin2(wa*n_bufs);
+
+    std::accumulate(src.begin(), src.end(), lin1.get_write(), [](char* dst, temporary_buffer<char>& buf) {
+        return std::copy(buf.begin(), buf.end(), dst);
+    });
+    std::accumulate(bufs.begin(), bufs.end(), lin2.get_write(), [](char* dst, temporary_buffer<char>& buf) {
+        return std::copy(buf.begin(), buf.end(), dst);
+    });
+
+    BOOST_REQUIRE(std::equal(lin1.begin(), lin1.begin() + final_len, lin2.begin()));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sink_wrapper_iovec) {
+    std::vector<temporary_buffer<char>> bufs;
+
+    auto sink = create_memory_sink(bufs);
+    auto file = create_file_for_sink(std::move(sink));
+
+    auto wa = file.disk_write_dma_alignment();
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<unsigned> dist(0u, 255u);
+
+    constexpr auto n_bufs = 11;
+    temporary_buffer<char> src(wa * n_bufs);
+
+    std::generate(src.get_write(), src.get_write() + src.size(), [&] {
+        return (char)dist(gen);
+    });
+
+    std::uniform_int_distribution<size_t> sdist(1u, wa);
+
+    auto* p = src.get_write();
+    uint64_t pos = 0, end = src.size();
+
+    while (pos < end) {
+        std::vector<iovec> iovs;
+        auto rem = size_t(end - pos);
+        auto p2 = p + pos;
+        while (iovs.size() < 5 && rem != 0) {
+            auto size = std::min(sdist(gen), rem);
+            iovs.emplace_back(iovec{p2, size});
+            p2 += size;
+            rem -= size;
+        }
+
+        auto written = file.dma_write(pos, std::move(iovs)).get();
+        pos += written;
+    }
+
+    auto final_len = src.size() - wa/3;
+    file.truncate(final_len).get();
+    file.flush().get();
+    file.close().get();
+
+    auto res = std::accumulate(bufs.begin(), bufs.end(), size_t(0), [](size_t s, auto& buf) {
+        return s + buf.size();
+    });
+
+    BOOST_REQUIRE_EQUAL(final_len, res);
+
+    temporary_buffer<char> lin(wa*n_bufs);
+
+    std::accumulate(bufs.begin(), bufs.end(), lin.get_write(), [](char* dst, temporary_buffer<char>& buf) {
+        return std::copy(buf.begin(), buf.end(), dst);
+    });
+
+    BOOST_REQUIRE(std::equal(lin.begin(), lin.begin() + final_len, src.begin()));
+}
+
