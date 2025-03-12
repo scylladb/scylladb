@@ -121,8 +121,10 @@ int scylla_sstable_main(int argc, char** argv) {
              "(SizeTieredCompactionStrategy, LeveledCompactionStrategy, DateTieredCompactionStrategy, TimeWindowCompactionStrategy)")
         ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]");
 
-    return app.run_deprecated(argc, argv, [&app] {
-        auto test = make_lw_shared<distributed<perf_sstable_test_env>>();
+    return app.run(argc, argv, [&app] {
+        return async([&app] {
+        // FIXME: indent
+        distributed<perf_sstable_test_env> test;
 
         auto cfg = perf_sstable_test_env::conf();
         iterations = app.configuration()["iterations"].as<unsigned>();
@@ -143,8 +145,10 @@ int scylla_sstable_main(int argc, char** argv) {
         }
         cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
         cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
-        return test->start(std::move(cfg)).then([mode, dir, test] {
-            engine().at_exit([test] { return test->stop(); });
+        test.start(std::move(cfg)).get();
+        auto stop_test = deferred_stop(test);
+
+        // FIXME: the indent
             switch (mode) {
             using enum test_modes;
             case index_read:
@@ -154,44 +158,49 @@ int scylla_sstable_main(int argc, char** argv) {
             case full_scan_streaming:
                 [[fallthrough]];
             case partitioned_streaming:
-                return test->invoke_on_all([] (perf_sstable_test_env &t) {
+                try {
+                    // FIXME: the indent
+                test.invoke_on_all([] (perf_sstable_test_env &t) {
                     return t.load_sstables(iterations);
-                }).then_wrapped([] (future<> f) {
-                    try {
-                        f.get();
-                    } catch (...) {
+                }).get();
+                } catch (...) {
                         std::cerr << "An error occurred when trying to load test sstables. Did you run write mode yet?" << std::endl;
                         throw;
                     }
-                });
+                break;
             case index_write:
                 [[fallthrough]];
             case write:
                 [[fallthrough]];
             case compaction:
-                return test_setup::create_empty_test_dir(dir);
+                test_setup::create_empty_test_dir(dir).get();
+                break;
             }
-        }).then([test, mode] {
+
             switch (mode) {
             using enum test_modes;
             case index_read:
-                return test_index_read(*test).then([test] {});
+                test_index_read(test).get();
+                break;
             case sequential_read:
-                return test_sequential_read(*test).then([test] {});
+                test_sequential_read(test).get();
+                break;
             case full_scan_streaming:
-                return test_full_scan_streaming(*test).then([test] {});
+                test_full_scan_streaming(test).get();
+                break;
             case partitioned_streaming:
-                return test_partitioned_streaming(*test).then([test] {});
+                test_partitioned_streaming(test).get();
+                break;
             case index_write:
                 [[fallthrough]];
             case write:
-                return test_write(*test).then([test] {});
+                test_write(test).get();
+                break;
             case compaction:
-                return test_compaction(*test).then([test] {});
+                test_compaction(test).get();
+                break;
             }
-        }).then([] {
-            return engine().exit(0);
-        }).or_terminate();
+        });
     });
 }
 
