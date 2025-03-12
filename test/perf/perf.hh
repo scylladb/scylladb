@@ -97,6 +97,7 @@ class executor {
     const uint64_t _end_at_count;
     const unsigned _n_workers;
     const bool _stop_on_error;
+    const unsigned _operations_count_per_iteration;
     uint64_t _count;
     uint64_t _errors;
     linux_perf_event _instructions_retired_counter = linux_perf_event::user_instructions_retired();
@@ -105,7 +106,7 @@ private:
     executor_shard_stats executor_shard_stats_snapshot();
     future<> run_worker() {
         while (_end_at_count ? _count < _end_at_count : lowres_clock::now() < _end_at) {
-            ++_count;
+            _count += _operations_count_per_iteration;
             future<> f = co_await coroutine::as_future(_func());
             if (f.failed()) {
                 ++_errors;
@@ -117,12 +118,13 @@ private:
         }
     }
 public:
-    executor(unsigned n_workers, Func func, lowres_clock::time_point end_at, uint64_t end_at_count = 0, bool stop_on_error = true)
+    executor(unsigned n_workers, Func func, lowres_clock::time_point end_at, uint64_t end_at_count = 0, bool stop_on_error = true, unsigned operations_count_per_iteration = 1)
             : _func(std::move(func))
             , _end_at(end_at)
             , _end_at_count(end_at_count)
             , _n_workers(n_workers)
             , _stop_on_error(stop_on_error)
+            , _operations_count_per_iteration(operations_count_per_iteration)
             , _count(0)
             , _errors(0)
     { }
@@ -220,7 +222,7 @@ template <> struct fmt::formatter<perf_result_with_aio_writes> : fmt::formatter<
 template <typename Res, typename Func, typename UpdateFunc = void(*)(const Res&, const executor_shard_stats&)>
 requires (std::is_base_of_v<perf_result, Res> && std::is_invocable_v<UpdateFunc, Res&, const executor_shard_stats&>)
 static
-std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true, UpdateFunc uf = [](const auto&, const auto&) {}) {
+std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true, UpdateFunc uf = [](const auto&, const auto&) {}, unsigned operations_count_per_iteration = 1) {
     using clk = std::chrono::steady_clock;
     if (operations_per_shard) {
         iterations = 1;
@@ -231,7 +233,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
         distributed<executor<Func>> exec;
         Res result;
-        exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard, stop_on_error).get();
+        exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard, stop_on_error, operations_count_per_iteration).get();
         auto stop_exec = defer([&exec] {
             exec.stop().get();
         });
@@ -258,8 +260,8 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
 
 template <typename Func>
 static
-std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true) {
-    return time_parallel_ex<perf_result>(std::move(func), concurrency_per_core, iterations, operations_per_shard, stop_on_error);
+std::vector<perf_result> time_parallel(Func func, unsigned concurrency_per_core, int iterations = 5, unsigned operations_per_shard = 0, bool stop_on_error = true, unsigned operations_count_per_iteration = 1) {
+    return time_parallel_ex<perf_result>(std::move(func), concurrency_per_core, iterations, operations_per_shard, stop_on_error, [](const auto&, const auto&) {}, operations_count_per_iteration);
 }
 
 template<typename Func>
