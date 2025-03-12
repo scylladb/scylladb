@@ -384,3 +384,81 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     async with asyncio.TaskGroup() as tg:
         for task in [*valid_keyspaces, *invalid_keyspaces]:
             _ = tg.create_task(task)
+
+async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager: ManagerClient):
+    """
+    This test verifies that starting a Scylla node fails when there's an RF-rack-invalid keyspace.
+    We aim to simulate the behavior of a node when upgrading to 2025.*.
+
+    For more context, see: scylladb/scylladb#23300.
+    """
+
+    cfg_false = {"rf_rack_valid_keyspaces": "false"}
+
+    s1 = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r1"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r2"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r3"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc2", "rack": "r4"})
+    # Note: This rack should behave as if it never existed.
+    _ = await manager.server_add(config={"join_ring": "false", "rf_rack_valid_keyspaces": "false"}, property_file={"dc": "dc1", "rack": "rzerotoken"})
+
+    # Current situation:
+    # DC1: {r1, r2, r3}, DC2: {r4}
+
+    cql = manager.get_cql()
+
+    async def create_keyspace(rfs: List[int], tablets: bool) -> str:
+        dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
+        name = unique_name()
+        tablets = str(tablets).lower()
+        await cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}} "
+                            f"AND tablets = {{'enabled': {tablets}}}")
+        logger.info(f"Created keyspace {name} with {rfs} and tablets={tablets}")
+        return name
+
+    valid_keyspaces = [
+        # For each DC: RF \in {0, 1, #racks}.
+        ([0, 0], True),
+        ([1, 0], True),
+        ([3, 0], True),
+        ([1, 1], True),
+        ([3, 1], True),
+        # Reminder: Keyspaces not using tablets are all valid.
+        ([0, 0], False),
+        ([1, 0], False),
+        ([2, 0], False),
+        ([3, 0], False),
+        ([4, 0], False),
+        ([0, 1], False),
+        ([1, 1], False),
+        ([2, 1], False),
+        ([3, 1], False),
+        ([4, 1], False),
+        ([0, 2], False),
+        ([1, 2], False),
+        ([2, 2], False),
+        ([3, 2], False),
+        ([4, 2], False)
+    ]
+
+    # Populate RF-rack-valid keyspaces.
+    async with asyncio.TaskGroup() as tg:
+        for rfs, tablets in valid_keyspaces:
+            _ = tg.create_task(create_keyspace(rfs, tablets))
+
+    await manager.server_stop_gracefully(s1.server_id)
+    await manager.server_update_config(s1.server_id, "rf_rack_valid_keyspaces", "true")
+
+    async def try_fail(rfs: List[int], dc: str, rf: int, rack_count: int):
+        ks = await create_keyspace(rfs, True)
+        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
+              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC '{dc}': RF={rf} vs. rack count={rack_count}."
+        _ = await manager.server_start(s1.server_id, expected_error=err)
+        await cql.run_async(f"DROP KEYSPACE {ks}")
+
+    # Test RF-rack-invalid keyspaces.
+    await try_fail([2, 0], "dc1", 2, 3)
+    await try_fail([3, 2], "dc2", 2, 1)
+    await try_fail([4, 1], "dc1", 4, 3)
+
+    _ = await manager.server_start(s1.server_id)

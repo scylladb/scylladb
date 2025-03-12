@@ -13,6 +13,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include "exceptions/exceptions.hh"
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
@@ -2152,6 +2153,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);
             }).get();
+
+            // At this point, `locator::topology` should be stable, i.e. we should have complete information
+            // about the layout of the cluster (= list of nodes along with the racks/DCs).
+            if (cfg->rf_rack_valid_keyspaces()) {
+                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+                db.local().check_rf_rack_validity(token_metadata.local().get());
+                startlog.info("All keyspaces are RF-rack-valid");
+            }
 
             dictionary_service dict_service(
                 dict_sampler,
