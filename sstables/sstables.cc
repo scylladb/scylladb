@@ -82,6 +82,17 @@
 
 #include "release.hh"
 #include "utils/build_id.hh"
+<<<<<<< HEAD
+||||||| parent of d46dcbb769 (sstables::file_io_extension: Add a "wrap_sink" method.)
+#include "utils/labels.hh"
+
+#include <boost/lexical_cast.hpp>
+=======
+#include "utils/labels.hh"
+#include "utils/io-wrappers.hh"
+
+#include <boost/lexical_cast.hpp>
+>>>>>>> d46dcbb769 (sstables::file_io_extension: Add a "wrap_sink" method.)
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -3634,6 +3645,30 @@ generation_type::from_string(const std::string& s) {
     }
 }
 
+<<<<<<< HEAD
+||||||| parent of d46dcbb769 (sstables::file_io_extension: Add a "wrap_sink" method.)
+sstring component_name::format() const {
+    return sst._storage->prefix() + "/" + sst.component_basename(component);
+}
+
+=======
+sstring component_name::format() const {
+    return sst._storage->prefix() + "/" + sst.component_basename(component);
+}
+
+future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_type c, data_sink sink) {
+    file dummy = create_noop_file();
+    auto f = co_await wrap_file(sst, c, std::move(dummy), open_flags::wo);
+
+    if (!f) {
+        co_return sink;
+    }
+    co_await f.close();
+    f = co_await wrap_file(sst, c, create_file_for_sink(std::move(sink)), open_flags::wo);
+    co_return co_await make_file_data_sink(std::move(f), file_output_stream_options{});
+}
+
+>>>>>>> d46dcbb769 (sstables::file_io_extension: Add a "wrap_sink" method.)
 } // namespace sstables
 
 namespace seastar {
