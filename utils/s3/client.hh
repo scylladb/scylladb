@@ -18,7 +18,7 @@
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
-#include "retry_strategy.hh"
+#include "s3_retry_strategy.hh"
 #include "utils/exceptions.hh"
 #include "retryable_http_client.hh"
 #include "utils/s3/client_fwd.hh"
@@ -103,7 +103,7 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs = std::make_unique<aws::default_retry_strategy>());
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
