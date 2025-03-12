@@ -149,16 +149,6 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   try {
     auto f = _storage->open_component(*this, type, flags, options, _manager.config().enable_sstable_data_integrity_check());
 
-    if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
-            f = with_file_close_on_failure(std::move(f), [ext, this, type, flags] (file f) {
-               return ext->wrap_file(const_cast<sstable&>(*this), type, f, flags).then([f](file nf) mutable {
-                   return nf ? nf : std::move(f);
-               });
-            });
-        }
-    }
-
     f = with_file_close_on_failure(std::move(f), [&error_handler] (file f) {
         return make_checked_file(error_handler, std::move(f));
     });
