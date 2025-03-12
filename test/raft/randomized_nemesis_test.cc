@@ -19,7 +19,7 @@
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/util/defer.hh>
 
-#include "direct_failure_detector/failure_detector.hh"
+#include "service/direct_failure_detector/failure_detector.hh"
 #include "raft/server.hh"
 #include "raft/logical_clock.hh"
 #include "serializer.hh"

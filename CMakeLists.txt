@@ -175,7 +175,6 @@ target_sources(scylla-main
     converting_mutation_partition_applier.cc
     counters.cc
     sstable_dict_autotrainer.cc
-    direct_failure_detector/failure_detector.cc
     duration.cc
     exceptions/exceptions.cc
     frozen_schema.cc
@@ -197,6 +196,7 @@ target_sources(scylla-main
     reader_concurrency_semaphore_group.cc
     schema_mutations.cc
     serializer.cc
+    service/direct_failure_detector/failure_detector.cc
     sstables_loader.cc
     table_helper.cc
     tasks/task_handler.cc
