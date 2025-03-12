@@ -123,32 +123,30 @@ int scylla_sstable_main(int argc, char** argv) {
 
     return app.run(argc, argv, [&app] {
         return async([&app] {
-        // FIXME: indent
-        distributed<perf_sstable_test_env> test;
+            distributed<perf_sstable_test_env> test;
 
-        auto cfg = perf_sstable_test_env::conf();
-        iterations = app.configuration()["iterations"].as<unsigned>();
-        parallelism = app.configuration()["parallelism"].as<unsigned>();
-        cfg.partitions = app.configuration()["partitions"].as<unsigned>();
-        cfg.key_size = app.configuration()["key_size"].as<unsigned>();
-        cfg.buffer_size = app.configuration()["buffer_size"].as<unsigned>() << 10;
-        cfg.sstables = app.configuration()["sstables"].as<unsigned>();
-        sstring dir = app.configuration()["testdir"].as<sstring>();
-        cfg.dir = dir;
-        auto mode = app.configuration()["mode"].as<test_modes>();
-        if ((mode == test_modes::index_read) || (mode == test_modes::index_write)) {
-            cfg.num_columns = 0;
-            cfg.column_size = 0;
-        } else {
-            cfg.num_columns = app.configuration()["num_columns"].as<unsigned>();
-            cfg.column_size = app.configuration()["column_size"].as<unsigned>();
-        }
-        cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
-        cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
-        test.start(std::move(cfg)).get();
-        auto stop_test = deferred_stop(test);
+            auto cfg = perf_sstable_test_env::conf();
+            iterations = app.configuration()["iterations"].as<unsigned>();
+            parallelism = app.configuration()["parallelism"].as<unsigned>();
+            cfg.partitions = app.configuration()["partitions"].as<unsigned>();
+            cfg.key_size = app.configuration()["key_size"].as<unsigned>();
+            cfg.buffer_size = app.configuration()["buffer_size"].as<unsigned>() << 10;
+            cfg.sstables = app.configuration()["sstables"].as<unsigned>();
+            sstring dir = app.configuration()["testdir"].as<sstring>();
+            cfg.dir = dir;
+            auto mode = app.configuration()["mode"].as<test_modes>();
+            if ((mode == test_modes::index_read) || (mode == test_modes::index_write)) {
+                cfg.num_columns = 0;
+                cfg.column_size = 0;
+            } else {
+                cfg.num_columns = app.configuration()["num_columns"].as<unsigned>();
+                cfg.column_size = app.configuration()["column_size"].as<unsigned>();
+            }
+            cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
+            cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
+            test.start(std::move(cfg)).get();
+            auto stop_test = deferred_stop(test);
 
-        // FIXME: the indent
             switch (mode) {
             using enum test_modes;
             case index_read:
@@ -159,14 +157,13 @@ int scylla_sstable_main(int argc, char** argv) {
                 [[fallthrough]];
             case partitioned_streaming:
                 try {
-                    // FIXME: the indent
-                test.invoke_on_all([] (perf_sstable_test_env &t) {
-                    return t.load_sstables(iterations);
-                }).get();
+                    test.invoke_on_all([] (perf_sstable_test_env &t) {
+                        return t.load_sstables(iterations);
+                    }).get();
                 } catch (...) {
-                        std::cerr << "An error occurred when trying to load test sstables. Did you run write mode yet?" << std::endl;
-                        throw;
-                    }
+                    std::cerr << "An error occurred when trying to load test sstables. Did you run write mode yet?" << std::endl;
+                    throw;
+                }
                 break;
             case index_write:
                 [[fallthrough]];
