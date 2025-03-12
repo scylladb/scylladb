@@ -673,7 +673,7 @@ public:
         return res;
     }
 
-    future<file> wrap_file(sstables::sstable& sst, sstables::component_type type, file f, open_flags flags) override {
+    future<file> wrap_file(const sstables::sstable& sst, sstables::component_type type, file f, open_flags flags) override {
         switch (type) {
         case sstables::component_type::Scylla:
         case sstables::component_type::TemporaryTOC:
@@ -725,77 +725,100 @@ public:
                 }
             }
         } else {
-            auto s = sst.get_schema();
-            shared_ptr<encryption_schema_extension> esx;
-            auto e = s->extensions().find(encryption_attribute);
-            // #4844 - don't allow schema encryption to be used for writing
-            // iff it is disallowed by config -> placeholder here
-            // (See schema_tables.cc::prepare_builder_from_table_row - if an extension
-            //  is unavailable/non-creatable at load time a dummy object is inserted
-            // )
-            if (e != s->extensions().end() && !e->second->is_placeholder()) {
-                esx = static_pointer_cast<encryption_schema_extension>(e->second);
-            } else if (!is_system_keyspace(s->ks_name())) {
-                esx = _ctxt->get_global_user_encryption();
-            }
-            if (esx) {
-                auto& sc = sst.get_shared_components();
-                if (!sc.scylla_metadata) {
-                    sc.scylla_metadata.emplace();
-                }
-                auto& ext = sc.scylla_metadata->get_or_create_extension_attributes();
-                opt_bytes id;
-
-                // We are writing more than one component. If we used a named key before
-                // we need to make sure we use the exact same one for all components,
-                // even if something like KMIP key invalidation replaced it.
-                // This will also speed up key lookup in some cases, as both repl
-                // and kmip cache id bound keys.
-                if (ext.map.count(key_id_attribute_ds)) {
-                    id = ext.map.at(key_id_attribute_ds).value;
-                }
-
-                logg.debug("Write encrypted sstable component {} using {} (id: {})", sst.component_basename(type), *esx, id);
-
-                /**
-                 * #3954 We can be (and are) called with two components simultaneously (hello index, data).
-                 * If this case we could block on the below "key" call and iff provider has certain cache behaviour (hello replicated)
-                 * or caches expire, we could end up with different keys for respective components, leading to one
-                 * of the components ending up unreadable.
-                */
-                for (;;) {
-                    auto [k, k_id] = co_await esx->key_for_write(std::move(id));
-
-                    if (k_id && ext.map.count(key_id_attribute_ds)) {
-                        id = ext.map.at(key_id_attribute_ds).value;
-                        if (k_id != id) {
-                            continue;
-                        }
-                    }
-
-                    id = std::move(k_id);
-
-                    if (!ext.map.count(encryption_attribute_ds)) {
-                        ext.map.emplace(encryption_attribute_ds, sstables::disk_string<uint32_t>{esx->serialize()});
-                    }
-                    if (id) {
-                        ext.map.emplace(key_id_attribute_ds, sstables::disk_string<uint32_t>{*id});
-                    }
-                    if (type != sstables::component_type::Data) {
-                        uint32_t mask = 0;
-                        if (ext.map.count(encrypted_components_attribute_ds)) {
-                            mask = ser::deserialize_from_buffer(ext.map.at(encrypted_components_attribute_ds).value, std::type_identity<uint32_t>{}, 0);
-                        }
-                        mask |= (1 << int(type));
-                        // just a marker. see above
-                        ext.map[encrypted_components_attribute_ds] = sstables::disk_string<uint32_t>{ser::serialize_to_buffer<bytes>(mask, 0)};
-                    }
-                    co_return make_encrypted_file(f, std::move(k));
-                }
+            if (co_await wrap_writeonly(sst, type, [&f](shared_ptr<symmetric_key> k) { f = make_encrypted_file(std::move(f), std::move(k)); })) {
+                co_return f;
             }
         }
 
         co_return file{};
+    }
+
+    future<bool> wrap_writeonly(const sstables::sstable& sst, sstables::component_type type, std::function<void(shared_ptr<symmetric_key>)> apply) {
+        auto s = sst.get_schema();
+        shared_ptr<encryption_schema_extension> esx;
+        auto e = s->extensions().find(encryption_attribute);
+        // #4844 - don't allow schema encryption to be used for writing
+        // iff it is disallowed by config -> placeholder here
+        // (See schema_tables.cc::prepare_builder_from_table_row - if an extension
+        //  is unavailable/non-creatable at load time a dummy object is inserted
+        // )
+        if (e != s->extensions().end() && !e->second->is_placeholder()) {
+            esx = static_pointer_cast<encryption_schema_extension>(e->second);
+        } else if (!is_system_keyspace(s->ks_name())) {
+            esx = _ctxt->get_global_user_encryption();
+        }
+        if (esx) {
+            auto& sc = sst.get_shared_components();
+            if (!sc.scylla_metadata) {
+                sc.scylla_metadata.emplace();
+            }
+            auto& ext = sc.scylla_metadata->get_or_create_extension_attributes();
+            opt_bytes id;
+
+            // We are writing more than one component. If we used a named key before
+            // we need to make sure we use the exact same one for all components,
+            // even if something like KMIP key invalidation replaced it.
+            // This will also speed up key lookup in some cases, as both repl
+            // and kmip cache id bound keys.
+            if (ext.map.count(key_id_attribute_ds)) {
+                id = ext.map.at(key_id_attribute_ds).value;
+            }
+
+            logg.debug("Write encrypted sstable component {} using {} (id: {})", sst.component_basename(type), *esx, id);
+
+            /**
+             * #3954 We can be (and are) called with two components simultaneously (hello index, data).
+             * If this case we could block on the below "key" call and iff provider has certain cache behaviour (hello replicated)
+             * or caches expire, we could end up with different keys for respective components, leading to one
+             * of the components ending up unreadable.
+            */
+            for (;;) {
+                auto [k, k_id] = co_await esx->key_for_write(std::move(id));
+
+                if (k_id && ext.map.count(key_id_attribute_ds)) {
+                    id = ext.map.at(key_id_attribute_ds).value;
+                    if (k_id != id) {
+                        continue;
+                    }
+                }
+
+                id = std::move(k_id);
+
+                if (!ext.map.count(encryption_attribute_ds)) {
+                    ext.map.emplace(encryption_attribute_ds, sstables::disk_string<uint32_t>{esx->serialize()});
+                }
+                if (id) {
+                    ext.map.emplace(key_id_attribute_ds, sstables::disk_string<uint32_t>{*id});
+                }
+                if (type != sstables::component_type::Data) {
+                    uint32_t mask = 0;
+                    if (ext.map.count(encrypted_components_attribute_ds)) {
+                        mask = ser::deserialize_from_buffer(ext.map.at(encrypted_components_attribute_ds).value, std::type_identity<uint32_t>{}, 0);
+                    }
+                    mask |= (1 << int(type));
+                    // just a marker. see above
+                    ext.map[encrypted_components_attribute_ds] = sstables::disk_string<uint32_t>{ser::serialize_to_buffer<bytes>(mask, 0)};
+                }
+                apply(std::move(k));
+                co_return true;
+            }
+        }
+        co_return false;
+    }
+    
+    future<data_sink> wrap_sink(const sstables::sstable& sst, sstables::component_type type, data_sink sink) override {
+        switch (type) {
+        case sstables::component_type::Scylla:
+        case sstables::component_type::TemporaryTOC:
+        case sstables::component_type::TOC:
+            co_return sink;
+        default:
+            break;
+        }
+        co_await wrap_writeonly(sst, type, [&sink](shared_ptr<symmetric_key> k) { 
+            sink = data_sink(make_encrypted_sink(std::move(sink), std::move(k))); 
+        });
+        co_return sink;
     }
 };
 
