@@ -114,7 +114,7 @@ public:
         // c.) System table/commit log write, with either first use of this provider,
         //     in which case we're creating the table (here at least) - thus fine,
         //     or again, we've waited through "ensure_populated", so keys are
-        //     readble. At worst, we create a few extra keys.
+        //     readable. At worst, we create a few extra keys.
         // Note: currently c.) is not relevant, as we don't support system/commitlog
         //       encryption using repl_prov.
         return !qp.local_is_initialized();

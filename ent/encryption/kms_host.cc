@@ -1004,7 +1004,7 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
      * "GenerateDataKey" API. This creates a new (epiphermal) key, encrypts it 
      * using a named (internal) key, and gives us both raw and encrypted blobs
      * for usage as a local key.
-     * To be able to actually re-use this key again, on decryption of data,
+     * To be able to actually reuse this key again, on decryption of data,
      * we employ the strategy recommended (https://docs.aws.amazon.com/kms/latest/APIReference/API_GenerateDataKey.html)
      * namely actually embedding the encrypted key in the key ID associated with 
      * the locally encrypted data. So ID:s become pretty big.
@@ -1027,7 +1027,7 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
      *
      * (last colon is separator) 
      *
-     * The actual data key can be retreived by doing a KMS "Decrypt" of the data blob part
+     * The actual data key can be retrieved by doing a KMS "Decrypt" of the data blob part
      * using the KMS key referenced by the key ID. This gives back actual key data that can
      * be used to create a symmetric_key with algo, length etc as specified by metadata.
      *
