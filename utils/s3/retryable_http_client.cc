@@ -47,7 +47,7 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
                     "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
             }
             e = {};
-            co_return co_await (as ? http.make_request(req, handler, *as, std::nullopt) : http.make_request(req, handler, std::nullopt));
+            co_return co_await http.make_request(req, handler, std::nullopt, as);
         } catch (const aws::aws_exception& ex) {
             e = std::current_exception();
             request_ex = ex;
