@@ -39,14 +39,9 @@ public:
 
     seastar::future<> stop();
 
-    virtual future<> on_change(gms::inet_address, const gms::application_state_map& states, gms::permit_id) override;
+    virtual future<> on_change(gms::inet_address, locator::host_id id, const gms::application_state_map& states, gms::permit_id) override;
 
-    virtual future<> on_remove(gms::inet_address, gms::permit_id) override;
-
-    virtual future<> on_join(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_alive(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_dead(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_restart(gms::inet_address, gms::endpoint_state_ptr, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_remove(gms::inet_address, locator::host_id id, gms::permit_id) override;
 };
 
 }

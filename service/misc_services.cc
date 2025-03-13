@@ -8,6 +8,7 @@
  */
 
 #include <seastar/core/sleep.hh>
+#include "gms/inet_address.hh"
 #include "load_meter.hh"
 #include "load_broadcaster.hh"
 #include "cache_hitrate_calculator.hh"
@@ -41,7 +42,7 @@ future<std::map<sstring, double>> load_meter::get_load_map() {
         std::map<sstring, double> load_map;
         if (_lb) {
             for (auto& x : _lb->get_load_info()) {
-                load_map.emplace(format("{}", x.first), x.second);
+                load_map.emplace(format("{}", _lb->gossiper().get_address_map().find(x.first).value_or(gms::inet_address{})), x.second);
                 llogger.debug("get_load_map endpoint={}, load={}", x.first, x.second);
             }
             load_map.emplace(format("{}",
@@ -266,8 +267,8 @@ future<> view_update_backlog_broker::stop() {
     });
 }
 
-future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id pid) {
-    return on_application_state_change(endpoint, states, gms::application_state::VIEW_BACKLOG, pid, [this] (gms::inet_address endpoint, const gms::versioned_value& value, gms::permit_id) {
+future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states, gms::permit_id pid) {
+    return on_application_state_change(endpoint, id, states, gms::application_state::VIEW_BACKLOG, pid, [this] (gms::inet_address endpoint, locator::host_id id, const gms::versioned_value& value, gms::permit_id) {
         if (utils::get_local_injector().enter("skip_updating_local_backlog_via_view_update_backlog_broker")) {
             return make_ready_future<>();
         }
@@ -294,7 +295,7 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, const
             return make_ready_future();
         }
         auto backlog = view_update_backlog_timestamped{db::view::update_backlog{current, max}, ticks};
-        return _sp.invoke_on_all([id = _gossiper.get_host_id(endpoint), backlog] (service::storage_proxy& sp) {
+        return _sp.invoke_on_all([id, backlog] (service::storage_proxy& sp) {
             auto[it, inserted] = sp._view_update_backlogs.try_emplace(id, backlog);
             if (!inserted && it->second.ts < backlog.ts) {
                 it->second = backlog;
@@ -304,8 +305,8 @@ future<> view_update_backlog_broker::on_change(gms::inet_address endpoint, const
     });
 }
 
-future<> view_update_backlog_broker::on_remove(gms::inet_address endpoint, gms::permit_id) {
-    _sp.local()._view_update_backlogs.erase(_gossiper.get_host_id(endpoint));
+future<> view_update_backlog_broker::on_remove(gms::inet_address endpoint, locator::host_id id, gms::permit_id) {
+    _sp.local()._view_update_backlogs.erase(id);
     return make_ready_future();
 }
 

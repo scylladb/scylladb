@@ -75,7 +75,6 @@ struct loaded_endpoint_state {
     gms::inet_address endpoint;
     std::unordered_set<dht::token> tokens;
     std::optional<locator::endpoint_dc_rack> opt_dc_rack;
-    std::optional<gms::versioned_value> opt_status;
 };
 
 /**
@@ -102,24 +101,23 @@ private:
 
     void init_messaging_service_handler();
     future<> uninit_messaging_service_handler();
-    future<> handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg);
-    future<> handle_ack_msg(msg_addr from, gossip_digest_ack ack_msg);
-    future<> handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg);
-    future<> handle_echo_msg(inet_address from, const locator::host_id* id, seastar::rpc::opt_time_point, std::optional<int64_t> generation_number_opt, bool notify_up);
+    future<> handle_syn_msg(locator::host_id from, gossip_digest_syn syn_msg);
+    future<> handle_ack_msg(locator::host_id from, gossip_digest_ack ack_msg);
+    future<> handle_ack2_msg(locator::host_id from, gossip_digest_ack2 msg);
+    future<> handle_echo_msg(locator::host_id id, seastar::rpc::opt_time_point, std::optional<int64_t> generation_number_opt, bool notify_up);
     future<> handle_shutdown_msg(inet_address from, std::optional<int64_t> generation_number_opt);
-    future<> do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg);
-    future<> do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest);
+    future<> do_send_ack_msg(locator::host_id from, gossip_digest_syn syn_msg);
+    future<> do_send_ack2_msg(locator::host_id from, utils::chunked_vector<gossip_digest> ack_msg_digest);
     future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
     static constexpr uint32_t _default_cpuid = 0;
-    msg_addr get_msg_addr(inet_address to) const noexcept;
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) const;
     timer<lowres_clock> _scheduled_gossip_task;
     bool _enabled = false;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
     seastar::gate _background_msg;
-    std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
-    std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
+    std::unordered_map<locator::host_id, syn_msg_pending> _syn_handlers;
+    std::unordered_map<locator::host_id, ack_msg_pending> _ack_handlers;
     // Map ip address and generation number
     generation_for_nodes _advertise_to_nodes;
     future<> _failure_detector_loop_done{make_ready_future<>()} ;
@@ -223,17 +221,17 @@ private:
      */
     atomic_vector<shared_ptr<i_endpoint_state_change_subscriber>> _subscribers;
 
-    std::list<std::vector<inet_address>> _endpoints_to_talk_with;
+    std::list<std::vector<locator::host_id>> _endpoints_to_talk_with;
 
     /* live member set */
-    std::unordered_set<inet_address> _live_endpoints;
+    std::unordered_set<locator::host_id> _live_endpoints;
     uint64_t _live_endpoints_version = 0;
 
     /* nodes are being marked as alive */
     std::unordered_set<inet_address> _pending_mark_alive_endpoints;
 
     /* unreachable member set */
-    std::unordered_map<inet_address, clk::time_point> _unreachable_endpoints;
+    std::unordered_map<locator::host_id, clk::time_point> _unreachable_endpoints;
 
     semaphore _endpoint_update_semaphore = semaphore(1);
 
@@ -244,9 +242,9 @@ private:
      * gossip. We will ignore any gossip regarding these endpoints for QUARANTINE_DELAY time
      * after removal to prevent nodes from falsely reincarnating during the time when removal
      * gossip gets propagated to all nodes */
-    std::map<inet_address, clk::time_point> _just_removed_endpoints;
+    std::map<locator::host_id, clk::time_point> _just_removed_endpoints;
 
-    std::map<inet_address, clk::time_point> _expire_time_endpoint_map;
+    std::map<locator::host_id, clk::time_point> _expire_time_endpoint_map;
 
     bool _in_shadow_round = false;
 
@@ -256,8 +254,8 @@ private:
     future<semaphore_units<>> lock_endpoint_update_semaphore();
 
     struct live_and_unreachable_endpoints {
-        std::unordered_set<inet_address> live;
-        std::unordered_map<inet_address, clk::time_point> unreachable;
+        std::unordered_set<locator::host_id> live;
+        std::unordered_map<locator::host_id, clk::time_point> unreachable;
     };
 
     // Must be called on shard 0.
@@ -303,15 +301,14 @@ public:
     /**
      * @return a list of unreachable gossip participants, including fat clients
      */
-    std::set<inet_address> get_unreachable_members() const;
-    std::set<locator::host_id> get_unreachable_host_ids() const;
+    std::set<locator::host_id> get_unreachable_members() const;
 
     /**
      * @return a list of unreachable nodes
      */
     std::set<locator::host_id> get_unreachable_nodes() const;
 
-    int64_t get_endpoint_downtime(inet_address ep) const noexcept;
+    int64_t get_endpoint_downtime(locator::host_id ep) const noexcept;
 
     /**
      * Return either: the greatest heartbeat or application state
@@ -348,14 +345,15 @@ public:
      * Removes the endpoint from Gossip but retains endpoint state
      */
     future<> remove_endpoint(inet_address endpoint, permit_id);
-    future<> force_remove_endpoint(inet_address endpoint, permit_id);
+    // Returns true if an endpoint was removed
+    future<bool> force_remove_endpoint(inet_address endpoint, locator::host_id id, permit_id);
 private:
     /**
      * Quarantines the endpoint for QUARANTINE_DELAY
      *
      * @param endpoint
      */
-    void quarantine_endpoint(inet_address endpoint);
+    void quarantine_endpoint(locator::host_id id);
 
     /**
      * Quarantines the endpoint until quarantine_start + QUARANTINE_DELAY
@@ -363,7 +361,7 @@ private:
      * @param endpoint
      * @param quarantine_start
      */
-    void quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start);
+    void quarantine_endpoint(locator::host_id id, clk::time_point quarantine_start);
 
 private:
     /**
@@ -383,8 +381,6 @@ public:
      */
     future<> advertise_token_removed(inet_address endpoint, locator::host_id host_id, permit_id);
 
-    future<> unsafe_assassinate_endpoint(sstring address);
-
     /**
      * Do not call this method unless you know what you are doing.
      * It will try extremely hard to obliterate any endpoint from the ring,
@@ -399,7 +395,7 @@ public:
     future<generation_type> get_current_generation_number(inet_address endpoint) const;
     future<version_type> get_current_heart_beat_version(inet_address endpoint) const;
 
-    bool is_gossip_only_member(inet_address endpoint) const;
+    bool is_gossip_only_member(locator::host_id endpoint) const;
     bool is_safe_for_bootstrap(inet_address endpoint) const;
     bool is_safe_for_restart(inet_address endpoint, locator::host_id host_id) const;
 private:
@@ -410,20 +406,20 @@ private:
      * @param epSet   a set of endpoint from which a random endpoint is chosen.
      * @return true if the chosen endpoint is also a seed.
      */
-    future<> send_gossip(gossip_digest_syn message, std::set<inet_address> epset);
+    template<typename T>
+    future<> send_gossip(gossip_digest_syn message, std::set<T> epset);
 
     /* Sends a Gossip message to a live member */
-    future<> do_gossip_to_live_member(gossip_digest_syn message, inet_address ep);
+    template<typename T>
+    future<> do_gossip_to_live_member(gossip_digest_syn message, T ep);
 
     /* Sends a Gossip message to an unreachable member */
     future<> do_gossip_to_unreachable_member(gossip_digest_syn message);
 
     future<> do_status_check();
 
-    const std::unordered_map<inet_address, endpoint_state_ptr>& get_endpoint_states() const noexcept;
-
 public:
-    clk::time_point get_expire_time_for_endpoint(inet_address endpoint) const noexcept;
+    clk::time_point get_expire_time_for_endpoint(locator::host_id endpoint) const noexcept;
 
     // Gets a shared pointer to the endpoint_state, if exists.
     // Otherwise, returns a null ptr.
@@ -515,7 +511,6 @@ private:
     template<typename ID>
     future<> wait_alive_helper(noncopyable_function<std::vector<ID>()> get_nodes, std::chrono::milliseconds timeout);
 public:
-    bool is_alive(inet_address ep) const;
     bool is_alive(locator::host_id id) const;
 
     bool is_dead_state(const endpoint_state& eps) const;
@@ -523,7 +518,6 @@ public:
     future<> wait_alive(std::vector<gms::inet_address> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(std::vector<locator::host_id> nodes, std::chrono::milliseconds timeout);
     future<> wait_alive(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
-    std::set<inet_address> get_live_members_helper() const;
 
     // Wait for `n` live nodes to show up in gossip (including ourself).
     future<> wait_for_live_nodes_to_show_up(size_t n);
@@ -545,7 +539,7 @@ private:
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.
-    future<> do_on_change_notifications(inet_address addr, const application_state_map& states, permit_id) const;
+    future<> do_on_change_notifications(inet_address addr, locator::host_id id, const application_state_map& states, permit_id) const;
 
     // notify that a node is DOWN (dead)
     // Must be called under lock_endpoint.
@@ -645,7 +639,7 @@ public:
     bool is_enabled() const;
 
 public:
-    void add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time);
+    void add_expire_time_for_endpoint(locator::host_id endpoint, clk::time_point expire_time);
 
     static clk::time_point compute_expire_time();
 public:
@@ -705,7 +699,7 @@ public:
     }
 private:
     future<> failure_detector_loop();
-    future<> failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version);
+    future<> failure_detector_loop_for_node(locator::host_id node, generation_type gossip_generation, uint64_t live_endpoints_version);
 };
 
 

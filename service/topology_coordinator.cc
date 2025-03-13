@@ -781,7 +781,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
                     auto generation = eps.get_heart_beat_state().get_generation().value();
                     auto host_id = eps.get_host_id();
-                    if (current_timestamp - generation > timeout && !_topo_sm._topology.contains(raft::server_id{host_id.id}) && !_gossiper.is_alive(addr)) {
+                    if (current_timestamp - generation > timeout && !_topo_sm._topology.contains(raft::server_id{host_id.id}) && !_gossiper.is_alive(host_id)) {
                         topology_mutation_builder builder(guard.write_timestamp());
                         // This topology mutation moves a node to left state and bans it. Hence, the value of below fields are not useful.
                         // The dummy_value used for few fields indicates the trivialness of this row entry, and is used to detect this special case.
@@ -2866,10 +2866,8 @@ public:
     future<> run();
     future<> stop();
 
-    virtual void on_join_cluster(const gms::inet_address& endpoint) {}
-    virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {};
-    virtual void on_up(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
-    virtual void on_down(const gms::inet_address& endpoint) { _topo_sm.event.broadcast(); };
+    virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
+    virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) { _topo_sm.event.broadcast(); };
 };
 
 future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_tables(group0_guard guard) {

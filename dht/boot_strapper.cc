@@ -42,7 +42,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
     }
     try {
         auto streamer = make_lw_shared<range_streamer>(_db, _stream_manager, _token_metadata_ptr, _abort_source, _tokens, _address, _dr, description, reason, topo_guard);
-        auto nodes_to_filter = gossiper.get_unreachable_host_ids();
+        auto nodes_to_filter = gossiper.get_unreachable_members();
         if (reason == streaming::stream_reason::replace) {
             nodes_to_filter.insert(std::move(replace_address));
         }

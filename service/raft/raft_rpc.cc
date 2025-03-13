@@ -62,7 +62,7 @@ template <typename Verb, typename... Args>
 auto
 raft_rpc::two_way_rpc(sloc loc, raft::server_id id,
         Verb&& verb, Args&&... args) {
-    using Fut = decltype(verb(&_messaging, netw::msg_addr(gms::inet_address()), db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...));
+    using Fut = decltype(verb(&_messaging, locator::host_id{}, db::no_timeout, _group_id, _my_id, id, std::forward<Args>(args)...));
     using Ret = typename Fut::value_type;
     if (!_failure_detector->is_alive(id)) {
         return make_exception_future<Ret>(raft::destination_not_alive_error(id, loc));

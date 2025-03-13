@@ -3201,40 +3201,25 @@ public:
             rlogger.warn("Failed to remove row level repair for node {}: {}", node, std::current_exception());
         }
     }
-    virtual future<> on_join(
-            gms::inet_address endpoint,
-            gms::endpoint_state_ptr ep_state,
-            gms::permit_id) override {
-        return make_ready_future();
-    }
-    virtual future<> on_change(
-            gms::inet_address endpoint,
-            const gms::application_state_map& states,
-            gms::permit_id) override {
-        return make_ready_future();
-    }
-    virtual future<> on_alive(
-            gms::inet_address endpoint,
-            gms::endpoint_state_ptr state,
-            gms::permit_id) override {
-        return make_ready_future();
-    }
     virtual future<> on_dead(
             gms::inet_address endpoint,
+            locator::host_id id,
             gms::endpoint_state_ptr state,
             gms::permit_id) override {
-        return remove_row_level_repair(_repair_service.get_gossiper().get_host_id(endpoint));
+        return remove_row_level_repair(id);
     }
     virtual future<> on_remove(
             gms::inet_address endpoint,
+            locator::host_id id,
             gms::permit_id) override {
-        return remove_row_level_repair(_repair_service.get_gossiper().get_host_id(endpoint));
+        return remove_row_level_repair(id);
     }
     virtual future<> on_restart(
             gms::inet_address endpoint,
+            locator::host_id id,
             gms::endpoint_state_ptr ep_state,
             gms::permit_id) override {
-        return remove_row_level_repair(_repair_service.get_gossiper().get_host_id(endpoint));
+        return remove_row_level_repair(id);
     }
 };
 

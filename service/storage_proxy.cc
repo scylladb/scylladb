@@ -288,8 +288,7 @@ public:
         return _gossiper;
     }
 
-    template<typename ID>
-    bool is_alive(const ID& ep) const {
+    bool is_alive(const locator::host_id& ep) const {
         return _gossiper.is_alive(ep);
     }
 
@@ -1048,18 +1047,10 @@ private:
         co_return netw::messaging_service::no_wait();
     }
 
-    void connection_dropped(gms::inet_address addr, std::optional<locator::host_id> id) {
-        slogger.debug("Drop hit rate info for {} because of disconnect", addr);
-        if (!id) {
-            try {
-                id = _gossiper.get_host_id(addr);
-            } catch (...) {}
-        }
-        if (!id) {
-            return;
-        }
+    void connection_dropped(locator::host_id id) {
+        slogger.debug("Drop hit rate info for {} because of disconnect", id);
         for (auto&& cf : _sp._db.local().get_non_system_column_families()) {
-            cf->drop_hit_rate(*id);
+            cf->drop_hit_rate(id);
         }
     }
 
@@ -6904,15 +6895,11 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     co_return;
 }
 
-void storage_proxy::on_join_cluster(const gms::inet_address& endpoint) {};
-
 void storage_proxy::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {
     // Discarding these futures is safe. They're awaited by db::hints::manager::stop().
     (void) _hints_manager.drain_for(hid, endpoint);
     (void) _hints_for_views_manager.drain_for(hid, endpoint);
 }
-
-void storage_proxy::on_up(const gms::inet_address& endpoint) {};
 
 void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
     SCYLLA_ASSERT(thread::running_in_thread());
@@ -6930,9 +6917,9 @@ void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstra
     }
 }
 
-void storage_proxy::on_down(const gms::inet_address& endpoint) {
+void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id id) {
     // FIXME: make gossiper notifictaions to pass host ids
-    return cancel_write_handlers([id = remote().gossiper().get_host_id(endpoint)] (const abstract_write_response_handler& handler) {
+    return cancel_write_handlers([id] (const abstract_write_response_handler& handler) {
         const auto& targets = handler.get_targets();
         return std::ranges::find(targets, id) != targets.end();
     });

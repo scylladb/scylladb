@@ -24,6 +24,7 @@
 #include "db/system_keyspace.hh"
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
+#include <ranges>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/metrics.hh>
@@ -58,10 +59,6 @@ static logging::logger logger("gossip");
 constexpr std::chrono::milliseconds gossiper::INTERVAL;
 constexpr std::chrono::hours gossiper::A_VERY_LONG_TIME;
 constexpr generation_type::value_type gossiper::MAX_GENERATION_DIFFERENCE;
-
-netw::msg_addr gossiper::get_msg_addr(inet_address to) const noexcept {
-    return msg_addr{to, _default_cpuid};
-}
 
 const sstring& gossiper::get_cluster_name() const noexcept {
     return _gcfg.cluster_name;
@@ -171,7 +168,7 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) cons
 
 // Depends on
 // - no external dependency
-future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
+future<> gossiper::handle_syn_msg(locator::host_id from, gossip_digest_syn syn_msg) {
     logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},group0_id:peer={},local={},partitioner_name:peer={},local={}",
         from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.group0_id(), get_group0_id(), syn_msg.partioner(), get_partitioner_name());
     if (!is_enabled()) {
@@ -180,22 +177,22 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
 
     /* If the message is from a different cluster throw it away. */
     if (syn_msg.cluster_id() != get_cluster_name()) {
-        logger.warn("ClusterName mismatch from {} {}!={}", from.addr, syn_msg.cluster_id(), get_cluster_name());
+        logger.warn("ClusterName mismatch from {} {}!={}", from, syn_msg.cluster_id(), get_cluster_name());
         co_return;
     }
 
     /* If the message is from a node with a different group0 id throw it away. */
     if (syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id()) {
-        logger.warn("Group0Id mismatch from {} {} != {}", from.addr, syn_msg.group0_id(), get_group0_id());
+        logger.warn("Group0Id mismatch from {} {} != {}", from, syn_msg.group0_id(), get_group0_id());
         co_return;
     }
 
     if (syn_msg.partioner() != "" && syn_msg.partioner() != get_partitioner_name()) {
-        logger.warn("Partitioner mismatch from {} {}!={}", from.addr, syn_msg.partioner(), get_partitioner_name());
+        logger.warn("Partitioner mismatch from {} {}!={}", from, syn_msg.partioner(), get_partitioner_name());
         co_return;
     }
 
-    syn_msg_pending& p = _syn_handlers[from.addr];
+    syn_msg_pending& p = _syn_handlers[from];
     if (p.pending) {
         // The latest syn message from peer has the latest information, so
         // it is safe to drop the previous syn message and keep the latest
@@ -211,10 +208,10 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     for (;;) {
         try {
             co_await do_send_ack_msg(from, std::move(syn_msg));
-            if (!_syn_handlers.contains(from.addr)) {
+            if (!_syn_handlers.contains(from)) {
                 co_return;
             }
-            syn_msg_pending& p = _syn_handlers[from.addr];
+            syn_msg_pending& p = _syn_handlers[from];
             if (p.syn_msg) {
                 // Process pending gossip syn msg and send ack msg back
                 logger.debug("Handle queued gossip syn msg from node {}, syn_msg={}, pending={}",
@@ -231,8 +228,8 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
             }
         } catch (...) {
             auto ep = std::current_exception();
-            if (_syn_handlers.contains(from.addr)) {
-                syn_msg_pending& p = _syn_handlers[from.addr];
+            if (_syn_handlers.contains(from)) {
+                syn_msg_pending& p = _syn_handlers[from];
                 p.pending = false;
                 p.syn_msg = {};
             }
@@ -242,7 +239,7 @@ future<> gossiper::handle_syn_msg(msg_addr from, gossip_digest_syn syn_msg) {
     }
 }
 
-future<> gossiper::do_send_ack_msg(msg_addr from, gossip_digest_syn syn_msg) {
+future<> gossiper::do_send_ack_msg(locator::host_id from, gossip_digest_syn syn_msg) {
     auto g_digest_list = syn_msg.get_gossip_digests();
     do_sort(g_digest_list);
     utils::chunked_vector<gossip_digest> delta_gossip_digest_list;
@@ -289,7 +286,7 @@ static bool should_count_as_msg_processing(const std::map<inet_address, endpoint
 // - on_restart callbacks
 // - on_join callbacks
 // - on_alive
-future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
+future<> gossiper::handle_ack_msg(locator::host_id id, gossip_digest_ack ack_msg) {
     logger.trace("handle_ack_msg():from={},msg={}", id, ack_msg);
 
     if (!is_enabled()) {
@@ -316,7 +313,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
 
     auto from = id;
     auto ack_msg_digest = std::move(g_digest_list);
-    ack_msg_pending& p = _ack_handlers[from.addr];
+    ack_msg_pending& p = _ack_handlers[from];
     if (p.pending) {
         // The latest ack message digests from peer has the latest information, so
         // it is safe to drop the previous ack message digests and keep the latest
@@ -332,10 +329,10 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     for (;;) {
         try {
             co_await do_send_ack2_msg(from, std::move(ack_msg_digest));
-            if (!_ack_handlers.contains(from.addr)) {
+            if (!_ack_handlers.contains(from)) {
                 co_return;
             }
-            ack_msg_pending& p = _ack_handlers[from.addr];
+            ack_msg_pending& p = _ack_handlers[from];
             if (p.ack_msg_digest) {
                 // Process pending gossip ack msg digests and send ack2 msg back
                 logger.debug("Handle queued gossip ack msg digests from node {}, ack_msg_digest={}, pending={}",
@@ -352,8 +349,8 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
             }
         } catch (...) {
             auto ep = std::current_exception();
-            if (_ack_handlers.contains(from.addr)) {
-                ack_msg_pending& p = _ack_handlers[from.addr];
+            if (_ack_handlers.contains(from)) {
+                ack_msg_pending& p = _ack_handlers[from];
                 p.pending = false;
                 p.ack_msg_digest = {};
             }
@@ -363,7 +360,7 @@ future<> gossiper::handle_ack_msg(msg_addr id, gossip_digest_ack ack_msg) {
     }
 }
 
-future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
+future<> gossiper::do_send_ack2_msg(locator::host_id from, utils::chunked_vector<gossip_digest> ack_msg_digest) {
     /* Get the state required to send to this gossipee - construct GossipDigestAck2Message */
     std::map<inet_address, endpoint_state> delta_ep_state_map;
     for (auto g_digest : ack_msg_digest) {
@@ -396,7 +393,7 @@ future<> gossiper::do_send_ack2_msg(msg_addr from, utils::chunked_vector<gossip_
 // - on_restart callbacks
 // - on_join callbacks
 // - on_alive callbacks
-future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
+future<> gossiper::handle_ack2_msg(locator::host_id from, gossip_digest_ack2 msg) {
     logger.trace("handle_ack2_msg():msg={}", msg);
     if (!is_enabled()) {
         co_return;
@@ -419,21 +416,21 @@ future<> gossiper::handle_ack2_msg(msg_addr from, gossip_digest_ack2 msg) {
     co_await apply_state_locally(std::move(remote_ep_state_map));
 }
 
-future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_id* from_hid, seastar::rpc::opt_time_point timeout, std::optional<int64_t> generation_number_opt, bool notify_up) {
+future<> gossiper::handle_echo_msg(locator::host_id from_hid, seastar::rpc::opt_time_point timeout, std::optional<int64_t> generation_number_opt, bool notify_up) {
     bool respond = true;
-    if (from_hid && !_advertise_to_nodes.empty()) {
-        auto it = _advertise_to_nodes.find(*from_hid);
+    if (!_advertise_to_nodes.empty()) {
+        auto it = _advertise_to_nodes.find(from_hid);
         if (it == _advertise_to_nodes.end()) {
             respond = false;
         } else {
-            auto es = get_endpoint_state_ptr(from);
+            auto es = get_endpoint_state_ptr(from_hid);
             if (es) {
                 auto saved_generation_number = it->second;
                 auto current_generation_number = generation_number_opt ?
                         generation_type(generation_number_opt.value()) : es->get_heart_beat_state().get_generation();
                 respond = saved_generation_number == current_generation_number;
                 logger.debug("handle_echo_msg: from={}, saved_generation_number={}, current_generation_number={}",
-                        from, saved_generation_number, current_generation_number);
+                        from_hid, saved_generation_number, current_generation_number);
             } else {
                 respond = false;
             }
@@ -443,21 +440,21 @@ future<> gossiper::handle_echo_msg(gms::inet_address from, const locator::host_i
         throw std::runtime_error("Not ready to respond gossip echo message");
     }
     if (notify_up) {
-        if (!timeout || !from_hid) {
-            on_internal_error(logger, "UP notification should have a timeout and src host id");
+        if (!timeout) {
+            on_internal_error(logger, "UP notification should have a timeout");
         }
         auto normal = [] (gossiper& g, locator::host_id hid) {
             const auto& topo = g.get_token_metadata_ptr()->get_topology();
             return topo.has_node(hid) && topo.find_node(hid)->is_normal();
         };
-        co_await container().invoke_on(0, [from, from_hid, timeout, &normal] (gossiper& g) -> future<> {
+        co_await container().invoke_on(0, [from_hid, timeout, &normal] (gossiper& g) -> future<> {
             try {
                 // Wait to see the node as normal. It may node be the case if the node bootstraps
-                while (rpc::rpc_clock_type::now() < *timeout && !(normal(g, *from_hid) && g.is_alive(from))) {
+                while (rpc::rpc_clock_type::now() < *timeout && !(normal(g, from_hid) && g.is_alive(from_hid))) {
                     co_await sleep_abortable(std::chrono::milliseconds(100), g._abort_source);
                 }
             } catch(...) {
-                logger.warn("handle_echo_msg: UP notification from {} failed with {}", from, std::current_exception());
+                logger.warn("handle_echo_msg: UP notification from {} failed with {}", from_hid, std::current_exception());
             }
         });
     }
@@ -520,27 +517,26 @@ future<rpc::no_wait_type> gossiper::background_msg(sstring type, noncopyable_fun
 
 void gossiper::init_messaging_service_handler() {
     ser::gossip_rpc_verbs::register_gossip_digest_syn(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_syn syn_msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_DIGEST_SYN", [from, syn_msg = std::move(syn_msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_syn_msg(from, std::move(syn_msg));
         });
     });
      ser::gossip_rpc_verbs::register_gossip_digest_ack(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_ack msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_DIGEST_ACK", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack_msg(from, std::move(msg));
         });
     });
     ser::gossip_rpc_verbs::register_gossip_digest_ack2(&_messaging, [this] (const rpc::client_info& cinfo, gossip_digest_ack2 msg) {
-        auto from = netw::messaging_service::get_source(cinfo);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_DIGEST_ACK2", [from, msg = std::move(msg)] (gms::gossiper& gossiper) mutable {
             return gossiper.handle_ack2_msg(from, std::move(msg));
         });
     });
     ser::gossip_rpc_verbs::register_gossip_echo(&_messaging, [this] (const rpc::client_info& cinfo, seastar::rpc::opt_time_point timeout, rpc::optional<int64_t> generation_number_opt, rpc::optional<bool> notify_up_opt) {
-        auto from = cinfo.retrieve_auxiliary<gms::inet_address>("baddr");
-        auto from_hid = cinfo.retrieve_auxiliary_opt<locator::host_id>("host_id");
-        return handle_echo_msg(from, from_hid, timeout, generation_number_opt, notify_up_opt.value_or(false));
+        auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return handle_echo_msg(from_hid, timeout, generation_number_opt, notify_up_opt.value_or(false));
     });
     ser::gossip_rpc_verbs::register_gossip_shutdown(&_messaging, [this] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
         return background_msg("GOSSIP_SHUTDOWN", [from, generation_number_opt] (gms::gossiper& gossiper) {
@@ -559,8 +555,9 @@ future<> gossiper::uninit_messaging_service_handler() {
     return ser::gossip_rpc_verbs::unregister(&ms);
 }
 
-future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address> epset) {
-    utils::chunked_vector<inet_address> __live_endpoints(epset.begin(), epset.end());
+template<typename T>
+future<> gossiper::send_gossip(gossip_digest_syn message, std::set<T> epset) {
+    utils::chunked_vector<T> __live_endpoints(epset.begin(), epset.end());
     size_t size = __live_endpoints.size();
     if (size < 1) {
         return make_ready_future<>();
@@ -568,8 +565,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
     /* Generate a random number from 0 -> size */
     std::uniform_int_distribution<int> dist(0, size - 1);
     int index = dist(_random_engine);
-    inet_address to = __live_endpoints[index];
-    auto id = get_msg_addr(to);
+    std::conditional_t<std::is_same_v<T, gms::inet_address>, netw::msg_addr, T> id{__live_endpoints[index]};
     logger.trace("Sending a GossipDigestSyn to {} ...", id);
     return ser::gossip_rpc_verbs::send_gossip_digest_syn(&_messaging, id, std::move(message)).handle_exception([id] (auto ep) {
         // It is normal to reach here because it is normal that a node
@@ -619,7 +615,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             } else {
                 logger.debug("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, node);
             }
-            if (!is_alive(node) && !is_dead_state(get_endpoint_state(node)) && !shadow_round) { // unless of course, it was dead
+            if (!is_alive(es->get_host_id()) && !is_dead_state(get_endpoint_state(node)) && !shadow_round) { // unless of course, it was dead
                 mark_alive(node);
             }
         } else {
@@ -664,8 +660,8 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                 return make_ready_future<>();
             }
         } else {
-            if (_just_removed_endpoints.contains(ep)) {
-                logger.trace("Ignoring gossip for {} because it is quarantined", ep);
+            if (_just_removed_endpoints.contains(hid)) {
+                logger.trace("Ignoring gossip for {} because it is quarantined", hid);
                 return make_ready_future<>();
             }
         }
@@ -678,19 +674,24 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
         std::chrono::steady_clock::now() - start).count());
 }
 
-future<> gossiper::force_remove_endpoint(inet_address endpoint, permit_id pid) {
-    if (endpoint == get_broadcast_address()) {
-        return make_exception_future<>(std::runtime_error(format("Can not force remove node {} itself", endpoint)));
-    }
-    return container().invoke_on(0, [endpoint, pid] (auto& gossiper) mutable -> future<> {
+future<bool> gossiper::force_remove_endpoint(inet_address endpoint, locator::host_id id, permit_id pid) {
+    return container().invoke_on(0, [this, endpoint, pid, id] (auto& gossiper) mutable -> future<bool> {
         auto permit = co_await gossiper.lock_endpoint(endpoint, pid);
         pid = permit.id();
         try {
+            if (gossiper.get_host_id(endpoint) != id) {
+                co_return false;
+            }
+            if (endpoint == get_broadcast_address()) {
+                throw std::runtime_error(format("Can not force remove node {} itself", endpoint));
+            }
             co_await gossiper.remove_endpoint(endpoint, pid);
             co_await gossiper.evict_from_membership(endpoint, pid);
             logger.info("Finished to force remove node {}", endpoint);
+            co_return true;
         } catch (...) {
             logger.warn("Failed to force remove node {}: {}", endpoint, std::current_exception());
+            co_return false;
         }
     });
 }
@@ -699,10 +700,12 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
     auto permit = co_await lock_endpoint(endpoint, pid);
     pid = permit.id();
 
+    auto state = get_endpoint_state_ptr(endpoint);
+
     // do subscribers first so anything in the subscriber that depends on gossiper state won't get confused
     try {
-        co_await _subscribers.for_each([endpoint, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            return subscriber->on_remove(endpoint, pid);
+        co_await _subscribers.for_each([endpoint, state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+            return subscriber->on_remove(endpoint, state ? state->get_host_id() : locator::host_id{}, pid);
         });
     } catch (...) {
         logger.warn("Fail to call on_remove callback: {}", std::current_exception());
@@ -714,19 +717,29 @@ future<> gossiper::remove_endpoint(inet_address endpoint, permit_id pid) {
         logger.info("removed {} from _seeds, updated _seeds list = {}", endpoint, _seeds);
     }
 
-    auto state = get_endpoint_state_ptr(endpoint);
+    if (!state) {
+        logger.warn("There is no state for the removed IP {}", endpoint);
+        co_return;
+    }
+
+    auto host_id = state->get_host_id();
 
     bool was_alive = false;
-    co_await mutate_live_and_unreachable_endpoints([endpoint, &was_alive] (live_and_unreachable_endpoints& data) {
-        was_alive = data.live.erase(endpoint);
-        data.unreachable.erase(endpoint);
-    });
-    _syn_handlers.erase(endpoint);
-    _ack_handlers.erase(endpoint);
-    quarantine_endpoint(endpoint);
+
+    if (_address_map.find(host_id) == endpoint) {
+        // During IP address change we may have a situation where we work on old address
+        // but there is a new address for the same host id, so no need to mark host id as down
+        co_await mutate_live_and_unreachable_endpoints([host_id, &was_alive] (live_and_unreachable_endpoints& data) {
+            was_alive = data.live.erase(host_id);
+            data.unreachable.erase(host_id);
+        });
+        _syn_handlers.erase(host_id);
+        _ack_handlers.erase(host_id);
+    }
+    quarantine_endpoint(host_id);
     logger.info("Removed endpoint {}", endpoint);
 
-    if (was_alive && state) {
+    if (was_alive) {
         try {
             logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), endpoint, get_gossip_status(*state));
             co_await do_on_dead_notifications(endpoint, std::move(state), pid);
@@ -754,13 +767,14 @@ future<> gossiper::do_status_check() {
             continue;
         }
         auto& ep_state = *eps;
-        bool is_alive = this->is_alive(endpoint);
+        auto host_id = ep_state.get_host_id();
+        bool is_alive = this->is_alive(host_id);
         auto update_timestamp = ep_state.get_update_timestamp();
 
         // check if this is a fat client. fat clients are removed automatically from
         // gossip after FatClientTimeout.  Do not remove dead states here.
-        if (is_gossip_only_member(endpoint)
-            && !_just_removed_endpoints.contains(endpoint)
+        if (is_gossip_only_member(host_id)
+            && !_just_removed_endpoints.contains(host_id)
             && ((now - update_timestamp) > fat_client_timeout)) {
             logger.info("FatClient {} has been silent for {}ms, removing from gossip", endpoint, fat_client_timeout.count());
             co_await remove_endpoint(endpoint, pid); // will put it in _just_removed_endpoints to respect quarantine delay
@@ -769,12 +783,8 @@ future<> gossiper::do_status_check() {
         }
 
         // check for dead state removal
-        auto expire_time = get_expire_time_for_endpoint(endpoint);
+        auto expire_time = get_expire_time_for_endpoint(host_id);
         if (!is_alive && (now > expire_time)) {
-            const auto host_id = eps->get_host_id();
-            if (!host_id) {
-                on_internal_error_noexcept(logger, format("Endpoint {} is dead and expired, but unexpecteduly, it has no HOST_ID in endpoint state", endpoint));
-            }
             const auto* node = get_token_metadata_ptr()->get_topology().find_node(host_id);
             if (!host_id || !node || !node->is_member()) {
                 logger.debug("time is expiring for endpoint : {} ({})", endpoint, expire_time.time_since_epoch().count());
@@ -926,7 +936,7 @@ future<std::set<inet_address>> gossiper::get_live_members_synchronized() {
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
         // Make sure the value we return is synchronized on all shards
         auto lock = co_await g.lock_endpoint_update_semaphore();
-        co_return g.get_live_members_helper();
+        co_return g.get_live_members() | std::views::transform([&g] (auto id) { return g._address_map.get(id); }) | std::ranges::to<std::set>();
     });
 }
 
@@ -934,17 +944,16 @@ future<std::set<inet_address>> gossiper::get_unreachable_members_synchronized() 
     return container().invoke_on(0, [] (gms::gossiper& g) -> future<std::set<inet_address>> {
         // Make sure the value we return is synchronized on all shards
         auto lock = co_await g.lock_endpoint_update_semaphore();
-        co_return g.get_unreachable_members();
+        co_return g.get_unreachable_members() | std::views::transform([&g] (auto id) { return g._address_map.get(id); }) | std::ranges::to<std::set>();
     });
 }
 
-future<> gossiper::failure_detector_loop_for_node(gms::inet_address node, generation_type gossip_generation, uint64_t live_endpoints_version) {
+future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, generation_type gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::seconds(2);
     auto max_duration = echo_interval + std::chrono::milliseconds(_gcfg.failure_detector_timeout_ms());
-    auto host_id = get_host_id(node);
-
+    auto node = _address_map.get(host_id);
     while (is_enabled()) {
         bool failed = false;
         try {
@@ -996,7 +1005,7 @@ future<> gossiper::failure_detector_loop() {
                 co_await sleep_abortable(std::chrono::seconds(1), _abort_source);
                 continue;
             }
-            auto nodes = _live_endpoints | std::ranges::to<std::vector<inet_address>>();
+            auto nodes = _live_endpoints | std::ranges::to<std::vector>();
             auto live_endpoints_version = _live_endpoints_version;
             auto generation_number = my_endpoint_state().get_heart_beat_state().get_generation();
             co_await coroutine::parallel_for_each(std::views::iota(0u, nodes.size()), [this, generation_number, live_endpoints_version, &nodes] (size_t idx) {
@@ -1086,42 +1095,34 @@ void gossiper::run() {
             if (g_digests.size() > 0) {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
 
-                if (_endpoints_to_talk_with.empty()) {
-                    auto live_endpoints = _live_endpoints | std::ranges::to<std::vector<inet_address>>();
+                if (_endpoints_to_talk_with.empty() && !_live_endpoints.empty()) {
+                    auto live_endpoints = _live_endpoints | std::ranges::to<std::vector>();
                     std::shuffle(live_endpoints.begin(), live_endpoints.end(), _random_engine);
                     // This guarantees the local node will talk with all nodes
                     // in live_endpoints at least once within nr_rounds gossip rounds.
                     // Other gossip implementation like SWIM uses similar approach.
                     // https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf
-                    size_t nr_rounds = 10;
+                    constexpr size_t nr_rounds = 10;
                     size_t nodes_per_round = (live_endpoints.size() + nr_rounds - 1) / nr_rounds;
-                    std::vector<inet_address> live_nodes;
-                    for (const auto& node : live_endpoints) {
-                        if (live_nodes.size() < nodes_per_round) {
-                            live_nodes.push_back(node);
-                        } else {
-                            _endpoints_to_talk_with.push_back(std::move(live_nodes));
-                            live_nodes = {node};
-                        }
-                    }
-                    if (!live_nodes.empty()) {
-                        _endpoints_to_talk_with.push_back(live_nodes);
-                    }
+                    _endpoints_to_talk_with = live_endpoints | std::views::chunk(nodes_per_round) | std::ranges::to<std::list<std::vector<locator::host_id>>>();
                     logger.debug("Set live nodes to talk: endpoint_state_map={}, all_live_nodes={}, endpoints_to_talk_with={}",
                             _endpoint_state_map.size(), live_endpoints, _endpoints_to_talk_with);
                 }
-                if (_endpoints_to_talk_with.empty()) {
-                    auto nodes = std::vector<inet_address>(_seeds.begin(), _seeds.end());
-                    logger.debug("No live nodes yet: try initial contact point nodes={}", nodes);
-                    if (!nodes.empty()) {
-                        _endpoints_to_talk_with.push_back(std::move(nodes));
-                    }
-                }
+
                 if (!_endpoints_to_talk_with.empty()) {
                     auto live_nodes = std::move(_endpoints_to_talk_with.front());
                     _endpoints_to_talk_with.pop_front();
                     logger.debug("Talk to live nodes: {}", live_nodes);
                     for (auto& ep: live_nodes) {
+                        (void)with_gate(_background_msg, [this, message, ep] () mutable {
+                            return do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
+                                logger.trace("Failed to send gossip to live members: {}", ep);
+                            });
+                        });
+                    }
+                } else if (!_seeds.empty()) {
+                    logger.debug("No live nodes yet: try initial contact point nodes={}", _seeds);
+                    for (auto& ep: _seeds) {
                         (void)with_gate(_background_msg, [this, message, ep] () mutable {
                             return do_gossip_to_live_member(message, ep).handle_exception([] (auto ep) {
                                 logger.trace("Failed to send gossip to live members: {}", ep);
@@ -1177,19 +1178,15 @@ future<> gossiper::unregister_(shared_ptr<i_endpoint_state_change_subscriber> su
     return _subscribers.remove(subscriber);
 }
 
-std::set<inet_address> gossiper::get_live_members_helper() const {
-    std::set<inet_address> live_members(_live_endpoints.begin(), _live_endpoints.end());
+std::set<locator::host_id> gossiper::get_live_members() const {
+    std::set<locator::host_id> live_members(_live_endpoints.begin(), _live_endpoints.end());
     auto myip = get_broadcast_address();
     logger.debug("live_members before={}", live_members);
     if (!is_shutdown(myip)) {
-        live_members.insert(myip);
+        live_members.insert(my_host_id());
     }
     logger.debug("live_members after={}", live_members);
     return live_members;
-}
-
-std::set<locator::host_id> gossiper::get_live_members() const {
-    return get_live_members_helper() | std::views::transform([this] (inet_address ip) { return get_host_id(ip); }) | std::ranges::to<std::set>();
 }
 
 std::set<locator::host_id> gossiper::get_live_token_owners() const {
@@ -1215,7 +1212,7 @@ std::set<locator::host_id> gossiper::get_unreachable_nodes() const {
 }
 
 // Return downtime in microseconds
-int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
+int64_t gossiper::get_endpoint_downtime(locator::host_id ep) const noexcept {
     auto it = _unreachable_endpoints.find(ep);
     if (it != _unreachable_endpoints.end()) {
         auto& downtime = it->second;
@@ -1231,7 +1228,7 @@ int64_t gossiper::get_endpoint_downtime(inet_address ep) const noexcept {
 future<> gossiper::convict(inet_address endpoint) {
     auto permit = co_await lock_endpoint(endpoint, null_permit_id);
     auto state = get_endpoint_state_ptr(endpoint);
-    if (!state || !is_alive(endpoint)) {
+    if (!state || !is_alive(state->get_host_id())) {
         co_return;
     }
     if (is_shutdown(endpoint)) {
@@ -1241,19 +1238,8 @@ future<> gossiper::convict(inet_address endpoint) {
     }
 }
 
-std::set<inet_address> gossiper::get_unreachable_members() const {
-    std::set<inet_address> ret;
-    for (auto&& x : _unreachable_endpoints) {
-        ret.insert(x.first);
-    }
-    return ret;
-}
-
-std::set<locator::host_id> gossiper::get_unreachable_host_ids() const {
-    return get_unreachable_members() |
-            std::views::transform([this] (gms::inet_address ip) { return get_host_id(ip); }) |
-            std::ranges::to<std::set>();
-
+std::set<locator::host_id> gossiper::get_unreachable_members() const {
+    return _unreachable_endpoints | std::views::keys | std::ranges::to<std::set>();
 }
 
 version_type gossiper::get_max_endpoint_state_version(const endpoint_state& state) const noexcept {
@@ -1267,14 +1253,18 @@ version_type gossiper::get_max_endpoint_state_version(const endpoint_state& stat
 
 future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
     verify_permit(endpoint, pid);
-    co_await mutate_live_and_unreachable_endpoints([endpoint] (live_and_unreachable_endpoints& data) {
-        data.unreachable.erase(endpoint);
-        data.live.erase(endpoint);
-    });
+    auto hid = get_host_id(endpoint);
+    if (_address_map.find(hid) == endpoint) {
+        // During IP address change we may have a situation where we work on old address
+        // but there is a new address for the same host id, so no need to mark host id as down
+        co_await mutate_live_and_unreachable_endpoints([hid] (live_and_unreachable_endpoints& data) {
+            data.unreachable.erase(hid);
+            data.live.erase(hid);
+        });
+    }
 
-    co_await container().invoke_on_all([endpoint] (auto& g) {
+    co_await container().invoke_on_all([endpoint, hid] (auto& g) {
         if (this_shard_id() == 0) {
-            auto hid = g.get_endpoint_state_ptr(endpoint)->get_host_id();
             if (g._address_map.find(hid) == endpoint) {
                 // During IP address change we may have a situation where we remove old gossiper state
                 // but there is a new address for the same host id, so no need to make it expiring
@@ -1283,19 +1273,19 @@ future<> gossiper::evict_from_membership(inet_address endpoint, permit_id pid) {
         }
         g._endpoint_state_map.erase(endpoint);
     });
-    _expire_time_endpoint_map.erase(endpoint);
-    quarantine_endpoint(endpoint);
+    _expire_time_endpoint_map.erase(hid);
+    quarantine_endpoint(hid);
     logger.debug("evicting {} from gossip", endpoint);
 }
 
-void gossiper::quarantine_endpoint(inet_address endpoint) {
-    quarantine_endpoint(endpoint, now());
+void gossiper::quarantine_endpoint(locator::host_id id) {
+    quarantine_endpoint(id, now());
 }
 
-void gossiper::quarantine_endpoint(inet_address endpoint, clk::time_point quarantine_start) {
+void gossiper::quarantine_endpoint(locator::host_id id, clk::time_point quarantine_start) {
     if (!_topo_sm) {
         // In raft topology mode the coodinator maintains banned nodes list
-        _just_removed_endpoints[endpoint] = quarantine_start;
+        _just_removed_endpoints[id] = quarantine_start;
     }
 }
 
@@ -1366,15 +1356,10 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_
     auto expire_time = compute_expire_time();
     eps.add_application_state(application_state::STATUS, versioned_value::removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
     logger.info("Completing removal of {}", endpoint);
-    add_expire_time_for_endpoint(endpoint, expire_time);
+    add_expire_time_for_endpoint(host_id, expire_time);
     co_await replicate(endpoint, std::move(eps), pid);
     // ensure at least one gossip round occurs before returning
     co_await sleep_abortable(INTERVAL * 2, _abort_source);
-}
-
-future<> gossiper::unsafe_assassinate_endpoint(sstring address) {
-    logger.warn("Gossiper.unsafeAssassinateEndpoint is deprecated and will be removed in the next release; use assassinate_endpoint instead");
-    return assassinate_endpoint(address);
 }
 
 future<> gossiper::assassinate_endpoint(sstring address) {
@@ -1442,8 +1427,9 @@ future<version_type> gossiper::get_current_heart_beat_version(inet_address endpo
     });
 }
 
-future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, gms::inet_address ep) {
-    return send_gossip(message, {ep});
+template<typename T>
+future<> gossiper::do_gossip_to_live_member(gossip_digest_syn message, T ep) {
+    return send_gossip<T>(message, {ep});
 }
 
 future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
@@ -1455,10 +1441,10 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
         std::uniform_real_distribution<double> dist(0, 1);
         double rand_dbl = dist(_random_engine);
         if (rand_dbl < prob) {
-            std::set<inet_address> addrs;
+            std::set<locator::host_id> addrs;
             for (auto&& x : _unreachable_endpoints) {
                 // Ignore the node which is decommissioned
-                if (get_gossip_status(x.first) != sstring(versioned_value::STATUS_LEFT)) {
+                if (get_gossip_status(_address_map.get(x.first)) != sstring(versioned_value::STATUS_LEFT)) {
                     addrs.insert(x.first);
                 }
             }
@@ -1470,19 +1456,18 @@ future<> gossiper::do_gossip_to_unreachable_member(gossip_digest_syn message) {
     return make_ready_future<>();
 }
 
-bool gossiper::is_gossip_only_member(inet_address endpoint) const {
-    auto es = get_endpoint_state_ptr(endpoint);
+bool gossiper::is_gossip_only_member(locator::host_id host_id) const {
+    auto es = get_endpoint_state_ptr(host_id);
     if (!es) {
         return false;
     }
-    const auto host_id = get_host_id(endpoint);
     const auto* node = get_token_metadata_ptr()->get_topology().find_node(host_id);
     return !is_dead_state(*es) && (!node || !node->is_member());
 }
 
-clk::time_point gossiper::get_expire_time_for_endpoint(inet_address endpoint) const noexcept {
+clk::time_point gossiper::get_expire_time_for_endpoint(locator::host_id id) const noexcept {
     /* default expire_time is A_VERY_LONG_TIME */
-    auto it = _expire_time_endpoint_map.find(endpoint);
+    auto it = _expire_time_endpoint_map.find(id);
     if (it == _expire_time_endpoint_map.end()) {
         return compute_expire_time();
     } else {
@@ -1546,10 +1531,6 @@ future<> gossiper::reset_endpoint_state_map() {
     });
 }
 
-const std::unordered_map<inet_address, endpoint_state_ptr>& gms::gossiper::get_endpoint_states() const noexcept {
-    return _endpoint_state_map;
-}
-
 std::vector<inet_address> gossiper::get_endpoints() const {
     return _endpoint_state_map | std::views::keys | std::ranges::to<std::vector>();
 }
@@ -1596,7 +1577,7 @@ locator::host_id gossiper::get_host_id(inet_address endpoint) const {
 
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
     std::set<gms::inet_address> nodes;
-    for (const auto& [node, eps] : get_endpoint_states()) {
+    for (const auto& [node, eps] : _endpoint_state_map) {
         auto app_state = eps->get_application_state_ptr(application_state::HOST_ID);
         if (app_state && host_id == locator::host_id(utils::UUID(app_state->value()))) {
             nodes.insert(node);
@@ -1720,6 +1701,11 @@ void gossiper::mark_alive(inet_address addr) {
         // ping an old gossip entry.
         return;
     }
+    if (_address_map.find(id) != addr) {
+        // We are here because id has now different ip but we
+        // try to ping the old one
+        return;
+    }
     auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
@@ -1756,28 +1742,29 @@ future<> gossiper::real_mark_alive(inet_address addr) {
     // prevents do_status_check from racing us and evicting if it was down > A_VERY_LONG_TIME
     update_timestamp(es);
 
+    auto host_id = es->get_host_id();
     logger.debug("removing expire time for endpoint : {}", addr);
     bool was_live = false;
-    co_await mutate_live_and_unreachable_endpoints([addr, &was_live] (live_and_unreachable_endpoints& data) {
+    co_await mutate_live_and_unreachable_endpoints([addr = host_id, &was_live] (live_and_unreachable_endpoints& data) {
         data.unreachable.erase(addr);
         auto [it_, inserted] = data.live.insert(addr);
         was_live = !inserted;
     });
-    _expire_time_endpoint_map.erase(addr);
+    _expire_time_endpoint_map.erase(host_id);
     if (was_live) {
         co_return;
     }
 
     if (_endpoints_to_talk_with.empty()) {
-        _endpoints_to_talk_with.push_back({addr});
+        _endpoints_to_talk_with.push_back({host_id});
     } else {
-        _endpoints_to_talk_with.front().push_back(addr);
+        _endpoints_to_talk_with.front().push_back(host_id);
     }
 
-    logger.info("InetAddress {}/{} is now UP, status = {}", es->get_host_id(), addr, status);
+    logger.info("InetAddress {}/{} is now UP, status = {}", host_id, addr, status);
 
-    co_await _subscribers.for_each([addr, es, pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
-        co_await subscriber->on_alive(addr, es, pid);
+    co_await _subscribers.for_each([addr, host_id, es, pid = permit.id()] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) -> future<> {
+        co_await subscriber->on_alive(addr, host_id, es, pid);
         logger.trace("Notified {}", fmt::ptr(subscriber.get()));
     });
 }
@@ -1785,10 +1772,15 @@ future<> gossiper::real_mark_alive(inet_address addr) {
 future<> gossiper::mark_dead(inet_address addr, endpoint_state_ptr state, permit_id pid) {
     logger.trace("marking as down {}", addr);
     verify_permit(addr, pid);
-    co_await mutate_live_and_unreachable_endpoints([addr] (live_and_unreachable_endpoints& data) {
-        data.live.erase(addr);
-        data.unreachable[addr] = now();
-    });
+
+    if (_address_map.find(state->get_host_id()) == addr) {
+        // During IP address change we may have a situation where we work on old address
+        // but there is a new address for the same host id, so no need to mark host id as down
+        co_await mutate_live_and_unreachable_endpoints([addr = state->get_host_id()] (live_and_unreachable_endpoints& data) {
+            data.live.erase(addr);
+            data.unreachable[addr] = now();
+        });
+    }
     logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), addr, get_gossip_status(*state));
     co_await do_on_dead_notifications(addr, std::move(state), pid);
 }
@@ -1815,7 +1807,7 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
     if (eps_old) {
         // the node restarted: it is up to the subscriber to take whatever action is necessary
         co_await _subscribers.for_each([ep, eps_old, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-            return subscriber->on_restart(ep, eps_old, pid);
+            return subscriber->on_restart(ep, eps_old->get_host_id(), eps_old, pid);
         });
     }
 
@@ -1831,7 +1823,7 @@ future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps
     }
 
     co_await _subscribers.for_each([ep, ep_state, pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        return subscriber->on_join(ep, ep_state, pid);
+        return subscriber->on_join(ep, ep_state->get_host_id(), ep_state, pid);
     });
 
     // check this at the end so nodes will learn about the endpoint
@@ -1912,6 +1904,8 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
         ep = std::current_exception();
     }
 
+    auto host_id = local_state.get_host_id();
+
     // We must replicate endpoint states before listeners run.
     // Exceptions during replication will cause abort because node's state
     // would be inconsistent across shards. Changes listeners depend on state
@@ -1927,7 +1921,7 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
     // Some values are set only once, so listeners would never be re-run.
     // Listeners should decide which failures are non-fatal and swallow them.
     try {
-        co_await do_on_change_notifications(addr, changed, pid);
+        co_await do_on_change_notifications(addr, host_id, changed, pid);
     } catch (...) {
         auto msg = format("Gossip change listener failed: {}", std::current_exception());
         if (_abort_source.abort_requested()) {
@@ -1940,18 +1934,18 @@ future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_stat
     maybe_rethrow_exception(std::move(ep));
 }
 
-future<> gossiper::do_on_change_notifications(inet_address addr, const gms::application_state_map& states, permit_id pid) const {
+future<> gossiper::do_on_change_notifications(inet_address addr, locator::host_id id, const gms::application_state_map& states, permit_id pid) const {
     co_await _subscribers.for_each([&] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
         // Once _abort_source is aborted, don't attempt to process any further notifications
         // because that would violate monotonicity due to partially failed notification.
         _abort_source.check();
-        return subscriber->on_change(addr, states, pid);
+        return subscriber->on_change(addr, id, states, pid);
     });
 }
 
 future<> gossiper::do_on_dead_notifications(inet_address addr, endpoint_state_ptr state, permit_id pid) const {
     co_await _subscribers.for_each([addr, state = std::move(state), pid] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
-        return subscriber->on_dead(addr, state, pid);
+        return subscriber->on_dead(addr, state->get_host_id(), state, pid);
     });
 }
 
@@ -1976,17 +1970,6 @@ void gossiper::send_all(gossip_digest& g_digest,
 void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_list,
     utils::chunked_vector<gossip_digest>& delta_gossip_digest_list,
     std::map<inet_address, endpoint_state>& delta_ep_state_map) const {
-    if (g_digest_list.size() == 0) {
-        /* we've been sent a *completely* empty syn, which should normally
-             * never happen since an endpoint will at least send a syn with
-             * itself.  If this is happening then the node is attempting shadow
-             * gossip, and we should reply with everything we know.
-             */
-        logger.debug("Shadow request received, adding all states");
-        for (auto& entry : _endpoint_state_map) {
-            g_digest_list.emplace_back(entry.first);
-        }
-    }
     for (gossip_digest& g_digest : g_digest_list) {
         auto remote_generation = g_digest.get_generation();
         auto max_remote_version = g_digest.get_max_version();
@@ -2223,12 +2206,9 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
         ep_state.add_application_state(gms::application_state::DC, gms::versioned_value::datacenter(st.opt_dc_rack->dc));
         ep_state.add_application_state(gms::application_state::RACK, gms::versioned_value::datacenter(st.opt_dc_rack->rack));
     }
-    if (st.opt_status) {
-        ep_state.add_application_state(gms::application_state::STATUS, std::move(*st.opt_status));
-    }
     auto generation = ep_state.get_heart_beat_state().get_generation();
     co_await replicate(ep, std::move(ep_state), permit.id());
-    _unreachable_endpoints[ep] = now();
+    _unreachable_endpoints[host_id] = now();
     logger.trace("Adding saved endpoint {} {}", ep, generation);
 }
 
@@ -2287,7 +2267,7 @@ future<> gossiper::add_local_application_state(application_state_map states) {
             // now we might defer again, so this could be reordered. But we've
             // ensured the whole set of values are monotonically versioned and
             // applied to endpoint state.
-            co_await gossiper.do_on_change_notifications(ep_addr, states, permit.id());
+            co_await gossiper.do_on_change_notifications(ep_addr, gossiper.my_host_id(), states, permit.id());
         });
     } catch (...) {
         logger.warn("Fail to apply application_state: {}", std::current_exception());
@@ -2311,9 +2291,8 @@ future<> gossiper::do_stop_gossiping() {
         logger.info("Announcing shutdown");
         co_await add_local_application_state(application_state::STATUS, versioned_value::shutdown(true));
         auto live_endpoints = _live_endpoints;
-        for (inet_address addr : live_endpoints) {
-            msg_addr id = get_msg_addr(addr);
-            logger.info("Sending a GossipShutdown to {} with generation {}", id.addr, local_generation);
+        for (locator::host_id id : live_endpoints) {
+            logger.info("Sending a GossipShutdown to {} with generation {}", id, local_generation);
             try {
                 co_await ser::gossip_rpc_verbs::send_gossip_shutdown(&_messaging, id, get_broadcast_address(), local_generation.value());
                 logger.trace("Got GossipShutdown Reply");
@@ -2370,7 +2349,7 @@ bool gossiper::is_enabled() const {
     return _enabled && !_abort_source.abort_requested();
 }
 
-void gossiper::add_expire_time_for_endpoint(inet_address endpoint, clk::time_point expire_time) {
+void gossiper::add_expire_time_for_endpoint(locator::host_id endpoint, clk::time_point expire_time) {
     auto now_ = now();
     auto diff = std::chrono::duration_cast<std::chrono::seconds>(expire_time - now_).count();
     logger.info("Node {} will be removed from gossip at [{:%Y-%m-%d %T}]: (expire = {}, now = {}, diff = {} seconds)",
@@ -2383,45 +2362,22 @@ clk::time_point gossiper::compute_expire_time() {
     return now() + A_VERY_LONG_TIME;
 }
 
-bool gossiper::is_alive(inet_address ep) const {
-    if (ep == get_broadcast_address()) {
+bool gossiper::is_alive(locator::host_id id) const {
+    if (id == my_host_id()) {
         return true;
     }
-    bool is_alive = _live_endpoints.contains(ep);
+
+    bool is_alive = _live_endpoints.contains(id);
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
     // Live endpoints must always have a valid endpoint_state.
     // Verify that in testing mode to reduce the overhead in production.
-    if (is_alive && !get_endpoint_state_ptr(ep)) {
-        on_internal_error(logger, fmt::format("Node {} is alive but has no endpoint state", ep));
+    if (is_alive && !get_endpoint_state_ptr(id)) {
+        on_internal_error(logger, fmt::format("Node {} is alive but has no endpoint state", id));
     }
 #endif
 
     return is_alive;
-}
-
-bool gossiper::is_alive(locator::host_id id) const {
-    auto ip_opt = _address_map.find(id);
-
-    if (!ip_opt) {
-        // if host ID is not in the gossiper state (and hence not in the address map) it is dead
-        return false;
-    }
-
-    auto ep = get_endpoint_state_ptr(*ip_opt);
-    if (!ep) {
-        // _address_map may have stale entry since we rely on gc to remove entries there
-        // FIXME: add function to address_map to remove immediately
-        return false;
-    }
-
-    if (id != ep->get_host_id()) {
-        // If IDs do not match it means that the node with provided ID was replaced
-        // with a new node with same IP address and hence it is dead
-        return false;
-    }
-
-    return is_alive(*ip_opt);
 }
 
 template<typename ID>
@@ -2431,12 +2387,15 @@ future<> gossiper::wait_alive_helper(noncopyable_function<std::vector<ID>()> get
         auto nodes = get_nodes();
         std::vector<ID> live_nodes;
         for (const auto& node: nodes) {
-            size_t nr_alive = co_await container().map_reduce0([node] (gossiper& g) -> size_t {
-                return g.is_alive(node) ? 1 : 0;
-            }, 0, std::plus<size_t>());
-            logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
-            if (nr_alive == smp::count) {
-                live_nodes.push_back(node);
+            auto es = get_endpoint_state_ptr(node);
+            if (es) {
+                size_t nr_alive = co_await container().map_reduce0([node = es->get_host_id()] (gossiper& g) -> size_t {
+                    return g.is_alive(node) ? 1 : 0;
+                }, 0, std::plus<size_t>());
+                logger.debug("Marked node={} as alive on {} out of {} shards", node, nr_alive, smp::count);
+                if (nr_alive == smp::count) {
+                    live_nodes.push_back(node);
+                }
             }
         }
         logger.debug("Waited for marking node as up, replace_nodes={}, live_nodes={}", nodes, live_nodes);
@@ -2750,8 +2709,8 @@ int gossiper::get_down_endpoint_count() const noexcept {
 }
 
 int gossiper::get_up_endpoint_count() const noexcept {
-    return std::ranges::count_if(_endpoint_state_map | std::views::keys, [this] (const inet_address& ep) {
-        return is_alive(ep);
+    return std::ranges::count_if(_endpoint_state_map | std::views::values, [this] (const endpoint_state_ptr& es) {
+        return is_alive(es->get_host_id());
     });
 }
 

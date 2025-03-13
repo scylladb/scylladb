@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "gms/generation-number.hh"
 #include "gms/inet_address.hh"
+#include "seastar/core/shard_id.hh"
 #include "utils/assert.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
@@ -221,9 +223,9 @@ size_t msg_addr::hash::operator()(const msg_addr& id) const noexcept {
     return std::hash<bytes_view>()(id.addr.bytes());
 }
 
-messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topo_ignored, inet_address ip)
+messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topo_ignored)
     : rpc_client(std::move(client))
-    , topology_ignored(topo_ignored), endpoint(ip)
+    , topology_ignored(topo_ignored)
 {
 }
 
@@ -271,11 +273,12 @@ messaging_service::messaging_service(
     uint16_t port,
     gms::feature_service& feature_service,
     gms::gossip_address_map& address_map,
+    gms::generation_type generation,
     utils::walltime_compressor_tracker& wct,
     qos::service_level_controller& sl_controller)
     : messaging_service(config{std::move(id), ip, ip, port},
                         scheduling_config{{{{}, "$default"}}, {}, {}},
-                        nullptr, feature_service, address_map, wct, sl_controller)
+                        nullptr, feature_service, address_map, generation, wct, sl_controller)
 {}
 
 static
@@ -476,7 +479,7 @@ void messaging_service::do_start_listen() {
 }
 
 messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service,
-                                     gms::gossip_address_map& address_map, utils::walltime_compressor_tracker& arct, qos::service_level_controller& sl_controller)
+                                     gms::gossip_address_map& address_map, gms::generation_type generation, utils::walltime_compressor_tracker& arct, qos::service_level_controller& sl_controller)
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)
@@ -488,6 +491,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     , _sl_controller(sl_controller)
     , _compressor_factory_wrapper(std::make_unique<compressor_factory_wrapper>(arct, _cfg.enable_advanced_rpc_compression))
     , _address_map(address_map)
+    , _current_generation(generation)
 {
     _rpc->set_logger(&rpc_logger);
 
@@ -501,7 +505,7 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
     }
 
     register_handler(this, messaging_verb::CLIENT_ID, [this] (rpc::client_info& ci, gms::inet_address broadcast_address, uint32_t src_cpu_id, rpc::optional<uint64_t> max_result_size, rpc::optional<utils::UUID> host_id,
-                    rpc::optional<std::optional<utils::UUID>> dst_host_id) {
+                    rpc::optional<std::optional<utils::UUID>> dst_host_id, rpc::optional<gms::generation_type> generation) {
         if (dst_host_id && *dst_host_id && **dst_host_id != _cfg.id.uuid()) {
             ci.server.abort_connection(ci.conn_id);
         }
@@ -509,18 +513,22 @@ messaging_service::messaging_service(config cfg, scheduling_config scfg, std::sh
             auto peer_host_id = locator::host_id(*host_id);
             if (is_host_banned(peer_host_id)) {
                 ci.server.abort_connection(ci.conn_id);
-                return rpc::no_wait;
+                return make_ready_future<rpc::no_wait_type>(rpc::no_wait);
             }
             ci.attach_auxiliary("host_id", peer_host_id);
+            ci.attach_auxiliary("baddr", broadcast_address);
+            ci.attach_auxiliary("src_cpu_id", src_cpu_id);
+            ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
             _host_connections.emplace(peer_host_id, connection_ref {
                 .server = ci.server,
                 .conn_id = ci.conn_id,
             });
+            return container().invoke_on(0, [peer_host_id,  broadcast_address, generation = generation.value_or(gms::generation_type{})] (messaging_service &ms) {
+                ms._address_map.add_or_update_entry(peer_host_id, broadcast_address, generation);
+                return rpc::no_wait;
+            });
         }
-        ci.attach_auxiliary("baddr", broadcast_address);
-        ci.attach_auxiliary("src_cpu_id", src_cpu_id);
-        ci.attach_auxiliary("max_result_size", max_result_size.value_or(query::result_memory_limiter::maximum_result_size));
-        return rpc::no_wait;
+        return make_ready_future<rpc::no_wait_type>(rpc::no_wait);
     });
 
     init_local_preferred_ip_cache(_cfg.preferred_ips);
@@ -986,7 +994,7 @@ void messaging_service::cache_preferred_ip(gms::inet_address ep, gms::inet_addre
     // _preferred_ip_cache so that they reopen with the preferred IPs we've
     // just read.
     //
-    remove_rpc_client(msg_addr(ep));
+    remove_rpc_client(msg_addr(ep), std::nullopt);
 }
 
 void messaging_service::init_feature_listeners() {
@@ -1143,12 +1151,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // the topology (so we always set `topology_ignored` to `false` in that case).
     bool topology_ignored = idx != TOPOLOGY_INDEPENDENT_IDX && topology_status.has_value() && *topology_status == false;
     if (host_id) {
-        auto res = _clients_with_host_id[idx].emplace(*host_id, shard_info(std::move(client), topology_ignored, id.addr));
+        auto res = _clients_with_host_id[idx].emplace(*host_id, shard_info(std::move(client), topology_ignored));
         SCYLLA_ASSERT(res.second);
         auto it = res.first;
         client = it->second.rpc_client;
     } else {
-        auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored, id.addr));
+        auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
         SCYLLA_ASSERT(res.second);
         auto it = res.first;
         client = it->second.rpc_client;
@@ -1156,9 +1164,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     uint32_t src_cpu_id = this_shard_id();
     // No reply is received, nothing to wait for.
     (void)_rpc->make_client<
-            rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID, std::optional<utils::UUID>)>(messaging_verb::CLIENT_ID)(
+            rpc::no_wait_type(gms::inet_address, uint32_t, uint64_t, utils::UUID, std::optional<utils::UUID>, gms::generation_type)>(messaging_verb::CLIENT_ID)(
                 *client, broadcast_address, src_cpu_id,
-                query::result_memory_limiter::maximum_result_size, my_host_id.uuid(), host_id ? std::optional{host_id->uuid()} : std::nullopt)
+                query::result_memory_limiter::maximum_result_size, my_host_id.uuid(), host_id ? std::optional{host_id->uuid()} : std::nullopt, _current_generation)
             .handle_exception([ms = shared_from_this(), remote_addr, verb] (std::exception_ptr ep) {
         mlogger.debug("Failed to send client id to {} for verb {}: {}", remote_addr, std::underlying_type_t<messaging_verb>(verb), ep);
     });
@@ -1180,12 +1188,10 @@ void messaging_service::find_and_remove_client(Map& clients, typename Map::key_t
     if (it != clients.end() && filter(it->second)) {
         auto client = std::move(it->second.rpc_client);
 
-        gms::inet_address addr;
-        std::optional<locator::host_id> hid;
+        locator::host_id hid;
         if constexpr (std::is_same_v<typename Map::key_type, msg_addr>) {
-            addr = id.addr;
+            hid = _address_to_host_id_mapper(id.addr);
         } else {
-            addr = it->second.endpoint;
             hid = id;
         }
 
@@ -1197,10 +1203,10 @@ void messaging_service::find_and_remove_client(Map& clients, typename Map::key_t
         // This will make sure messaging_service::stop() blocks until
         // client->stop() is over.
         //
-        (void)client->stop().finally([addr, client, ms = shared_from_this()] {
-            mlogger.debug("dropped connection to {}", addr);
+        (void)client->stop().finally([id, client, ms = shared_from_this()] {
+            mlogger.debug("dropped connection to {}", id);
         }).discard_result();
-        _connection_dropped(addr, hid);
+        _connection_dropped(hid);
     }
 }
 
@@ -1213,18 +1219,15 @@ void messaging_service::remove_error_rpc_client(messaging_verb verb, locator::ho
 }
 
 // Removes client to id.addr in both _client and _clients_with_host_id
-// FIXME: make removing from _clients_with_host_id more efficient
-void messaging_service::remove_rpc_client(msg_addr id) {
+void messaging_service::remove_rpc_client(msg_addr id, std::optional<locator::host_id> hid) {
     for (auto& c : _clients) {
         find_and_remove_client(c, id, [] (const auto&) { return true; });
     }
+    if (!hid) {
+        hid = _address_to_host_id_mapper(id.addr);
+    }
     for (auto& c : _clients_with_host_id) {
-        for (auto it = c.begin(); it != c.end();) {
-            auto& [hid, si] = *it++;
-            if (id.addr == si.endpoint) {
-                find_and_remove_client(c, hid, [] (const auto&) { return true; });
-            }
-        }
+        find_and_remove_client(c, *hid, [] (const auto&) { return true; });
     }
 }
 

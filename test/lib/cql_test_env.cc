@@ -10,6 +10,7 @@
 #include <random>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
+#include "gms/generation-number.hh"
 #include "replica/database_fwd.hh"
 #include "test/lib/cql_test_env.hh"
 #include "cdc/generation_service.hh"
@@ -774,7 +775,7 @@ private:
                     }
                     // Don't start listening so tests can be run in parallel if cfg_in.ms_listen is not set to true explicitly.
                     _ms.start(host_id, listen, std::move(port), std::ref(_feature_service),
-                              std::ref(_gossip_address_map), std::ref(_compressor_tracker),
+                              std::ref(_gossip_address_map), gms::generation_type{}, std::ref(_compressor_tracker),
                               std::ref(_sl_controller)).get();
                     stop_ms = defer_verbose_shutdown("messaging service", stop_type(stop_ms_func));
 

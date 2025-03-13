@@ -487,12 +487,14 @@ class RpcVerb(ASTBase):
     - [[one_way]] - the handler function is annotated by
       future<rpc::no_wait_type> return type to designate that a client
       doesn't need to wait for an answer.
+    - [[ip]] - ip addressable send function will be generated instead of
+               host id addressable
 
     The `-> return_values` clause is optional for two-way messages. If omitted,
     the return type is set to be `future<>`.
     For one-way verbs, the use of return clause is prohibited and the
     signature of `send*` function always returns `future<>`."""
-    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, cancellable, one_way):
+    def __init__(self, name, parameters, return_values, with_client_info, with_timeout, cancellable, one_way, ip):
         super().__init__(name)
         self.params = parameters
         self.return_values = return_values
@@ -500,9 +502,10 @@ class RpcVerb(ASTBase):
         self.with_timeout = with_timeout
         self.cancellable = cancellable
         self.one_way = one_way
+        self.ip = ip
 
     def __str__(self):
-        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, cancellable={self.cancellable}, one_way={self.one_way})>"
+        return f"<RpcVerb(name={self.name}, params={self.params}, return_values={self.return_values}, with_client_info={self.with_client_info}, with_timeout={self.with_timeout}, cancellable={self.cancellable}, one_way={self.one_way}, ip={self.ip})>"
 
     def __repr__(self):
         return self.__str__()
@@ -690,12 +693,13 @@ def rpc_verb_parse_action(tokens):
     with_timeout = not raw_attrs.empty() and 'with_timeout' in raw_attrs.attr_items
     cancellable = not raw_attrs.empty() and 'cancellable' in raw_attrs.attr_items
     with_client_info = not raw_attrs.empty() and 'with_client_info' in raw_attrs.attr_items
+    ip = not raw_attrs.empty() and 'ip' in raw_attrs.attr_items
     one_way = not raw_attrs.empty() and 'one_way' in raw_attrs.attr_items
     if one_way and 'return_values' in tokens:
         raise Exception(f"Invalid return type specification for one-way RPC verb '{name}'")
     if with_timeout and cancellable:
         raise Exception(f"Error in verb {name}: [[with_timeout]] cannot be used together with [[cancellable]] in the same verb")
-    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, cancellable=cancellable, one_way=one_way)
+    return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, cancellable=cancellable, one_way=one_way, ip=ip)
 
 
 def namespace_parse_action(tokens):
@@ -1614,9 +1618,10 @@ def generate_rpc_verbs_declarations(hout, module_name):
         fprintln(hout, reindent(4, f'''static void register_{name}(netw::messaging_service* ms,
     std::function<{verb.handler_function_return_values()} ({verb.handler_function_parameters_str()})>&&);
 static future<> unregister_{name}(netw::messaging_service* ms);
-static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False, dst_type="netw::msg_addr")});
 static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False, dst_type="locator::host_id")});
 '''))
+        if verb.ip:
+            fprintln(hout, reindent(4, f'''static {verb.send_function_return_type()} send_{name}({verb.send_function_signature_params_list(include_placeholder_names=False, dst_type="netw::msg_addr")});'''))
 
     fprintln(hout, reindent(4, 'static future<> unregister(netw::messaging_service* ms);'))
     fprintln(hout, '};\n')
@@ -1635,11 +1640,12 @@ future<> {module_name}_rpc_verbs::unregister_{name}(netw::messaging_service* ms)
     return ms->unregister_handler({verb.messaging_verb_enum_case()});
 }}
 
-{verb.send_function_return_type()} {module_name}_rpc_verbs::send_{name}({verb.send_function_signature_params_list(include_placeholder_names=True, dst_type="netw::msg_addr")}) {{
-    {verb.send_function_invocation()}
-}}
-
 {verb.send_function_return_type()} {module_name}_rpc_verbs::send_{name}({verb.send_function_signature_params_list(include_placeholder_names=True, dst_type="locator::host_id")}) {{
+    {verb.send_function_invocation()}
+}}''')
+        if verb.ip:
+            fprintln(cout, f'''
+{verb.send_function_return_type()} {module_name}_rpc_verbs::send_{name}({verb.send_function_signature_params_list(include_placeholder_names=True, dst_type="netw::msg_addr")}) {{
     {verb.send_function_invocation()}
 }}''')
 

@@ -891,18 +891,12 @@ future<> service_level_controller::do_remove_service_level(sstring name, bool re
     return make_ready_future();
 }
 
-void service_level_controller::on_join_cluster(const gms::inet_address& endpoint) { }
-
 void service_level_controller::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) {
     if (this_shard_id() == global_controller && _token_metadata.get()->get_topology().is_me(hid)) {
         _global_controller_db->dist_data_update_aborter.request_abort();
         _global_controller_db->group0_aborter.request_abort();
     }
 }
-
-void service_level_controller::on_up(const gms::inet_address& endpoint) { }
-
-void service_level_controller::on_down(const gms::inet_address& endpoint) { }
 
 void service_level_controller::register_subscriber(qos_configuration_change_subscriber* subscriber) {
     _subscribers.add(subscriber);

@@ -123,8 +123,8 @@ public:
     // Incremented each time the function above is called. Needed by tests.
     size_t canonical_mutation_merge_count = 0;
 
-    bool should_pull_schema_from(const gms::inet_address& endpoint);
-    bool has_compatible_schema_tables_version(const gms::inet_address& endpoint);
+    bool should_pull_schema_from(const locator::host_id& endpoint);
+    bool has_compatible_schema_tables_version(const locator::host_id& endpoint);
 
     // The function needs to be called if the user wants to read most up-to-date group 0 state (including schema state)
     // (the function ensures that all previously finished group0 operations are visible on this node) or to write it.
@@ -185,12 +185,9 @@ public:
     future<schema_ptr> get_schema_for_write(table_schema_version, locator::host_id from, unsigned shard, netw::messaging_service& ms, abort_source& as);
 
 private:
-    virtual future<> on_join(gms::inet_address endpoint, gms::endpoint_state_ptr ep_state, gms::permit_id) override;
-    virtual future<> on_change(gms::inet_address endpoint, const gms::application_state_map& states, gms::permit_id) override;
-    virtual future<> on_alive(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_dead(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_remove(gms::inet_address endpoint, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_restart(gms::inet_address endpoint, gms::endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
+    virtual future<> on_join(gms::inet_address endpoint,locator::host_id id,  gms::endpoint_state_ptr ep_state, gms::permit_id) override;
+    virtual future<> on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states, gms::permit_id) override;
+    virtual future<> on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id) override;
 
 public:
     // For tests only.

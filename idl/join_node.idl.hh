@@ -63,8 +63,8 @@ struct join_node_response_params {
 
 struct join_node_response_result {};
 
-verb join_node_query (raft::server_id dst_id, service::join_node_query_params) -> service::join_node_query_result;
-verb join_node_request (raft::server_id dst_id, service::join_node_request_params) -> service::join_node_request_result;
+verb [[ip]] join_node_query (raft::server_id dst_id, service::join_node_query_params) -> service::join_node_query_result;
+verb [[ip]] join_node_request (raft::server_id dst_id, service::join_node_request_params) -> service::join_node_request_result;
 verb join_node_response (raft::server_id dst_id, service::join_node_response_params) -> service::join_node_response_result;
 
 }

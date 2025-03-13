@@ -172,17 +172,14 @@ public:
     reader_consumer_v2 make_streaming_consumer(
             uint64_t estimated_partitions, stream_reason, service::frozen_topology_guard);
 public:
-    virtual future<> on_join(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_change(gms::inet_address, const gms::application_state_map& states, gms::permit_id) override  { return make_ready_future(); }
-    virtual future<> on_alive(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override { return make_ready_future(); }
-    virtual future<> on_dead(inet_address endpoint, endpoint_state_ptr state, gms::permit_id) override;
-    virtual future<> on_remove(inet_address endpoint, gms::permit_id) override;
-    virtual future<> on_restart(inet_address endpoint, endpoint_state_ptr ep_state, gms::permit_id) override;
+    virtual future<> on_dead(inet_address endpoint, locator::host_id id, endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_remove(inet_address endpoint, locator::host_id id, gms::permit_id) override;
+    virtual future<> on_restart(inet_address endpoint, locator::host_id id, endpoint_state_ptr ep_state, gms::permit_id) override;
 
 private:
     void fail_all_sessions();
-    void fail_sessions(inet_address endpoint);
-    bool has_peer(inet_address endpoint) const;
+    void fail_sessions(locator::host_id id);
+    bool has_peer(locator::host_id id) const;
 
     void init_messaging_service_handler(abort_source& as);
     future<> uninit_messaging_service_handler();

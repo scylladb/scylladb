@@ -21,8 +21,8 @@ struct msg_addr;
 enum class messaging_verb;
 class messaging_service;
 
-using connection_drop_signal_t = boost::signals2::signal_type<void (gms::inet_address, std::optional<locator::host_id>), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
-using connection_drop_slot_t = std::function<void(gms::inet_address, std::optional<locator::host_id>)>;
+using connection_drop_signal_t = boost::signals2::signal_type<void (locator::host_id), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
+using connection_drop_slot_t = std::function<void(locator::host_id)>;
 using connection_drop_registration_t = boost::signals2::scoped_connection;
 
 }

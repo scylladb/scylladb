@@ -148,7 +148,7 @@ void set_messaging_service(http_context& ctx, routes& r, sharded<netw::messaging
     hf::inject_disconnect.set(r, [&ms] (std::unique_ptr<request> req) -> future<json::json_return_type> {
         auto ip = msg_addr(req->get_path_param("ip"));
         co_await ms.invoke_on_all([ip] (netw::messaging_service& ms) {
-            ms.remove_rpc_client(ip);
+            ms.remove_rpc_client(ip, std::nullopt);
         });
         co_return json::json_void();
     });

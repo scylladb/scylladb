@@ -40,6 +40,7 @@ private:
     messaging_service& ms;
     gms::inet_address _server;
     uint32_t _cpuid;
+    locator::host_id _server_id = locator::host_id{utils::UUID("00000000-0000-1000-0000-000000000001")};
 public:
     tester(netw::messaging_service& ms_) : ms(ms_) {}
     using msg_addr = netw::messaging_service::msg_addr;
@@ -65,7 +66,7 @@ public:
         ser::gossip_rpc_verbs::register_gossip_digest_syn(&ms, [this] (const rpc::client_info& cinfo, gms::gossip_digest_syn msg) {
             test_logger.info("Server got syn msg = {}", msg);
 
-            auto from = netw::messaging_service::get_source(cinfo);
+            auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             auto ep1 = inet_address("1.1.1.1");
             auto ep2 = inet_address("2.2.2.2");
             gms::generation_type gen(800);
@@ -87,7 +88,7 @@ public:
 
         ser::gossip_rpc_verbs::register_gossip_digest_ack(&ms, [this] (const rpc::client_info& cinfo, gms::gossip_digest_ack msg) {
             test_logger.info("Server got ack msg = {}", msg);
-            auto from = netw::messaging_service::get_source(cinfo);
+            auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
             // Prepare gossip_digest_ack2 message
             auto ep1 = inet_address("3.3.3.3");
             std::map<inet_address, endpoint_state> eps{
@@ -145,10 +146,9 @@ public:
 
     future<> test_gossip_shutdown() {
         test_logger.info("=== {} ===", __func__);
-        auto id = get_msg_addr();
         inet_address from("127.0.0.1");
         int64_t gen = 0x1;
-        return ser::gossip_rpc_verbs::send_gossip_shutdown(&ms, id, from, gen).then([] () {
+        return ser::gossip_rpc_verbs::send_gossip_shutdown(&ms, _server_id, from, gen).then([] () {
             test_logger.info("Client sent gossip_shutdown got reply = void");
             return make_ready_future<>();
         });
@@ -156,9 +156,8 @@ public:
 
     future<> test_echo() {
         test_logger.info("=== {} ===", __func__);
-        auto id = get_msg_addr();
         int64_t gen = 0x1;
-        return ser::gossip_rpc_verbs::send_gossip_echo(&ms, id, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), gen, false).then_wrapped([] (auto&& f) {
+        return ser::gossip_rpc_verbs::send_gossip_echo(&ms, _server_id, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), gen, false).then_wrapped([] (auto&& f) {
             try {
                 f.get();
                 return make_ready_future<>();
@@ -213,7 +212,7 @@ int main(int ac, char ** av) {
             gossip_address_map.start().get();
             seastar::sharded<netw::messaging_service> messaging;
             messaging.start(locator::host_id{}, listen, 7000, std::ref(feature_service),
-                            std::ref(gossip_address_map), std::ref(compressor_tracker),
+                            std::ref(gossip_address_map), gms::generation_type{}, std::ref(compressor_tracker),
                             std::ref(sl_controller)).get();
             auto stop_messaging = deferred_stop(messaging);
             seastar::sharded<tester> testers;

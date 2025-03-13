@@ -252,10 +252,9 @@ public:
     static constexpr int32_t current_version = 0;
 
     struct shard_info {
-        shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topology_ignored, inet_address ip);
+        shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topology_ignored);
         shared_ptr<rpc_protocol_client_wrapper> rpc_client;
         const bool topology_ignored;
-        const inet_address endpoint;
         rpc::stats get_stats() const;
     };
 
@@ -358,6 +357,7 @@ private:
     std::unordered_multimap<locator::host_id, connection_ref> _host_connections;
     std::unordered_set<locator::host_id> _banned_hosts;
     gms::gossip_address_map& _address_map;
+    gms::generation_type _current_generation;
 
     future<> shutdown_tls_server();
     future<> shutdown_nontls_server();
@@ -369,9 +369,9 @@ public:
     using clock_type = lowres_clock;
 
     messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port,
-                      gms::feature_service&, gms::gossip_address_map&, utils::walltime_compressor_tracker&, qos::service_level_controller&);
+                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, utils::walltime_compressor_tracker&, qos::service_level_controller&);
     messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>,
-                      gms::feature_service&, gms::gossip_address_map&, utils::walltime_compressor_tracker&, qos::service_level_controller&);
+                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, utils::walltime_compressor_tracker&, qos::service_level_controller&);
     ~messaging_service();
 
     future<> start();
@@ -462,7 +462,7 @@ public:
     void remove_error_rpc_client(messaging_verb verb, msg_addr id);
     void remove_error_rpc_client(messaging_verb verb, locator::host_id id);
     void remove_rpc_client_with_ignored_topology(msg_addr id, locator::host_id hid);
-    void remove_rpc_client(msg_addr id);
+    void remove_rpc_client(msg_addr id, std::optional<locator::host_id> hid);
     connection_drop_registration_t when_connection_drops(connection_drop_slot_t& slot) {
         return _connection_dropped.connect(slot);
     }
