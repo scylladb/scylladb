@@ -179,6 +179,7 @@ private:
     uint64_t _ranges_complete = 0;
     gc_clock::time_point _flush_time;
     service::frozen_topology_guard _frozen_topology_guard;
+    service::topology_guard _topology_guard = {service::null_topology_guard};
 public:
     bool sched_by_scheduler = false;
 public:
