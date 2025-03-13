@@ -302,7 +302,7 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
         (target_type == cql3::statements::index_target::target_type::regular_values) ?
         format("{} IS NOT NULL", index_target->name_as_cql_string()) :
         "";
-    builder.with_view_info(*schema, false, where_clause);
+    builder.with_view_info(schema, false, where_clause);
     // A local secondary index should be backed by a *synchronous* view,
     // see #16371. A view is marked synchronous with a tag. Non-local indexes
     // do not need the tags schema extension at all.

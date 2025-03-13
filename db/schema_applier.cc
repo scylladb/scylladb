@@ -574,19 +574,23 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // 2. The table was just created - the table is guaranteed to be published with the view in that case.
         // 3. The view itself was altered - in that case we already know the base table so we can take it from
         //    the database object.
-        view_ptr vp = create_view_from_mutations(proxy, std::move(sm));
+        query::result_set rs(sm.columnfamilies_mutation());
+        const query::result_set_row& view_row = rs.row(0);
+        auto ks_name = view_row.get_nonnull<sstring>("keyspace_name");
+        auto base_name = view_row.get_nonnull<sstring>("base_table_name");
+
         schema_ptr base_schema;
         for (auto&& altered : tables_diff.altered) {
             // Chose the appropriate version of the base table schema: old -> old, new -> new.
             schema_ptr s = side == schema_diff_side::left ? altered.old_schema : altered.new_schema;
-            if (s->ks_name() == vp->ks_name() && s->cf_name() == vp->view_info()->base_name() ) {
+            if (s->ks_name() == ks_name && s->cf_name() == base_name) {
                 base_schema = s;
                 break;
             }
         }
         if (!base_schema) {
             for (auto&& s : tables_diff.created) {
-                if (s.get()->ks_name() == vp->ks_name() && s.get()->cf_name() == vp->view_info()->base_name() ) {
+                if (s.get()->ks_name() == ks_name && s.get()->cf_name() == base_name) {
                     base_schema = s;
                     break;
                 }
@@ -594,14 +598,13 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         }
 
         if (!base_schema) {
-            base_schema = proxy.local().local_db().find_schema(vp->ks_name(), vp->view_info()->base_name());
+            base_schema = proxy.local().local_db().find_schema(ks_name, base_name);
         }
+        view_ptr vp = create_view_from_mutations(proxy, std::move(sm), base_schema);
 
         // Now when we have a referenced base - sanity check that we're not registering an old view
         // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
         check_no_legacy_secondary_index_mv_schema(proxy.local().get_db().local(), vp, base_schema);
-
-        vp->view_info()->set_base_info(vp->view_info()->make_base_dependent_view_info(*base_schema));
         return vp;
     });
 
@@ -628,23 +631,28 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         });
     }
 
+    // For updating and creating tables use the following order:
+    // 1. Create non-view tables
+    // 2. Atomically update non-view tables and views
+    // 3. Create views
+    // This order is needed to maintain consistency base and view schemas - we shouldn't create a view
+    // before updating the base schema and both base and view schemas need to be updated atomically.
+    // If this atomicity starts causing stalls, we can consider only atomically updating a table and its views,
+    // not all tables and views at once.
     co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guaranteed to find it.
         co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
             co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
         });
-        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
-        });
-    });
-    co_await db.invoke_on_all([&](replica::database& db) -> future<> {
         std::vector<bool> columns_changed;
         columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
         for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
             columns_changed.push_back(db.update_column_family(altered.new_schema));
-            co_await coroutine::maybe_yield();
         }
+        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
+            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
+        });
         auto it = columns_changed.begin();
         auto notify = [&] (auto& r, auto&& f) -> future<> {
             co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
