@@ -42,7 +42,11 @@ async def test_read_repair_with_conflicting_hash_keys(request: pytest.FixtureReq
 
     """
     logger.info("Creating a new cluster")
-    srvs = await manager.servers_add(3)
+    srvs = [
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}),
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}),
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r3"})
+    ]
     cql, _ = await manager.get_ready_cql(srvs)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3};") as ks:
