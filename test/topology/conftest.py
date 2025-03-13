@@ -172,7 +172,7 @@ async def manager_internal(event_loop, request):
 
 
 @pytest.fixture(scope="function")
-async def manager(request, manager_internal, record_property, build_mode, is_test_needed_cluster):
+async def manager(request, manager_internal, record_property, build_mode):
     """Per test fixture to notify Manager client object when tests begin so it can
     perform checks for cluster state.
     """
@@ -189,8 +189,6 @@ async def manager(request, manager_internal, record_property, build_mode, is_tes
     test_py_log_test = suite_testpy_log.parent / f"{suite_testpy_log.stem}_{test_case_name}_cluster.log"
 
     manager_client = manager_internal()  # set up client object in fixture with scope function
-    if not is_test_needed_cluster:
-        await manager_client.mark_dirty()
     await manager_client.before_test(test_case_name, test_log)
     yield manager_client
     # `request.node.stash` contains a report stored in `pytest_runtest_makereport` from where we can retrieve
@@ -275,15 +273,7 @@ def pytest_collection_modifyitems(items, config):
         item.name = f"{item.name}.{run_id}"
 
 
-@pytest.fixture(scope="function")
-def is_test_needed_cluster(request):
-    prepare_marker = request.node.get_closest_marker("prepare_3_nodes_cluster")
-    return bool(prepare_marker)
-
-
 @pytest.fixture(scope="function", autouse=True)
-async def prepare_3_nodes_cluster(is_test_needed_cluster, manager):
-    servers = await  manager.running_servers()
-    if not servers and is_test_needed_cluster:
+async def prepare_3_nodes_cluster(request, manager):
+    if request.node.get_closest_marker("prepare_3_nodes_cluster"):
         await manager.servers_add(3)
-        await manager.mark_clean()
