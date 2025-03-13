@@ -672,6 +672,7 @@ void repair::shard_repair_task_impl::check_failed_ranges() {
 void repair::shard_repair_task_impl::check_in_abort_or_shutdown() {
     try {
         _as.check();
+        _topology_guard.check();
     } catch (...) {
         if (!_aborted) {
             _aborted = true;
@@ -1028,6 +1029,7 @@ future<> repair::shard_repair_task_impl::release_resources() noexcept {
     neighbors = {};
     dropped_tables = {};
     nodes_down = {};
+    _topology_guard = {service::null_topology_guard};
     return make_ready_future();
 }
 
@@ -1050,6 +1052,7 @@ future<> repair::shard_repair_task_impl::do_repair_ranges() {
             // prevent this.
             co_await coroutine::maybe_yield();
 
+            _topology_guard.check();
             // Get the system range parallelism
             auto permit = co_await seastar::get_units(rs.get_repair_module().range_parallelism_semaphore(), 1);
             // Get the range parallelism specified by user
@@ -1109,6 +1112,7 @@ future<tasks::task_manager::task::progress> repair::shard_repair_task_impl::get_
 // is assumed to be a indivisible in the sense that all the tokens in has the
 // same nodes as replicas.
 future<> repair::shard_repair_task_impl::run() {
+    _topology_guard = {_frozen_topology_guard};
     rs.get_repair_module().add_shard_task_id(global_repair_id.id, _status.id);
     auto remove_shard_task_id = defer([this] {
         rs.get_repair_module().remove_shard_task_id(global_repair_id.id);
