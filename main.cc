@@ -192,14 +192,6 @@ public:
     sharded<abort_source>& as_sharded_abort_source() { return _abort_sources; }
 };
 
-static void read_object_storage_config(db::config& db_cfg) {
-    std::unordered_map<sstring, s3::endpoint_config> cfg;
-    for (auto&& ep : db_cfg.object_storage_endpoints()) {
-        cfg[ep.endpoint] = std::move(ep.config);
-    }
-    db_cfg.object_storage_config.set(std::move(cfg));
-}
-
 static future<>
 read_config(bpo::variables_map& opts, db::config& cfg) {
     sstring file;
@@ -219,7 +211,6 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
             }
             startlog.log(level, "{} : {}", msg, opt);
         });
-        read_object_storage_config(cfg);
     } catch (...) {
         auto ep = std::current_exception();
         startlog.error("Could not read configuration file {}: {}", file, ep);

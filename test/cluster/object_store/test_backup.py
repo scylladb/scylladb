@@ -509,8 +509,9 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_server):
     '''Check that restore task fails well when given a non-existing sstable'''
 
+    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
     cfg = {'enable_user_defined_functions': False,
-           'object_storage_config_file': str(s3_server.config_file),
+           'object_storage_endpoints': objconf,
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
