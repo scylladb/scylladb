@@ -186,6 +186,7 @@ private:
             }
             auto frozen_frag = freeze(*s, *frag);
         }
+        co_await frag_stream.close();
 
         const auto end = perf_sstable_test_env::now();
         const auto duration = std::chrono::duration<double>(end - start).count();
