@@ -24,6 +24,7 @@ from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=n
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
+from test import BUILDDIR, TOP_SRCDIR
 from test.pylib.internal_types import ServerInfo
 
 
@@ -260,19 +261,18 @@ async def wait_for_first_completed(coros: list[Coroutine]):
         await t
 
 
-def ninja(target):
-    """Build specified target using ninja"""
-    build_dir = 'build'
-    args = ['ninja', target]
-    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
-        args = ['ninja', '-C', build_dir, target]
-    return subprocess.Popen(args, stdout=subprocess.PIPE).communicate()[0].decode()
+def ninja(target: str) -> str:
+    """Build specified target using ninja."""
+
+    return subprocess.Popen(
+        args=["ninja", *(["-C", str(BUILDDIR)] if BUILDDIR.joinpath("build.ninja").exists() else []), target],
+        stdout=subprocess.PIPE,
+        cwd=TOP_SRCDIR,
+    ).communicate()[0].decode()
 
 
 @cache
-def get_configured_modes(root_dir=None):
-    if root_dir:
-        os.chdir(root_dir)
+def get_configured_modes() -> list[str]:
     out = ninja('mode_list')
     # [1/1] List configured modes
     # debug release dev
@@ -283,7 +283,7 @@ def get_configured_modes(root_dir=None):
 def get_modes_to_run(session) -> list[str]:
     modes = session.config.getoption('modes')
     if not modes:
-        modes = get_configured_modes(root_dir=pathlib.Path(session.config.rootpath).parent)
+        modes = get_configured_modes()
     if not modes:
         raise RuntimeError('No modes configured. Please run ./configure.py first')
     return modes
@@ -304,3 +304,7 @@ async def gather_safely(*awaitables: Awaitable):
         if isinstance(result, BaseException):
             raise result from None
     return results
+
+
+def get_xdist_worker_id() -> str | None:
+    return os.environ.get("PYTEST_XDIST_WORKER")
