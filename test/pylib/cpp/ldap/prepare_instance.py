@@ -284,10 +284,6 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
     # Set up the server.
     SLAPD_URLS = 'ldap://:{}/ ldaps://:{}/'.format(port, port + 1)
 
-    def can_connect_to_slapd():
-        return can_connect(('127.0.0.1', port)) and can_connect(('127.0.0.1', port + 1)) and can_connect(
-            ('127.0.0.1', port + 2))
-
     def can_connect_to_saslauthd():
         return can_connect(os.path.join(saslauthd_socket_path.name, 'mux'), socket.AF_UNIX)
 
@@ -308,8 +304,6 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
         subprocess.check_output(['toxiproxy-cli', 'd', proxy_name])
 
     try:
-        if not try_something_backoff(can_connect_to_slapd):
-            raise Exception('Unable to connect to slapd')
         if not try_something_backoff(can_connect_to_saslauthd):
             raise Exception('Unable to connect to saslauthd')
     except:

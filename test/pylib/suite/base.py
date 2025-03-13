@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from importlib import import_module
 from typing import TYPE_CHECKING
+import socket
 
 import colorama
 import yaml
@@ -399,6 +400,17 @@ def read_log(log_filename: pathlib.Path) -> str:
 toxiproxy_id_gen = 0
 
 
+def is_port_available(host, port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex((host, port)) != 0
+
+def can_connect_to_local_ports(ports_range):
+    for port in ports_range:
+        if not is_port_available('localhost', port):
+            return False
+    return True
+
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
@@ -406,7 +418,15 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
         global toxiproxy_id_gen
         toxiproxy_id = toxiproxy_id_gen
         toxiproxy_id_gen += 1
+        # Assign some NONE-busy ports to LDAP
         ldap_port = 5000 + (toxiproxy_id * 3) % 55000
+        while not can_connect_to_local_ports(range(ldap_port, ldap_port+3)):
+            print("One of {} ports required by LDAP are busy, trying the next 3 ports".format(list(range(ldap_port, ldap_port+3))))
+            ldap_port = ldap_port + 3
+            if ldap_port > 65535: # it's the highest possible TCP port number
+                print("No more ports to check, exiting")
+                return False
+
         cleanup_fn = None
         finject_desc = None
         def report_error(error, failure_injection_desc = None):
