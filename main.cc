@@ -114,6 +114,7 @@
 #include "utils/advanced_rpc_compressor.hh"
 #include "utils/shared_dict.hh"
 #include "message/dictionary_service.hh"
+#include "sstable_dict_autotrainer.hh"
 #include "utils/disk_space_monitor.hh"
 #include "utils/labels.hh"
 #include "tools/utils.hh"
@@ -2192,6 +2193,16 @@ sharded<locator::shared_token_metadata> token_metadata;
             );
             auto stop_dict_service = defer_verbose_shutdown("dictionary training", [&] {
                 dict_service.stop().get();
+            });
+
+            auto sst_dict_autotrainer = sstable_dict_autotrainer(ss.local(), group0_client, sstable_dict_autotrainer::config{
+                .tick_period_in_seconds = cfg->sstable_compression_dictionaries_autotrainer_tick_period_in_seconds,
+                .retrain_period_in_seconds = cfg->sstable_compression_dictionaries_retrain_period_in_seconds,
+                .min_dataset_bytes = cfg->sstable_compression_dictionaries_min_training_dataset_bytes,
+                .min_improvement_factor = cfg->sstable_compression_dictionaries_min_training_improvement_factor,
+            });
+            auto stop_sst_dict_autotrainer = defer_verbose_shutdown("sstable_dict_autotrainer", [&] {
+                sst_dict_autotrainer.stop().get();
             });
 
             checkpoint(stop_signal, "starting tracing");
