@@ -12,6 +12,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include "dict_autotrainer.hh"
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
 #include "auth/allow_all_authorizer.hh"
@@ -2178,6 +2179,14 @@ sharded<locator::shared_token_metadata> token_metadata;
             );
             auto stop_dict_service = defer_verbose_shutdown("dictionary training", [&] {
                 dict_service.stop().get();
+            });
+
+            auto sst_dict_autotrainer = sstable_dict_autotrainer(ss.local(), group0_client, sstable_dict_autotrainer::config{
+                .tick_period_in_seconds = cfg->sstable_compression_dictionaries_autotrainer_tick_period_in_seconds,
+                .retrain_period_in_seconds = cfg->sstable_compression_dictionaries_retrain_period_in_seconds,
+            });
+            auto stop_sst_dict_autotrainer = defer_verbose_shutdown("sstable_dict_autotrainer", [&] {
+                sst_dict_autotrainer.stop().get();
             });
 
             checkpoint(stop_signal, "starting tracing");
