@@ -369,9 +369,8 @@ class topo:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
-        topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
+        topo(rf = 3, nodes = 5, racks = 3, dcs = 1),
         topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
-        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
         topo(rf = 3, nodes = 6, racks = 3, dcs = 1),
         topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
     ])
