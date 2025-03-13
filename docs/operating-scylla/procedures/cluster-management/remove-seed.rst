@@ -5,9 +5,10 @@ Remove a Seed Node from Seed List
 This procedure describes how to remove a seed node from the seed list.
 
 .. note::
-   The seed concept in gossip has been removed. A seed node 
-   is only used by a new node during startup to learn about the cluster topology. As a result, you only need to configure one 
-   seed node in a node's ``scylla.yaml`` file.
+   A seed node is only used by a new node during startup to learn about the cluster topology.
+   This means it is sufficient to configure one seed node in a node's ``scylla.yaml`` file.
+
+   The first node in a new cluster must be a seed node.
 
 
 Prerequisites
