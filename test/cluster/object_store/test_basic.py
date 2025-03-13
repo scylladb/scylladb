@@ -13,6 +13,7 @@ from test.pylib.manager_client import ManagerClient
 from test.cluster.util import reconnect_driver
 from test.cluster.object_store.conftest import get_s3_resource, format_tuples
 from test.cqlpy.rest_api import scylla_inject_error
+from test.cluster.test_config import wait_for_config
 
 logger = logging.getLogger(__name__)
 
@@ -261,8 +262,30 @@ async def test_get_object_store_endpoints(manager: ManagerClient, s3_server):
     print('Check that system.config contains the object storage endpoints')
     cql = manager.get_cql()
     res = json.loads(cql.execute("SELECT value FROM system.config WHERE name = 'object_storage_endpoints';").one().value)
-    print(res)
-    print(objconf)
     assert s3_server.address in res and 'a' in res
     assert json.loads(res[s3_server.address]) == objconf[0]
     assert json.loads(res['a']) == badconf[0]
+
+    print('Update config with a new endpoint and SIGHUP Scylla to reload configuration')
+    new_endpoint = MinioServer.create_conf('b', 456, 'good_region')
+    await manager.server_update_config(server.server_id, 'object_storage_endpoints', new_endpoint)
+    await wait_for_config(manager, server, 'object_storage_endpoints', {'b': '{ "port": 456, "use_https": false, "aws_region": "good_region", "iam_role_arn": "" }'})
+
+    print('Trying to create a keyspace with an endpoint not configured in object_storage_endpoints should trip storage_manager::is_known_endpoint()')
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy',
+                                      'replication_factor': '1'})
+    storage_opts = format_tuples(type='S3',
+                                 endpoint='a',
+                                 bucket=s3_server.bucket_name)
+    with pytest.raises(ConfigurationException):
+        cql.execute((f'CREATE KEYSPACE random_ks WITH'
+                      f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
+
+    print('Passing a known endpoint will make the CREATE KEYSPACE stmt to succeed')
+    storage_opts = format_tuples(type='S3',
+                                 endpoint='b',
+                                 bucket=s3_server.bucket_name)
+    cql.execute((f'CREATE KEYSPACE random_ks WITH'
+                    f' REPLICATION = {replication_opts} AND STORAGE = {storage_opts};'))
+    
+

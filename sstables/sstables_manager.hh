@@ -29,6 +29,7 @@ namespace db {
 
 class large_data_handler;
 class config;
+class object_storage_endpoint_param;
 
 }   // namespace db
 
@@ -47,7 +48,7 @@ static constexpr size_t default_sstable_buffer_size = 128 * 1024;
 class storage_manager : public peering_sharded_service<storage_manager> {
     struct config_updater {
         serialized_action action;
-        utils::observer<std::unordered_map<sstring, s3::endpoint_config>> observer;
+        utils::observer<std::vector<db::object_storage_endpoint_param>> observer;
         config_updater(const db::config& cfg, storage_manager&);
     };
 
