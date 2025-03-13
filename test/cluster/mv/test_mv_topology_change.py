@@ -34,7 +34,11 @@ async def test_mv_topology_change(manager: ManagerClient):
            'enable_tablets': False,
            'error_injections_at_startup': ['delay_before_get_view_natural_endpoint']}
 
-    servers = [await manager.server_add(config=cfg) for _ in range(3)]
+    servers = [
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"}),
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"}),
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+    ]
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
@@ -69,7 +73,7 @@ async def test_mv_topology_change(manager: ManagerClient):
         # replication maps for base and view will change after the writes start but before they finish
         tasks = [asyncio.create_task(do_writes(i, repeat=False)) for i in range(concurrency)]
 
-        server = await manager.server_add()
+        server = await manager.server_add(property_file={"dc": "dc1", "rack": "r1"})
 
         await asyncio.gather(*tasks)
 
@@ -177,7 +181,12 @@ async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
 # during this time.
 @pytest.mark.asyncio
 async def test_mv_write_to_dead_node(manager: ManagerClient):
-    servers = await manager.servers_add(4)
+    servers = [
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}),
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}),
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r3"}),
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r3"})
+    ]
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:

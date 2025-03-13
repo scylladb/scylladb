@@ -67,8 +67,16 @@ async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_mv_retried_writes_reach_all_replicas(manager: ManagerClient) -> None:
     node_count = 4
-    servers = await manager.servers_add(node_count - 1, config={'error_injections_at_startup': ['update_backlog_immediately'], 'enable_tablets': True})
-    server = await manager.server_add(config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately'], 'enable_tablets': True})
+
+    cfg_normal = {'error_injections_at_startup': ['update_backlog_immediately'], 'enable_tablets': True}
+    cfg_slow = {'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately'], 'enable_tablets': True}
+
+    servers = [
+        await manager.server_add(config=cfg_normal, property_file={"dc": "dc1", "rack": "r1"}),
+        await manager.server_add(config=cfg_normal, property_file={"dc": "dc1", "rack": "r2"}),
+        await manager.server_add(config=cfg_normal, property_file={"dc": "dc1", "rack": "r3"})
+    ]
+    server = await manager.server_add(config=cfg_slow, property_file={"dc": "dc1", "rack": "r1"})
 
     cql, hosts = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
