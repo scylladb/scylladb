@@ -199,11 +199,13 @@ The ScyllaDB image supports many command line options that are passed to the Doc
 -------------
 The ``--seeds`` command line option configures ScyllaDB's seed nodes. If no ``--seeds`` option is specified, ScyllaDB uses its own IP address as the seed.
 
-For example, to configure ScyllaDB to run with two seed nodes ``192.168.0.100`` and ``192.168.0.200``.
+For example, to configure ScyllaDB to run with the seed node ``192.168.0.100``, run:
 
 .. code-block:: console
 
- docker run --name some-scylla -d scylladb/scylla --seeds 192.168.0.100,192.168.0.200
+ docker run --name some-scylla -d scylladb/scylla --seeds 192.168.0.100
+
+See :doc:`ScyllaDB Seed Nodes </kb/seed-nodes>` for details.
 
 --listen-address ADDR
 ---------------------
