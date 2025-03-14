@@ -12,13 +12,14 @@
 #include <concepts>
 #include <seastar/core/format.hh>
 
+#include "sstables/component_type.hh"
 #include "seastarx.hh"
 
 namespace sstables {
 class malformed_sstable_exception : public std::exception {
     sstring _msg;
 public:
-    malformed_sstable_exception(sstring msg, sstring filename)
+    malformed_sstable_exception(sstring msg, component_name filename)
         : malformed_sstable_exception{format("{} in sstable {}", msg, filename)}
     {}
     malformed_sstable_exception(sstring s) : _msg(s) {}

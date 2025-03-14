@@ -155,17 +155,17 @@ public:
     void rewrite_toc_without_component(component_type component) {
         SCYLLA_ASSERT(component != component_type::TOC);
         _sst->_recognized_components.erase(component);
-        remove_file(_sst->filename(component_type::TOC)).get();
+        remove_file(fmt::to_string(_sst->toc_filename())).get();
         _sst->_storage->open(*_sst);
         _sst->seal_sstable(false).get();
     }
 
     future<> remove_component(component_type c) {
-        return remove_file(_sst->filename(c));
+        return remove_file(fmt::to_string(_sst->filename(c)));
     }
 
     fs::path filename(component_type c) const {
-        return fs::path(_sst->filename(c));
+        return fs::path(fmt::to_string(_sst->filename(c)));
     }
 
     void set_shards(std::vector<unsigned> shards) {

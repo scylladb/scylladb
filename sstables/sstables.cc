@@ -838,16 +838,16 @@ future<> sstable::read_toc() noexcept {
                     _recognized_components.insert(reverse_map(c, sstable_version_constants::get_component_map(_version)));
                 } catch (std::out_of_range& oor) {
                     _unrecognized_components.push_back(c);
-                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, filename(component_type::TOC));
+                    sstlog.info("Unrecognized TOC component was found: {} in sstable {}", c, toc_filename());
                 }
             }
             if (!_recognized_components.size()) {
-                throw malformed_sstable_exception("Empty TOC", filename(component_type::TOC));
+                throw malformed_sstable_exception("Empty TOC", toc_filename());
             }
         });
     } catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw malformed_sstable_exception(filename(component_type::TOC) + ": file not found");
+            throw malformed_sstable_exception(fmt::format("{}: file not found", toc_filename()));
         }
         throw;
     }
@@ -895,7 +895,7 @@ file_writer::~file_writer() {
         // so auto-close the output_stream so it won't be destructed while open.
         _out.close().get();
     } catch (...) {
-        sstlog.warn("Error while auto-closing {}: {}. Ignored.", get_filename(), std::current_exception());
+        sstlog.warn("Error while auto-closing {}: {}. Ignored.", _component, std::current_exception());
     }
 }
 
@@ -918,7 +918,7 @@ void file_writer::close() {
         _out.close().get();
     } catch (...) {
         auto e = std::current_exception();
-        sstlog.error("Error while closing {}: {}", get_filename(), e);
+        sstlog.error("Error while closing {}: {}", _component, e);
         if (!ex) {
             ex = std::move(e);
         }
@@ -928,18 +928,12 @@ void file_writer::close() {
     }
 }
 
-const char* file_writer::get_filename() const noexcept {
-    return _filename ? _filename->c_str() : "<anonymous output_stream>";
-}
-
 future<file_writer> sstable::make_component_file_writer(component_type c, file_output_stream_options options, open_flags oflags) noexcept {
     // Note: file_writer::make closes the file if file_writer creation fails
     // so we don't need to use with_file_close_on_failure here.
-    return futurize_invoke([this, c] { return filename(c); }).then([this, c, options = std::move(options), oflags] (sstring filename) mutable {
-        return _storage->make_component_sink(*this, c, oflags, std::move(options)).then([filename = std::move(filename)] (data_sink sink) mutable {
-            return file_writer(output_stream<char>(std::move(sink)), std::move(filename));
+        return _storage->make_component_sink(*this, c, oflags, std::move(options)).then([comp = component_name(*this, c)] (data_sink sink) mutable {
+            return file_writer(output_stream<char>(std::move(sink)), std::move(comp));
         });
-    });
 }
 
 void sstable::open_sstable(const sstring& origin) {
@@ -982,8 +976,8 @@ thread_local std::array<std::vector<int>, downsampling::BASE_SAMPLING_LEVEL> dow
 
 future<> sstable::do_read_simple(component_type type,
                                  noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) {
-    auto file_path = filename(type);
-    sstlog.debug("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), file_path);
+    auto component_name = filename(type);
+    sstlog.debug("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), component_name);
     try {
         file fi = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
         uint64_t size = co_await fi.size();
@@ -992,11 +986,11 @@ future<> sstable::do_read_simple(component_type type,
         _metadata_size_on_disk += size;
     }  catch (std::system_error& e) {
         if (e.code() == std::error_code(ENOENT, std::system_category())) {
-            throw malformed_sstable_exception(file_path + ": file not found");
+            throw malformed_sstable_exception(fmt::format("{}: file not found", component_name));
         }
         throw;
     } catch (malformed_sstable_exception& e) {
-        throw malformed_sstable_exception(e.what(), file_path);
+        throw malformed_sstable_exception(e.what(), component_name);
     }
 }
 
@@ -1294,7 +1288,6 @@ void sstable::write_statistics() {
 }
 
 void sstable::rewrite_statistics() {
-    auto file_path = filename(component_type::TemporaryStatistics);
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
     file_output_stream_options options;
@@ -1304,7 +1297,7 @@ void sstable::rewrite_statistics() {
     write(_version, w, _components->statistics);
     w.close();
     // rename() guarantees atomicity when renaming a file into place.
-    sstable_write_io_check(rename_file, file_path, filename(component_type::Statistics)).get();
+    sstable_write_io_check(rename_file, fmt::to_string(filename(component_type::TemporaryStatistics)), fmt::to_string(filename(component_type::Statistics))).get();
 }
 
 future<> sstable::read_summary() noexcept {
@@ -2235,16 +2228,6 @@ void sstable::validate_originating_host_id() const {
     }
 }
 
-std::vector<sstring> sstable::component_filenames() const {
-    std::vector<sstring> res;
-    for (auto c : sstable_version_constants::get_component_map(_version) | std::views::keys) {
-        if (has_component(c)) {
-            res.emplace_back(filename(c));
-        }
-    }
-    return res;
-}
-
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
                                     format_types format, sstring component) {
     sstring v = fmt::to_string(version);
@@ -3037,7 +3020,7 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
             reader_concurrency_semaphore::register_metrics::no);
     std::unique_ptr<sstables::index_reader> lh_index_ptr = nullptr;
     try {
-        lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema, s->get_filename(), db::no_timeout, {}));
+        lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema, fmt::to_string(s->get_filename()), db::no_timeout, {}));
         present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
     } catch (...) {
         ex = std::current_exception();
@@ -3532,7 +3515,7 @@ public:
 private:
     future<> load_metadata() const {
         auto metafile = _sst->filename(sstables::component_type::Scylla);
-        if (!co_await file_exists(metafile)) {
+        if (!co_await file_exists(fmt::to_string(metafile))) {
             // for compatibility with streaming a non-scylla table (no scylla component)
             co_return;
         }
@@ -3635,6 +3618,10 @@ generation_type::from_string(const std::string& s) {
         int64_t lsb = decode_base36(match[4]);
         return generation_type{utils::UUID_gen::get_time_UUID_raw(timestamp, lsb)};
     }
+}
+
+sstring component_name::format() const {
+    return sst._storage->prefix() + "/" + sst.component_basename(component);
 }
 
 } // namespace sstables

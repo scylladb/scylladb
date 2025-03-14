@@ -15,6 +15,7 @@
 #include <seastar/core/iostream.hh>
 
 #include "sstables/progress_monitor.hh"
+#include "sstables/component_type.hh"
 #include "bytes.hh"
 #include "seastarx.hh"
 
@@ -23,12 +24,12 @@ namespace sstables {
 class file_writer {
     output_stream<char> _out;
     writer_offset_tracker _offset;
-    std::optional<sstring> _filename;
+    std::optional<component_name> _component;
     bool _closed = false;
 public:
-    file_writer(output_stream<char>&& out, sstring filename) noexcept
+    file_writer(output_stream<char>&& out, component_name component) noexcept
         : _out(std::move(out))
-        , _filename(std::move(filename))
+        , _component(std::move(component))
     {}
 
     file_writer(output_stream<char>&& out) noexcept
@@ -41,7 +42,7 @@ public:
     file_writer(file_writer&& x) noexcept
         : _out(std::move(x._out))
         , _offset(std::move(x._offset))
-        , _filename(std::move(x._filename))
+        , _component(std::move(x._component))
         , _closed(x._closed)
     {
         x._closed = true;   // don't auto-close in destructor
@@ -66,9 +67,6 @@ public:
     const writer_offset_tracker& offset_tracker() const {
         return _offset;
     }
-
-private:
-    const char* get_filename() const noexcept;
 };
 
 }

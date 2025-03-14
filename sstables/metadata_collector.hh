@@ -11,6 +11,7 @@
 #pragma once
 
 #include "sstables/types.hh"
+#include "sstables/component_type.hh"
 #include "timestamp.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/murmur_hash.hh"
@@ -125,7 +126,7 @@ public:
     }
 private:
     const schema& _schema;
-    sstring _name;
+    component_name _name;
     locator::host_id _host_id;
     // EH of 150 can track a max value of 1697806495183, i.e., > 1.5PB
     utils::estimated_histogram _estimated_partition_size{150};
@@ -156,7 +157,7 @@ private:
 private:
     void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<position_in_partition>& from);
 public:
-    explicit metadata_collector(const schema& schema, sstring name, const locator::host_id& host_id)
+    explicit metadata_collector(const schema& schema, component_name name, const locator::host_id& host_id)
         : _schema(schema)
         , _name(name)
         , _host_id(host_id)

@@ -252,7 +252,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
         // manager's reclaimed set has the sst now
         auto& reclaimed_set = sst_mgr.get_reclaimed_set();
         BOOST_REQUIRE_EQUAL(reclaimed_set.size(), 1);
-        BOOST_REQUIRE_EQUAL(reclaimed_set.begin()->get_filename(), sst->get_filename());
+        BOOST_REQUIRE_EQUAL(fmt::to_string(reclaimed_set.begin()->get_filename()), fmt::to_string(sst->get_filename()));
 
         // hold a copy of shared sst object in async thread to test reload after unlink
         utils::get_local_injector().enable("test_bloom_filter_reload_after_unlink");
@@ -330,7 +330,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         // hold sst1 as the async thread still has a reference.
         auto& active_list = sst_mgr.get_active_list();
         BOOST_REQUIRE_EQUAL(active_list.size(), 1);
-        BOOST_REQUIRE_EQUAL(active_list.front().get_filename(), sst1_filename);
+        BOOST_REQUIRE_EQUAL(fmt::to_string(active_list.front().get_filename()), fmt::to_string(sst1_filename));
 
         // create another sst and unlink it to trigger reload of components.
         // the reload should not attempt to load sst'1 bloom filter into memory depsite its presence in the _active list.

@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <seastar/core/sstring.hh>
 #include <fmt/format.h>
 
 namespace sstables {
@@ -27,6 +28,13 @@ enum class component_type {
     TemporaryStatistics,
     Scylla,
     Unknown,
+};
+
+struct sstable;
+struct component_name {
+    const sstable& sst;
+    component_type component;
+    seastar::sstring format() const;
 };
 
 }
@@ -66,5 +74,13 @@ struct fmt::formatter<sstables::component_type> : fmt::formatter<string_view> {
         case Unknown:
             return formatter<string_view>::format("Unknown", ctx);
         }
+    }
+};
+
+template <>
+struct fmt::formatter<sstables::component_name> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const sstables::component_name& name, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", name.format());
     }
 };

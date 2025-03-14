@@ -478,7 +478,7 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
         try {
             co_await coroutine::parallel_for_each(sstables, [&] (sstables::shared_sstable& sst) {
                 llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
-                        ops_uuid, s->ks_name(), s->cf_name(), sst->component_filenames());
+                        ops_uuid, s->ks_name(), s->cf_name(), sst->toc_filename());
                 return sst->unlink();
             });
         } catch (...) {
