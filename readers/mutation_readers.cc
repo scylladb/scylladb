@@ -1409,6 +1409,9 @@ private:
     compact_mutation_state<compact_for_sstables::yes> _compactor;
     noop_compacted_fragments_consumer _gc_consumer;
 
+    // Needs to be alive for the duration of the processing of the partition.
+    dht::decorated_key _dk;
+
     // Uncompacted stream
     partition_start _last_uncompacted_partition_start;
     mutation_fragment_v2::kind _last_uncompacted_kind = mutation_fragment_v2::kind::partition_end;
@@ -1466,7 +1469,8 @@ public:
         : impl(source.schema(), source.permit())
         , _reader(std::move(source))
         , _compactor(*_schema, compaction_time, get_max_purgeable, gc_state)
-        , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{})
+        , _dk(dht::minimum_token(), partition_key::make_empty())
+        , _last_uncompacted_partition_start(_dk, tombstone{})
         , _fwd(fwd) {
     }
     virtual future<> fill_buffer() override {
@@ -1503,7 +1507,8 @@ public:
                         break;
                     case mutation_fragment_v2::kind::partition_start:
                         _last_uncompacted_partition_start = std::move(mf).as_partition_start();
-                        _compactor.consume_new_partition(_last_uncompacted_partition_start.key());
+                        _dk = _last_uncompacted_partition_start.key();
+                        _compactor.consume_new_partition(_dk);
                         if (_last_uncompacted_partition_start.partition_tombstone()) {
                             _compactor.consume(_last_uncompacted_partition_start.partition_tombstone(), *this, _gc_consumer);
                         }
