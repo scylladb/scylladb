@@ -11,6 +11,7 @@
 #pragma once
 
 #include <vector>
+#include "cql3/prepared_statements_cache.hh"
 #include "utils/chunked_vector.hh"
 #include "enum_set.hh"
 #include "service/pager/paging_state.hh"
@@ -89,6 +90,8 @@ public:
     const std::vector<lw_shared_ptr<column_specification>>& get_names() const {
         return _column_info->_names;
     }
+
+    cql3::cql_metadata_id_type calculate_metadata_id() const;
 };
 
 ::shared_ptr<const cql3::metadata> make_empty_metadata();
