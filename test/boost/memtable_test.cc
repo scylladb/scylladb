@@ -191,7 +191,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 const auto now = gc_clock::now();
                 auto compacted_muts = muts;
                 for (auto& mut : compacted_muts) {
-                    mut.partition().compact_for_compaction(*mut.schema(), always_gc, mut.decorated_key(), now, tombstone_gc_state(nullptr));
+                    mut.partition().compact_for_compaction(*mut.schema(), always_gc, mut.decorated_key(), now, {});
                 }
 
                 testlog.info("Simple read");
