@@ -527,9 +527,9 @@ public:
     future<> drop_legacy_tables() {
         mlogger.info("Dropping legacy schema tables");
         auto with_snapshot = !_keyspaces.empty();
-        return parallel_for_each(legacy_schema_tables, [this, with_snapshot](const sstring& cfname) {
-            return replica::database::drop_table_on_all_shards(_db, _sys_ks, db::system_keyspace::NAME, cfname, with_snapshot);
-        });
+        for (const sstring& cfname : legacy_schema_tables) {
+            co_await replica::database::legacy_drop_table_on_all_shards(_db, _sys_ks, db::system_keyspace::NAME, cfname, with_snapshot);
+        }
     }
 
     future<> store_keyspaces_in_new_schema_tables() {

@@ -29,8 +29,8 @@ schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt) const {
     auto in = ser::as_input_stream(_data);
     auto sv = ser::deserialize(in, std::type_identity<ser::schema_view>());
     return sv.mutations().is_view()
-         ? db::schema_tables::create_view_from_mutations(ctxt, sv.mutations(), sv.version())
-         : db::schema_tables::create_table_from_mutations(ctxt, sv.mutations(), sv.version());
+         ? db::schema_tables::create_view_from_mutations(ctxt, sv.mutations(), ctxt.user_types(), sv.version())
+         : db::schema_tables::create_table_from_mutations(ctxt, sv.mutations(), ctxt.user_types(), sv.version());
 }
 
 frozen_schema::frozen_schema(bytes_ostream b)
