@@ -76,6 +76,16 @@ hinted_handoff_enabled_to_json(const db::config::hinted_handoff_enabled_type& h)
     return value_to_json(h.to_configuration_string());
 }
 
+static
+json::json_return_type
+object_storage_endpoints_to_json(const std::vector<db::object_storage_endpoint_param> &endpoints) {
+    std::unordered_map<sstring, sstring> m;
+    for (auto& e : endpoints) {
+        m[e.endpoint] = e.to_json_string();
+    }
+    return value_to_json(m);
+}
+
 // Convert a value that can be printed with fmt::format, or a vector of
 // such values, to JSON. An example is enum_option<T>, because enum_option<T>
 // has a specialization for fmt::formatter.
@@ -271,6 +281,12 @@ const config_type& config_type_for<utils::advanced_rpc_compressor::tracker::algo
     return ct;
 }
 
+template <>
+const config_type& config_type_for<std::vector<db::object_storage_endpoint_param>>() {
+    static config_type ct("object storage endpoint configuration", object_storage_endpoints_to_json);
+    return ct;
+}
+
 }
 
 namespace YAML {
@@ -435,6 +451,18 @@ public:
         } catch (boost::program_options::invalid_option_value&) {
             return false;
         }
+        return true;
+    }
+};
+
+template<>
+struct convert<db::object_storage_endpoint_param> {
+    static bool decode(const Node& node, db::object_storage_endpoint_param& ep) {
+        ep.endpoint = node["name"].as<std::string>();
+        ep.config.port = node["port"].as<unsigned>();
+        ep.config.use_https = node["https"].as<bool>(false);
+        ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
+        ep.config.role_arn = node["iam_role_arn"] ? node["iam_role_arn"].as<std::string>() : "";
         return true;
     }
 };
@@ -1327,7 +1355,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , wasm_udf_total_fuel(this, "wasm_udf_total_fuel", value_status::Used, 100000000, "Wasmtime fuel a WASM UDF can consume before termination.")
     , wasm_udf_memory_limit(this, "wasm_udf_memory_limit", value_status::Used, 2*1024*1024, "How much memory each WASM UDF can allocate at most.")
     , relabel_config_file(this, "relabel_config_file", value_status::Used, "", "Optionally, read relabel config from file.")
-    , object_storage_config_file(this, "object_storage_config_file", value_status::Used, "", "Optionally, read object-storage endpoints config from file.")
     , live_updatable_config_params_changeable_via_cql(this, "live_updatable_config_params_changeable_via_cql", liveness::MustRestart, value_status::Used, true, "If set to true, configuration parameters defined with LiveUpdate can be updated in runtime via CQL (by updating system.config virtual table), otherwise they can't.")
     , auth_superuser_name(this, "auth_superuser_name", value_status::Used, "",
         "Initial authentication super username. Ignored if authentication tables already contain a super user.")
@@ -1368,7 +1395,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , ldap_bind_dn(this, "ldap_bind_dn", value_status::Used, "", "Distinguished name used by LDAPRoleManager for binding to LDAP server.")
     , ldap_bind_passwd(this, "ldap_bind_passwd", value_status::Used, "", "Password used by LDAPRoleManager for binding to LDAP server.")
     , saslauthd_socket_path(this, "saslauthd_socket_path", value_status::Used, "", "UNIX domain socket on which saslauthd is listening.")
-
+    , object_storage_endpoints(this, "object_storage_endpoints", liveness::LiveUpdate, value_status::Used, {}, "Object storage endpoints configuration.")
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces.")
@@ -1477,12 +1504,25 @@ std::istream& operator>>(std::istream& is, error_injection_at_startup& eias) {
     return is;
 }
 
+
+std::istream& operator>>(std::istream& is, object_storage_endpoint_param& f) {
+    // FIXME -- this operator is used, in particular, by boost lexical_cast<>
+    // it's here just to make the code compile, but it's not yet called for real
+    throw std::runtime_error("reading object_storage_endpoint_param from istream is not implemented");
+    return is;
+}
+
 }
 
 auto fmt::formatter<db::error_injection_at_startup>::format(const db::error_injection_at_startup& eias, fmt::format_context& ctx) const
     -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "error_injection_at_startup{{name={}, one_short={}, parameters={}}}",
                           eias.name, eias.one_shot, eias.parameters);
+}
+
+auto fmt::formatter<db::object_storage_endpoint_param>::format(const db::object_storage_endpoint_param& e, fmt::format_context& ctx) const
+    -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "object_storage_endpoint_param{{}}", e.to_json_string());
 }
 
 namespace utils {
