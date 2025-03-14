@@ -10,6 +10,7 @@
 
 #include "auth/service.hh"
 #include <seastar/core/seastar.hh>
+#include "cql3/prepared_statements_cache.hh"
 #include "seastar/core/scheduling.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
@@ -212,7 +213,7 @@ private:
     class fmt_visitor;
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
-            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, bool skip_metadata);
+            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, bool skip_metadata, bool support_metadata_id, seastar::lw_shared_ptr<cql3::cql_metadata_id_type> metadata_id);
 
     class connection : public generic_server::connection {
         cql_server& _server;
