@@ -2176,6 +2176,16 @@ sharded<locator::shared_token_metadata> token_metadata;
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
 
+            // At this point, `locator::topology` should be stable, i.e. we should have complete information
+            // about the layout of the cluster (= list of nodes along with the racks/DCs).
+            if (cfg->rf_rack_valid_keyspaces()) {
+                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+                db.invoke_on(0, [&tm = token_metadata] (const replica::database& local_db) {
+                    return local_db.check_rf_rack_validity(tm.local().get()->get_topology());
+                }).get();
+                startlog.info("All keyspaces are RF-rack-valid");
+            }
+
             dictionary_service dict_service(
                 dict_sampler,
                 sys_ks.local(),

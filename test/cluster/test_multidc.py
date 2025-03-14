@@ -6,15 +6,21 @@
 import logging
 import sys
 
+import time
+from typing import List
+
 import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
+from test.cluster.util import new_materialized_view, new_test_keyspace, new_test_table
 from test.cqlpy import nodetool
 from cassandra import ConsistencyLevel
+from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, TextType, Column
-from test.pylib.util import unique_name
+from test.pylib.rest_client import read_barrier
+from test.pylib.util import unique_name, wait_for
 from test.cluster.conftest import cluster_con
 
 logger = logging.getLogger(__name__)
@@ -54,10 +60,10 @@ async def test_putget_2dc_with_rf(
     table_name = "test_table_name"
     columns = [Column("name", TextType), Column("value", TextType)]
     logger.info("Create two servers in different DC's")
-    for i in nodes_list:
+    for i, dc_idx in enumerate(nodes_list):
         s_info = await manager.server_add(
             config=CONFIG,
-            property_file={"dc": f"dc{i}", "rack": "myrack"},
+            property_file={"dc": f"dc{dc_idx}", "rack": f"myrack{i}"},
         )
         logger.info(s_info)
     conn = manager.get_cql()
@@ -143,3 +149,333 @@ async def test_query_dc_with_rf_0_does_not_crash_db(request: pytest.FixtureReque
         f"Expected {expected} from {select_query.query_string}, but got {first_node_results}"
     assert second_node_result is None, \
         f"Expected no results from {select_query.query_string}, but got {second_node_result}"
+
+@pytest.mark.asyncio
+async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: ManagerClient):
+    """
+    This test verifies that creating and altering a keyspace keeps it RF-rack-valid.
+    If an operation would make it RF-rack-invalid, it should fail.
+    We can add a new rack or a data center and the existing keyspaces must still work fine.
+    """
+
+    cql = None
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+
+    async def create_ok(rfs: List[int]) -> str:
+        ks = unique_name()
+        dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
+        await cql.run_async(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}} AND tablets = {{'enabled': true}}")
+        return ks
+
+    async def create_fail(rfs: List[int], failed_dc: int, rack_count: int) -> None:
+        ks = unique_name()
+        dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
+
+        dc = f"dc{failed_dc}"
+        rf = rfs[failed_dc - 1]
+
+        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that keyspaces are RF-rack-valid. " \
+              f"Your query would violate that: keyspace '{ks}' doesn't satisfy the condition for DC '{dc}': RF={rf} vs. rack count={rack_count}."
+
+        with pytest.raises(InvalidRequest, match=err):
+            await cql.run_async(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}} AND tablets = {{'enabled': true}}")
+
+    async def alter_ok(ks: str, rfs: List[int]) -> None:
+        dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}}")
+
+    async def alter_fail(ks: str, rfs: List[int], failed_dc: int, rack_count: int) -> None:
+        dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
+
+        dc = f"dc{failed_dc}"
+        rf = rfs[failed_dc - 1]
+
+        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that keyspaces remain RF-rack-valid. " \
+              f"Your query would violate that: keyspace '{ks}' uses tablets and the condition is not satisfied for DC '{dc}': " \
+              f"RF={rf} vs. rack count={rack_count}."
+
+        with pytest.raises(InvalidRequest, match=err):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}}")
+
+    # dc1: r1=1.
+    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}, config=cfg)
+    cql = manager.get_cql()
+
+    ks1 = await create_ok([1])
+    await create_fail([2], 1, 1)
+
+    # Edge case: global RF = 0.
+    await alter_ok(ks1, [0])
+    await alter_ok(ks1, [1])
+    # Check if it works if the RF doesn't change.
+    await alter_ok(ks1, [1])
+
+    await alter_fail(ks1, [2], 1, 1)
+
+    # dc1: r1=1.
+    # dc2: r1=1.
+    _ = await manager.server_add(property_file={"dc": "dc2", "rack": "r1"}, config=cfg)
+
+    ks2 = await create_ok([1, 1])
+    await create_ok([0, 1])
+    await create_ok([0, 0])
+    await create_ok([1, 0])
+
+    await create_fail([2, 1], 1, 1)
+    await create_fail([1, 2], 2, 1)
+    await create_fail([2, 0], 1, 1)
+
+    # Edge case: global RF = 0.
+    await alter_ok(ks1, [0, 0])
+    await alter_ok(ks1, [1, 0])
+    # Check if it works if the RF doesn't change.
+    await alter_ok(ks1, [1, 0])
+
+    # Edge case: global RF = 0.
+    await alter_ok(ks1, [0])
+    await alter_ok(ks1, [1])
+    # Check if it works if the RF doesn't change.
+    await alter_ok(ks1, [1])
+
+    await alter_fail(ks1, [2, 0], 1, 1)
+    await alter_fail(ks1, [2], 1, 1)
+
+    await alter_ok(ks1, [1, 1])
+    await alter_ok(ks2, [0, 1])
+    await alter_ok(ks2, [1, 1])
+    await alter_ok(ks2, [1, 0])
+    await alter_ok(ks2, [1, 1])
+
+    await alter_fail(ks2, [2, 1], 1, 1)
+    await alter_fail(ks2, [1, 2], 2, 1)
+
+    # dc1: r1=1, r2=1.
+    # dc2: r1=1.
+    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}, config=cfg)
+
+    ks3 = await create_ok([2, 1])
+    # RF = 1 is always OK!
+    ks4 = await create_ok([1, 1])
+
+    await create_fail([1, 2], 2, 1)
+    await create_fail([2, 2], 2, 1)
+    await create_ok([2, 0])
+    await create_ok([0, 1])
+
+    await alter_ok(ks1, [2, 1])
+    await alter_fail(ks1, [2, 2], 2, 1)
+
+    await alter_ok(ks2, [2, 1])
+    await alter_ok(ks3, [2, 1])
+    await alter_ok(ks4, [2, 1])
+    # RF = 1 is always OK!
+    await alter_ok(ks3, [1, 1])
+
+@pytest.mark.asyncio
+async def test_create_mv_with_racks(manager: ManagerClient):
+    """
+    This test verifies that creating a materialized view is only possible in RF-rack-valid keyspaces.
+
+    For more context, see: scylladb/scylladb#23030.
+    """
+
+    cmd = ["--experimental-features=views-with-tablets"]
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+
+    s1 = await manager.server_add(cmdline=cmd, property_file={"dc": "dc1", "rack": "r1"}, config=cfg)
+    _ = await manager.server_add(cmdline=cmd, property_file={"dc": "dc1", "rack": "r2"}, config=cfg)
+    _ = await manager.server_add(cmdline=cmd, property_file={"dc": "dc2", "rack": "r1"}, config=cfg)
+
+    async def set_rf_rack_valid_keyspaces(value: bool):
+        servers = await manager.running_servers()
+        cfg_name = "rf_rack_valid_keyspaces"
+
+        for s in servers:
+            await manager.server_update_config(s.server_id, cfg_name, str(value).lower())
+
+        for s in servers:
+            async def config_value_equal():
+                await read_barrier(manager.api, s.ip_addr)
+                response = await manager.api.get_config(s.ip_addr, cfg_name)
+                logging.info(f"Obtained the value of option '{cfg_name}' for {s.ip_addr} via REST API: {response}")
+                if response == value:
+                    return True
+                return None
+            await wait_for(config_value_equal, deadline=time.time() + 60)
+
+    async def try_pass(replication_class: str, replication_details: str, tablets: str):
+        async with new_test_keyspace(manager, f"WITH REPLICATION = {{'class': '{replication_class}', {replication_details}}} AND tablets = {{'enabled': {tablets}}}") as ks:
+            async with new_test_table(manager, ks, "p int PRIMARY KEY, v int") as table:
+                async with new_materialized_view(manager, table, "*", "p, v", "p IS NOT NULL AND v IS NOT NULL"):
+                    pass
+
+    async def try_fail(replication_class: str, replication_details: str, tablets: str, regex: str):
+        # We need to artificially turn off the restriction to be able to create an RF-rack-invalid keyspace
+        # so we can verify that Scylla refuses to create a materialized view in it.
+        await set_rf_rack_valid_keyspaces(False)
+
+        async with new_test_keyspace(manager, f"WITH REPLICATION = {{'class': '{replication_class}', {replication_details}}} AND tablets = {{'enabled': {tablets}}}") as ks:
+            await set_rf_rack_valid_keyspaces(True)
+
+            async with new_test_table(manager, ks, "p int PRIMARY KEY, v int") as table:
+                with pytest.raises(InvalidRequest, match=regex.format(ks=ks)):
+                    async with new_materialized_view(manager, table, "*", "p, v", "p IS NOT NULL AND v IS NOT NULL"):
+                        pass
+
+    # Below, we test each case twice: with tablets on and off.
+    # Note that we only use NetworkTopologyStrategy. That's because of this fragment of our documentation:
+    #
+    # "When creating a new keyspace with tablets enabled (the default), you can still disable them on a per-keyspace basis.
+    #  The recommended NetworkTopologyStrategy for keyspaces remains REQUIRED when using tablets."
+    #
+    # --- "Data Distribution with Tablets"
+
+    # Part 1: Test the current state of the cluster. Note that every rack currently consists of one node.
+
+    # RF = #racks for every DC.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 1", "false")
+
+    # RF != #racks for dc1, but we accept RF = 1.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 1", "false")
+
+    # RF != #racks for dc2, but we accept RF = 0.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 0", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 0", "false")
+    # Ditto, just for dc1.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 0, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 0, 'dc2': 1", "false")
+
+    # Note: in case these checks start failing or causing issues, feel free to get rid of them.
+    #       We don't care about it (just like we don't care about EverywhereStrategy and LocalStrategy),
+    #       so these are more of sanity checks than something we really want to test.
+    for rf in [1, 2, 3]:
+        await try_pass("SimpleStrategy", f"'replication_factor': {rf}", "false")
+
+    # Part 2: We extend the cluster by one node in dc1/r2. We no longer have a bijection: nodes -> racks.
+
+    _ = await manager.server_add(cmdline=cmd, property_file={"dc": "dc1", "rack": "r2"}, config=cfg)
+
+    # RF = #racks for every DC.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 1", "false")
+
+    # RF < #racks for dc1, but we accept RF = 1.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 1", "false")
+
+    # RF > #racks for dc1.
+    await try_fail("NetworkTopologyStrategy", "'dc1': 3, 'dc2': 1", "true",
+                   "The option `rf-rack-valid-keyspaces` is enabled, which forbids creating " \
+                   "a materialized view in an RF-rack-invalid keyspace: the mismatch occurs for " \
+                   r"keyspace='{ks}', data center='dc1': RF=3 vs. rack count=2")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 3, 'dc2': 1", "false")
+
+    # RF != #racks for dc2, but we accept RF = 0.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 0", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 0", "false")
+    # Ditto, just for dc1.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 0, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 0, 'dc2': 1", "false")
+
+    # Note: ditto, same as in part 1.
+    for rf in [1, 2, 3, 4]:
+        await try_pass("SimpleStrategy", f"'replication_factor': {rf}", "false")
+
+    # Part 3: We get rid of dc1/r1. This way, we have two nodes in dc1, but only one rack.
+
+    await manager.decommission_node(s1.server_id)
+
+    # RF = #racks for every DC.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 1", "false")
+
+    # RF > #racks for dc1.
+    await try_fail("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 1", "true",
+                   "The option `rf-rack-valid-keyspaces` is enabled, which forbids creating " \
+                   "a materialized view in an RF-rack-invalid keyspace: the mismatch occurs for " \
+                   r"keyspace='{ks}', data center='dc1': RF=2 vs. rack count=1")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 2, 'dc2': 1", "false")
+
+    # RF != #racks for dc2, but we accept RF = 0.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 0", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 1, 'dc2': 0", "false")
+    # Ditto, just for dc1.
+    await try_pass("NetworkTopologyStrategy", "'dc1': 0, 'dc2': 1", "true")
+    await try_pass("NetworkTopologyStrategy", "'dc1': 0, 'dc2': 1", "false")
+
+    # Note: ditto, same as in part 1.
+    for rf in [1, 2, 3]:
+        await try_pass("SimpleStrategy", f"'replication_factor': {rf}", "false")
+
+@pytest.mark.asyncio
+async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager: ManagerClient):
+    """
+    This test verifies that starting a Scylla node fails when there's an RF-rack-invalid keyspace.
+    We aim to simulate the behavior of a node when upgrading to 2025.*.
+    """
+
+    cfg_false = {"rf_rack_valid_keyspaces": "false"}
+
+    s1 = await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}, config=cfg_false)
+    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}, config=cfg_false)
+    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r3"}, config=cfg_false)
+    _ = await manager.server_add(property_file={"dc": "dc2", "rack": "r4"}, config=cfg_false)
+
+    # Current situation:
+    # DC1: {r1, r2, r3}, DC2: {r4}
+
+    cql = manager.get_cql()
+
+    async def create_keyspace(rfs: List[int], tablets: bool) -> str:
+        dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
+        name = unique_name()
+        tablets = str(tablets).lower()
+        await cql.run_async(f"CREATE KEYSPACE {name} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}} "
+                            f"AND tablets = {{'enabled': {tablets}}}")
+        logger.info(f"Created keyspace {name} with {rfs} and tablets={tablets}")
+        return name
+
+    # Populate RF-rack-valid keyspaces.
+
+    # For each DC: RF \in {0, 1, #racks}.
+    await create_keyspace([0, 0], True)
+    await create_keyspace([1, 0], True)
+    await create_keyspace([3, 0], True)
+    await create_keyspace([1, 1], True)
+    await create_keyspace([3, 1], True)
+    # Reminder: Keyspaces not using tablets are all valid.
+    await create_keyspace([0, 0], False)
+    await create_keyspace([1, 0], False)
+    await create_keyspace([2, 0], False)
+    await create_keyspace([3, 0], False)
+    await create_keyspace([4, 0], False)
+    await create_keyspace([0, 1], False)
+    await create_keyspace([1, 1], False)
+    await create_keyspace([2, 1], False)
+    await create_keyspace([3, 1], False)
+    await create_keyspace([4, 1], False)
+    await create_keyspace([0, 2], False)
+    await create_keyspace([1, 2], False)
+    await create_keyspace([2, 2], False)
+    await create_keyspace([3, 2], False)
+    await create_keyspace([4, 2], False)
+
+    await manager.server_stop_gracefully(s1.server_id)
+    await manager.server_update_config(s1.server_id, "rf_rack_valid_keyspaces", "true")
+
+    async def try_fail(rfs: List[int], dc: str, rf: int, rack_count: int):
+        ks = await create_keyspace(rfs, True)
+        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
+              f"That condition is not satisfied by keyspace '{ks}' in DC '{dc}': RF={rf} vs. rack count={rack_count}. " \
+              r"Alter all RF-rack-invalid keyspaces so that they're valid and try again."
+        _ = await manager.server_start(s1.server_id, expected_error=err)
+        await cql.run_async(f"DROP KEYSPACE {ks}")
+
+    # Test RF-rack-invalid keyspaces.
+    await try_fail([2, 0], "dc1", 2, 3)
+    await try_fail([3, 2], "dc2", 2, 1)
+    await try_fail([4, 1], "dc1", 4, 3)
+
+    _ = await manager.server_start(s1.server_id)

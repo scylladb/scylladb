@@ -11,6 +11,7 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "locator/network_topology_strategy.hh"
 #include "prepared_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -76,6 +77,40 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
     } catch (const std::runtime_error& e) {
         throw exceptions::invalid_request_exception(e.what());
     }
+
+    const auto& tm = *qp.proxy().get_token_metadata_ptr();
+    const auto& feat = qp.proxy().features();
+    const auto& cfg = qp.db().get_config();
+    auto ksm = _attrs->as_ks_metadata(_name, tm, feat, cfg);
+    auto rs = locator::abstract_replication_strategy::create_replication_strategy(
+            ksm->strategy_name(),
+            locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()));
+
+    const bool restricted_keyspaces = cfg.rf_rack_valid_keyspaces();
+    // At this point, we don't know yet if the replication strategy is NetworkTopologyStrategy!
+    // It may happen that the user chooses SimpleStrategy, but they try to enable tablets as well.
+    // That's why we need to check the conjunction here.
+    const bool uses_tablets = rs->get_type() == locator::replication_strategy_type::network_topology && rs->uses_tablets();
+
+    if (restricted_keyspaces && uses_tablets) {
+        const auto* nts = static_cast<const locator::network_topology_strategy*>(rs.get());
+
+        for (const auto& [dc, rack_map] : tm.get_topology().get_datacenter_racks()) {
+            const auto rack_count = rack_map.size();
+            const auto rf = nts->get_replication_factor(dc);
+
+            // We must not allow for a keyspace to become RF-rack-invalid. Any attempt at that must be rejected.
+            // For more context, see: scylladb/scylladb#23071.
+            const bool invalid_rf = rf != rack_count && rf != 1 && rf != 0;
+            if (invalid_rf) {
+                throw exceptions::invalid_request_exception(seastar::format(
+                        "The option `rf_rack_valid_keyspaces` is enabled. It requires that keyspaces are RF-rack-valid. "
+                        "Your query would violate that: keyspace '{}' doesn't satisfy the condition for DC '{}': RF={} vs. rack count={}.",
+                        _name, dc, rf, rack_count));
+            }
+        }
+    }
+
 #if 0
     // The strategy is validated through KSMetaData.validate() in announceNewKeyspace below.
     // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,

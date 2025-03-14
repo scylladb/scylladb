@@ -30,7 +30,12 @@ logger = logging.getLogger(__name__)
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_mv_tablets_empty_ip(manager: ManagerClient):
     cfg = {'enable_tablets': True}
-    servers = await manager.servers_add(4, config = cfg)
+    servers = [
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"}),
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"}),
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"}),
+        await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+    ]
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
@@ -66,7 +71,7 @@ async def test_mv_tablets_empty_ip(manager: ManagerClient):
         replace_cfg = ReplaceConfig(replaced_id = servers[-1].server_id, reuse_ip_addr = False, use_host_id = True)
 
         logger.info("Replacing the last node")
-        await manager.server_add(replace_cfg=replace_cfg, config = cfg)
+        await manager.server_add(replace_cfg=replace_cfg, property_file={"dc": "dc1", "rack": "r3"}, config=cfg)
 
         logger.info("Stopping writes")
         stop_event.set()

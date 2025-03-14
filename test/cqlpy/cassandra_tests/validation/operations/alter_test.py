@@ -222,18 +222,22 @@ def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace
 
 # Test {@link ConfigurationException} thrown when altering a keyspace to
 # invalid DC option in replication configuration.
-def testAlterKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, test_keyspace, this_dc):
+def testAlterKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, test_keyspace, this_dc, has_tablets):
+    extra_opts = " AND TABLETS = {'enabled': false}" if has_tablets else ""
+
     # Create a keyspace with expected DC name.
-    with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }") as ks:
+    with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }" + extra_opts) as ks:
         # try modifying the keyspace
         assert_invalid_throw_message_re(cql, ks, "Unrecognized strategy option {INVALID_DC} passed to .*NetworkTopologyStrategy", ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', 'INVALID_DC' : 2 }")
         execute(cql, ks, "ALTER KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3 }")
         # Mix valid and invalid, should throw an exception
         assert_invalid_throw_message_re(cql, ks, "Unrecognized strategy option {INVALID_DC} passed to .*NetworkTopologyStrategy", ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 , 'INVALID_DC': 1}")
 
-def testAlterKeyspaceWithMultipleInstancesOfSameDCThrowsSyntaxException(cql, test_keyspace, this_dc):
+def testAlterKeyspaceWithMultipleInstancesOfSameDCThrowsSyntaxException(cql, test_keyspace, this_dc, has_tablets):
+    extra_opts = " AND TABLETS = {'enabled': false}" if has_tablets else ""
+
     # Create a keyspace
-    with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }") as ks:
+    with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }" + extra_opts) as ks:
         # try modifying the keyspace
         assert_invalid_throw(cql, ks, SyntaxException, "ALTER KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2, '" + this_dc + "' : 3 }")
         execute(cql, ks, "ALTER KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 3}")

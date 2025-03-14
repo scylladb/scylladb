@@ -279,5 +279,7 @@ def is_test_needed_cluster(request):
 async def prepare_3_nodes_cluster(is_test_needed_cluster, manager):
     servers = await  manager.running_servers()
     if not servers and is_test_needed_cluster:
-        await manager.servers_add(3)
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r1"})
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r2"})
+        await manager.server_add(property_file={"dc": "dc1", "rack": "r3"})
         await manager.mark_clean()
