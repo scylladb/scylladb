@@ -18,12 +18,20 @@
 #include <vector>
 
 #include "exceptions/exceptions.hh"
+#include "types/types.hh"
 
 namespace cql3 {
 
 class prepare_context;
 class column_specification;
 class cql_statement;
+
+struct cql_metadata_id_type {
+    explicit cql_metadata_id_type(bytes&& metadata_id) : _metadata_id(std::move(metadata_id)) {}
+    bytes _metadata_id;
+
+    bool operator==(const cql_metadata_id_type& other) const = default;
+};
 
 namespace statements {
 
@@ -61,3 +69,10 @@ public:
 }
 
 }
+
+template <> struct fmt::formatter<cql3::cql_metadata_id_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::cql_metadata_id_type& m, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", m._metadata_id);
+    }
+};
