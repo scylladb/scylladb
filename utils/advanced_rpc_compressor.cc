@@ -14,7 +14,7 @@
 #include "utils/advanced_rpc_compressor_protocol.hh"
 #include "stream_compressor.hh"
 #include "utils/dict_trainer.hh"
-#include "seastar/core/on_internal_error.hh"
+#include <seastar/core/on_internal_error.hh>
 
 namespace utils {
 
