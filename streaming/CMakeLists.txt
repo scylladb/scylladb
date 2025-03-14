@@ -14,7 +14,16 @@ target_sources(streaming
     stream_session_state.cc
     stream_summary.cc
     stream_task.cc
+<<<<<<< HEAD
     stream_transfer_task.cc)
+||||||| parent of 876cf32e9d (repair: streaming: move table_check.{cc,hh} to streaming)
+    stream_blob.cc
+    stream_transfer_task.cc)
+=======
+    stream_blob.cc
+    stream_transfer_task.cc
+    table_check.cc)
+>>>>>>> 876cf32e9d (repair: streaming: move table_check.{cc,hh} to streaming)
 target_include_directories(streaming
   PUBLIC
     ${CMAKE_SOURCE_DIR})

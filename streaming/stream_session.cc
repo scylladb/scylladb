@@ -19,6 +19,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include "streaming/stream_session_state.hh"
+#include "streaming/table_check.hh"
 #include "service/migration_manager.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "sstables/sstable_set.hh"
@@ -203,12 +204,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             auto op = table.stream_in_progress();
             auto sharder_ptr = std::make_unique<dht::auto_refreshing_sharder>(table.shared_from_this());
             auto& sharder = *sharder_ptr;
-            //FIXME: discarded future.
-            (void)mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
-                make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
-                make_streaming_consumer(estimated_partitions, reason, topo_guard),
-                std::move(op)
-            ).then_wrapped([s, plan_id, from, sink, estimated_partitions, log_done, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable {
+            auto result_handling_cont = [s, plan_id, from, sink, estimated_partitions, log_done, cf_id, &db = _db, &mm = _mm, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable -> future<> {
                 int32_t status = 0;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {
@@ -219,7 +215,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     }
                     status = -1;
                     // The status code -2 means error and the table is dropped
-                    if (try_catch<data_dictionary::no_such_column_family>(ex)) {
+                    if (db.local_is_initialized() && mm.local_is_initialized() && co_await table_sync_and_check(db.local(), mm.local(), cf_id)) {
                         level = seastar::log_level::debug;
                         status = -2;
                     }
@@ -232,16 +228,24 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     sslog.info("[Stream #{}] Write to sstable for ks={}, cf={}, estimated_partitions={}, received_partitions={}",
                             plan_id, s->ks_name(), s->cf_name(), estimated_partitions, received_partitions);
                 }
-                return sink(status).finally([sink] () mutable {
+                co_await sink(status).finally([sink] () mutable {
                     return sink.close();
                 });
-            }).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
-                auto level = seastar::log_level::error;
-                if (try_catch<seastar::rpc::closed_error>(ep)) {
-                    level = seastar::log_level::debug;
-                }
-                sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
-                        plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
+            };
+            //FIXME: discarded future.
+            (void)do_with(std::move(result_handling_cont), [&] (auto& result_handling) {
+                return mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
+                    make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
+                    make_streaming_consumer(estimated_partitions, reason, topo_guard),
+                    std::move(op)
+                ).then_wrapped(std::ref(result_handling)).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
+                    auto level = seastar::log_level::error;
+                    if (try_catch<seastar::rpc::closed_error>(ep)) {
+                        level = seastar::log_level::debug;
+                    }
+                    sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
+                            plan_id, s->ks_name(), s->cf_name(), from.addr, ep);
+                });
             });
           } catch (...) {
             return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<int>> {
