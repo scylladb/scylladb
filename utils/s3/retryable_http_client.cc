@@ -77,8 +77,7 @@ future<> retryable_http_client::make_request(http::request req,
                                              seastar::abort_source* as) {
     co_await do_retryable_request(
         std::move(req),
-        [handler = std::move(handle), expected = expected.value_or(http::reply::status_type::ok)](const http::reply& rep,
-                                                                                                  input_stream<char>&& in) mutable -> future<> {
+        [handler = std::move(handle), expected](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
             auto payload = std::move(in);
             auto status_class = http::reply::classify_status(rep._status);
 
@@ -90,7 +89,7 @@ future<> retryable_http_client::make_request(http::request req,
                 co_await coroutine::return_exception(aws::aws_exception(aws::aws_error::from_http_code(rep._status)));
             }
 
-            if (rep._status != expected) {
+            if (expected.has_value() && rep._status != *expected) {
                 co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
             }
             co_await handler(rep, std::move(payload));
