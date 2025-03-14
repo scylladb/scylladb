@@ -24,6 +24,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "utils/s3/creds.hh"
 #include <boost/intrusive/list.hpp>
+#include "utils/atomic_vector.hh"
 
 namespace db {
 
@@ -72,6 +73,13 @@ public:
     shared_ptr<s3::client> get_endpoint_client(sstring endpoint);
     bool is_known_endpoint(sstring endpoint) const;
     future<> stop();
+};
+
+struct sstables_manager_subscriber {
+    virtual ~sstables_manager_subscriber() {}
+
+    virtual future<> on_add(generation_type) { return make_ready_future(); };
+    virtual future<> on_unlink(generation_type) { return make_ready_future(); };
 };
 
 class sstables_manager {
@@ -127,6 +135,9 @@ private:
     scheduling_group _maintenance_sg;
 
     const abort_source& _abort;
+
+    atomic_vector<shared_ptr<sstables_manager_subscriber>> _subscribers;
+    gate _notifications_gate;
 
 public:
     explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem,
@@ -198,6 +209,9 @@ public:
     void on_unlink(sstable* sst);
 
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
+
+    void subscribe(shared_ptr<sstables_manager_subscriber>);
+    future<> unsubscribe(const shared_ptr<sstables_manager_subscriber>&);
 
 private:
     void add(sstable* sst);

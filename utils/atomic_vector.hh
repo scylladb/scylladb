@@ -22,6 +22,12 @@ class atomic_vector {
     mutable seastar::rwlock _vec_lock;
 
 public:
+    bool empty() const noexcept {
+        return _vec.empty();
+    }
+    size_t size() const noexcept {
+        return _vec.size();
+    }
     void add(const T& value) {
         _vec.push_back(value);
     }

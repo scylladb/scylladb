@@ -24,6 +24,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _bucket;
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
+    table_id _table_id;
     bool _remove_on_uploaded;
     s3::upload_progress _progress = {};
 
@@ -41,6 +42,7 @@ public:
                      sstring prefix,
                      sstring ks,
                      std::filesystem::path snapshot_dir,
+                     table_id tid,
                      bool move_files) noexcept;
 
     virtual std::string type() const override;

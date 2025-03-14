@@ -52,6 +52,14 @@ sstables_manager::~sstables_manager() {
     SCYLLA_ASSERT(_undergoing_close.empty());
 }
 
+void sstables_manager::subscribe(shared_ptr<sstables_manager_subscriber> s) {
+    _subscribers.add(std::move(s));
+}
+
+future<> sstables_manager::unsubscribe(const shared_ptr<sstables_manager_subscriber>& s) {
+    co_await _subscribers.remove(s);
+}
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
@@ -260,6 +268,14 @@ void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
 
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
+    if (!_subscribers.empty()) {
+        // safe to drop future since gate.close() is awaited in close()
+        (void)with_gate(_notifications_gate, [this, gen = sst->generation()] {
+            return _subscribers.for_each([gen] (shared_ptr<sstables_manager_subscriber> sub) {
+                return sub->on_add(gen);
+            });
+        });
+    }
 }
 
 void sstables_manager::deactivate(sstable* sst) {
@@ -319,6 +335,7 @@ future<> sstables_manager::close() {
     // stop the components reload fiber
     _components_memory_change_event.signal();
     co_await std::move(_components_reloader_status);
+    co_await _notifications_gate.close();
 }
 
 void sstables_manager::plug_sstables_registry(std::unique_ptr<sstables::sstables_registry> sr) noexcept {
@@ -363,6 +380,14 @@ std::vector<std::filesystem::path> sstables_manager::get_local_directories(const
 
 void sstables_manager::on_unlink(sstable* sst) {
     reclaim_memory_and_stop_tracking_sstable(sst);
+    if (!_subscribers.empty()) {
+        // safe to drop future since gate.close() is awaited in close()
+        (void)with_gate(_notifications_gate, [this, gen = sst->generation()] {
+            return _subscribers.for_each([gen] (shared_ptr<sstables_manager_subscriber> sub) {
+                return sub->on_unlink(gen);
+            });
+        });
+    }
 }
 
 sstables_registry::~sstables_registry() = default;

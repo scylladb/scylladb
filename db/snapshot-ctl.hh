@@ -63,6 +63,8 @@ public:
 
     future<> stop();
 
+    sharded<replica::database>& db() { return _db; };
+
     /**
      * Takes the snapshot for all keyspaces. A snapshot name must be specified.
      *
