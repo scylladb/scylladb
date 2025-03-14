@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 #include <seastar/core/file.hh>
 #include <seastar/core/byteorder.hh>
+#include <seastar/core/iostream.hh>
 
 #include "symmetric_key.hh"
 #include "encryption.hh"
@@ -18,6 +19,8 @@
 #include "encrypted_file_impl.hh"
 
 namespace encryption {
+
+using namespace seastar;
 
 static inline bool is_aligned(size_t n, size_t a) {
     return (n & (a - 1)) == 0;
@@ -57,25 +60,33 @@ static inline bool is_aligned(size_t n, size_t a) {
  * we could possibly race with disk op/continuations.
  * But we are really only for ro/wo cases.
  */
-class encrypted_file_impl : public seastar::file_impl {
-    file _file;
+struct block_encryption_base {
     ::shared_ptr<symmetric_key> _key;
     ::shared_ptr<symmetric_key> _block_key;
     bytes _hash_salt;
-
-    std::optional<uint64_t> _file_length;
 
     // this is somewhat large, but we assume this is for bulky stuff like sstables/commitlog
     // so large alignment should be preferable to reaclculating block IV too often.
     static constexpr size_t block_size = 4096;
     static constexpr size_t block_key_len = 256;
 
-    class my_file_handle_impl;
-    friend class my_file_handle_impl;
+    using mode = symmetric_key::mode;
 
     bytes iv_for(uint64_t pos) const;
 
-    using mode = symmetric_key::mode;
+    static ::shared_ptr<symmetric_key> generate_block_key(::shared_ptr<symmetric_key>);
+
+    block_encryption_base(::shared_ptr<symmetric_key>);
+};
+
+class encrypted_file_impl : public seastar::file_impl, block_encryption_base {
+    file _file;
+    bytes _hash_salt;
+
+    std::optional<uint64_t> _file_length;
+
+    class my_file_handle_impl;
+    friend class my_file_handle_impl;
 
     temporary_buffer<uint8_t> transform(uint64_t, const void* buffer, size_t len, mode);
     size_t transform(uint64_t, const void* buffer, size_t len, void*, mode);
@@ -83,8 +94,6 @@ class encrypted_file_impl : public seastar::file_impl {
     future<> verify_file_length();
     void maybe_set_length(uint64_t);
     void clear_length();
-
-    static ::shared_ptr<symmetric_key> generate_block_key(::shared_ptr<symmetric_key>);
 
 public:
     encrypted_file_impl(file, ::shared_ptr<symmetric_key>);
@@ -127,16 +136,20 @@ public:
  * The key is AES-256, using ECB (non-iv) encryption
  *
  */
-::shared_ptr<symmetric_key> encrypted_file_impl::generate_block_key(::shared_ptr<symmetric_key> key) {
+::shared_ptr<symmetric_key> block_encryption_base::generate_block_key(::shared_ptr<symmetric_key> key) {
     auto hash = calculate_sha256(key->key());
     hash.resize(block_key_len / 8);
     return ::make_shared<symmetric_key>(key_info{"AES/ECB", block_key_len }, hash);
 }
 
-encrypted_file_impl::encrypted_file_impl(file f, ::shared_ptr<symmetric_key> key)
-    : _file(std::move(f))
-    , _key(std::move(key))
+block_encryption_base::block_encryption_base(::shared_ptr<symmetric_key> key)
+    : _key(std::move(key))
     , _block_key(generate_block_key(_key))
+{}
+
+encrypted_file_impl::encrypted_file_impl(file f, ::shared_ptr<symmetric_key> key)
+    : block_encryption_base(std::move(key))
+    , _file(std::move(f))
 {
     _memory_dma_alignment = std::max<unsigned>(_file.memory_dma_alignment(), block_size);
     _disk_read_dma_alignment = std::max<unsigned>(_file.disk_read_dma_alignment(), block_size);
@@ -174,7 +187,7 @@ void encrypted_file_impl::clear_length() {
     _file_length = std::nullopt;
 }
 
-bytes encrypted_file_impl::iv_for(uint64_t pos) const {
+bytes block_encryption_base::iv_for(uint64_t pos) const {
     assert(!(pos & (block_size - 1)));
 
     // #658. ECB block mode has no IV. Bad for security,
@@ -571,6 +584,121 @@ shared_ptr<seastar::file_impl> make_delayed_encrypted_file(file f, size_t key_bl
     return ::make_shared<indirect_encrypted_file_impl>(std::move(f), key_block_size, std::move(get));
 }
 
+class encrypted_data_sink : public data_sink_impl, public block_encryption_base {
+public:
+    data_sink _sink;
+    char _buffer[block_size];
+    uint64_t _pos = 0, _flush_pos = 0;
+    size_t _bufpos = 0;
+
+    using mode = block_encryption_base::mode;
+
+    encrypted_data_sink(data_sink sink, shared_ptr<symmetric_key> k)
+        : block_encryption_base(std::move(k))
+        , _sink(std::move(sink))
+    {}
+
+    future<> put(net::packet data) override {
+        return fallback_put(std::move(data));
+    }
+    future<> put(std::vector<temporary_buffer<char>> data) override {
+        for (auto&& buf : data) {
+            co_await put(std::move(buf));
+        }
+    }
+
+    void transform(uint64_t pos, char* data, size_t len) {
+        assert(!(pos & (block_size - 1)));
+        auto b = _key->block_size();
+
+        size_t off = 0;
+        for (; off < len; off += block_size) {
+            auto iv = iv_for(_pos + off);
+            auto rem = std::min<uint64_t>(block_size, len - off);
+            _key->transform_unpadded(mode::encrypt, data + off, align_down(rem, b), data + off, iv.data());
+        }
+    }
+
+    future<> do_send(temporary_buffer<char> buf) {
+        _pos += buf.size();
+        return _sink.put(std::move(buf));
+    }
+    future<> send_buffer() {
+        return do_send(temporary_buffer<char>(_buffer, std::exchange(_bufpos, 0)));
+    }
+    future<> put(temporary_buffer<char> buf) override {
+        if (_bufpos != 0) {
+            auto add = std::min(buf.size(), sizeof(_buffer) - _bufpos);
+            std::copy(buf.get(), buf.get() + add, _buffer + _bufpos);
+            _bufpos += add;
+            buf.trim_front(add);
+            if (_bufpos == sizeof(_buffer)) {
+                transform(_pos, _buffer, _bufpos);
+                co_await send_buffer();
+            }
+        }
+
+        assert(!(_pos & (block_size - 1)));
+
+        while (buf.size() >= block_size) {
+            auto size = align_down(buf.size(), block_size);
+            transform(_pos, buf.get_write(), size);
+            co_await do_send(buf.share(0, size));
+            buf.trim_front(size);
+        }
+
+        if (!buf.empty()) {
+            assert(_bufpos == 0);
+            assert(buf.size() < sizeof(_buffer));
+            std::copy(buf.begin(), buf.end(), _buffer);
+            _bufpos = buf.size();
+        }
+    }
+    future<> flush() override {
+        /*
+        if (std::exchange(_flush_pos, _pos) < _pos) {
+            return _sink.flush();
+        }
+        */
+        return make_ready_future<>();
+    }
+    future<> close() override {
+        auto kb = _key->block_size();
+        size_t append = 0;
+        if (!is_aligned(_bufpos, kb)) {
+            auto add = std::min(kb, sizeof(_buffer) - _bufpos);
+            std::fill(_buffer + _bufpos, _buffer + _bufpos + add, 0);
+            _bufpos += add;
+            append = kb - add;
+        }
+        if (_bufpos != 0) {
+            transform(_pos, _buffer, _bufpos);
+            co_await send_buffer();
+        }
+        if (append != 0) {
+            co_await do_send(temporary_buffer<char>(append));
+        }
+        co_await _sink.flush();
+        co_await _sink.close();
+    }
+
+    size_t buffer_size() const noexcept override {
+        return align_up(_sink.buffer_size(), block_size);
+    }
+
+    bool can_batch_flushes() const noexcept override {
+        return _sink.can_batch_flushes();
+    }
+
+    void on_batch_flush_error() noexcept override {
+        _sink.on_batch_flush_error();
+    }
+
+};
+
+std::unique_ptr<data_sink_impl> make_encrypted_sink(data_sink sink, shared_ptr<symmetric_key> k) {
+    return std::make_unique<encrypted_data_sink>(std::move(sink), std::move(k));
+}
 
 }
 

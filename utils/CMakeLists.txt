@@ -32,6 +32,7 @@ target_sources(utils
     histogram_metrics_helper.cc
     human_readable.cc
     i_filter.cc
+    io-wrappers.cc
     large_bitset.cc
     like_matcher.cc
     limiting_data_source.cc
