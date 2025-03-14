@@ -1,7 +1,7 @@
 Nodetool repair
 ===============
 
-**Repair** - a process that runs in the background and synchronizes the data between nodes.
+**Repair** - a process that runs in the background and synchronizes the data between nodes. The command repairs only the vnode keyspaces.
 
 When running ``nodetool repair`` on a **single node**, it acts as the **repair master**. Only the data contained in the master node and its replications will be repaired.
 Typically, this subset of data is replicated on many nodes in the cluster, often all, and the repair process syncs between all the replicas until the master data subset is in-sync.
@@ -99,6 +99,10 @@ ScyllaDB nodetool repair command supports the following options:
   ::
 
      nodetool repair <my_keyspace> <my_table>
+
+To repair tablet keyspaces see :doc:`nodetool tablet-repair </operating-scylla/nodetool-commands/tablet-repair/>`.
+
+.. note:: To repair all, both vnode and tablet, keyspaces you need to run :doc:`nodetool repair -pr </operating-scylla/nodetool-commands/repair/>` on **all** of the nodes in the cluster and :doc:`nodetool tablet-repair </operating-scylla/nodetool-commands/tablet-repair/>` on **any** of the nodes in the cluster.
 
 See also `ScyllaDB Manager <https://manager.docs.scylladb.com/>`_.
 
