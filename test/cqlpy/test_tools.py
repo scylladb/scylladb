@@ -27,6 +27,8 @@ from . import util
 from typing import Iterable, Type, Union
 from cassandra.util import Duration
 
+from test.cluster.object_store.conftest import s3_server, get_s3_resource
+
 
 def simple_no_clustering_table(cql, keyspace):
     table = util.unique_name()
@@ -149,7 +151,7 @@ def get_sstables_for_table(data_dir, keyspace, table):
 
 
 @contextlib.contextmanager
-def scylla_sstable(table_factory, cql, ks, data_dir):
+def scylla_sstable(table_factory, cql, ks, data_dir, s3_server=None, copy_to_s3=False, everywhere=False):
     table, schema = table_factory(cql, ks)
 
     schema_file = os.path.join(data_dir, "..", "test_tools_schema.cql")
@@ -157,6 +159,13 @@ def scylla_sstable(table_factory, cql, ks, data_dir):
         f.write(schema)
 
     sstables = get_sstables_for_table(data_dir, ks, table)
+
+    if copy_to_s3:
+        sstable_path = os.path.dirname(sstables[0])
+        if everywhere:
+            sstables += upload_folder_to_s3(sstable_path, s3_server)
+        else:
+            sstables = upload_folder_to_s3(sstable_path, s3_server)
 
     try:
         yield (table, schema_file, sstables)
@@ -173,6 +182,63 @@ def one_sstable(sstables):
 def all_sstables(sstables):
     assert len(sstables) > 1
     return sstables
+
+
+def upload_folder_to_s3(folder_path, s3_server):
+    s3_resource = get_s3_resource(s3_server)
+    bucket = s3_resource.Bucket(s3_server.bucket_name)
+    prefix = "just/some/s3/prefix"
+    sstables = []
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            s3_key = os.path.join(prefix, os.path.relpath(file_path, folder_path))
+            if file.endswith('-Data.db'):
+                sstables.append(f"s3://{s3_server.bucket_name}/{s3_key}")
+            bucket.upload_file(file_path, s3_key)
+    return sstables
+
+
+@pytest.mark.parametrize("what", ["index", "compression-info", "summary", "statistics", "scylla-metadata"])
+@pytest.mark.parametrize("where", ["s3", "mixed"])
+def test_scylla_sstable_dump_component_with_s3(skip_s3_tests, cql, test_keyspace, scylla_path, scylla_data_dir,
+                                               scylla_home_dir, what,
+                                               where, s3_server):
+    scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+    with open(scylla_yaml_file, "a") as f:
+        f.write(f"\nobject_storage_config_file: {str(s3_server.config_file)}")
+
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir, s3_server,
+                        False if where == "local" else True, True if where == "mixed" else False) as (
+    _, schema_file, sstables):
+        out = subprocess.check_output(
+            [scylla_path, "sstable", f"dump-{what}", "--scylla-yaml-file", scylla_yaml_file, "--schema-file",
+             schema_file] + all_sstables(sstables))
+
+    print(out)
+
+    assert out
+    assert json.loads(out)
+
+
+@pytest.mark.parametrize("where", ["s3", "mixed"])
+def test_scylla_sstable_dump_data_with_s3(skip_s3_tests, cql, test_keyspace, scylla_path, scylla_data_dir,
+                                          scylla_home_dir, where,
+                                          s3_server):
+    scylla_yaml_file = os.path.join(scylla_home_dir, "conf", "scylla.yaml")
+    with open(scylla_yaml_file, "a") as f:
+        f.write(f"\nobject_storage_config_file: {str(s3_server.config_file)}")
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir, s3_server,
+                        False if where == "local" else True, True if where == "mixed" else False) as (
+    _, schema_file, sstables):
+        args = [scylla_path, "sstable", "dump-data", "--scylla-yaml-file", scylla_yaml_file, "--schema-file",
+                schema_file, "--output-format", "json"]
+        out = subprocess.check_output(args + sstables)
+
+    print(out)
+
+    assert out
+    assert json.loads(out)
 
 
 @pytest.mark.parametrize("what", ["index", "compression-info", "summary", "statistics", "scylla-metadata"])
