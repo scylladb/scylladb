@@ -31,11 +31,16 @@ BOOST_AUTO_TEST_SUITE(extensions_test)
 
 class dummy_ext : public schema_extension {
 public:
+    // dummy_ext was written before schema_extension was deprecated, so support it
+    // without warnings
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     dummy_ext(bytes b) : _bytes(b) {}
     dummy_ext(const std::map<sstring, sstring>& map) : _bytes(ser::serialize_to_buffer<bytes>(map)) {}
     dummy_ext(const sstring&) {
         throw std::runtime_error("should not reach");
     }
+#pragma clang diagnostic pop
     bytes serialize() const override {
         return _bytes;
     }

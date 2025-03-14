@@ -591,11 +591,17 @@ std::ostream& operator<<(std::ostream& os, const encryption_schema_extension& ex
     return os;
 }
 
+// encryption_schema_extension was written before schema_extension was deprecated, so support it
+// without warnings
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 encryption_schema_extension::encryption_schema_extension(key_info info, shared_ptr<key_provider> provider, std::map<sstring, sstring> options)
     : _info(std::move(info))
     , _provider(std::move(provider))
     , _options(std::move(options))
 {}
+
+#pragma clang diagnostic pop
 
 ::shared_ptr<encryption_schema_extension> encryption_schema_extension::create(encryption_context_impl& ctxt, const bytes& v) {
     auto map = parse_options(v);

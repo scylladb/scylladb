@@ -19,6 +19,10 @@ class per_partition_rate_limit_extension : public schema_extension {
 public:
     static constexpr auto NAME = "per_partition_rate_limit";
 
+    // per_partition_rate_limit_extension was written before schema_extension was deprecated, so support it
+    // without warnings
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     per_partition_rate_limit_extension() = default;
     per_partition_rate_limit_extension(const per_partition_rate_limit_options& opts) : _options(opts) {}
 
