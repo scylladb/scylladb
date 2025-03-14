@@ -28,6 +28,7 @@ struct prepared_cache_entry_size {
 };
 
 typedef bytes cql_prepared_id_type;
+typedef bytes cql_metadata_id_type;
 
 /// \brief The key of the prepared statements cache
 ///

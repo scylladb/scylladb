@@ -89,6 +89,8 @@ public:
     const std::vector<lw_shared_ptr<column_specification>>& get_names() const {
         return _column_info->_names;
     }
+
+    bytes calculate_metadata_id() const;
 };
 
 ::shared_ptr<const cql3::metadata> make_empty_metadata();
