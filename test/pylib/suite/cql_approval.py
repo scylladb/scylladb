@@ -87,6 +87,7 @@ class CQLApprovalTest(Test):
     def _prepare_args(self, options: argparse.Namespace):
         self.args = [
             "-s",  # don't capture print() inside pytest
+            "-vv",
             "test/pylib/cql_repl/cql_repl.py",
             "--input={}".format(self.cql),
             "--output={}".format(self.tmpfile),

@@ -53,6 +53,7 @@ class ToolTest(Test):
         self.args = launcher.split()[1:]
         self.args += [
             "-s",  # don't capture print() output inside pytest
+            "-vv",
             "--log-level=DEBUG",   # Capture logs
             "-o",
             "junit_family=xunit2",
