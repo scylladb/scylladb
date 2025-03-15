@@ -25,6 +25,7 @@
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 
 using namespace std::string_literals;
 
@@ -45,15 +46,17 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-static unsigned get_abs_rf_diff(const std::string& curr_rf, const std::string& new_rf) {
+static int parse_rf(const std::string& rf) {
     try {
-        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
-    } catch (std::invalid_argument const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
-    } catch (std::out_of_range const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments to fit into `int` type, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
+        const auto value = std::stoi(rf);
+        if (value < 0) {
+            on_internal_error(mylogger, std::format("parse_rf() expects a valid RF value, but it got: {}", rf));
+        }
+        return value;
+    } catch (std::invalid_argument const&) {
+        on_internal_error(mylogger, std::format("parse_rf() expects a valid RF value, but it got: {}", rf));
+    } catch (std::out_of_range const&) {
+        on_internal_error(mylogger, std::format("parse_rf() expects a valid RF value fitting into `int`, but it got: {}", rf));
     }
 }
 
@@ -81,27 +84,62 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         current_options.type_string(), new_options.type_string()));
             }
 
-            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
+            const auto tmptr = qp.proxy().get_token_metadata_ptr();
+            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *tmptr, qp.proxy().features());
 
             if (ks.get_replication_strategy().uses_tablets()) {
                 const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+
                 unsigned total_abs_rfs_diff = 0;
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
-                    sstring old_rf = "0";
+                    int old_rf_value = 0;
                     if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
                              new_dc_in_current_mapping != current_rf_per_dc.end()) {
-                        old_rf = new_dc_in_current_mapping->second;
-                    } else if (!qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters().contains(new_dc)) {
+                        old_rf_value = parse_rf(new_dc_in_current_mapping->second);
+                    } else if (!tmptr->get_topology().get_datacenters().contains(new_dc)) {
                         // This means that the DC listed in ALTER doesn't exist. This error will be reported later,
                         // during validation in abstract_replication_strategy::validate_replication_strategy.
                         // We can't report this error now, because it'd change the order of errors reported:
                         // first we need to report non-existing DCs, then if RFs aren't changed by too much.
                         continue;
                     }
-                    if (total_abs_rfs_diff += get_abs_rf_diff(old_rf, new_rf); total_abs_rfs_diff >= 2) {
+
+                    const auto new_rf_value = parse_rf(new_rf);
+                    const auto rf_diff = std::abs(new_rf_value - old_rf_value);
+
+                    if (total_abs_rfs_diff += rf_diff; total_abs_rfs_diff >= 2) {
                         throw exceptions::invalid_request_exception("Only one DC's RF can be changed at a time and not by more than 1");
+                    }
+                }
+
+                const auto& rack_map = tmptr->get_topology().get_datacenter_racks();
+
+                // We cannot allow for ALTER to proceed if it would lead to an RF-rack-invalid keyspace.
+                // For more context, see: scylladb/scylladb#23276.
+                for (const auto& [new_dc, rf] : new_rf_per_dc) {
+                    const auto rf_value = parse_rf(rf);
+                    size_t normal_rack_count = 0;
+                    for (const auto& [_, rack_nodes] : rack_map.at(new_dc)) {
+                        // We must ignore zero-token nodes because they don't take part in replication.
+                        // Verify that this rack has at least one normal node.
+                        const bool normal_rack = std::ranges::any_of(rack_nodes, [tmptr] (locator::host_id host_id) {
+                            return tmptr->is_normal_token_owner(host_id);
+                        });
+                        if (normal_rack) {
+                            ++normal_rack_count;
+                        }
+                    }
+                    const bool restricted_keyspaces = qp.db().get_config().rf_rack_valid_keyspaces();
+                    const bool invalid_rf = (rf_value != (int) normal_rack_count) && rf_value != 1 && rf_value != 0;
+
+                    if (restricted_keyspaces && invalid_rf) {
+                        throw exceptions::invalid_request_exception(seastar::format(
+                                "The option `rf_rack_valid_keyspaces` is enabled. It requires that keyspaces remain RF-rack-valid. "
+                                "Your query would violate that: keyspace '{}' uses tablets and the condition is not satisfied for DC '{}': "
+                                "RF={} vs. rack count={}.",
+                                _name, new_dc, rf_value, normal_rack_count));
                     }
                 }
             }

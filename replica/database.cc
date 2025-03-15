@@ -10,6 +10,8 @@
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+#include "locator/network_topology_strategy.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "utils/log.hh"
 #include "replica/database_fwd.hh"
 #include "utils/assert.hh"
@@ -3182,6 +3184,48 @@ future<> database::on_before_service_level_change(qos::service_level_options slo
 future<>
 database::on_effective_service_levels_cache_reloaded() {
     co_return;
+}
+
+void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
+    SCYLLA_ASSERT(get_config().rf_rack_valid_keyspaces());
+
+    for (const auto& [name, info] : get_keyspaces()) {
+        if (!info.uses_tablets()) {
+            continue;
+        }
+
+        dblog.debug("Verifying that keyspace='{}' is RF-rack-valid", name);
+
+        // Note: Tablets are only supported by NetworkTopologyStrategy.
+        SCYLLA_ASSERT(info.get_replication_strategy().get_type() == locator::replication_strategy_type::network_topology);
+        const auto* rs = static_cast<const locator::network_topology_strategy*>(std::addressof(info.get_replication_strategy()));
+
+        for (const auto& [dc, rack_map] : tmptr->get_topology().get_datacenter_racks()) {
+            dblog.debug("Verifying RF-rack validity restriction for keyspace='{}' and DC='{}'", name, dc);
+            const auto rf = rs->get_replication_factor(dc);
+
+            size_t normal_rack_count = 0;
+            for (const auto& [_, rack_nodes] : rack_map) {
+                // We must ignore zero-token nodes because they don't take part in replication.
+                // Verify that this rack has at least one normal node.
+                const bool normal_rack = std::ranges::any_of(rack_nodes, [tmptr] (locator::host_id host_id) {
+                    return tmptr->is_normal_token_owner(host_id);
+                });
+                if (normal_rack) {
+                    ++normal_rack_count;
+                }
+            }
+
+            const bool invalid_ks = rf != normal_rack_count && rf != 1 && rf != 0;
+            if (invalid_ks) {
+                throw std::runtime_error(std::format(
+                        "The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. "
+                        "That condition is not satisfied by keyspace '{}' in DC '{}': RF={} vs. rack count={}. "
+                        "Alter all RF-rack-invalid keyspaces so that they're valid and try again.",
+                        std::string_view(name), std::string_view(dc), rf, normal_rack_count));
+            }
+        }
+    }
 }
 
 }

@@ -1050,6 +1050,14 @@ private:
                 throw;
             }
 
+            if (cfg->rf_rack_valid_keyspaces()) {
+                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+                _db.invoke_on(0, [&tm = _token_metadata] (const replica::database& local_db) {
+                    return local_db.check_rf_rack_validity(tm.local().get());
+                }).get();
+                startlog.info("All keyspaces are RF-rack-valid");
+            }
+
             utils::loading_cache_config perm_cache_config;
             perm_cache_config.max_size = cfg->permissions_cache_max_entries();
             perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());

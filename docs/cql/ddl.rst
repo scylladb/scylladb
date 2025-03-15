@@ -224,7 +224,8 @@ By default, a keyspace is created with tablets enabled. You can use the ``tablet
 to opt out a keyspace from tablets-based distribution.
 
 You may want to opt out if you plan to use features that are not supported for keyspaces
-with tablets enabled. See :ref:`Limitations and Unsupported Features <tablets-limitations>`
+with tablets enabled. Keyspaces using tablets must also remain :term:`RF-rack-valid <RF-rack-valid keyspace>`
+throughout their lifetime. See :ref:`Limitations and Unsupported Features <tablets-limitations>`
 for details.
 
 **The ``initial`` sub-option (deprecated)**
@@ -300,6 +301,7 @@ Modifying a keyspace with tablets enabled is possible and doesn't require any sp
 - If there's any other ongoing global topology operation, executing the ``ALTER`` statement will fail (with an explicit and specific error) and needs to be repeated.
 - The ``ALTER`` statement may take longer than the regular query timeout, and even if it times out, it will continue to execute in the background.
 - The replication strategy cannot be modified, as keyspaces with tablets only support ``NetworkTopologyStrategy``.
+- The ``ALTER`` statement will fail if it would make the keyspace :term:`RF-rack-invalid <RF-rack-valid keyspace>`.
 
 .. _drop-keyspace-statement:
 

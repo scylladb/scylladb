@@ -1381,6 +1381,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , disk_space_monitor_high_polling_interval_in_seconds(this, "disk_space_monitor_high_polling_interval_in_seconds", value_status::Used, 1, "Disk-space polling interval at or above polling threshold")
     , disk_space_monitor_polling_interval_threshold(this, "disk_space_monitor_polling_interval_threshold", value_status::Used, 0.9, "Disk-space polling threshold. Polling interval is increased when disk utilization is greater than or equal to this threshold")
     , enable_create_table_with_compact_storage(this, "enable_create_table_with_compact_storage", liveness::LiveUpdate, value_status::Used, false, "Enable the deprecated feature of CREATE TABLE WITH COMPACT STORAGE.  This feature will eventually be removed in a future version.")
+    , rf_rack_valid_keyspaces(this, "rf_rack_valid_keyspaces", liveness::MustRestart, value_status::Used, false,
+        "Enforce RF-rack-valid keyspaces. Additionally, if there are existing RF-rack-invalid "
+        "keyspaces, attempting to start a node with this option ON will fail.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
