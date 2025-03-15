@@ -44,6 +44,8 @@ void load_balancer_stats_manager::setup_metrics(const dc_name& dc, load_balancer
                          stats.migrations_produced)(dc_lb),
         sm::make_counter("migrations_skipped", sm::description("number of migrations skipped by the load balancer due to load limits"),
                          stats.migrations_skipped)(dc_lb),
+        sm::make_counter("cross_rack_collocations", sm::description("number of co-locating migrations which move replica across racks"),
+                         stats.cross_rack_collocations)(dc_lb),
     });
 }
 
@@ -932,7 +934,7 @@ public:
         co_return all_colocated;
     }
 
-    future<migration_plan> make_merge_colocation_plan(node_load_map& nodes) {
+    future<migration_plan> make_merge_colocation_plan(const dc_name& dc, node_load_map& nodes) {
         migration_plan plan;
         table_resize_plan resize_plan;
 
@@ -958,8 +960,14 @@ public:
             auto migrating = [] (const tablet_desc& t) {
                 return bool(t.transition);
             };
+            auto rack_of = [&topo = _tm->get_topology()] (tablet_replica tr) -> const sstring& {
+                return topo.get_rack(tr.host);
+            };
+            auto cross_rack_migration = [&] (tablet_replica src, tablet_replica dst) {
+                return rack_of(src) != rack_of(dst);
+            };
 
-            auto first_non_matching_replicas = [] (tablet_replica_set r1, tablet_replica_set r2) -> std::optional<std::pair<tablet_replica, tablet_replica>> {
+            auto first_non_matching_replicas = [&] (tablet_replica_set r1, tablet_replica_set r2) -> std::optional<std::pair<tablet_replica, tablet_replica>> {
                 assert(r1.size() == r2.size());
                 // Subtract intersecting (co-located) elements from the replicas set of sibling tablets.
                 // Think for example that tablet 0 and 1 have replicas [n2, n4] and [n1, n2] respectively.
@@ -971,6 +979,7 @@ public:
                 r1.erase(r1_first, r1_last);
                 const auto [r2_first, r2_last] = std::ranges::remove_if(r2, [&] (tablet_replica r) { return intersection.contains(r); });
                 r2.erase(r2_first, r2_last);
+
                 // Favor replicas of different tablets that belong to same node. For example:
                 // tablet 0 replicas: [n2:s1, n3:s0]
                 // tablet 1 replicas: [n1:s0, n2:s0]
@@ -986,10 +995,41 @@ public:
                         return std::make_pair(r1_it->second, r2[i]);
                     }
                 }
-                // Since sets had intersection subtracted, the remaining replicas are certainly not co-located.
+
+                // Favor replicas which belong to the same rack. For example:
+                //
+                //   tablet 0: [n1:rack3, n2:rack1]
+                //   tablet 1: [n3:rack2, n4:rack3]
+                //
+                // We want to move tablet1's n4:rack3 to n1:rack3 first (within rack3), for the following reasons:
+                //   1) Minimize cross-rack migrations (they have higher cost)
+                //      In particular, this ensures that when RF=#racks, there will be no across-rack migrations.
+                //   2) Minimize breaking of pairing: view replica is determined by rack, cross-rack migration breaks it
+                //      In particular, this ensures that when RF=#racks, no pairing will be broken.
+                //   3) Avoid overloading racks temporarily, which is an availability risk in case the rack goes down.
+                //      Otherwise, n3:rack2 would be migrated to n1:rack3, and tablet 1 would have two replicas in rack3.
+                //
+                std::unordered_map<sstring, tablet_replica> r1_rack_map;
+                for (auto&& r : r1) {
+                    auto&& rack = rack_of(r);
+                    auto i = r1_rack_map.find(rack);
+                    if (i == r1_rack_map.end()) {
+                        r1_rack_map[rack] = r;
+                    }
+                }
+                for (auto&& r : r2) {
+                    auto&& rack = rack_of(r);
+                    auto i = r1_rack_map.find(rack);
+                    if (i != r1_rack_map.end()) {
+                        return std::make_pair(i->second, r);
+                    }
+                }
+
+                // r1 and r2 don't share replicas, hosts, or racks.
                 if (r1.size() > 0) {
                     return std::make_pair(r1[0], r2[0]);
                 }
+
                 return std::nullopt;
             };
 
@@ -1052,6 +1092,17 @@ public:
                 // Emits migration for replica of t2 to co-habit same shard as replica of t1.
                 auto src = ret->second;
                 auto dst = ret->first;
+
+                if (cross_rack_migration(src, dst)) {
+                    // FIXME: This is illegal if table has views, as it breaks base-view pairing.
+                    // Can happen when RF!=#racks.
+                    _stats.for_dc(_dc).cross_rack_collocations++;
+                    lblogger.debug("Cross-rack co-location migration for {}@{} (rack: {}) to co-habit {}@{} (rack: {})",
+                        t2_id, src, rack_of(src), t1_id, dst, rack_of(dst));
+                    utils::get_local_injector().inject("forbid_cross_rack_migration_attempt", [&] {
+                        on_fatal_internal_error(lblogger, "Cross rack colocation is not allowed, killing the node");
+                    });
+                }
 
                 // If migration will violate replication constraint, skip to next pair of replicas of sibling tablets.
                 auto skip = check_constraints(src, dst);
@@ -3004,7 +3055,7 @@ public:
         }
 
         if (_tm->tablets().balancing_enabled() && plan.empty()) {
-            auto dc_merge_plan = co_await make_merge_colocation_plan(nodes);
+            auto dc_merge_plan = co_await make_merge_colocation_plan(dc, nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in DC {}", dc_merge_plan.tablet_migration_count(), dc);
             plan.merge(std::move(dc_merge_plan));

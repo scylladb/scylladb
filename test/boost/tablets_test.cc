@@ -1663,6 +1663,78 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
   }).get();
 }
 
+// Throws if tablets have more than 1 replica in a given rack.
+// Run in seastar thread.
+void check_no_rack_overload(const token_metadata& tm) {
+    auto& topo = tm.get_topology();
+    for (auto&& [table, tmap_p] : tm.tablets().all_tables()) {
+        const tablet_map& tmap = *tmap_p;
+        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+            std::unordered_map<sstring, std::unordered_set<sstring>> racks_by_dc;
+            auto replicas = tinfo.replicas;
+            for (auto& r : tinfo.replicas) {
+                auto& rack = topo.get_rack(r.host);
+                auto& racks = racks_by_dc[topo.get_datacenter(r.host)];
+                if (racks.contains(rack)) {
+                    throw std::runtime_error("rack overloaded");
+                }
+                racks.insert(rack);
+            }
+            return make_ready_future<>();
+        }).get();
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        auto host1 = topo.add_node(node_state::normal, 1, rack3);
+        auto host2 = topo.add_node(node_state::normal, 1, rack2);
+        auto host3 = topo.add_node(node_state::normal, 1, rack1);
+        auto host4 = topo.add_node(node_state::normal, 1, rack3);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 2); // RF=2
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(2);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host3, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host2, 0},
+                    tablet_replica{host4, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Trigger merge
+        e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_size(table1, 0);
+        rebalance_tablets(e, &topo.get_shared_load_stats(), {}, [&] (const migration_plan& plan) {
+            check_no_rack_overload(*stm.get());
+            return false;
+        });
+
+        BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
   do_with_cql_env_thread([] (auto& e) {
     // Tests the scenario of balacning cluster with DOWN node
@@ -3042,6 +3114,45 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
                 tablet_replica_set {
                     tablet_replica {host2, shard_id(0)},
                     tablet_replica {host1, shard_id(0)},
+                }
+            });
+        };
+
+        do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
+    }).get();
+}
+
+// Verify merge can proceed with multiple racks and RF=#racks
+//
+// Given replica sets (not in rack order):
+// rack1 { n1, n2 }
+// rack2 { n3, n4 }
+//
+// t0: { n1, n3 }
+// t1: { n4, n2 }
+//
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_racks_and_rf_equals_racks) {
+    do_with_cql_env_thread([] (auto& e) {
+        const int rf = 2;
+        const int n_racks = rf;
+        const int n_hosts = 4; // 2 nodes in each rack.
+        const unsigned shard_count = 1;
+        const unsigned initial_tablets = 2;
+
+        auto set_tablets = [] (token_metadata&, tablet_map& tmap, const rack_vector& racks, const hosts_by_rack_map& hosts_by_rack) {
+            auto& first_rack_hosts = hosts_by_rack.at(racks[0].rack);
+            auto& second_rack_hosts = hosts_by_rack.at(racks[1].rack);
+
+            tmap.set_tablet(tablet_id(0), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {first_rack_hosts[0], shard_id(0)},
+                    tablet_replica {second_rack_hosts[0], shard_id(0)},
+                }
+            });
+            tmap.set_tablet(tablet_id(1), tablet_info {
+                tablet_replica_set {
+                    tablet_replica {second_rack_hosts[1], shard_id(0)},
+                    tablet_replica {first_rack_hosts[1], shard_id(0)},
                 }
             });
         };
