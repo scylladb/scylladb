@@ -264,6 +264,14 @@ minio_download_jobs() {
     rm -f ${cfile}
 }
 
+sccache_build() {
+  rm -rf sccache
+  git clone https://github.com/mozilla/sccache.git
+  cd sccache
+  cargo build --release
+  mv target/release/sccache /usr/local/bin/
+}
+
 print_usage() {
     echo "Usage: install-dependencies.sh [OPTION]..."
     echo ""
@@ -415,6 +423,7 @@ elif [ "$ID" == "arch" ]; then
 fi
 
 cargo --config net.git-fetch-with-cli=true install cxxbridge-cmd --root /usr/local
+sccache_build
 
 CURL_ARGS=$(minio_download_jobs)
 if [ ! -z "${CURL_ARGS}" ]; then
