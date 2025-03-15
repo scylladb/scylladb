@@ -364,36 +364,6 @@ def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: arg
             print(f"Summary: {len(failed_tests)} of the total {TestSuite.test_count()} tests failed")
 
 
-def write_junit_report(tmpdir: str, mode: str) -> None:
-    junit_filename = os.path.join(tmpdir, mode, "xml", "junit.xml")
-    total = 0
-    failed = 0
-    skipped = 0
-    xml_results = ET.Element("testsuite", name="non-boost tests", errors="0")
-    for suite in TestSuite.suites.values():
-        for test in suite.junit_tests():
-            if test.mode != mode:
-                continue
-            total += 1
-            test_time = f"{test.time_end - test.time_start:.3f}"
-            # add the suite name to disambiguate tests named "run"
-            xml_res = ET.SubElement(xml_results, 'testcase',
-                                    name="{}.{}.{}.{}".format(test.suite.name, test.shortname, mode, test.id),
-                                    time=test_time)
-            if test.failed:
-                failed += 1
-                test.write_junit_failure_report(xml_res)
-            if test.did_not_run:
-                skipped += 1
-    if total == 0:
-        return
-    xml_results.set("tests", str(total))
-    xml_results.set("failures", str(failed))
-    xml_results.set("skipped", str(skipped))
-    with open(junit_filename, "w") as f:
-        ET.ElementTree(xml_results).write(f, encoding="unicode")
-
-
 def summarize_boost_tests(tests):
     # in case we run a certain test multiple times
     # - if any of the runs failed, the test is considered failed, and
@@ -621,7 +591,6 @@ async def main() -> int:
 
     for mode in options.modes:
         junit_file = f"{options.tmpdir}/{mode}/allure/boost.junit.xml"
-        write_junit_report(options.tmpdir, mode)
         xunit_file = write_consolidated_boost_junit_xml(options.tmpdir, mode)
         boost_to_junit(xunit_file, junit_file)
 
