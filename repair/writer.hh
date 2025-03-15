@@ -4,6 +4,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "schema/schema_fwd.hh"
 #include "reader_permit.hh"
+#include "service/topology_guard.hh"
 #include "streaming/stream_reason.hh"
 #include "repair/decorated_key_with_hash.hh"
 #include "readers/upgrading_consumer.hh"
@@ -150,5 +151,6 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             streaming::stream_reason reason,
             sharded<replica::database>& db,
             sharded<db::system_distributed_keyspace>& sys_dist_ks,
-            sharded<db::view::view_update_generator>& view_update_generator);
+            sharded<db::view::view_update_generator>& view_update_generator,
+            service::frozen_topology_guard topo_guard);
 
