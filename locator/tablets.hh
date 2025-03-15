@@ -26,6 +26,10 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+namespace gms {
+class feature_service;
+}
+
 namespace locator {
 
 class topology;
@@ -217,6 +221,7 @@ enum class tablet_transition_stage {
     allow_write_both_read_old,
     write_both_read_old,
     streaming,
+    rebuild_repair,
     write_both_read_new,
     use_new,
     cleanup,
@@ -304,8 +309,8 @@ struct tablet_migration_streaming_info {
     int stream_weight = tablet_migration_stream_weight_default;
 };
 
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
-tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&, const gms::feature_service&);
+tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&, const gms::feature_service&);
 bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& tinfo);
 
 // Describes if a given token is located at either left or right side of a tablet's range
