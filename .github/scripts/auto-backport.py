@@ -32,7 +32,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, is_draft=False):
+def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr_title, commits, is_draft=False, is_collaborator=True):
     pr_body = f'{pr.body}\n\n'
     for commit in commits:
         pr_body += f'- (cherry picked from commit {commit})\n\n'
@@ -46,7 +46,8 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
             draft=is_draft
         )
         logging.info(f"Pull request created: {backport_pr.html_url}")
-        backport_pr.add_to_assignees(pr.user)
+        if is_collaborator:
+            backport_pr.add_to_assignees(pr.user)
         if is_draft:
             backport_pr.add_to_labels("conflicts")
             pr_comment = f"@{pr.user.login} - This PR was marked as draft because it has conflicts\n"
@@ -92,18 +93,7 @@ def get_pr_commits(repo, pr, stable_branch, start_commit=None):
     return commits
 
 
-def create_pr_comment_and_remove_label(pr, comment_body):
-    labels = pr.get_labels()
-    pattern = re.compile(r"backport/\d+\.\d+$")
-    for label in labels:
-        if pattern.match(label.name):
-            print(f"Removing label: {label.name}")
-            comment_body += f'- {label.name}\n'
-            pr.remove_from_labels(label)
-    pr.create_issue_comment(comment_body)
-
-
-def backport(repo, pr, version, commits, backport_base_branch):
+def backport(repo, pr, version, commits, backport_base_branch, is_collaborator=True):
     new_branch_name = f'backport/{pr.number}/to-{version}'
     backport_pr_title = f'[Backport {version}] {pr.title}'
     repo_url = f'https://scylladbbot:{github_token}@github.com/{repo.full_name}.git'
@@ -123,7 +113,7 @@ def backport(repo, pr, version, commits, backport_base_branch):
                     repo_local.git.cherry_pick('--continue')
             repo_local.git.push(fork_repo, new_branch_name, force=True)
             create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
-                                is_draft=is_draft)
+                                is_draft=is_draft, is_collaborator=is_collaborator)
 
         except GitCommandError as e:
             logging.warning(f"GitCommandError: {e}")
@@ -142,8 +132,10 @@ def with_github_keyword_prefix(repo, pr):
         print(f'No valid close reference for {pr.number}')
         comment = f':warning:  @{pr.user.login} PR body does not contain a Fixes reference to an issue '
         comment += ' and can not be backported\n\n'
-        comment += 'The following labels were removed:\n'
-        create_pr_comment_and_remove_label(pr, comment)
+        comment += ' please add a Fixes ref or get @scylladb/scylla-maint approval\n'
+        comment += ' to trigger the backport process again, please remove backport-error label\n'
+        pr.add_to_labels("scylladbbot/backport_error")
+        pr.create_issue_comment(comment)
         return False
     else:
         return True
@@ -168,6 +160,7 @@ def main():
     scylladbbot_repo = g.get_repo(fork_repo_name)
     closed_prs = []
     start_commit = None
+    is_collaborator = True
 
     if args.commits:
         start_commit, end_commit = args.commits.split('..')
@@ -192,21 +185,24 @@ def main():
         if not backport_labels:
             print(f'no backport label: {pr.number}')
             continue
-        if args.commits and not with_github_keyword_prefix(repo, pr):
+        if not with_github_keyword_prefix(repo, pr):
             continue
         if not repo.private and not scylladbbot_repo.has_in_collaborators(pr.user.login):
             logging.info(f"Sending an invite to {pr.user.login} to become a collaborator to {scylladbbot_repo.full_name} ")
             scylladbbot_repo.add_to_collaborators(pr.user.login)
             comment = f':warning:  @{pr.user.login} you have been added as collaborator to scylladbbot fork '
-            comment += f'Please check your inbox and approve the invitation, once it is done, please add the backport labels again\n'
-            create_pr_comment_and_remove_label(pr, comment)
-            continue
+            comment += f'Please check your inbox and approve the invitation, otherwise you will not be able to edit PR branch when needed\n'
+            pr.add_to_labels("scylladbbot/backport_error")
+            pr.create_issue_comment(comment)
+            is_collaborator = False
         commits = get_pr_commits(repo, pr, stable_branch, start_commit)
+        labels += [label.name for label in pr.labels]
         logging.info(f"Found PR #{pr.number} with commit {commits} and the following labels: {backport_labels}")
-        for backport_label in backport_labels:
-            version = backport_label.replace('backport/', '')
-            backport_base_branch = backport_label.replace('backport/', backport_branch)
-            backport(repo, pr, version, commits, backport_base_branch)
+        if 'scylladbbot/backport_error' not in labels:
+            for backport_label in backport_labels:
+                version = backport_label.replace('backport/', '')
+                backport_base_branch = backport_label.replace('backport/', backport_branch)
+                backport(repo, pr, version, commits, backport_base_branch, is_collaborator)
 
 
 if __name__ == "__main__":
