@@ -315,6 +315,7 @@ add_scylla_test(combined_tests
     large_paging_state_test.cc
     loading_cache_test.cc
     memtable_test.cc
+    metadata_id_test.cc
     multishard_combining_reader_as_mutation_source_test.cc
     multishard_mutation_query_test.cc
     mutation_reader_test.cc

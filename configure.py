@@ -1508,6 +1508,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/large_paging_state_test.cc',
     'test/boost/loading_cache_test.cc',
     'test/boost/memtable_test.cc',
+    'test/boost/metadata_id_test.cc',
     'test/boost/multishard_combining_reader_as_mutation_source_test.cc',
     'test/boost/multishard_mutation_query_test.cc',
     'test/boost/mutation_reader_test.cc',
