@@ -411,6 +411,10 @@ public:
         return _token_metadata;
     }
 
+    virtual sharded<service::topology_state_machine>& get_topology_state_machine() override {
+        return _topology_state_machine;
+    }
+
     virtual future<> refresh_client_state() override {
         return _core_local.invoke_on_all([] (core_local_state& state) {
             return state.client_state.maybe_update_per_service_level_params();

@@ -120,6 +120,7 @@ struct topology {
         left_token_ring,
         rollback_to_normal,
         truncate_table,
+        lock,
     };
 
     std::optional<transition_state> tstate;
