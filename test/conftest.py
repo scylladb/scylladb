@@ -6,31 +6,25 @@
 from __future__ import annotations
 
 import asyncio
-import glob
 import logging
 import os
-import pathlib
-import shutil
+import subprocess
 import sys
-import time
+from argparse import BooleanOptionalAction
+from pathlib import Path
+from random import randint
 from typing import TYPE_CHECKING
 
 import pytest
-import universalasync
 
-from test.pylib.host_registry import HostRegistry
-from test.pylib.minio_server import MinioServer
+from test import TEST_RUNNER
 from test.pylib.report_plugin import ReportPlugin
-from test.pylib.s3_proxy import S3ProxyServer
-from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.suite.base import TestSuite, init_testsuite_globals
-from test.pylib.util import LogPrefixAdapter, get_configured_modes
+from test.pylib.util import get_configured_modes, prepare_dirs, start_3rd_party_services
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
 
-
-TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
 
 ALL_MODES = {'debug': 'Debug',
              'release': 'RelWithDebInfo',
@@ -44,6 +38,8 @@ def pytest_addoption(parser):
     parser.addoption('--tmpdir', action='store', default='testlog', help='''Path to temporary test data and log files. The data is
             further segregated per build mode. Default: ./testlog.''', )
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
+    parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
+                     help="Specific byte limit for failure injection (random by default)")
 
     # Following option is to use with bare pytest command.
     #
@@ -101,62 +97,6 @@ def pytest_collection_modifyitems(config, items):
                 item.name = f'{item.name}.{run_id}'
 
 
-def prepare_dir(dirname: str, pattern: str) -> None:
-    # Ensure the dir exists
-    pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
-    # Remove old artifacts
-    for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
-        pathlib.Path(p).unlink()
-
-
-def prepare_dirs(tempdir_base: str, modes: list[str]) -> None:
-    prepare_dir(tempdir_base, "*.log")
-    for mode in modes:
-        prepare_dir(os.path.join(tempdir_base, mode), "*.log")
-        prepare_dir(os.path.join(tempdir_base, mode), "*.reject")
-        prepare_dir(os.path.join(tempdir_base, mode, "xml"), "*.xml")
-        shutil.rmtree(os.path.join(tempdir_base, mode, "failed_test"), ignore_errors=True)
-        prepare_dir(os.path.join(tempdir_base, mode, "failed_test"), "*")
-        prepare_dir(os.path.join(tempdir_base, mode, "allure"), "*.xml")
-        if TEST_RUNNER == "pytest":
-            shutil.rmtree(os.path.join(tempdir_base, mode, "pytest"), ignore_errors=True)
-            prepare_dir(os.path.join(tempdir_base, mode, "pytest"), "*")
-
-
-@universalasync.async_to_sync_wraps
-async def start_s3_mock_services(minio_tempdir_base: str) -> None:
-    ms = MinioServer(
-        tempdir_base=minio_tempdir_base,
-        address="127.0.0.1",
-        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
-    )
-    await ms.start()
-    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
-
-    hosts = HostRegistry()
-    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
-
-    mock_s3_server = MockS3Server(
-        host=await hosts.lease_host(),
-        port=2012,
-        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
-    )
-    await mock_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
-
-    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
-    proxy_s3_server = S3ProxyServer(
-        host=await hosts.lease_host(),
-        port=9002,
-        minio_uri=minio_uri,
-        max_retries=3,
-        seed=int(time.time()),
-        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
-    )
-    await proxy_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
-
-
 def pytest_sessionstart(session: pytest.Session) -> None:
     # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
     # we don't need this stuff.
@@ -171,9 +111,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     # Run stuff just once for the pytest session even running under xdist.
     if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
-        temp_dir = os.path.join(session.config.rootpath, "..", session.config.getoption("--tmpdir"))
+        temp_dir = Path(session.config.getoption("--tmpdir")).absolute()
         prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes())
-        start_s3_mock_services(minio_tempdir_base=temp_dir)
+        start_3rd_party_services(tempdir_base=temp_dir, byte_limit=session.config.getoption('byte_limit'))
 
 
 def pytest_sessionfinish() -> None:

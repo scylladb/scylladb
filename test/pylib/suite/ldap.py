@@ -4,11 +4,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
-import os
-import pathlib
-from random import randint
-
-from test.pylib.cpp.ldap.prepare_instance import setup
 from test.pylib.suite.unit import UnitTestSuite
 from test.pylib.suite.boost import BoostTest
 
@@ -30,9 +25,3 @@ class LdapTest(BoostTest):
 
     def __init__(self, test_no, shortname, args, suite):
         super().__init__(test_no, shortname, args, suite, None, False, None)
-
-    async def setup(self, port, options):
-        instances_root = pathlib.Path(options.tmpdir) / self.mode / 'ldap_instances'
-        byte_limit = options.byte_limit if options.byte_limit else randint(0, 2000)
-        project_root = pathlib.Path(os.path.dirname(__file__)).parent.parent.parent
-        return setup(project_root=project_root, port=port, instance_root=instances_root, byte_limit=byte_limit)

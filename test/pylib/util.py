@@ -3,7 +3,11 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from __future__ import annotations
+
+import glob
 import re
+import shutil
 import subprocess
 from collections.abc import Coroutine
 import threading
@@ -16,16 +20,24 @@ from functools import cache
 
 import random
 import string
+from subprocess import Popen
 
-from typing import Callable, Awaitable, Optional, TypeVar, Any
+from typing import Callable, Awaitable, Optional, TypeVar, Any, Coroutine
 
+import universalasync
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
+from test import TEST_RUNNER
+from test.pylib.ldap_server import start_ldap, try_something_backoff, can_connect
+from test.pylib.host_registry import HostRegistry
 from test.pylib.internal_types import ServerInfo
-
+from test.pylib.minio_server import MinioServer
+from test.pylib.s3_proxy import S3ProxyServer
+from test.pylib.s3_server_mock import MockS3Server
+from test.pylib.suite.base import TestSuite
 
 logger = logging.getLogger(__name__)
 
@@ -304,3 +316,71 @@ async def gather_safely(*awaitables: Awaitable):
         if isinstance(result, BaseException):
             raise result from None
     return results
+
+
+def prepare_dir(dirname: str, pattern: str) -> None:
+    # Ensure the dir exists
+    pathlib.Path(dirname).mkdir(parents=True, exist_ok=True)
+    # Remove old artifacts
+    for p in glob.glob(os.path.join(dirname, pattern), recursive=True):
+        pathlib.Path(p).unlink()
+
+
+def prepare_dirs(tempdir_base: str, modes: list[str]) -> None:
+    prepare_dir(tempdir_base, "*.log")
+    shutil.rmtree(os.path.join(tempdir_base, "ldap_instances"), ignore_errors=True)
+    prepare_dir(os.path.join(tempdir_base, "ldap_instances"), "*")
+    for mode in modes:
+        prepare_dir(os.path.join(tempdir_base, mode), "*.log")
+        prepare_dir(os.path.join(tempdir_base, mode), "*.reject")
+        prepare_dir(os.path.join(tempdir_base, mode, "xml"), "*.xml")
+        shutil.rmtree(os.path.join(tempdir_base, mode, "failed_test"), ignore_errors=True)
+        prepare_dir(os.path.join(tempdir_base, mode, "failed_test"), "*")
+        prepare_dir(os.path.join(tempdir_base, mode, "allure"), "*.xml")
+        if TEST_RUNNER != "pytest":
+            shutil.rmtree(os.path.join(tempdir_base, mode, "pytest"), ignore_errors=True)
+            prepare_dir(os.path.join(tempdir_base, mode, "pytest"), "*")
+
+
+@universalasync.async_to_sync_wraps
+async def start_3rd_party_services(tempdir_base: pathlib.Path, byte_limit: int):
+    hosts = HostRegistry()
+
+    finalize = start_ldap(
+        host=await hosts.lease_host(),
+        port=5000,
+        instance_root=tempdir_base / 'ldap_instances',
+        byte_limit=byte_limit)
+    async def make_async_finalize():
+        finalize()
+
+    TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
+    ms = MinioServer(
+        tempdir_base=str(tempdir_base),
+        address="127.0.0.1",
+        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
+    )
+    await ms.start()
+    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
+    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
+
+    mock_s3_server = MockS3Server(
+        host=await hosts.lease_host(),
+        port=2012,
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
+    )
+    await mock_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
+
+    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
+    proxy_s3_server = S3ProxyServer(
+        host=await hosts.lease_host(),
+        port=9002,
+        minio_uri=minio_uri,
+        max_retries=3,
+        seed=int(time.time()),
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
+    )
+    await proxy_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
