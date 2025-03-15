@@ -925,6 +925,48 @@ void database::init_schema_commitlog() {
     }).release();
 }
 
+std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s) {
+    bool is_colocated_view = std::invoke([&] {
+        if (!s.is_view()) {
+            return false;
+        }
+
+        if (!column_family_exists(s.view_info()->base_id())) {
+            // TODO MICHAEL what if base and view are created together?
+            // see test_tablet_alternator_lsi_consistency
+            dblog.warn("Base table for view {}.{} not found", s.ks_name(), s.cf_name());
+            return false;
+        }
+
+        auto base_schema_ptr = find_column_family(s.view_info()->base_id()).schema();
+        if (s.partition_key_size() != base_schema_ptr->partition_key_size()) {
+            return false;
+        }
+
+        auto&& view_pk = s.partition_key_columns();
+        auto&& base_pk = base_schema_ptr->partition_key_columns();
+        for (const auto& [a,b] : std::views::zip(view_pk, base_pk)) {
+            if (a.name() != b.name()) {
+                return false;
+            }
+        }
+        return true;
+    });
+
+    if (is_colocated_view) {
+        return s.view_info()->base_id();
+    }
+
+    // temporary method to create colocated tables for testing
+    if (s.cf_name().ends_with("colocation")) {
+        auto base_name = s.cf_name().substr(0, s.cf_name().find("_"));
+        auto base_schema_ptr = find_column_family(s.ks_name(), base_name).schema();
+        return base_schema_ptr->id();
+    }
+
+    return std::nullopt;
+}
+
 future<> database::create_local_system_table(
         schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory& erm_factory) {
     auto ks_name = table->ks_name();

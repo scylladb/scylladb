@@ -1389,11 +1389,14 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 
 static
 void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
-    for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
+    const auto& table_groups = tm.tablets().all_base_tables();
+    for (auto [base_table_id, resize_decision] : plan.resize_plan().resize) {
+      for (auto table_id : table_groups.at(base_table_id)) {
         tm.tablets().mutate_tablet_map(table_id, [&] (tablet_map& tmap) {
             resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
             tmap.set_resize_decision(resize_decision);
         });
+      }
     }
 }
 
@@ -1401,10 +1404,12 @@ static
 future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migration_plan& plan) {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
+    auto tm = stm.get();
+    const auto& table_groups = tm->tablets().all_base_tables();
     bool changed = false;
 
-    for (auto table_id : plan.resize_plan().finalize_resize) {
-        auto tm = stm.get();
+    for (auto base_table_id : plan.resize_plan().finalize_resize) {
+      for (auto table_id : table_groups.at(base_table_id)) {
         const auto& old_tmap = tm->tablets().get_tablet_map(table_id);
 
         auto new_tmap = co_await talloc.resize_tablets(tm, table_id);
@@ -1417,6 +1422,7 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
             tm.tablets().set_tablet_map(table_id, std::move(new_tmap));
             return make_ready_future<>();
         });
+      }
     }
 
     if (changed) {
@@ -1434,13 +1440,16 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
 void apply_plan(token_metadata& tm, const migration_plan& plan) {
+    const auto& table_groups = tm.tablets().all_base_tables();
     for (auto&& mig : plan.migrations()) {
-        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+      for (auto table : table_groups.at(mig.tablet.table)) {
+        tm.tablets().mutate_tablet_map(table, [&] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             testlog.trace("Replacing tablet {} replica from {} to {}", mig.tablet.tablet, mig.src, mig.dst);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
             tmap.set_tablet(mig.tablet.tablet, tinfo);
         });
+      }
     }
     apply_resize_plan(tm, plan);
 }
@@ -1733,6 +1742,152 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
         load.populate().get();
         BOOST_REQUIRE_EQUAL(load.get_load(host3), 0);
         BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+    }
+  }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets) {
+  do_with_cql_env_thread([] (auto& e) {
+    // Tests that co-located tablets remain co-located during load balancing.
+    // table1 and table2 are co-located
+    // table3 and table4 are co-located
+    // initially they all start with one tablet on the same host and shard.
+    // load balancing is expected to move one pair of co-located tablets to the
+    // other host while maintaining co-location of each pair.
+
+    logging::logger_registry().set_logger_level("load_balancer", logging::log_level::trace);
+
+    unsigned shard_count = 2;
+
+    topology_builder topo(e);
+    auto host1 = topo.add_node(node_state::normal, shard_count);
+    auto host2 = topo.add_node(node_state::normal, shard_count);
+
+    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+    auto table1 = add_table(e, ks_name).get();
+    auto table2 = add_table(e, ks_name).get();
+    auto table3 = add_table(e, ks_name).get();
+    auto table4 = add_table(e, ks_name).get();
+
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                        tablet_replica {host1, 0},
+                }
+        });
+
+        tablet_map tmap1(tmap);
+        tablet_map tmap2(tmap);
+        tablet_map tmap3(tmap);
+        tablet_map tmap4(tmap);
+
+        tmap2.set_base_table(table1);
+        tmap4.set_base_table(table3);
+
+        tmeta.set_tablet_map(table1, std::move(tmap1));
+        tmeta.set_tablet_map(table2, std::move(tmap2));
+        tmeta.set_tablet_map(table3, std::move(tmap3));
+        tmeta.set_tablet_map(table4, std::move(tmap4));
+        return make_ready_future<>();
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+
+    // Sanity check
+    {
+        load_sketch load(stm.get());
+        load.populate().get();
+        BOOST_REQUIRE_EQUAL(load.get_load(host1), 4);
+        BOOST_REQUIRE_EQUAL(load.get_load(host2), 0);
+    }
+
+    rebalance_tablets(e);
+
+    {
+        load_sketch load(stm.get());
+        load.populate().get();
+
+        BOOST_REQUIRE_EQUAL(load.get_load(host1), 2);
+        BOOST_REQUIRE_EQUAL(load.get_load(host2), 2);
+
+        auto& tmap1 = stm.get()->tablets().get_tablet_map(table1);
+        auto& tmap2 = stm.get()->tablets().get_tablet_map(table2);
+        auto& tmap3 = stm.get()->tablets().get_tablet_map(table3);
+        auto& tmap4 = stm.get()->tablets().get_tablet_map(table4);
+
+        BOOST_REQUIRE_EQUAL(tmap1.get_tablet_info(tmap1.first_tablet()).replicas, tmap2.get_tablet_info(tmap2.first_tablet()).replicas);
+        BOOST_REQUIRE_EQUAL(tmap3.get_tablet_info(tmap3.first_tablet()).replicas, tmap4.get_tablet_info(tmap4.first_tablet()).replicas);
+    }
+  }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets_and_single) {
+  do_with_cql_env_thread([] (auto& e) {
+    // Tests load balancing where we have co-located tablets together with single tablets.
+    // Initially we have on one shard two co-located tablets of table1 and table2, and
+    // a single tablet of table3. After load balancing we expect the two co-located
+    // tablets to remain co-located, and the single tablet to be on another node.
+
+    unsigned shard_count = 2;
+
+    topology_builder topo(e);
+    auto host1 = topo.add_node(node_state::normal, shard_count);
+    auto host2 = topo.add_node(node_state::normal, shard_count);
+
+    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+    auto table1 = add_table(e, ks_name).get();
+    auto table2 = add_table(e, ks_name).get();
+    auto table3 = add_table(e, ks_name).get();
+
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) {
+        tablet_map tmap(1);
+        auto tid = tmap.first_tablet();
+        tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                        tablet_replica {host1, 0},
+                }
+        });
+
+        tablet_map tmap1(tmap);
+        tablet_map tmap2(tmap);
+        tablet_map tmap3(tmap);
+
+        tmap2.set_base_table(table1);
+
+        tmeta.set_tablet_map(table1, std::move(tmap1));
+        tmeta.set_tablet_map(table2, std::move(tmap2));
+        tmeta.set_tablet_map(table3, std::move(tmap3));
+        return make_ready_future<>();
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+
+    // Sanity check
+    {
+        load_sketch load(stm.get());
+        load.populate().get();
+        BOOST_REQUIRE_EQUAL(load.get_load(host1), 3);
+        BOOST_REQUIRE_EQUAL(load.get_load(host2), 0);
+    }
+
+    rebalance_tablets(e);
+
+    {
+        load_sketch load(stm.get());
+        load.populate().get();
+
+        auto min_load = std::min(load.get_load(host1), load.get_load(host2));
+        auto max_load = std::max(load.get_load(host1), load.get_load(host2));
+
+        BOOST_REQUIRE_EQUAL(min_load, 1);
+        BOOST_REQUIRE_EQUAL(max_load, 2);
+
+        auto& tmap1 = stm.get()->tablets().get_tablet_map(table1);
+        auto& tmap2 = stm.get()->tablets().get_tablet_map(table2);
+
+        BOOST_REQUIRE_EQUAL(tmap1.get_tablet_info(tmap1.first_tablet()).replicas, tmap2.get_tablet_info(tmap2.first_tablet()).replicas);
     }
   }).get();
 }
@@ -2717,6 +2872,52 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
                 testlog.info("Load on host {}: min={}, max={}", h, l.min(), l.max());
                 BOOST_REQUIRE_LE(l.max(), 2 * per_shard_goal);
             }
+        }
+    }, tablet_cql_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_options_with_colocated_tablets) {
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(10.0);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+
+        topo.add_node(node_state::normal, 3);
+
+        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': 32}}", ks_name1)).get();
+        auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
+
+        // table2 has 64 tablets/shard in dc2, should not be scaled down.
+        e.execute_cql(fmt::format("CREATE TABLE {}.table1_colocation (p1 text, r1 int, PRIMARY KEY (p1)) "
+                                  "WITH tablets = {{'min_tablet_count': 8}}", ks_name1)).get();
+        auto table2 = e.local_db().find_schema(ks_name1, "table1_colocation")->id();
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0);
+        load_stats.set_size(table2, 0);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 32);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 32);
+        }
+
+        e.execute_cql(fmt::format("ALTER TABLE {}.table1 "
+                                  "WITH tablets = {{'min_tablet_count': 2}}", ks_name1)).get();
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            auto& stm = e.shared_token_metadata().local();
+            auto tm = stm.get();
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 8);
+            BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 8);
         }
     }, tablet_cql_test_config()).get();
 }
