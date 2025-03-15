@@ -10,7 +10,7 @@
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
-#include "seastar/core/scheduling.hh"
+#include <seastar/core/scheduling.hh>
 #include "types/collection.hh"
 #include "types/list.hh"
 #include "types/set.hh"

@@ -8,7 +8,7 @@
 
 #include "gms/generation-number.hh"
 #include "gms/inet_address.hh"
-#include "seastar/core/shard_id.hh"
+#include <seastar/core/shard_id.hh>
 #include "utils/assert.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>

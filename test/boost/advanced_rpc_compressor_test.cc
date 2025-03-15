@@ -6,8 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "seastar/core/manual_clock.hh"
-#include "seastar/util/closeable.hh"
+#include <seastar/core/manual_clock.hh>
+#include <seastar/util/closeable.hh>
 #include "test/lib/random_utils.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "utils/advanced_rpc_compressor.hh"

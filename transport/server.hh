@@ -10,7 +10,7 @@
 
 #include "auth/service.hh"
 #include <seastar/core/seastar.hh>
-#include "seastar/core/scheduling.hh"
+#include <seastar/core/scheduling.hh>
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
 #include "auth/authenticator.hh"

@@ -11,7 +11,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/consistency_level_type.hh"
-#include "seastar/json/json_elements.hh"
+#include <seastar/json/json_elements.hh>
 #include "transport/controller.hh"
 #include <unordered_map>
 
