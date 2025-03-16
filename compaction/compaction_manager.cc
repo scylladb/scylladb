@@ -2175,7 +2175,8 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
 }
 
 compaction::compaction_state::compaction_state(table_state& t)
-    : backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
+    : gate(format("compaction_state for table {}.{}", t.schema()->ks_name(), t.schema()->cf_name()))
+    , backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
 {
 }
 
