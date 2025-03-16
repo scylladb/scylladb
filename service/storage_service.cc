@@ -1505,6 +1505,11 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     slogger.info("Tablet replicas from the replaced node have been rebuilt");
 }
 
+future<> storage_service::start_sys_dist_ks() const {
+    slogger.info("starting system distributed keyspace shards");
+    return _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+}
+
 future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
@@ -1836,6 +1841,7 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
         // process may access those tables.
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await start_sys_dist_ks();
 
         if (_sys_ks.local().bootstrap_complete()) {
             if (_topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
@@ -1958,12 +1964,14 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await start_sys_dist_ks();
         co_await _view_builder.local().mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await start_sys_dist_ks();
         bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
         if (bootstrap_tokens.empty()) {
             bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
