@@ -2110,6 +2110,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                     });
             }).get();
 
+            checkpoint(stop_signal, "join cluster");
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
