@@ -176,7 +176,7 @@ future<> backup_task_impl::process_snapshot_dir() {
 }
 
 future<> backup_task_impl::uploads_worker() {
-    gate uploads;
+    named_gate uploads(format("do_backup::uploads({})", _snapshot_dir));
 
     try {
         while (!_ex) {
