@@ -78,9 +78,10 @@ class hint_sender {
     struct send_one_file_ctx {
         send_one_file_ctx(std::unordered_map<table_schema_version, column_mapping>& last_schema_ver_to_column_mapping)
             : schema_ver_to_column_mapping(last_schema_ver_to_column_mapping)
+            , file_send_gate("file_send_gate")
         {}
         std::unordered_map<table_schema_version, column_mapping>& schema_ver_to_column_mapping;
-        seastar::gate file_send_gate;
+        seastar::named_gate file_send_gate;
         std::optional<db::replay_position> first_failed_rp;
         std::optional<db::replay_position> last_succeeded_rp;
         std::set<db::replay_position> in_progress_rps;
