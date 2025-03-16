@@ -326,7 +326,7 @@ private:
     index _shard_mutation_querier_index;
     std::chrono::seconds _entry_ttl;
     stats _stats;
-    gate _closing_gate;
+    named_gate _closing_gate;
     is_user_semaphore_func _is_user_semaphore_func;
 
 private:
