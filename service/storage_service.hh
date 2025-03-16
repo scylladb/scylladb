@@ -414,6 +414,7 @@ private:
     bool is_replacing();
     bool is_first_node();
     raft::server* get_group_server_if_raft_topolgy_enabled();
+    future<> start_sys_dist_ks() const;
     future<> join_topology(sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
