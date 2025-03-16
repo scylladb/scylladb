@@ -167,6 +167,30 @@ public:
         _broadcasts_to_abort_sources_done.get();
         _abort_sources.stop().get();
     }
+<<<<<<< HEAD
+||||||| parent of 41f02c521d (main: allow abort during join_cluster)
+    void ready() {
+        _ready = true;
+        check();
+    }
+    void check() {
+        if (_caught) {
+            broadcast();
+            throw abort_requested_exception{};
+        }
+    }
+=======
+    void ready(bool state = true) {
+        _ready = state;
+        check();
+    }
+    void check() {
+        if (_caught) {
+            broadcast();
+            throw abort_requested_exception{};
+        }
+    }
+>>>>>>> 41f02c521d (main: allow abort during join_cluster)
     future<> wait() {
         return _cond.wait([this] { return _caught; });
     }
@@ -2154,10 +2178,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 ||||||| parent of f269480f53 (main: add checkpoint before joining cluster)
 =======
             checkpoint(stop_signal, "join cluster");
+<<<<<<< HEAD
 >>>>>>> f269480f53 (main: add checkpoint before joining cluster)
+||||||| parent of 41f02c521d (main: allow abort during join_cluster)
+=======
+            // Allow abort during join_cluster since bootstrap or replace
+            // can take a long time.
+            stop_signal.ready(true);
+>>>>>>> 41f02c521d (main: allow abort during join_cluster)
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);
             }).get();
+            stop_signal.ready(false);
 
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
