@@ -873,7 +873,9 @@ bool table::uses_tablets() const {
 }
 
 storage_group::storage_group(compaction_group_ptr cg)
-        : _main_cg(std::move(cg)) {
+        : _main_cg(cg)
+        , _async_gate(format("[storage_group {}.{} {}]", cg->as_table_state().schema()->ks_name(), cg->as_table_state().schema()->cf_name(), cg->group_id()))
+{
 }
 
 const dht::token_range& storage_group::token_range() const noexcept {
@@ -2429,6 +2431,7 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
     , _main_sstables(make_lw_shared<sstables::sstable_set>(t._compaction_strategy.make_sstable_set(t.schema())))
     , _maintenance_sstables(t.make_maintenance_sstable_set())
+    , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
 {
     _t._compaction_manager.add(as_table_state());
 }

@@ -56,7 +56,7 @@ class compaction_group {
     std::vector<sstables::shared_sstable> _sstables_compacted_but_not_deleted;
     seastar::condition_variable _staging_done_condition;
     // Gates async operations confined to a single group.
-    seastar::gate _async_gate;
+    seastar::named_gate _async_gate;
     bool _tombstone_gc_enabled = true;
 private:
     // Adds new sstable to the set of sstables
@@ -184,7 +184,7 @@ public:
         return _staging_done_condition;
     }
 
-    seastar::gate& async_gate() noexcept {
+    seastar::named_gate& async_gate() noexcept {
         return _async_gate;
     }
 
@@ -211,7 +211,7 @@ class storage_group {
     // eventually have all their data moved into main group.
     std::vector<compaction_group_ptr> _merging_groups;
     std::vector<compaction_group_ptr> _split_ready_groups;
-    seastar::gate _async_gate;
+    seastar::named_gate _async_gate;
 private:
     bool splitting_mode() const {
         return !_split_ready_groups.empty();
@@ -220,7 +220,7 @@ private:
 public:
     storage_group(compaction_group_ptr cg);
 
-    seastar::gate& async_gate() {
+    seastar::named_gate& async_gate() {
         return _async_gate;
     }
 
