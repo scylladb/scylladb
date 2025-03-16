@@ -504,7 +504,7 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _key_cache(1024, 1min, slogger)
         , _enforce_authorization(false)
         , _enabled_servers{}
-        , _pending_requests{}
+        , _pending_requests("alternator::server::pending_requests")
         , _timeout_config(_proxy.data_dictionary().get_config())
       , _callbacks{
         {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req) {
