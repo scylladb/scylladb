@@ -2063,7 +2063,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
     if (!_background_msg.is_closed()) {
         co_await _background_msg.close();
     }
-    _background_msg = seastar::gate();
+    _background_msg = seastar::named_gate("gossiper");
     /* Ensure all shards have enabled gossip before starting the failure detector loop */
     co_await container().invoke_on_all([] (gms::gossiper& g) {
         g._enabled = true;

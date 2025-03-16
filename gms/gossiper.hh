@@ -116,7 +116,7 @@ private:
     bool _enabled = false;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
-    seastar::gate _background_msg;
+    seastar::named_gate _background_msg;
     std::unordered_map<locator::host_id, syn_msg_pending> _syn_handlers;
     std::unordered_map<locator::host_id, ack_msg_pending> _ack_handlers;
     // Map ip address and generation number
