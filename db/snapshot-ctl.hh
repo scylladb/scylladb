@@ -108,7 +108,7 @@ private:
     config _config;
     sharded<replica::database>& _db;
     seastar::rwlock _lock;
-    seastar::gate _ops;
+    seastar::named_gate _ops;
     shared_ptr<snapshot::task_manager_module> _task_manager_module;
     sstables::storage_manager& _storage_manager;
 
