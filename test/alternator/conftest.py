@@ -191,6 +191,8 @@ def dynamodbstreams(request):
 @pytest.fixture(scope="function", autouse=True)
 def dynamodb_test_connection(dynamodb, request, optional_rest_api):
     scylla_log(optional_rest_api, f'test/alternator: Starting {request.node.parent.name}::{request.node.name}', 'info')
+    if dynamodb_test_connection.scylla_crashed:
+        pytest.skip('Server down')
     yield
     try:
         # We want to run a do-nothing DynamoDB command. The health-check
@@ -199,9 +201,11 @@ def dynamodb_test_connection(dynamodb, request, optional_rest_api):
         response = requests.get(url, verify=False)
         assert response.ok
     except:
-        pytest.exit(f"Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}")
+        dynamodb_test_connection.scylla_crashed = True
+        pytest.fail(f'Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}')
     scylla_log(optional_rest_api, f'test/alternator: Ended {request.node.parent.name}::{request.node.name}', 'info')
 
+dynamodb_test_connection.scylla_crashed = False
 
 # "test_table" fixture: Create and return a temporary table to be used in tests
 # that need a table to work on. The table is automatically deleted at the end.
