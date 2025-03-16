@@ -41,7 +41,7 @@ class server : public peering_sharded_service<server> {
     key_cache _key_cache;
     utils::updateable_value<bool> _enforce_authorization;
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server>, 2> _enabled_servers;
-    gate _pending_requests;
+    named_gate _pending_requests;
     // In some places we will need a CQL updateable_timeout_config object even
     // though it isn't really relevant for Alternator which defines its own
     // timeouts separately. We can create this object only once.
