@@ -27,6 +27,7 @@ public:
 };
 
 class default_retry_strategy : public retry_strategy {
+protected:
     unsigned _max_retries;
     unsigned _scale_factor;
 
