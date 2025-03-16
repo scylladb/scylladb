@@ -2148,8 +2148,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     });
             }).get();
 
+<<<<<<< HEAD
             const auto generation_number = gms::generation_type(sys_ks.local().increment_and_get_generation().get());
 
+||||||| parent of f269480f53 (main: add checkpoint before joining cluster)
+=======
+            checkpoint(stop_signal, "join cluster");
+>>>>>>> f269480f53 (main: add checkpoint before joining cluster)
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(sys_dist_ks, proxy, service::start_hint_manager::yes, generation_number);
             }).get();
