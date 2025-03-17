@@ -55,6 +55,7 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
+<<<<<<< HEAD
     parser.addoption('--host', action='store', default='localhost',
                      help='CQL server host to connect to')
     parser.addoption('--port', action='store', default='9042',
@@ -65,6 +66,13 @@ def pytest_addoption(parser):
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
                         help='password for authentication')
+||||||| parent of d3cb873532 (test.py: add --run-internet-dependent-tests)
+    add_cql_connection_options(parser)
+=======
+    add_cql_connection_options(parser)
+    parser.addoption('--skip-internet-dependent-tests', action='store_true',
+                     help='Skip tests which depend on artifacts from the internet')
+>>>>>>> d3cb873532 (test.py: add --run-internet-dependent-tests)
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
                           'with logs')
