@@ -94,4 +94,6 @@ public:
     static future<> process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sstring ks_name, sstring cf_name);
 };
 
+future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
+
 }
