@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "schema/schema_fwd.hh"
 #include "utils/assert.hh"
 #include <seastar/core/sharded.hh>
 
@@ -33,9 +34,10 @@ schema_registry_entry::~schema_registry_entry() {
     }
 }
 
-schema_registry_entry::schema_registry_entry(table_schema_version v, schema_registry& r)
+schema_registry_entry::schema_registry_entry(table_schema_version v, std::optional<table_schema_version> b, schema_registry& r)
     : _state(state::INITIAL)
     , _version(v)
+    , _base_version(b)
     , _registry(r)
     , _sync_state(sync_state::NOT_SYNCED)
 {
@@ -43,7 +45,14 @@ schema_registry_entry::schema_registry_entry(table_schema_version v, schema_regi
         slogger.debug("Dropping {}", _version);
         SCYLLA_ASSERT(!_schema);
         try {
-            _registry._entries.erase(_version);
+            if (_base_version) {
+                if (_registry._entries.contains(_version) && _registry._entries.at(_version)->_base_version == _base_version) {
+                    _registry._entries.erase(_version);
+                }
+                _registry._view_entries.erase({_version, *_base_version});
+            } else {
+                _registry._entries.erase(_version);
+            }
         } catch (...) {
             slogger.error("Failed to erase schema version {}: {}", _version, std::current_exception());
         }
@@ -77,24 +86,35 @@ void schema_registry::attach_table(schema_registry_entry& e) noexcept {
 }
 
 schema_ptr schema_registry::learn(const schema_ptr& s) {
-    if (s->registry_entry()) {
-        return std::move(s);
-    }
-    auto i = _entries.find(s->version());
-    if (i != _entries.end()) {
-        schema_registry_entry& e = *i->second;
-        if (e._state == schema_registry_entry::state::LOADING) {
-            e.load(s);
-            attach_table(e);
+    auto learn_view_or_table = [&] (auto& entry_map, auto key) -> schema_ptr {
+        if (s->registry_entry()) {
+            return std::move(s);
         }
-        return e.get_schema();
+        auto i = entry_map.find(key);
+        if (i != entry_map.end()) {
+            schema_registry_entry& e = *i->second;
+            if (e._state == schema_registry_entry::state::LOADING) {
+                e.load(s);
+                attach_table(e);
+            }
+            return e.get_schema();
+        }
+        slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
+        std::optional<table_schema_version> base = s->is_view() ? std::make_optional(s->view_info()->base_info().base_schema()->version()) : std::nullopt;
+        auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), std::move(base), *this);
+        auto loaded_s = e_ptr->load(s);
+        attach_table(*e_ptr);
+        entry_map.emplace(key, e_ptr);
+        if (s->is_view()) {
+            _entries[s->version()] = e_ptr;
+        }
+        return loaded_s;
+    };
+    if (s->is_view()) {
+        return learn_view_or_table(_view_entries, std::make_pair(s->version(), s->view_info()->base_info().base_schema()->version()));
+    } else {
+        return learn_view_or_table(_entries, s->version());
     }
-    slogger.debug("Learning about version {} of {}.{}", s->version(), s->ks_name(), s->cf_name());
-    auto e_ptr = make_lw_shared<schema_registry_entry>(s->version(), *this);
-    auto loaded_s = e_ptr->load(s);
-    attach_table(*e_ptr);
-    _entries.emplace(s->version(), e_ptr);
-    return loaded_s;
 }
 
 schema_registry_entry& schema_registry::get_entry(table_schema_version v) const {
@@ -121,19 +141,29 @@ frozen_schema schema_registry::get_frozen(table_schema_version v) const {
     return get_entry(v).frozen();
 }
 
-future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader) {
-    auto i = _entries.find(v);
-    if (i == _entries.end()) {
-        auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
-        auto f = e_ptr->start_loading(loader);
-        _entries.emplace(v, e_ptr);
-        return f;
+future<schema_ptr> schema_registry::get_or_load(table_schema_version v, const async_schema_loader& loader, std::optional<table_schema_version> base) {
+    auto get_or_load_view_or_table = [&] (auto& entry_map, auto key) -> future<schema_ptr> {
+        auto i = entry_map.find(key);
+        if (i == entry_map.end()) {
+            auto e_ptr = make_lw_shared<schema_registry_entry>(v, base, *this);
+            auto f = e_ptr->start_loading(loader);
+            entry_map.emplace(key, e_ptr);
+            if (base) {
+                _entries[v] = e_ptr;
+            }
+            return f;
+        }
+        schema_registry_entry& e = *i->second;
+        if (e._state == schema_registry_entry::state::LOADING) {
+            return e._schema_promise.get_shared_future();
+        }
+        return make_ready_future<schema_ptr>(e.get_schema());
+    };
+    if (base) {
+        return get_or_load_view_or_table(_view_entries, std::make_pair(v, *base));
+    } else {
+        return get_or_load_view_or_table(_entries, v);
     }
-    schema_registry_entry& e = *i->second;
-    if (e._state == schema_registry_entry::state::LOADING) {
-        return e._schema_promise.get_shared_future();
-    }
-    return make_ready_future<schema_ptr>(e.get_schema());
 }
 
 schema_ptr schema_registry::get_or_null(table_schema_version v) const {
@@ -148,26 +178,37 @@ schema_ptr schema_registry::get_or_null(table_schema_version v) const {
     return e.get_schema();
 }
 
-schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loader& loader) {
-    auto i = _entries.find(v);
-    if (i == _entries.end()) {
-        auto e_ptr = make_lw_shared<schema_registry_entry>(v, *this);
-        auto s = e_ptr->load(loader(v));
-        attach_table(*e_ptr);
-        _entries.emplace(v, e_ptr);
-        return s;
+schema_ptr schema_registry::get_or_load(table_schema_version v, const schema_loader& loader, std::optional<table_schema_version> base) {
+    auto get_or_load_view_or_table = [&] (auto& entry_map, auto key) -> schema_ptr {
+        auto i = entry_map.find(key);
+        if (i == entry_map.end()) {
+            auto e_ptr = make_lw_shared<schema_registry_entry>(v, base, *this);
+            auto s = e_ptr->load(loader(v));
+            attach_table(*e_ptr);
+            entry_map.emplace(key, e_ptr);
+            if (base) {
+                _entries[v] = e_ptr;
+            }
+            return s;
+        }
+        schema_registry_entry& e = *i->second;
+        if (e._state == schema_registry_entry::state::LOADING) {
+            auto s = e.load(loader(v));
+            attach_table(e);
+            return s;
+        }
+        return e.get_schema();
+    };
+    if (base) {
+        return get_or_load_view_or_table(_view_entries, std::make_pair(v, *base));
+    } else {
+        return get_or_load_view_or_table(_entries, v);
     }
-    schema_registry_entry& e = *i->second;
-    if (e._state == schema_registry_entry::state::LOADING) {
-        auto s = e.load(loader(v));
-        attach_table(e);
-        return s;
-    }
-    return e.get_schema();
 }
 
 void schema_registry::clear() {
     _entries.clear();
+    _view_entries.clear();
 }
 
 schema_ptr schema_registry_entry::load(base_and_view_schemas fs) {
@@ -258,10 +299,6 @@ frozen_schema schema_registry_entry::frozen() const {
     return *_frozen_schema;
 }
 
-void schema_registry_entry::update_base_schema(schema_ptr s) {
-    _base_schema = s;
-}
-
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
     switch (_sync_state) {
         case schema_registry_entry::sync_state::SYNCED:
@@ -336,13 +373,10 @@ schema_ptr global_schema_ptr::get() const {
         return _ptr;
     } else {
         auto registered_schema = [](const schema_registry_entry& e, std::optional<schema_ptr> base_schema = std::nullopt) -> schema_ptr {
-            schema_ptr ret = local_schema_registry().get_or_null(e.version());
-            if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e, &base_schema](table_schema_version) -> base_and_view_schemas {
-                    return {e.frozen(), base_schema};
-                });
-            }
-            return ret;
+            std::optional<table_schema_version> base_schema_version = base_schema ? std::make_optional(base_schema.value()->version()) : std::nullopt;
+            return local_schema_registry().get_or_load(e.version(), [&e, &base_schema](table_schema_version) -> base_and_view_schemas {
+                return {e.frozen(), base_schema};
+            }, base_schema_version);
         };
 
         std::optional<schema_ptr> registered_bs;
@@ -380,7 +414,7 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
                 } else {
                     return {frozen_schema(s)};
                 }
-            });
+            }, s->is_view() ? std::make_optional(s->view_info()->base_info().base_schema()->version()) : std::nullopt);
         }
     };
 

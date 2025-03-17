@@ -2057,7 +2057,7 @@ schema_ptr schema::get_reversed() const {
             return {frozen_schema(s), s->view_info()->base_info().base_schema()};
         }
         return {frozen_schema(s)};
-    });
+    }, is_view() ? std::make_optional(view_info()->base_info().base_schema()->version()) : std::nullopt);
 }
 
 raw_view_info::raw_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause)
