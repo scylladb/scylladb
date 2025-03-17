@@ -920,6 +920,7 @@ public:
 
 compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
+    , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
@@ -956,6 +957,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
 
 compaction_manager::compaction_manager(tasks::task_manager& tm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
+    , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))

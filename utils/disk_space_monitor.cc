@@ -27,6 +27,7 @@ disk_space_monitor::disk_space_monitor(abort_source& as, std::filesystem::path d
         _as.request_abort();
         _poll_cv.broadcast();
     }))
+    , _signal_barrier("disk_space_monitor::signal_barrier")
     , _data_dir(std::move(data_dir))
     , _cfg(std::move(cfg))
 {
