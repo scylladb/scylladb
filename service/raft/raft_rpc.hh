@@ -27,7 +27,7 @@ protected:
     raft::server_id _my_id;                     // Raft server id of this node.
     netw::messaging_service& _messaging;
     shared_ptr<raft::failure_detector> _failure_detector;
-    seastar::gate _shutdown_gate;
+    seastar::named_gate _shutdown_gate;
 
     // Limits the total memory usage of raft::append_request messages that are currently being sent
     seastar::semaphore _append_entries_semaphore;
