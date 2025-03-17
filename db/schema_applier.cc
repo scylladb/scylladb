@@ -125,6 +125,15 @@ static std::optional<table_id> table_id_from_mutations(const schema_mutations& s
     return table_id(table_row.get_nonnull<utils::UUID>("id"));
 }
 
+static std::optional<table_id> base_id_from_mutations(const schema_mutations& sm) {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    if (table_rs.empty()) {
+        return std::nullopt;
+    }
+    const query::result_set_row& table_row = table_rs.row(0);
+    return table_id(table_row.get_nonnull<utils::UUID>("base_table_id"));
+}
+
 static
 future<std::map<table_id, schema_mutations>>
 read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names, table_kind kind,
@@ -210,6 +219,34 @@ static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, 
         const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
         return row.get_nonnull<sstring>(name);
     }) | std::ranges::to<std::vector>();
+}
+
+static
+future<std::map<table_id, schema_mutations>>
+read_views_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::map<table_id, schema_mutations>& base_tables,
+                          const std::unordered_map<sstring, table_selector>& tables_per_keyspace)
+{
+    if (proxy.local().local_db().features().immutable_base_info) {
+        co_return std::map<table_id, schema_mutations>{};
+    }
+    std::map<table_id, schema_mutations> result;
+
+    for (auto&& [keyspace_name, sel] : tables_per_keyspace) {
+        if (!sel.tables.contains(table_kind::table)) {
+            continue;
+        }
+        for (auto&& n : co_await read_table_names_of_keyspace(proxy, keyspace_name, get_table_holder(table_kind::view))) {
+            auto vqn = qualified_name(keyspace_name, n);
+            auto vmuts = co_await read_table_mutations(proxy, vqn, get_table_holder(table_kind::view));
+            auto base_id = base_id_from_mutations(vmuts);
+            if (base_id && base_tables.contains(*base_id)) {
+                if (auto vid = table_id_from_mutations(vmuts)) {
+                    result.emplace(std::move(*vid), std::move(vmuts));
+                }
+            }
+        }
+    }
+    co_return result;
 }
 
 // Applies deletion of the "version" column to system_schema.scylla_tables mutation rows
@@ -566,7 +603,8 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm));
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
+    bool need_reload_views = reload || !proxy.local().local_db().features().immutable_base_info;
+    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), need_reload_views, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -808,8 +846,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
     auto&& old_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
     auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
+    auto&& old_views = co_await read_views_for_keyspaces(proxy, old_column_families, affected_tables);
     auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
+    old_views.merge(co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables));
     auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
     auto old_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
@@ -820,8 +859,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
     auto&& new_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
     auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
+    auto&& new_views = co_await read_views_for_keyspaces(proxy, new_column_families, affected_tables);
     auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
+    new_views.merge(co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables));
     auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
     auto new_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
