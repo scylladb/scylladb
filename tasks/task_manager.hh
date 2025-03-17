@@ -318,7 +318,7 @@ public:
         task_manager& _tm;
         std::string _name;
         tasks_collection _tasks;
-        gate _gate;
+        named_gate _gate;
         uint64_t _sequence_number = 0;
     private:
         abort_source _as;
@@ -331,7 +331,7 @@ public:
         task_manager& get_task_manager() noexcept;
         const task_manager& get_task_manager() const noexcept;
         seastar::abort_source& abort_source() noexcept;
-        gate& async_gate() noexcept;
+        named_gate& async_gate() noexcept;
         const std::string& get_name() const noexcept;
         task_manager::task_map& get_local_tasks() noexcept;
         const task_manager::task_map& get_local_tasks() const noexcept;
