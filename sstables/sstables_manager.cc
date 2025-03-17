@@ -44,6 +44,7 @@ sstables_manager::sstables_manager(
     , _maintenance_sg(std::move(maintenance_sg))
     , _compressor_factory(compressor_factory)
     , _abort(abort)
+    , _signal_gate("sstables_manager::signal")
 {
     _components_reloader_status = components_reclaim_reload_fiber();
 }
@@ -327,7 +328,7 @@ future<> sstables_manager::delete_atomically(std::vector<shared_sstable> ssts) {
     }
 
     // All sstables here belong to the same table, thus they do live
-    // in the same storage so it's OK to get the deleter from the
+    // in the same storage so it's OK to get the deleter from _signal_mana
     // front element. The deleter implementation is welcome to check
     // that sstables from the vector really live in it.
     auto& storage = ssts.front()->get_storage();
