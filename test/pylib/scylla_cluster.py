@@ -22,6 +22,7 @@ import time
 import traceback
 from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn, \
     Awaitable
+import urllib
 import uuid
 from io import BufferedWriter
 
@@ -39,6 +40,9 @@ import signal
 import glob
 import errno
 import re
+import platform
+import contextlib
+import fcntl
 
 import psutil
 
@@ -1799,6 +1803,58 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         return self.cluster.server_get_process_status(server_id)
 
+@asynccontextmanager
+async def with_file_lock(lock_path: pathlib.Path) -> AsyncIterator[None]:
+    with open(lock_path, 'w') as f:
+        try:
+            await asyncio.to_thread(fcntl.flock, f, fcntl.LOCK_EX)
+            yield
+        finally:
+            await asyncio.to_thread(fcntl.flock, f, fcntl.LOCK_UN)
+
+async def get_scylla_2025_1_executable(build_mode: str) -> pathlib.Path:
+    async def run_process(cmd, **kwargs):
+        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+        await proc.communicate()
+        assert proc.returncode == 0
+
+    is_debug = build_mode == 'debug' or build_mode == 'sanitize'
+    package = "scylla-debug" if is_debug else "scylla"
+    arch = platform.machine()
+    url = f'https://downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/{package}-2025.1.0-0.20250325.9dca28d2b818.{arch}.tar.gz'
+
+    archive_filename = urllib.parse.urlparse(url).path.split("/")[-1]
+
+    xdg_cache_dir = pathlib.Path(os.getenv("XDG_CACHE_HOME", str(pathlib.Path.home() / ".cache")))
+    cache_dir = (xdg_cache_dir / "scylladb" / "test.py" / archive_filename)
+    cache_dir.mkdir(exist_ok=True, parents=True)
+
+    archive_path = cache_dir/archive_filename
+    unpack_dir = cache_dir/"unpacked"
+    install_dir = cache_dir/"installed"
+
+    lock_file = cache_dir / "lock"
+    downloaded_marker = cache_dir / "downloaded.success"
+    unpacked_marker = cache_dir / "unpacked.success"
+    installed_marker = cache_dir / "installed.success"
+
+    async with with_file_lock(lock_file):
+        if not installed_marker.exists():
+            if not unpacked_marker.exists():
+                if not downloaded_marker.exists():
+                    archive_path.unlink(missing_ok=True)
+                    await run_process(["curl", "--silent", "--show-error", "--output", archive_path, url])
+                    downloaded_marker.touch()
+                shutil.rmtree(unpack_dir, ignore_errors=True)
+                unpack_dir.mkdir(exist_ok=True, parents=True)
+                await run_process(["tar", "-xf", archive_path], cwd=unpack_dir)
+                unpacked_marker.touch()
+            shutil.rmtree(install_dir, ignore_errors=True)
+            install_dir.mkdir(exist_ok=True, parents=True)
+            await run_process(["bash", "./install.sh", "--without-systemd", "--nonroot", "--prefix", install_dir], cwd=unpack_dir/"scylla")
+            installed_marker.touch()
+
+    return install_dir/"bin"/"scylla"
 
 @asynccontextmanager
 async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \
