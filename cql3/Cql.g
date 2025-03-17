@@ -709,17 +709,23 @@ batchStatement returns [std::unique_ptr<cql3::statements::raw::batch_statement> 
     : K_BEGIN
       ( K_UNLOGGED { type = btype::UNLOGGED; } | K_COUNTER { type = btype::COUNTER; } )?
       K_BATCH ( usingClause[attrs] )?
-          ( s=batchStatementObjective ';'? { statements.push_back(std::move(s)); } )*
+          ( s=batchStatementObjective ';'?
+              {
+                  auto&& stmt = *$s.statement;
+                  stmt->add_raw(sstring{$s.text});
+                  statements.push_back(std::move(stmt));
+              } )*
       K_APPLY K_BATCH
       {
           $expr = std::make_unique<cql3::statements::raw::batch_statement>(type, std::move(attrs), std::move(statements));
       }
     ;
 
-batchStatementObjective returns [std::unique_ptr<cql3::statements::raw::modification_statement> statement]
-    : i=insertStatement  { $statement = std::move(i); }
-    | u=updateStatement  { $statement = std::move(u); }
-    | d=deleteStatement  { $statement = std::move(d); }
+batchStatementObjective returns [::lw_shared_ptr<std::unique_ptr<cql3::statements::raw::modification_statement>> statement]
+    @init { using original_ret_type = std::unique_ptr<cql3::statements::raw::modification_statement>; }
+    : i=insertStatement  { $statement = make_lw_shared<original_ret_type>(std::move(i)); }
+    | u=updateStatement  { $statement = make_lw_shared<original_ret_type>(std::move(u)); }
+    | d=deleteStatement  { $statement = make_lw_shared<original_ret_type>(std::move(d)); }
     ;
 
 dropAggregateStatement returns [std::unique_ptr<cql3::statements::drop_aggregate_statement> expr]
