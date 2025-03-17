@@ -10,6 +10,7 @@ target_sources(scylla_encryption
     encryption.cc
     encryption_config.cc
     azure_host.cc
+    azure_key_provider.cc
     gcp_host.cc
     gcp_key_provider.cc
     kmip_host.cc
