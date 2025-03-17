@@ -1160,6 +1160,7 @@ future<> persistent_discovery::stop() {
 persistent_discovery::persistent_discovery(discovery_peer my_addr, const peer_list& seeds, cql3::query_processor& qp)
     : _discovery{std::move(my_addr), seeds}
     , _qp{qp}
+    , _gate("raft_group0::persistent_discovery")
 {
     for (auto& addr: seeds) {
         group0_log.debug("discovery: seed peer: id={}, info={}", addr.id, addr.ip_addr);

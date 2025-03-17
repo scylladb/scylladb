@@ -36,7 +36,7 @@ using can_vote = bool_class<can_vote_tag>;
 class persistent_discovery {
     discovery _discovery;
     cql3::query_processor& _qp;
-    seastar::gate _gate;
+    seastar::named_gate _gate;
 
 public:
     using peer_list = discovery::peer_list;
