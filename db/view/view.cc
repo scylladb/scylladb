@@ -3026,7 +3026,131 @@ void view_builder::init_virtual_table() {
 }
 
 // Called in the context of a seastar::thread.
-class view_builder::consumer {
+class view_consumer {
+protected:
+    shared_ptr<view_update_generator> _gen;
+    gc_clock::time_point _now;
+    std::vector<view_ptr> _views_to_build;
+
+    std::deque<mutation_fragment_v2> _fragments;
+    // The compact_for_query<> that feeds this consumer is already configured
+    // to feed us up to view_builder::batchsize (128) rows and not an entire
+    // partition. Still, if rows contain large blobs, saving 128 of them in
+    // _fragments may be too much. So we want to track _fragment's memory
+    // usage, and flush the _fragments if it has grown too large.
+    // Additionally, limiting _fragment's size also solves issue #4213:
+    // A single view mutation can be as large as the size of the base rows
+    // used to build it, and we cannot allow its serialized size to grow
+    // beyond our limit on mutation size (by default 32 MB).
+    size_t _fragments_memory_usage = 0;
+
+    virtual void check_for_built_views() = 0;
+    virtual void load_views_to_build() = 0;
+
+    virtual void check_abort_source() = 0;
+    virtual bool stop_consuming() = 0;
+    virtual bool stop_consuming_end_of_partition() = 0;
+
+    virtual dht::decorated_key& get_current_key() = 0;
+    virtual void set_current_key(dht::decorated_key key) = 0;
+
+    virtual lw_shared_ptr<replica::table> base() = 0;
+    virtual mutation_reader& reader() = 0;
+    virtual reader_permit& permit() = 0;
+
+    void add_fragment(auto&& fragment) {
+        _fragments_memory_usage += fragment.memory_usage(*reader().schema());
+        _fragments.emplace_back(*reader().schema(), permit(), std::move(fragment));
+        if (_fragments_memory_usage > view_builder::batch_memory_max) {
+            // Although we have not yet completed the batch of base rows that
+            // compact_for_query<> planned for us (view_builder::batchsize),
+            // we've still collected enough rows to reach sizeable memory use,
+            // so let's flush these rows now.
+            flush_fragments();
+        }
+    }
+
+    void flush_fragments() {
+        inject_failure("view_builder_flush_fragments");
+        check_abort_source();
+        if (!_fragments.empty()) {
+            _fragments.emplace_front(*reader().schema(), permit(), partition_start(get_current_key(), tombstone()));
+            auto base_schema = base()->schema();
+            auto views = with_base_info_snapshot(_views_to_build);
+            auto fragemnts_reader = make_mutation_reader_from_fragments(reader().schema(), permit(), std::move(_fragments));
+            auto close_reader = defer([&fragemnts_reader] { fragemnts_reader.close().get(); });
+            reader().upgrade_schema(base_schema);
+            _gen->populate_views(
+                    *base(),
+                    std::move(views),
+                    get_current_key().token(),
+                    std::move(fragemnts_reader),
+                    _now).get();
+            close_reader.cancel();
+            _fragments.clear();
+            _fragments_memory_usage = 0;
+        }
+    }
+
+public:
+    view_consumer(shared_ptr<view_update_generator> gen, gc_clock::time_point now)
+            : _gen(std::move(gen))
+            , _now(now) {}
+
+    stop_iteration consume_new_partition(const dht::decorated_key& dk) {
+        inject_failure("view_builder_consume_new_partition");
+        if (dk.key().is_empty()) {
+            on_internal_error(vlogger, format("Trying to consume empty partition key {}", dk));
+        }
+        set_current_key(std::move(dk));
+        check_for_built_views();
+        _views_to_build.clear();
+        load_views_to_build();
+        return stop_iteration(_views_to_build.empty());
+    }
+
+    stop_iteration consume(tombstone) {
+        inject_failure("view_builder_consume_tombstone");
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
+        inject_failure("view_builder_consume_static_row");
+        if (stop_consuming()) {
+            return stop_iteration::yes;
+        }
+
+        add_fragment(std::move(sr));
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_live) {
+        inject_failure("view_builder_consume_clustering_row");
+        if (!is_live) {
+            return stop_iteration::no;
+        }
+        if (stop_consuming()) {
+            return stop_iteration::yes;
+        }
+
+        add_fragment(std::move(cr));
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume(range_tombstone_change&&) {
+        inject_failure("view_builder_consume_range_tombstone");
+        return stop_iteration::no;
+    }
+
+    stop_iteration consume_end_of_partition() {
+        inject_failure("view_builder_consume_end_of_partition");
+        flush_fragments();
+        return stop_iteration(stop_consuming_end_of_partition());
+    }
+};
+
+// Called in the context of a seastar::thread.
+class view_builder::consumer : public view_consumer {
 public:
     struct built_views {
         build_step& step;
@@ -3055,35 +3179,11 @@ public:
 
 private:
     view_builder& _builder;
-    shared_ptr<view_update_generator> _gen;
     build_step& _step;
     built_views _built_views;
-    gc_clock::time_point _now;
-    std::vector<view_ptr> _views_to_build;
-    std::deque<mutation_fragment_v2> _fragments;
-    // The compact_for_query<> that feeds this consumer is already configured
-    // to feed us up to view_builder::batchsize (128) rows and not an entire
-    // partition. Still, if rows contain large blobs, saving 128 of them in
-    // _fragments may be too much. So we want to track _fragment's memory
-    // usage, and flush the _fragments if it has grown too large.
-    // Additionally, limiting _fragment's size also solves issue #4213:
-    // A single view mutation can be as large as the size of the base rows
-    // used to build it, and we cannot allow its serialized size to grow
-    // beyond our limit on mutation size (by default 32 MB).
-    size_t _fragments_memory_usage = 0;
-public:
-    consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
-            : _builder(builder)
-            , _gen(std::move(gen))
-            , _step(step)
-            , _built_views{step}
-            , _now(now) {
-        if (!step.current_key.key().is_empty(*_step.reader.schema())) {
-            load_views_to_build();
-        }
-    }
 
-    void load_views_to_build() {
+protected:
+    virtual void load_views_to_build() override {
         inject_failure("view_builder_load_views");
         for (auto&& vs : _step.build_status) {
             if (_step.current_token() >= vs.next_token) {
@@ -3098,8 +3198,7 @@ public:
             }
         }
     }
-
-    void check_for_built_views() {
+    virtual void check_for_built_views() override {
         inject_failure("view_builder_check_for_built_views");
         for (auto it = _step.build_status.begin(); it != _step.build_status.end();) {
             // A view starts being built at token t1. Due to resharding, that may not necessarily be a
@@ -3116,89 +3215,42 @@ public:
         }
     }
 
-    stop_iteration consume_new_partition(const dht::decorated_key& dk) {
-        inject_failure("view_builder_consume_new_partition");
-        if (dk.key().is_empty()) {
-            on_internal_error(vlogger, format("Trying to consume empty partition key {}", dk));
-        }
-        _step.current_key = std::move(dk);
-        check_for_built_views();
-        _views_to_build.clear();
-        load_views_to_build();
-        return stop_iteration(_views_to_build.empty());
-    }
-
-    stop_iteration consume(tombstone) {
-        inject_failure("view_builder_consume_tombstone");
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(static_row&& sr, tombstone, bool) {
-        inject_failure("view_builder_consume_static_row");
-        if (_views_to_build.empty() || _builder._as.abort_requested()) {
-            return stop_iteration::yes;
-        }
-
-        add_fragment(std::move(sr));
-        return stop_iteration::no;
-    }
-
-    stop_iteration consume(clustering_row&& cr, row_tombstone, bool is_live) {
-        inject_failure("view_builder_consume_clustering_row");
-        if (!is_live) {
-            return stop_iteration::no;
-        }
-        if (_views_to_build.empty() || _builder._as.abort_requested()) {
-            return stop_iteration::yes;
-        }
-
-        add_fragment(std::move(cr));
-        return stop_iteration::no;
-    }
-
-    void add_fragment(auto&& fragment) {
-        _fragments_memory_usage += fragment.memory_usage(*_step.reader.schema());
-        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(fragment));
-        if (_fragments_memory_usage > batch_memory_max) {
-            // Although we have not yet completed the batch of base rows that
-            // compact_for_query<> planned for us (view_builder::batchsize),
-            // we've still collected enough rows to reach sizeable memory use,
-            // so let's flush these rows now.
-            flush_fragments();
-        }
-    }
-
-    stop_iteration consume(range_tombstone_change&&) {
-        inject_failure("view_builder_consume_range_tombstone");
-        return stop_iteration::no;
-    }
-
-    void flush_fragments() {
-        inject_failure("view_builder_flush_fragments");
+    virtual void check_abort_source() override {
         _builder._as.check();
-        if (!_fragments.empty()) {
-            _fragments.emplace_front(*_step.reader.schema(), _builder._permit, partition_start(_step.current_key, tombstone()));
-            auto base_schema = _step.base->schema();
-            auto views = with_base_info_snapshot(_views_to_build);
-            auto reader = make_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
-            auto close_reader = defer([&reader] { reader.close().get(); });
-            reader.upgrade_schema(base_schema);
-            _gen->populate_views(
-                    *_step.base,
-                    std::move(views),
-                    _step.current_token(),
-                    std::move(reader),
-                    _now).get();
-            close_reader.cancel();
-            _fragments.clear();
-            _fragments_memory_usage = 0;
-        }
+    }
+    virtual bool stop_consuming() override {
+        return _views_to_build.empty() || _builder._as.abort_requested();
+    }
+    virtual bool stop_consuming_end_of_partition() override {
+        return _step.build_status.empty();
     }
 
-    stop_iteration consume_end_of_partition() {
-        inject_failure("view_builder_consume_end_of_partition");
-        flush_fragments();
-        return stop_iteration(_step.build_status.empty());
+    virtual dht::decorated_key& get_current_key() override {
+        return _step.current_key;
+    }
+    virtual void set_current_key(dht::decorated_key key) override {
+        _step.current_key = std::move(key);
+    }
+
+    virtual lw_shared_ptr<replica::table> base() override {
+        return _step.base;
+    }
+    virtual mutation_reader& reader() override {
+        return _step.reader;
+    }
+    virtual reader_permit& permit() override {
+        return _builder._permit;
+    }
+
+public:
+    consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
+            : view_consumer(std::move(gen), now)
+            , _builder(builder)
+            , _step(step)
+            , _built_views{step} {
+        if (!step.current_key.key().is_empty(*_step.reader.schema())) {
+            load_views_to_build();
+        }
     }
 
     // Must be called in a seastar thread.
