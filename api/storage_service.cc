@@ -1493,7 +1493,7 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
                                 if (!cp->options().contains(compression_parameters::SSTABLE_COMPRESSION)) {
                                     ss::mapper e;
                                     e.key = compression_parameters::SSTABLE_COMPRESSION;
-                                    e.value = cp->name();
+                                    e.value = sstring(cp->name());
                                     nm.attributes.push(std::move(e));
                                 }
                                 info.extended_properties.push(std::move(nm));

@@ -14,46 +14,35 @@
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
 
-sstring compressor::make_name(std::string_view short_name) {
-    return seastar::format("org.apache.cassandra.io.compress.{}", short_name);
-}
-
 class lz4_processor: public compressor {
 public:
-    using compressor::compressor;
-
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+    algorithm get_algorithm() const override;
 };
 
 class snappy_processor: public compressor {
 public:
-    using compressor::compressor;
-
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+    algorithm get_algorithm() const override { return algorithm::snappy; }
 };
 
 class deflate_processor: public compressor {
 public:
-    using compressor::compressor;
-
     size_t uncompress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress(const char* input, size_t input_len, char* output,
                     size_t output_len) const override;
     size_t compress_max_size(size_t input_len) const override;
+    algorithm get_algorithm() const override { return algorithm::deflate; }
 };
-
-compressor::compressor(sstring name)
-    : _name(std::move(name))
-{}
 
 std::set<sstring> compressor::option_names() const {
     return {};
@@ -63,12 +52,18 @@ std::map<sstring, sstring> compressor::options() const {
     return {};
 }
 
+std::string compressor::name() const {
+    auto result = std::string(compression_parameters::name_prefix);
+    result.append(compression_parameters::algorithm_to_name(get_algorithm()));
+    return result;
+}
+
 compressor::ptr_type compressor::create(const sstring& name, const opt_getter& opts) {
     if (name.empty()) {
         return {};
     }
 
-    qualified_name qn(make_name(""), name);
+    qualified_name qn(compression_parameters::name_prefix, name);
 
     for (auto& c : { lz4, snappy, deflate }) {
         if (c->name() == static_cast<const sstring&>(qn)) {
@@ -93,9 +88,9 @@ shared_ptr<compressor> compressor::create(const std::map<sstring, sstring>& opti
     return {};
 }
 
-thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>(make_name("LZ4Compressor"));
-thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>(make_name("SnappyCompressor"));
-thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>(make_name("DeflateCompressor"));
+thread_local const shared_ptr<compressor> compressor::lz4 = ::make_shared<lz4_processor>();
+thread_local const shared_ptr<compressor> compressor::snappy = ::make_shared<snappy_processor>();
+thread_local const shared_ptr<compressor> compressor::deflate = ::make_shared<deflate_processor>();
 
 const sstring compression_parameters::SSTABLE_COMPRESSION = "sstable_compression";
 const sstring compression_parameters::CHUNK_LENGTH_KB = "chunk_length_in_kb";
@@ -112,6 +107,22 @@ compression_parameters::~compression_parameters()
 compression_parameters::compression_parameters(compressor_ptr c)
     : _compressor(std::move(c))
 {}
+
+std::string_view compression_parameters::algorithm_to_name(algorithm alg) {
+    switch (alg) {
+        case algorithm::lz4: return "LZ4Compressor";
+        case algorithm::deflate: return "DeflateCompressor";
+        case algorithm::snappy: return "SnappyCompressor";
+        case algorithm::zstd: return "ZstdCompressor";
+        case algorithm::none: abort();
+    }
+}
+
+std::string compression_parameters::algorithm_to_qualified_name(algorithm alg) {
+    auto result = std::string(name_prefix);
+    result.append(algorithm_to_name(alg));
+    return result;
+}
 
 compression_parameters::compression_parameters(const std::map<sstring, sstring>& options) {
     _compressor = compressor::create(options);
@@ -248,6 +259,10 @@ size_t lz4_processor::compress(const char* input, size_t input_len,
 
 size_t lz4_processor::compress_max_size(size_t input_len) const {
     return LZ4_COMPRESSBOUND(input_len) + 4;
+}
+
+auto lz4_processor::get_algorithm() const -> algorithm {
+    return algorithm::lz4;
 }
 
 size_t deflate_processor::uncompress(const char* input,
