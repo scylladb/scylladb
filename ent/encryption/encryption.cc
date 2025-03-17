@@ -44,6 +44,7 @@
 #include "kms_host.hh"
 #include "gcp_key_provider.hh"
 #include "gcp_host.hh"
+#include "azure_key_provider.hh"
 #include "azure_host.hh"
 #include "bytes.hh"
 #include "utils/class_registrator.hh"
@@ -71,6 +72,7 @@ static constexpr auto LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY = "LocalFileSystemK
 static constexpr auto KMIP_KEY_PROVIDER_FACTORY = "KmipKeyProviderFactory";
 static constexpr auto KMS_KEY_PROVIDER_FACTORY = "KmsKeyProviderFactory";
 static constexpr auto GCP_KEY_PROVIDER_FACTORY = "GcpKeyProviderFactory";
+static constexpr auto AZURE_KEY_PROVIDER_FACTORY = "AzureKeyProviderFactory";
 
 bytes base64_decode(const sstring& s, size_t off, size_t len) {
     if (off >= s.size()) {
@@ -331,6 +333,7 @@ public:
             map[KMIP_KEY_PROVIDER_FACTORY] = std::make_unique<kmip_key_provider_factory>();
             map[KMS_KEY_PROVIDER_FACTORY] = std::make_unique<kms_key_provider_factory>();
             map[GCP_KEY_PROVIDER_FACTORY] = std::make_unique<gcp_key_provider_factory>();
+            map[AZURE_KEY_PROVIDER_FACTORY] = std::make_unique<azure_key_provider_factory>();
 
             return map;
         }();
