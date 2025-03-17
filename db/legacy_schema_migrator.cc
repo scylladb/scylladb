@@ -561,7 +561,7 @@ public:
 
     future<> flush_schemas() {
         auto& db = _qp.db().real_database().container();
-        return replica::database::flush_tables_on_all_shards(db, db::schema_tables::NAME, db::schema_tables::all_table_names(schema_features::full()));
+        return replica::database::flush_tables_on_all_shards(db, db::schema_tables::all_table_infos(schema_features::full()));
     }
 
     future<> migrate() {

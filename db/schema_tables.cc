@@ -187,9 +187,9 @@ static future<> save_system_schema_to_keyspace(cql3::query_processor& qp, const 
     auto ksm = ks.metadata();
 
     // delete old, possibly obsolete entries in schema tables
-    co_await coroutine::parallel_for_each(all_table_names(schema_features::full()), [&qp, ksm] (sstring cf) -> future<> {
+    co_await coroutine::parallel_for_each(all_table_infos(schema_features::full()), [&qp, ksm] (table_info ti) -> future<> {
         auto deletion_timestamp = system_keyspace::schema_creation_timestamp() - 1;
-        co_await qp.execute_internal(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, cf,
+        co_await qp.execute_internal(format("DELETE FROM {}.{} USING TIMESTAMP {} WHERE keyspace_name = ?", NAME, ti.name,
             deletion_timestamp), { ksm->name() }, cql3::query_processor::cache_internal::yes).discard_result();
     });
     {
@@ -714,10 +714,10 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
 {
     using mutations_generator = coroutine::experimental::generator<mutation>;
 
-    auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (sstring table) mutable -> mutations_generator {
+    auto map = [&proxy, features, accept_keyspace = std::move(accept_keyspace)] (table_info table) mutable -> mutations_generator {
         auto& db = proxy.local().get_db();
-        auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
-        auto s = db.local().find_schema(NAME, table);
+        auto s = db.local().find_schema(table.id);
+        auto rs = co_await db::system_keyspace::query_mutations(db, s);
         for (auto&& p : rs->partitions()) {
             auto partition_key = value_cast<sstring>(utf8_type->deserialize(::partition_key(p.mut().key()).get_component(*s, 0)));
             if (!accept_keyspace(partition_key)) {
@@ -728,7 +728,7 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
         }
     };
     auto hash = md5_hasher();
-    auto tables = all_table_names(features);
+    auto tables = all_table_infos(features);
     {
         for (auto& table: tables) {
             auto gen_mutations = map(table);
@@ -816,10 +816,10 @@ future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distri
 
 future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
 {
-    auto map = [&proxy, features] (sstring table) -> future<std::vector<canonical_mutation>> {
+    auto map = [&proxy, features] (table_info table) -> future<std::vector<canonical_mutation>> {
         auto& db = proxy.local().get_db();
-        auto rs = co_await db::system_keyspace::query_mutations(db, NAME, table);
-        auto s = db.local().find_schema(NAME, table);
+        auto s = db.local().find_schema(table.id);
+        auto rs = co_await db::system_keyspace::query_mutations(db, s);
         std::vector<canonical_mutation> results;
         results.reserve(rs->partitions().size());
         for (auto&& p : rs->partitions()) {
@@ -837,7 +837,7 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
         std::move(mutations.begin(), mutations.end(), std::back_inserter(result));
         return std::move(result);
     };
-    co_return co_await map_reduce(all_table_names(features), map, std::vector<canonical_mutation>{}, reduce);
+    co_return co_await map_reduce(all_table_infos(features), map, std::vector<canonical_mutation>{}, reduce);
 }
 
 std::vector<mutation>
@@ -2670,9 +2670,9 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     return result;
 }
 
-std::vector<sstring> all_table_names(schema_features features) {
+std::vector<table_info> all_table_infos(schema_features features) {
     return all_tables(features)
-        | std::views::transform([] (auto schema) { return schema->cf_name(); })
+        | std::views::transform([] (auto schema) { return table_info{ schema->cf_name(), schema->id() }; })
         | std::ranges::to<std::vector>();
 }
 
