@@ -6848,7 +6848,7 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     // If the timer is triggered, it will spawn a discarded future which triggers
     // abort sources on all shards. We need to make sure that this future
     // completes before exiting - we use a gate for that.
-    seastar::gate timer_gate;
+    seastar::named_gate timer_gate("wait_for_hint_sync_point::timer");
     seastar::timer<lowres_clock> t;
     t.set_callback([&timer_gate, &sources] {
         // The gate is waited on at the end of the wait_for_hint_sync_point function
