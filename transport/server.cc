@@ -630,14 +630,10 @@ void cql_server::connection::on_connection_close()
     _server._notifier->unregister_connection(this);
 }
 
-std::pair<net::inet_address, int> cql_server::connection::make_client_key(const service::client_state& cli_state) {
-    return {cli_state.get_client_address().addr(),
-            cli_state.get_client_port()};
-}
-
 client_data cql_server::connection::make_client_data() const {
     client_data cd;
-    std::tie(cd.ip, cd.port) = make_client_key(_client_state);
+    cd.ip = _client_state.get_client_address().addr();
+    cd.port = _client_state.get_client_port();
     cd.shard_id = this_shard_id();
     cd.protocol_version = _version;
     cd.driver_name = _client_state.get_driver_name();
