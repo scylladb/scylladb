@@ -681,7 +681,7 @@ future<> sstables_loader::download_task_impl::run() {
     });
     llog.debug("Streaming sstables from {}({}/{})", _endpoint, _bucket, _prefix);
     std::exception_ptr ex;
-    gate g;
+    named_gate g("sstables_loader::download_task_impl");
     try {
         _as.check();
 
