@@ -1058,7 +1058,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // for any tablet finishes, or fails and needs to be restarted.
     bool _tablets_ready = false;
 
-    seastar::gate _async_gate;
+    seastar::named_gate _async_gate;
 
     bool action_failed(background_action_holder& holder) const {
         return holder && holder->failed();
@@ -2906,6 +2906,7 @@ public:
         , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
+        , _async_gate("topology_coordinator")
     {}
 
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
