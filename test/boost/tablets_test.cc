@@ -8,6 +8,7 @@
 
 
 
+#include "locator/types.hh"
 #include <seastar/core/shard_id.hh>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
@@ -2122,9 +2123,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     // which is a proof that it doesn't stop due to active migrations.
 
     topology_builder topo(e);
-    auto host1 = topo.add_node(node_state::normal, 1);
-    auto host2 = topo.add_node(node_state::normal, 1);
-    auto host3 = topo.add_node(node_state::normal, 2);
+    auto host1 = topo.add_node(node_state::normal, 1, locator::endpoint_dc_rack{"dc1", "r1"});
+    auto host2 = topo.add_node(node_state::normal, 1, locator::endpoint_dc_rack{"dc1", "r1"});
+    auto host3 = topo.add_node(node_state::normal, 2, locator::endpoint_dc_rack{"dc1", "r2"});
 
     auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 4);
     auto table1 = add_table(e, ks_name).get();
@@ -2181,9 +2182,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
   do_with_cql_env_thread([] (auto& e) {
     topology_builder topo(e);
 
-    auto host1 = topo.add_node(node_state::normal, 1);
-    auto host2 = topo.add_node(node_state::normal, 1);
-    topo.add_node(node_state::normal, 2);
+    auto host1 = topo.add_node(node_state::normal, 1, locator::endpoint_dc_rack{"dc1", "r1"});
+    auto host2 = topo.add_node(node_state::normal, 1, locator::endpoint_dc_rack{"dc1", "r2"});
+    topo.add_node(node_state::normal, 2, locator::endpoint_dc_rack{"dc1", "r2"});
 
     auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 4);
     auto table1 = add_table(e, ks_name).get();
@@ -2224,10 +2225,10 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
     topology_builder topo(e);
 
     const auto shard_count = 2;
-    auto host1 = topo.add_node(node_state::normal, shard_count);
-    auto host2 = topo.add_node(node_state::normal, shard_count);
-    auto host3 = topo.add_node(node_state::normal, shard_count);
-    auto host4 = topo.add_node(node_state::normal, shard_count);
+    auto host1 = topo.add_node(node_state::normal, shard_count, locator::endpoint_dc_rack{"dc1", "r1"});
+    auto host2 = topo.add_node(node_state::normal, shard_count, locator::endpoint_dc_rack{"dc1", "r1"});
+    auto host3 = topo.add_node(node_state::normal, shard_count, locator::endpoint_dc_rack{"dc1", "r2"});
+    auto host4 = topo.add_node(node_state::normal, shard_count, locator::endpoint_dc_rack{"dc1", "r2"});
 
     auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 16);
     auto table1 = add_table(e, ks_name).get();
@@ -3218,8 +3219,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
 
-        topo.add_node(node_state::normal, 2);
-        topo.add_node(node_state::normal, 2);
+        topo.add_node(node_state::normal, 2, locator::endpoint_dc_rack{"dc1", "r1"});
+        topo.add_node(node_state::normal, 2, locator::endpoint_dc_rack{"dc1", "r2"});
 
         const size_t initial_tablets = 2;
         auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, initial_tablets);

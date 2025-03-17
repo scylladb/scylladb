@@ -8,7 +8,10 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "db/config.hh"
 #include "exceptions/exceptions.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/network_topology_strategy.hh"
 #include "utils/assert.hh"
 #include <unordered_set>
 #include <vector>
@@ -151,7 +154,9 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
 
     schema_ptr schema = validation::validate_column_family(db, _base_name.get_keyspace(), _base_name.get_column_family());
 
-    if (!db.features().views_with_tablets && db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
+    const locator::abstract_replication_strategy& ars = db.find_keyspace(keyspace()).get_replication_strategy();
+
+    if (!db.features().views_with_tablets && ars.uses_tablets()) {
         throw exceptions::invalid_request_exception(format("Materialized views are not supported on base tables with tablets"));
     }
     if (schema->is_counter()) {
@@ -173,6 +178,45 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
                 "used to TTL undelivered updates. Setting gc_grace_seconds "
                 "too low might cause undelivered updates to expire "
                 "before being replayed.", column_family(), _base_name.get_column_family()));
+    }
+
+    const bool restricted_keyspaces = db.get_config().rf_rack_valid_keyspaces();
+    // Technical note: `tools/schema_loader` uses this function, but does NOT provide an actually valid instance
+    //                 of `data_dictionary::database`. As a result, we may not have access to the underlying
+    //                 `locator::topology`, which is crucial for this logic.
+    //                 However, since in "normal" circumstances, i.e. when it's actually Scylla that calls this function,
+    //                 we should always be able to access this pointer. Hence this form of `if`.
+    if (restricted_keyspaces && ars.uses_tablets() && db.real_database_ptr()) {
+        // We want to restrict materialized views to RF-rack-valid keyspaces.
+        //
+        // Long story short, when using tablets, we want to ensure that:
+        // * pairing the base and view replicas occurs within the same rack,
+        // * there's only one replica per rack.
+        //
+        // You can find more context about the pre-existing problems and solutions
+        // with materialized views and tablets in: scylladb/scylladb#23030.
+        //
+        // Moreover, you can refer to the document "Consistency problems in Materialized Views arising from replica order changes"
+        // for an even broader perspective.
+
+        const locator::topology& topology = db.real_database_ptr()->get_token_metadata().get_topology();
+
+        SCYLLA_ASSERT(ars.get_type() == locator::replication_strategy_type::network_topology);
+        const auto* replication_strategy = static_cast<const locator::network_topology_strategy*>(std::addressof(ars));
+
+        for (const auto& [dc, rack_map] : topology.get_datacenter_racks()) {
+            const auto dc_rf = replication_strategy->get_replication_factor(dc);
+            const auto rack_count = rack_map.size();
+
+            const bool invalid_rf = dc_rf != rack_count && dc_rf != 1 && dc_rf != 0;
+            if (invalid_rf) {
+                throw exceptions::invalid_request_exception(seastar::format(
+                        "The option `rf-rack-valid-keyspaces` is enabled, which forbids creating "
+                        "a materialized view in an RF-rack-invalid keyspace: the mismatch occurs for "
+                        "keyspace='{}', data center='{}': RF={} vs. rack count={}",
+                        keyspace(), dc, dc_rf, rack_count));
+            }
+        }
     }
 
     // Gather all included columns, as specified by the select clause

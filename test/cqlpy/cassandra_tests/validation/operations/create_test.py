@@ -309,14 +309,16 @@ def testKeyspace(cql):
     execute(cql, n, "DROP KEYSPACE %s")
 
 #  Test {@link ConfigurationException} is thrown on create keyspace with invalid DC option in replication configuration .
-def testCreateKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, this_dc):
+def testCreateKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, this_dc, has_tablets):
+    extra_opts = "AND TABLETS = {'enabled': false}" if has_tablets else ""
+
     n = unique_name()
-    assertInvalidThrow(cql, n, ConfigurationException, "CREATE KEYSPACE %s WITH replication = { 'class' : 'NetworkTopologyStrategy', 'INVALID_DC' : 2 }")
-    execute(cql, n, "CREATE KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }")
+    assertInvalidThrow(cql, n, ConfigurationException, "CREATE KEYSPACE %s WITH replication = { 'class' : 'NetworkTopologyStrategy', 'INVALID_DC' : 2 }" + extra_opts)
+    execute(cql, n, "CREATE KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }" + extra_opts)
     execute(cql, n, "DROP KEYSPACE IF EXISTS %s")
 
     # Mix valid and invalid, should throw an exception
-    assertInvalidThrow(cql, n, ConfigurationException, "CREATE KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 , 'INVALID_DC': 1}")
+    assertInvalidThrow(cql, n, ConfigurationException, "CREATE KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 , 'INVALID_DC': 1}" + extra_opts)
     execute(cql, n, "DROP KEYSPACE IF EXISTS %s")
 
 # Test {@link ConfigurationException} is not thrown on create NetworkTopologyStrategy keyspace without any options.

@@ -109,6 +109,8 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
 
     db_config->flush_schema_tables_after_modification.set(false);
     db_config->commitlog_use_o_dsync(false);
+
+    db_config->rf_rack_valid_keyspaces.set(true);
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
@@ -1048,6 +1050,14 @@ private:
                 // the error
                 testlog.error("Failed to join cluster: {}", e);
                 throw;
+            }
+
+            if (cfg->rf_rack_valid_keyspaces()) {
+                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+                _db.invoke_on(0, [&tm = _token_metadata] (const replica::database& local_db) {
+                    return local_db.check_rf_rack_validity(tm.local().get()->get_topology());
+                }).get();
+                startlog.info("All keyspaces are RF-rack-valid");
             }
 
             utils::loading_cache_config perm_cache_config;

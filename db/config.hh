@@ -545,6 +545,8 @@ public:
 
     named_value<bool> enable_create_table_with_compact_storage;
 
+    named_value<bool> rf_rack_valid_keyspaces;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
