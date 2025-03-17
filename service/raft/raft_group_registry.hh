@@ -16,7 +16,7 @@
 #include "raft/server.hh"
 #include "raft_timeout.hh"
 #include "utils/recent_entries_map.hh"
-#include "direct_failure_detector/failure_detector.hh"
+#include "service/direct_failure_detector/failure_detector.hh"
 #include "service/raft/group0_fwd.hh"
 
 namespace db {

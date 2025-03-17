@@ -23,7 +23,7 @@
 #include "service/storage_proxy.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
-#include "direct_failure_detector/failure_detector.hh"
+#include "service/direct_failure_detector/failure_detector.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
