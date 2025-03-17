@@ -3523,6 +3523,19 @@ future<utils::shared_dict> system_keyspace::query_dict(std::string_view name) co
     }
 }
 
+future<std::optional<db_clock::time_point>> system_keyspace::query_dict_timestamp(std::string_view name) const {
+    static sstring query = format("SELECT timestamp FROM {}.{} WHERE name = ?;", NAME, DICTS);
+    auto result_set = co_await _qp.execute_internal(
+        query, db::consistency_level::ONE, internal_system_query_state(), {name}, cql3::query_processor::cache_internal::yes);
+    if (!result_set->empty()) {
+        auto &&row = result_set->one();
+        auto timestamp = row.get_as<db_clock::time_point>("timestamp");
+        co_return timestamp;
+    } else {
+        co_return std::nullopt;
+    }
+}
+
 sstring system_keyspace_name() {
     return system_keyspace::NAME;
 }
