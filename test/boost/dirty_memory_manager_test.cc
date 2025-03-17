@@ -461,7 +461,7 @@ SEASTAR_TEST_CASE(test_no_crash_when_a_lot_of_requests_released_which_change_reg
                 }
             };
 
-            utils::phased_barrier request_barrier;
+            utils::phased_barrier request_barrier("request_barrier");
             auto wait_for_requests = defer([&] () noexcept { request_barrier.advance_and_await().get(); });
 
             for (int i = 0; i < 1000000; ++i) {
