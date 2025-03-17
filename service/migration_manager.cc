@@ -65,6 +65,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
                 });
             })
         )
+        , _background_tasks("migration_manager::background_tasks")
         , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _group0_client(group0_client)
         , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
