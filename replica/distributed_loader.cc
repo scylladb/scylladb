@@ -111,6 +111,16 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
     });
 }
 
+future<sstables::generation_type>
+highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
+    co_return co_await directory.map_reduce0(
+        std::mem_fn(&sstables::sstable_directory::highest_generation_seen),
+        sstables::generation_type{},
+        [] (sstables::generation_type a, sstables::generation_type b) {
+            return std::max(a, b);
+        });
+}
+
 future<>
 distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
         sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,

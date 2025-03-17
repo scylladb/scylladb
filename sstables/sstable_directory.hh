@@ -313,6 +313,4 @@ public:
     sstable_state state() const noexcept { return _state; }
 };
 
-future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
-
 }
