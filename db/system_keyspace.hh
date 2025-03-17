@@ -665,6 +665,7 @@ public:
     static mutation get_delete_dict_mutation(std::string_view name, api::timestamp_type write_ts);
     // Queries `dicts` for the most recent compression dictionary.
     future<utils::shared_dict> query_dict(std::string_view name) const;
+    future<std::optional<db_clock::time_point>> query_dict_timestamp(std::string_view name) const;
     future<std::vector<sstring>> query_all_dict_names() const;
 
 private:
