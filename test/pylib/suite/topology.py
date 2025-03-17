@@ -50,6 +50,7 @@ class TopologyTest(PythonTest):
         async with get_cluster_manager(self.uname, self.suite.clusters, test_path) as manager:
             self.args.insert(0, "--tmpdir={}".format(options.tmpdir))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
+            self.args.insert(0, "--run-internet-dependent-tests={}".format(options.run_internet_dependent_tests))
             if options.artifacts_dir_url:
                 self.args.insert(0, "--artifacts_dir_url={}".format(options.artifacts_dir_url))
 
