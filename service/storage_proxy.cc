@@ -241,7 +241,7 @@ class storage_proxy::remote {
     topology_state_machine& _topology_state_machine;
     abort_source _group0_as;
 
-    seastar::gate _truncate_gate;
+    seastar::named_gate _truncate_gate;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -252,6 +252,7 @@ public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
                 raft_group0_client& group0_client, topology_state_machine& tsm)
         : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _group0_client(group0_client), _topology_state_machine(tsm)
+        , _truncate_gate("storage_proxy::remote::truncate_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {
