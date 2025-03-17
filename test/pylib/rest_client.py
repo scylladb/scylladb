@@ -293,6 +293,9 @@ class ScyllaRESTAPIClient():
     async def disable_tablet_balancing(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "false"})
 
+    async def keyspace_upgrade_sstables(self, node_ip: str, ks: str) -> None:
+        await self.client.get(f"/storage_service/keyspace_upgrade_sstables/{ks}", host=node_ip)
+
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
 
