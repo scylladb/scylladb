@@ -482,7 +482,7 @@ private:
     // Compound SSTable set for all the compaction groups, which is useful for operations spanning all of them.
     lw_shared_ptr<const sstables::sstable_set> _sstables;
     // Control background fibers waiting for sstables to be deleted
-    seastar::gate _sstable_deletion_gate;
+    seastar::named_gate _sstable_deletion_gate;
     // This semaphore ensures that any operation updating the SSTable list and deleting unused
     // SSTables will be atomic to other concurrent operations.
     // That means snapshot, for example, won't have its selected sstables deleted by compaction
@@ -542,7 +542,7 @@ private:
     // order in which we need to close those gates. For all the others operations that don't have
     // such needs, we have this generic _async_gate, which all potentially asynchronous operations
     // have to get.  It will be closed by stop().
-    seastar::gate _async_gate;
+    seastar::named_gate _async_gate;
 
     double _cached_percentile = -1;
     lowres_clock::time_point _percentile_cache_timestamp;
@@ -752,7 +752,7 @@ public:
     future<> init_storage();
     future<> destroy_storage();
 
-    seastar::gate& async_gate() { return _async_gate; }
+    seastar::named_gate& async_gate() { return _async_gate; }
 
     uint64_t failed_counter_applies_to_memtable() const {
         return _failed_counter_applies_to_memtable;
