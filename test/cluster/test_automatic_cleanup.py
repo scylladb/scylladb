@@ -10,7 +10,7 @@ import logging
 import asyncio
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
@@ -25,8 +25,8 @@ async def test_no_cleanup_when_unnecessary(request, manager: ManagerClient):
     servers = await manager.running_servers()
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
     marks = [await log.mark() for log in logs]
-    await manager.server_add()
-    await manager.server_add()
+    await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"})
+    await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"})
     matches = [await log.grep("raft_topology - start cleanup", from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 0
 
@@ -44,7 +44,7 @@ async def test_no_cleanup_when_unnecessary(request, manager: ManagerClient):
     matches = [await log.grep("raft_topology - start cleanup", from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) == 0
 
-    await manager.server_add()
+    await manager.server_add(property_file={"dc": "dc1", "rack": "rack3"})
     servers = await manager.running_servers()
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
     marks = [await log.mark() for log in logs]
