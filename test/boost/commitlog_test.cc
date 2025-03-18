@@ -2060,4 +2060,46 @@ SEASTAR_TEST_CASE(test_commitlog_buffer_size_counter) {
     co_await log.clear();
 }
 
+SEASTAR_TEST_CASE(test_commitlog_handle_replayed_segments) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 8 * 1024;
+
+    cfg.commitlog_total_space_in_mb = max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+    cfg.commitlog_sync_period_in_ms = 1;
+
+    for (size_t k = 0; k < 100; ++k) {
+        tmpdir tmp;
+        cfg.commit_log_location = tmp.path().string();
+
+        auto log = co_await commitlog::create_commitlog(cfg);
+
+        auto shard_size = max_size_mb * 1024 * 1024;
+        auto seg_size = cfg.commitlog_segment_size_in_mb * 1024 * 1024;
+        auto n = 4 + (max_size_mb / cfg.commitlog_segment_size_in_mb);
+        std::vector<sstring> files;
+        for (size_t i = 0; i < n; ++i) {
+            auto name = (tmp.path() / ("tuta" + std::to_string(i) + ".log")).string();
+            auto f = co_await open_file_dma(name, open_flags::create|open_flags::wo, {});
+            co_await f.allocate(0, seg_size);
+            co_await f.truncate(seg_size);
+            co_await f.close();
+            files.emplace_back(std::move(name));
+        }
+
+        BOOST_REQUIRE_GE(files.size() * seg_size, shard_size + seg_size);
+
+        co_await log.delete_segments(std::move(files));
+
+        auto footprint = log.disk_footprint();
+
+        BOOST_REQUIRE_LE(footprint, shard_size + seg_size);
+        BOOST_REQUIRE_GE(footprint, shard_size);
+
+        co_await log.shutdown();
+        co_await log.clear();
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
