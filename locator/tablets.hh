@@ -27,6 +27,10 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+namespace gms {
+class feature_service;
+}
+
 namespace locator {
 
 class topology;
@@ -250,6 +254,8 @@ enum class tablet_transition_kind {
     // Repair the tablet replicas
     repair,
 };
+
+tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features);
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
 tablet_transition_stage tablet_transition_stage_from_string(const sstring&);

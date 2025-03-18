@@ -553,6 +553,10 @@ static const std::unordered_map<sstring, tablet_transition_stage> tablet_transit
     return result;
 });
 
+tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features) {
+    return features.repair_based_tablet_rebuild ? tablet_transition_kind::rebuild_v2 : tablet_transition_kind::rebuild;
+}
+
 sstring tablet_transition_stage_to_string(tablet_transition_stage stage) {
     auto i = tablet_transition_stage_to_name.find(stage);
     if (i == tablet_transition_stage_to_name.end()) {
