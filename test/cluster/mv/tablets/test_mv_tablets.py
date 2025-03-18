@@ -42,6 +42,21 @@ async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspa
         if row.last_token >= token:
             return row.replicas
 
+async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False):
+    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.api, server.ip_addr)
+
+    if is_view:
+        table_id = await manager.get_view_id(keyspace_name, table_name)
+    else:
+        table_id = await manager.get_table_id(keyspace_name, table_name)
+    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
+                                       f"table_id = {table_id}", host=host)
+    return rows[0].tablet_count
+
 # This convenience function assumes a table has RF=1 and only a single tablet,
 # and moves it to one specific node "server" - and pins it there (disabling
 # further tablet load-balancing). It is not specified which *shard* on that
@@ -295,3 +310,62 @@ async def test_tablet_cql_lsi(manager: ManagerClient):
         # so the data should be searchable through the local secondary index
         # immediately after the previous INSERT returned.
         assert [(7,42)] == list(await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk=7 AND c=42"))
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_tablet_split(manager: ManagerClient):
+    """A basic test for checking that tablet split works on MV tables.
+       We create a table with a materialized view, starting with one tablet
+       each, and prefill it with enough rows to trigger tablet splits of the
+       view table. We wait for tablet split of the view table and check that
+       the tablet count has increased.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'table=debug',
+        '--target-tablet-size-in-bytes', '1024',
+    ]
+    servers = [await manager.server_add(config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    }, cmdline=cmdline)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk)")
+
+        # enough to trigger multiple splits with max size of 1024 bytes.
+        keys = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        async def check():
+            logger.info("Checking table")
+            cql = manager.get_cql()
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test;")
+            assert len(rows) == len(keys)
+            for r in rows:
+                assert r.c == r.pk
+            logger.info("Checking view")
+            rows = await cql.run_async(f"SELECT * FROM {ks}.tv;")
+            assert len(rows) == len(keys)
+            for r in rows:
+                assert r.c == r.pk
+
+        await check()
+
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv', True)
+        assert tablet_count == 1
+
+        s1_log = await manager.server_open_log(servers[0].server_id)
+        s1_mark = await s1_log.mark()
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        await s1_log.wait_for(f"Detected tablet split for table {ks}.tv", from_mark=s1_mark)
+        await check()
+
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv', True)
+        assert tablet_count > 1
