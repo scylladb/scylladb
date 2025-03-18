@@ -102,6 +102,12 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
 
     # Take only hosts from `ip_set` (there may be more)
     hosts = [h for h in hosts if h.address in ip_set]
+
+    # Make sure `hosts` has same order as `servers`, that is: a given index will
+    # refer to the same underlying Scylla instance in both `servers` and `hosts`.
+    servers_by_ip = {srv.rpc_address: i for i, srv in enumerate(servers)}
+    hosts.sort(key=lambda x: servers_by_ip[x.address])
+
     await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
 
     return hosts
