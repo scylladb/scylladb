@@ -20,9 +20,11 @@ concept FlatMutationReaderConsumer =
 
 template<typename T>
 concept FlattenedConsumer =
-    StreamedMutationConsumer<T> && requires(T obj, const dht::decorated_key& dk) {
+    FragmentConsumer<T> && requires(T obj, const dht::decorated_key& dk, tombstone tomb) {
         { obj.consume_new_partition(dk) };
+        { obj.consume(tomb) };
         { obj.consume_end_of_partition() };
+        { obj.consume_end_of_stream() };
     };
 
 template<typename T>
@@ -51,9 +53,11 @@ concept MutationConsumer =
 
 template<typename T>
 concept FlattenedConsumerV2 =
-    StreamedMutationConsumerV2<T> && requires(T obj, const dht::decorated_key& dk) {
+    FragmentConsumerV2<T> && requires(T obj, const dht::decorated_key& dk, tombstone tomb) {
         { obj.consume_new_partition(dk) };
+        { obj.consume(tomb) };
         { obj.consume_end_of_partition() };
+        { obj.consume_end_of_stream() };
     };
 
 template<typename T>

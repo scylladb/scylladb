@@ -253,13 +253,6 @@ template<typename T>
 concept FragmentConsumer =
     FragmentConsumerReturning<T, stop_iteration> || FragmentConsumerReturning<T, future<stop_iteration>>;
 
-template<typename T>
-concept StreamedMutationConsumer =
-    FragmentConsumer<T> && requires(T t, static_row sr, clustering_row cr, range_tombstone rt, tombstone tomb) {
-        t.consume(tomb);
-        t.consume_end_of_stream();
-    };
-
 template<typename T, typename ReturnType>
 concept MutationFragmentVisitor =
     requires(T t, const static_row& sr, const clustering_row& cr, const range_tombstone& rt, const partition_start& ph, const partition_end& eop) {
