@@ -200,7 +200,7 @@ future<> service_level_controller::update_service_levels_cache(qos::query_contex
         return async([this, ctx] () {
             service_levels_info service_levels;
             // The next statement can throw, but that's fine since we would like the caller
-            // to be able to agreggate those failures and only report when it is critical or noteworthy.
+            // to be able to aggregate those failures and only report when it is critical or noteworthy.
             // one common reason for failure is because one of the nodes comes down and before this node
             // detects it the scan query done inside this call is failing.
             service_levels = _sl_data_accessor->get_service_levels(ctx).get();

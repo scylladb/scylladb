@@ -6565,9 +6565,9 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
                 tracing::trace(handler->tr_state, "CAS successful");
                 break;
             } else {
-                paxos::paxos_state::logger.debug("CAS[{}] PAXOS proposal not accepted (pre-empted by a higher ballot)",
+                paxos::paxos_state::logger.debug("CAS[{}] PAXOS proposal not accepted (preempted by a higher ballot)",
                         handler->id());
-                tracing::trace(handler->tr_state, "PAXOS proposal not accepted (pre-empted by a higher ballot)");
+                tracing::trace(handler->tr_state, "PAXOS proposal not accepted (preempted by a higher ballot)");
                 ++contentions;
                 co_await sleep_approx_50ms();
             }
