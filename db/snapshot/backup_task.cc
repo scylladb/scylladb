@@ -149,12 +149,8 @@ future<> backup_task_impl::uploads_worker() {
             // Pre-upload break point. For testing abort in actual s3 client usage.
             co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
-            std::ignore = upload_component(*it).handle_exception([this] (std::exception_ptr e) {
-                // keep the first exception
-                if (!_ex) {
-                    _ex = std::move(e);
-                }
-            }).finally([gh = std::move(gh)] {});
+            // okay to drop future since uploads is always closed before exiting the function
+            std::ignore = backup_file(std::move(*it), upload_permit(std::move(gh)));
             co_await coroutine::maybe_yield();
             co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
             if (impl::_as.abort_requested()) {
@@ -171,6 +167,15 @@ future<> backup_task_impl::uploads_worker() {
     if (_ex) {
         co_await coroutine::return_exception_ptr(_ex);
     }
+}
+
+future<> backup_task_impl::backup_file(sstring name, upload_permit permit) {
+    return upload_component(name).handle_exception([this] (std::exception_ptr e) {
+        // keep the first exception
+        if (!_ex) {
+            _ex = std::move(e);
+        }
+    }).finally([permit = std::move(permit)] {});
 }
 
 future<> backup_task_impl::run() {

@@ -13,6 +13,8 @@
 #include <exception>
 #include <vector>
 
+#include <seastar/core/gate.hh>
+
 #include "utils/s3/client_fwd.hh"
 #include "tasks/task_manager.hh"
 
@@ -38,6 +40,10 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     future<> upload_component(sstring name);
     future<> process_snapshot_dir();
     future<> uploads_worker();
+    struct upload_permit {
+        gate::holder gh;
+    };
+    future<> backup_file(sstring name, upload_permit permit);
 
 protected:
     virtual future<> run() override;
