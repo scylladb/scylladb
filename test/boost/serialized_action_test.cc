@@ -167,8 +167,8 @@ SEASTAR_THREAD_TEST_CASE(test_serialized_action_abort) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_phased_barrier_reassignment) {
-    utils::phased_barrier bar1;
-    utils::phased_barrier bar2;
+    utils::phased_barrier bar1("bar1");
+    utils::phased_barrier bar2("bar2");
     {
         auto op1 = bar1.start();
         auto op2 = bar2.start();
@@ -186,7 +186,7 @@ SEASTAR_THREAD_TEST_CASE(test_phased_barrier_reassignment) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_phased_barrier_stop) {
-    utils::phased_barrier bar;
+    utils::phased_barrier bar("bar");
     semaphore sem(0);
     auto task = [&] () -> future<> {
         auto op = bar.start();
@@ -210,7 +210,7 @@ SEASTAR_THREAD_TEST_CASE(test_phased_barrier_stop) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_phased_barrier_stop_while_awaiting) {
-    utils::phased_barrier bar;
+    utils::phased_barrier bar("bar");
     semaphore sem(0);
     auto task = [&] () -> future<> {
         auto op = bar.start();

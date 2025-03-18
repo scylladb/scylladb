@@ -22,6 +22,7 @@ connection::connection(server& server, connected_socket&& fd)
     , _fd{std::move(fd)}
     , _read_buf(_fd.input())
     , _write_buf(_fd.output())
+    , _pending_requests_gate("generic_server::connection")
     , _hold_server(_server._gate)
 {
     ++_server._total_connections;
@@ -146,6 +147,7 @@ future<> connection::shutdown()
 server::server(const sstring& server_name, logging::logger& logger)
     : _server_name{server_name}
     , _logger{logger}
+    , _gate("generic_server::server")
 {
 }
 

@@ -1915,6 +1915,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _recycled_segments(std::numeric_limits<size_t>::max())
     , _reserve_replenisher(make_ready_future<>())
     , _background_sync(make_ready_future<>())
+    , _gate(format("commitlog::segment_manager::{}", cfg.commit_log_location))
 {
     SCYLLA_ASSERT(max_size > 0);
     SCYLLA_ASSERT(max_mutation_size < segment::multi_entry_size_magic);

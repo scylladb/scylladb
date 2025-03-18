@@ -72,7 +72,7 @@ public:
         }
     };
 
-    explicit session(session_id id) : _id(id) {}
+    explicit session(session_id id) : _id(id), _gate("session") {}
 
     guard enter() {
         return guard(*this);

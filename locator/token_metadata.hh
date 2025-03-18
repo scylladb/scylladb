@@ -410,6 +410,7 @@ public:
     explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
         : _shared(make_token_metadata_ptr(std::move(cfg)))
         , _lock_func(std::move(lock_func))
+        , _versions_barrier("shared_token_metadata::versions_barrier")
     {
         _shared->set_version_tracker(new_tracker(_shared->get_version()));
     }

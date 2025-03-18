@@ -46,6 +46,7 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
         , _replay_rate(config.replay_rate)
         , _delay(config.delay)
         , _replay_cleanup_after_replays(config.replay_cleanup_after_replays)
+        , _gate("batchlog_manager")
         , _loop_done(batchlog_replay_loop())
 {
     namespace sm = seastar::metrics;
@@ -266,7 +267,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         }).then([] { return make_ready_future<stop_iteration>(stop_iteration::no); });
     };
 
-    co_await seastar::with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
+    co_await with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
         co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
         co_await _qp.query_internal(

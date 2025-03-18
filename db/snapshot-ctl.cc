@@ -29,6 +29,7 @@ namespace db {
 snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& tm, sstables::storage_manager& sstm, config cfg)
     : _config(std::move(cfg))
     , _db(db)
+    , _ops("snapshot_ctl")
     , _task_manager_module(make_shared<snapshot::task_manager_module>(tm))
     , _storage_manager(sstm)
 {

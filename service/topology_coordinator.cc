@@ -2859,6 +2859,7 @@ public:
         , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
+        , _async_gate("topology_coordinator")
     {}
 
     // Returns true if the upgrade was done, returns false if upgrade was interrupted.
