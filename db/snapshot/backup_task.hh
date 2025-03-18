@@ -11,6 +11,7 @@
 
 #include <filesystem>
 #include <exception>
+#include <vector>
 
 #include "utils/s3/client_fwd.hh"
 #include "tasks/task_manager.hh"
@@ -30,9 +31,11 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     s3::upload_progress _progress = {};
 
     std::exception_ptr _ex;
+    std::vector<sstring> _files;
 
     future<> do_backup();
     future<> upload_component(sstring name);
+    future<> process_snapshot_dir();
 
 protected:
     virtual future<> run() override;

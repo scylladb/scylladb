@@ -108,28 +108,17 @@ future<> backup_task_impl::do_backup() {
         throw std::invalid_argument(fmt::format("snapshot does not exist at {}", _snapshot_dir.native()));
     }
 
-    gate uploads;
-    auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+    co_await process_snapshot_dir();
 
-    for (;;) {
-        std::optional<directory_entry> component_ent;
-        try {
-            component_ent = co_await snapshot_dir_lister.get();
-        } catch (...) {
-            if (!_ex) {
-                _ex = std::current_exception();
-                break;
-            }
-        }
-        if (!component_ent.has_value()) {
-            break;
-        }
+    gate uploads;
+
+    for (auto it = _files.begin(); it != _files.end() && !_ex; ++it) {
         auto gh = uploads.hold();
 
         // Pre-upload break point. For testing abort in actual s3 client usage.
         co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
-        std::ignore = upload_component(component_ent->name).handle_exception([this] (std::exception_ptr e) {
+        std::ignore = upload_component(*it).handle_exception([this] (std::exception_ptr e) {
             // keep the first exception
             if (!_ex) {
                 _ex = std::move(e);
@@ -143,10 +132,26 @@ future<> backup_task_impl::do_backup() {
         }
     }
 
-    co_await snapshot_dir_lister.close();
     co_await uploads.close();
     if (_ex) {
         co_await coroutine::return_exception_ptr(std::move(_ex));
+    }
+}
+
+future<> backup_task_impl::process_snapshot_dir() {
+    auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
+
+    try {
+        while (auto component_ent = co_await snapshot_dir_lister.get()) {
+            _files.push_back(component_ent->name);
+        }
+    } catch (...) {
+        _ex = std::current_exception();
+    }
+
+    co_await snapshot_dir_lister.close();
+    if (_ex) {
+        co_await coroutine::return_exception_ptr(_ex);
     }
 }
 
