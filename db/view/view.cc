@@ -147,39 +147,13 @@ void view_info::set_base_info(db::view::base_info_ptr base_info) {
 }
 
 // A constructor for a base info that can facilitate reads and writes from the materialized view.
-db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema,
-        bool has_computed_column_depending_on_base_non_primary_key,
-        bool is_partition_key_permutation_of_base_partition_key,
-        bool has_base_non_pk_columns_in_view_pk)
-        : _base_schema{std::move(base_schema)}
-        , has_computed_column_depending_on_base_non_primary_key{has_computed_column_depending_on_base_non_primary_key}
-        , is_partition_key_permutation_of_base_partition_key{is_partition_key_permutation_of_base_partition_key}
-        , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
-        , use_only_for_reads{false} {
-
-}
-
-// A constructor for a base info that can facilitate only reads from the materialized view.
 db::view::base_dependent_view_info::base_dependent_view_info(bool has_computed_column_depending_on_base_non_primary_key,
         bool is_partition_key_permutation_of_base_partition_key,
-        bool has_base_non_pk_columns_in_view_pk,
-        std::optional<bytes>&& column_missing_in_base)
-        : _base_schema{nullptr}
-        , _column_missing_in_base{std::move(column_missing_in_base)}
-        , has_computed_column_depending_on_base_non_primary_key{has_computed_column_depending_on_base_non_primary_key}
+        bool has_base_non_pk_columns_in_view_pk)
+        : has_computed_column_depending_on_base_non_primary_key{has_computed_column_depending_on_base_non_primary_key}
         , is_partition_key_permutation_of_base_partition_key{is_partition_key_permutation_of_base_partition_key}
         , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
-        , use_only_for_reads{true} {
-}
-
-const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
-    if (use_only_for_reads) {
-        on_internal_error(vlogger,
-                seastar::format("base_schema(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
-    }
-    return _base_schema;
-}
+{ }
 
 db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
     bool is_partition_key_permutation_of_base_partition_key =
@@ -191,7 +165,6 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
 
     bool has_computed_column_depending_on_base_non_primary_key = false;
     bool has_base_non_pk_columns_in_view_pk = false;
-    bytes column_missing_in_base = bytes();
     for (auto&& view_col : _schema.primary_key_columns()) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
@@ -207,27 +180,10 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         } else if (base_col && base_col->is_static()) {
             has_base_non_pk_columns_in_view_pk = true;
         } else if (!base_col) {
-            vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
-                    to_string_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
-            if (to_string_view(view_col_name) == "idx_token") {
-                vlogger.warn("Missing idx_token column is caused by an incorrect upgrade of a secondary index. "
-                        "Please recreate index {}.{} to avoid future issues.", _schema.ks_name(), _schema.cf_name());
-            }
-            // If we didn't find the column in the base column then it must have been deleted
-            // or not yet added (by alter command), this means it is for sure not a pk column
-            // in the base table. This can happen if the version of the base schema is not the
-            // one that the view was created with. Setting this schema as the base can't harm since
-            // if we got to such a situation then it means it is only going to be used for reading
-            // (computation of shadowable tombstones) and in that case the existence of such a column
-            // is the only thing that is of interest to us.
-            column_missing_in_base = view_col_name;
+            has_base_non_pk_columns_in_view_pk = true;
         }
     }
-    if (!column_missing_in_base.empty()) {
-        return make_lw_shared<db::view::base_dependent_view_info>(has_computed_column_depending_on_base_non_primary_key,
-            is_partition_key_permutation_of_base_partition_key, true, column_missing_in_base);
-    }
-    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), has_computed_column_depending_on_base_non_primary_key,
+    return make_lw_shared<db::view::base_dependent_view_info>(has_computed_column_depending_on_base_non_primary_key,
         is_partition_key_permutation_of_base_partition_key, has_base_non_pk_columns_in_view_pk);
 }
 
@@ -497,10 +453,10 @@ bool matches_view_filter(data_dictionary::database db, const schema& base, const
             && visitor.matches_view_filter();
 }
 
-view_updates::view_updates(view_and_base vab)
+view_updates::view_updates(view_and_base vab, schema_ptr base)
     : _view(std::move(vab.view))
     , _view_info(*_view->view_info())
-    , _base(vab.base->base_schema())
+    , _base(std::move(base))
     , _base_info(vab.base)
     , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view))
 {
@@ -1714,12 +1670,7 @@ view_update_builder make_view_update_builder(
         mutation_reader_opt&& existings,
         gc_clock::time_point now) {
     auto vs = views_to_update | std::views::transform([&] (view_and_base v) {
-        if (base->version() != v.base->base_schema()->version()) {
-            on_internal_error(vlogger, format("Schema version used for view updates ({}) does not match the current"
-                                              " base schema version of the view ({}) for view {}.{} of {}.{}",
-                base->version(), v.base->base_schema()->version(), v.view->ks_name(), v.view->cf_name(), base->ks_name(), base->cf_name()));
-        }
-        return view_updates(std::move(v));
+        return view_updates(std::move(v), base);
     }) | std::ranges::to<std::vector<view_updates>>();
     return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
 }

@@ -174,7 +174,7 @@ class view_updates final {
     std::unordered_map<partition_key, mutation_partition, partition_key::hashing, partition_key::equality> _updates;
     size_t _op_count = 0;
 public:
-    explicit view_updates(view_and_base vab);
+    explicit view_updates(view_and_base v, schema_ptr b);
 
     future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
