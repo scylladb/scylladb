@@ -56,17 +56,8 @@ public:
 
     bool is_partition_key_permutation_of_base_partition_key() const;
 
-    /// Returns a pointer to the base_dependent_view_info which matches the current
-    /// schema of the base table.
-    ///
-    /// base_dependent_view_info lives separately from the view schema.
-    /// It can change without the view schema changing its value.
-    /// This pointer is updated on base table schema changes as long as this view_info
-    /// corresponds to the current schema of the view. After that the pointer stops tracking
-    /// the base table schema.
-    ///
-    /// The snapshot of both the view schema and base_dependent_view_info is represented
-    /// by view_and_base. See with_base_info_snapshot().
+    /// base_dependent_view_info contains information about the view that depends on the base table,
+    /// which isn't dependent on the base schema version
     const db::view::base_info_ptr& base_info() const { return _base_info; }
     void set_base_info(db::view::base_info_ptr);
     db::view::base_info_ptr make_base_dependent_view_info(const schema& base_schema) const;
