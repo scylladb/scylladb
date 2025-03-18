@@ -29,6 +29,12 @@ from packaging.version import Version
 if (Version(botocore.__version__) < Version('1.12.54')):
     pytest.exit("Your Boto library is too old. Please upgrade it,\ne.g. using:\n    sudo pip{} install --upgrade boto3".format(sys.version_info[0]))
 
+# We've been seeing Python crashing when shutting down after successfully
+# finishing Alternator tests, and couldn't figure out why (issue #17564).
+# Hopefully this will produce useful debugging information:
+import faulthandler
+faulthandler.enable(all_threads=True)
+
 # By default, tests run against a local Scylla installation on localhost:8080/.
 # The "--aws" option can be used to run against Amazon DynamoDB in the us-east-1
 # region.
