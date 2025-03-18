@@ -521,7 +521,7 @@ schema::schema(const schema& o, const std::function<void(schema&)>& transform)
 
     rebuild();
     if (o.is_view()) {
-        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw(), o.view_info()->base_info()->base_schema());
+        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw(), *o.view_info()->base_info());
         if (o.view_info()->base_info()) {
             _view_info->set_base_info(o.view_info()->base_info());
         }
@@ -1255,7 +1255,7 @@ schema_builder::schema_builder(const schema_ptr s)
     : schema_builder(s->_raw)
 {
     if (s->is_view()) {
-        _base_schema = s->view_info()->base_info()->base_schema();
+        _base_info = *s->view_info()->base_info();
         _view_info = s->view_info()->raw();
     }
 }

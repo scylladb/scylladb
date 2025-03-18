@@ -180,7 +180,7 @@ schema_registry& local_schema_registry();
 // chain will last.
 class global_schema_ptr {
     schema_ptr _ptr;
-    schema_ptr _base_schema;
+    std::optional<db::view::base_dependent_view_info> _base_info;
     unsigned _cpu_of_origin;
 public:
     // Note: the schema_ptr must come from the current shard and can't be nullptr.
