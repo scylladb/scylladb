@@ -338,7 +338,7 @@ global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     SCYLLA_ASSERT(o._cpu_of_origin == current);
     _ptr = std::move(o._ptr);
     _cpu_of_origin = current;
-    _base_schema = std::move(o._base_schema);
+    _base_info = std::move(o._base_info);
 }
 
 schema_ptr global_schema_ptr::get() const {
@@ -355,20 +355,12 @@ schema_ptr global_schema_ptr::get() const {
             return ret;
         };
 
-        std::optional<db::view::base_dependent_view_info> base_info_of_registered_bs;
         // the following code contains registry entry dereference of a foreign shard
         // however, it is guaranteed to succeed since we made sure in the constructor
-        // that _bs_schema and _ptr will have a registry on the foreign shard where this
+        // that _ptr will have a registry on the foreign shard where this
         // object originated so as long as this object lives the registry entries lives too
         // and it is safe to reference them on foreign shards.
-        if (_base_schema) {
-            auto registered_bs = registered_schema(*_base_schema->registry_entry());
-            if (_base_schema->registry_entry()->is_synced()) {
-                registered_bs->registry_entry()->mark_synced();
-            }
-            base_info_of_registered_bs = *_ptr->view_info()->make_base_dependent_view_info(*registered_bs);
-        }
-        schema_ptr s = registered_schema(*_ptr->registry_entry(), base_info_of_registered_bs);
+        schema_ptr s = registered_schema(*_ptr->registry_entry(), _base_info);
         if (_ptr->registry_entry()->is_synced()) {
             s->registry_entry()->mark_synced();
         }
@@ -398,9 +390,8 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         }
     };
 
-    schema_ptr s = ensure_registry_entry(ptr);
-    if (s->is_view()) {
-        _base_schema = ensure_registry_entry(s->view_info()->base_info()->base_schema());
+    _ptr = ensure_registry_entry(ptr);
+    if (_ptr->is_view()) {
+        _base_info = *_ptr->view_info()->base_info();
     }
-    _ptr = s;
 }
