@@ -141,16 +141,13 @@ void view_info::set_base_info(db::view::base_info_ptr base_info) {
 
 // A constructor for a base info that can facilitate reads and writes from the materialized view.
 db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema,
-        std::vector<column_id>&& base_regular_columns_in_view_pk,
-        std::vector<column_id>&& base_static_columns_in_view_pk,
         bool has_computed_column_depending_on_base_non_primary_key,
-        bool is_partition_key_permutation_of_base_partition_key)
+        bool is_partition_key_permutation_of_base_partition_key,
+        bool has_base_non_pk_columns_in_view_pk)
         : _base_schema{std::move(base_schema)}
-        , _base_regular_columns_in_view_pk{std::move(base_regular_columns_in_view_pk)}
-        , _base_static_columns_in_view_pk{std::move(base_static_columns_in_view_pk)}
         , has_computed_column_depending_on_base_non_primary_key{has_computed_column_depending_on_base_non_primary_key}
         , is_partition_key_permutation_of_base_partition_key{is_partition_key_permutation_of_base_partition_key}
-        , has_base_non_pk_columns_in_view_pk{!_base_regular_columns_in_view_pk.empty() || !_base_static_columns_in_view_pk.empty()}
+        , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
         , use_only_for_reads{false} {
 
 }
@@ -168,24 +165,6 @@ db::view::base_dependent_view_info::base_dependent_view_info(bool has_computed_c
         , use_only_for_reads{true} {
 }
 
-const std::vector<column_id>& db::view::base_dependent_view_info::base_regular_columns_in_view_pk() const {
-    if (use_only_for_reads) {
-        on_internal_error(vlogger,
-                seastar::format("base_regular_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
-    }
-    return _base_regular_columns_in_view_pk;
-}
-
-const std::vector<column_id>& db::view::base_dependent_view_info::base_static_columns_in_view_pk() const {
-    if (use_only_for_reads) {
-        on_internal_error(vlogger,
-                seastar::format("base_static_columns_in_view_pk(): operation unsupported when initialized only for view reads. "
-                "Missing column in the base table: {}", to_string_view(_column_missing_in_base.value_or(bytes()))));
-    }
-    return _base_static_columns_in_view_pk;
-}
-
 const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
     if (use_only_for_reads) {
         on_internal_error(vlogger,
@@ -196,9 +175,6 @@ const schema_ptr& db::view::base_dependent_view_info::base_schema() const {
 }
 
 db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
-    std::vector<column_id> base_regular_columns_in_view_pk;
-    std::vector<column_id> base_static_columns_in_view_pk;
-
     bool is_partition_key_permutation_of_base_partition_key =
         std::ranges::all_of(_schema.partition_key_columns(), [&base] (const column_definition& view_col) {
             const column_definition* base_col = base.get_column_definition(view_col.name());
@@ -207,6 +183,7 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         && _schema.partition_key_size() == base.partition_key_size();
 
     bool has_computed_column_depending_on_base_non_primary_key = false;
+    bool has_base_non_pk_columns_in_view_pk = false;
     bytes column_missing_in_base = bytes();
     for (auto&& view_col : _schema.primary_key_columns()) {
         if (view_col.is_computed()) {
@@ -219,9 +196,9 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         const bytes& view_col_name = view_col.name();
         auto* base_col = base.get_column_definition(view_col_name);
         if (base_col && base_col->is_regular()) {
-            base_regular_columns_in_view_pk.push_back(base_col->id);
+            has_base_non_pk_columns_in_view_pk = true;
         } else if (base_col && base_col->is_static()) {
-            base_static_columns_in_view_pk.push_back(base_col->id);
+            has_base_non_pk_columns_in_view_pk = true;
         } else if (!base_col) {
             vlogger.error("Column {} in view {}.{} was not found in the base table {}.{}",
                     to_string_view(view_col_name), _schema.ks_name(), _schema.cf_name(), base.ks_name(), base.cf_name());
@@ -243,8 +220,8 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
         return make_lw_shared<db::view::base_dependent_view_info>(has_computed_column_depending_on_base_non_primary_key,
             is_partition_key_permutation_of_base_partition_key, true, column_missing_in_base);
     }
-    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_regular_columns_in_view_pk), std::move(base_static_columns_in_view_pk),
-        has_computed_column_depending_on_base_non_primary_key, is_partition_key_permutation_of_base_partition_key);
+    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), has_computed_column_depending_on_base_non_primary_key,
+        is_partition_key_permutation_of_base_partition_key, has_base_non_pk_columns_in_view_pk);
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
@@ -511,6 +488,30 @@ bool matches_view_filter(data_dictionary::database db, const schema& base, const
 
     return clustering_prefix_matches(db, base, view, key, *update.key())
             && visitor.matches_view_filter();
+}
+
+view_updates::view_updates(view_and_base vab)
+    : _view(std::move(vab.view))
+    , _view_info(*_view->view_info())
+    , _base(vab.base->base_schema())
+    , _base_info(vab.base)
+    , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view))
+{
+    for (auto&& view_col : _view->primary_key_columns()) {
+        if (view_col.is_computed()) {
+            continue;
+        }
+        const bytes& view_col_name = view_col.name();
+        auto* base_col = _base->get_column_definition(view_col_name);
+        if (base_col && base_col->is_regular()) {
+            _base_regular_columns_in_view_pk.push_back(base_col->id);
+        } else if (base_col && base_col->is_static()) {
+            _base_static_columns_in_view_pk.push_back(base_col->id);
+        } else if (!base_col) {
+            on_internal_error(vlogger, format("Column {} in view {}.{} was not found in the base table {}.{}",
+                    view_col_name, _view->ks_name(), _view->cf_name(), _base->ks_name(), _base->cf_name()));
+        }
+    }
 }
 
 future<> view_updates::move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations) {
@@ -942,8 +943,8 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
     const auto kind = existing.column_kind();
     for (const auto& [r, action] : view_rows) {
         const auto& col_ids = existing.is_clustering_row()
-                ? _base_info->base_regular_columns_in_view_pk()
-                : _base_info->base_static_columns_in_view_pk();
+                ? _base_regular_columns_in_view_pk
+                : _base_static_columns_in_view_pk;
         if (!col_ids.empty() || _view_info.has_computed_column_depending_on_base_non_primary_key()) {
             // The view key could have been modified because it contains or
             // depends on a non-primary-key. The fact that this function was
