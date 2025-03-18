@@ -156,10 +156,10 @@ struct table {
         std::vector<mutation_reader> rd;
         auto permit = make_permit();
         if (prev_mt) {
-            rd.push_back(prev_mt->make_flat_reader(s.schema(), permit, r->pr, r->slice, nullptr,
+            rd.push_back(prev_mt->make_mutation_reader(s.schema(), permit, r->pr, r->slice, nullptr,
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         }
-        rd.push_back(mt->make_flat_reader(s.schema(), permit, r->pr, r->slice, nullptr,
+        rd.push_back(mt->make_mutation_reader(s.schema(), permit, r->pr, r->slice, nullptr,
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
         rd.push_back(cache.make_reader(s.schema(), permit, r->pr, r->slice, nullptr,
             streamed_mutation::forwarding::no, mutation_reader::forwarding::no));

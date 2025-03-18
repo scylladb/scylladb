@@ -1270,7 +1270,7 @@ SEASTAR_THREAD_TEST_CASE(test_foreign_reader_as_mutation_source) {
                     mutation_reader::forwarding fwd_mr) {
                 auto remote_reader = env.db().invoke_on(remote_shard,
                         [&, s = global_schema_ptr(s), fwd_sm, fwd_mr, trace_state = tracing::global_trace_state_ptr(trace_state)] (replica::database& db) {
-                    return make_foreign(std::make_unique<mutation_reader>(remote_mt->make_flat_reader(s.get(),
+                    return make_foreign(std::make_unique<mutation_reader>(remote_mt->make_mutation_reader(s.get(),
                             make_reader_permit(env),
                             range,
                             slice,
@@ -2585,7 +2585,7 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_as_mutation_source) {
                     tracing::trace_state_ptr trace_state,
                     streamed_mutation::forwarding fwd_sm,
                     mutation_reader::forwarding fwd_mr) mutable {
-                auto source = mt->make_flat_reader(s, std::move(permit), range, slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+                auto source = mt->make_mutation_reader(s, std::move(permit), range, slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
                 if (fwd_sm == streamed_mutation::forwarding::yes) {
                     source = make_forwardable(std::move(source));
                 }
