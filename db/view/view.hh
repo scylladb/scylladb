@@ -48,6 +48,12 @@ public:
     const std::vector<column_id>& base_static_columns_in_view_pk() const;
     const schema_ptr& base_schema() const;
 
+    const bool has_computed_column_depending_on_base_non_primary_key;
+
+    // True if the partition key columns of the view are the same as the
+    // partition key columns of the base, maybe in a different order.
+    const bool is_partition_key_permutation_of_base_partition_key;
+
     // Indicates if the view hase pk columns which are not part of the base
     // pk, it seems that !base_non_pk_columns_in_view_pk.empty() is the same,
     // but actually there are cases where we can compute this boolean without
@@ -62,9 +68,14 @@ public:
     // A constructor for a base info that can facilitate reads and writes from the materialized view.
     base_dependent_view_info(schema_ptr base_schema,
             std::vector<column_id>&& base_regular_columns_in_view_pk,
-            std::vector<column_id>&& base_static_columns_in_view_pk);
+            std::vector<column_id>&& base_static_columns_in_view_pk,
+            bool has_computed_column_depending_on_base_non_primary_key,
+            bool is_partition_key_permutation_of_base_partition_key);
     // A constructor for a base info that can facilitate only reads from the materialized view.
-    base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk, std::optional<bytes>&& column_missing_in_base);
+    base_dependent_view_info(bool has_computed_column_depending_on_base_non_primary_key,
+            bool is_partition_key_permutation_of_base_partition_key,
+            bool has_base_non_pk_columns_in_view_pk,
+            std::optional<bytes>&& column_missing_in_base);
 };
 
 // Immutable snapshot of view's base-schema-dependent part.
