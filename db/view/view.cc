@@ -83,7 +83,6 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, s
         : _schema(schema)
         , _raw(raw_view_info)
         , _base_info(make_base_dependent_view_info(*base_schema))
-        , _has_computed_column_depending_on_base_non_primary_key(false)
 { }
 
 cql3::statements::select_statement& view_info::select_statement(data_dictionary::database db) const {
@@ -144,19 +143,28 @@ void view_info::set_base_info(db::view::base_info_ptr base_info) {
 // A constructor for a base info that can facilitate reads and writes from the materialized view.
 db::view::base_dependent_view_info::base_dependent_view_info(schema_ptr base_schema,
         std::vector<column_id>&& base_regular_columns_in_view_pk,
-        std::vector<column_id>&& base_static_columns_in_view_pk)
+        std::vector<column_id>&& base_static_columns_in_view_pk,
+        bool has_computed_column_depending_on_base_non_primary_key,
+        bool is_partition_key_permutation_of_base_partition_key)
         : _base_schema{std::move(base_schema)}
         , _base_regular_columns_in_view_pk{std::move(base_regular_columns_in_view_pk)}
         , _base_static_columns_in_view_pk{std::move(base_static_columns_in_view_pk)}
+        , has_computed_column_depending_on_base_non_primary_key{has_computed_column_depending_on_base_non_primary_key}
+        , is_partition_key_permutation_of_base_partition_key{is_partition_key_permutation_of_base_partition_key}
         , has_base_non_pk_columns_in_view_pk{!_base_regular_columns_in_view_pk.empty() || !_base_static_columns_in_view_pk.empty()}
         , use_only_for_reads{false} {
 
 }
 
 // A constructor for a base info that can facilitate only reads from the materialized view.
-db::view::base_dependent_view_info::base_dependent_view_info(bool has_base_non_pk_columns_in_view_pk, std::optional<bytes>&& column_missing_in_base)
+db::view::base_dependent_view_info::base_dependent_view_info(bool has_computed_column_depending_on_base_non_primary_key,
+        bool is_partition_key_permutation_of_base_partition_key,
+        bool has_base_non_pk_columns_in_view_pk,
+        std::optional<bytes>&& column_missing_in_base)
         : _base_schema{nullptr}
         , _column_missing_in_base{std::move(column_missing_in_base)}
+        , has_computed_column_depending_on_base_non_primary_key{has_computed_column_depending_on_base_non_primary_key}
+        , is_partition_key_permutation_of_base_partition_key{is_partition_key_permutation_of_base_partition_key}
         , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
         , use_only_for_reads{true} {
 }
@@ -192,18 +200,20 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
     std::vector<column_id> base_regular_columns_in_view_pk;
     std::vector<column_id> base_static_columns_in_view_pk;
 
-    _is_partition_key_permutation_of_base_partition_key =
+    bool is_partition_key_permutation_of_base_partition_key =
         std::ranges::all_of(_schema.partition_key_columns(), [&base] (const column_definition& view_col) {
             const column_definition* base_col = base.get_column_definition(view_col.name());
             return base_col && base_col->is_partition_key();
             })
         && _schema.partition_key_size() == base.partition_key_size();
 
+    bool has_computed_column_depending_on_base_non_primary_key = false;
+    bytes column_missing_in_base = bytes();
     for (auto&& view_col : _schema.primary_key_columns()) {
         if (view_col.is_computed()) {
             // we are not going to find it in the base table...
             if (view_col.get_computation().depends_on_non_primary_key_column()) {
-                _has_computed_column_depending_on_base_non_primary_key = true;
+                has_computed_column_depending_on_base_non_primary_key = true;
             }
             continue;
         }
@@ -227,11 +237,15 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             // if we got to such a situation then it means it is only going to be used for reading
             // (computation of shadowable tombstones) and in that case the existence of such a column
             // is the only thing that is of interest to us.
-            return make_lw_shared<db::view::base_dependent_view_info>(true, view_col_name);
+            column_missing_in_base = view_col_name;
         }
     }
-
-    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_regular_columns_in_view_pk), std::move(base_static_columns_in_view_pk));
+    if (!column_missing_in_base.empty()) {
+        return make_lw_shared<db::view::base_dependent_view_info>(has_computed_column_depending_on_base_non_primary_key,
+            is_partition_key_permutation_of_base_partition_key, true, column_missing_in_base);
+    }
+    return make_lw_shared<db::view::base_dependent_view_info>(base.shared_from_this(), std::move(base_regular_columns_in_view_pk), std::move(base_static_columns_in_view_pk),
+        has_computed_column_depending_on_base_non_primary_key, is_partition_key_permutation_of_base_partition_key);
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
@@ -245,6 +259,20 @@ bool view_info::has_base_non_pk_columns_in_view_pk() const {
         on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
     }
     return _base_info->has_base_non_pk_columns_in_view_pk;
+}
+
+bool view_info::has_computed_column_depending_on_base_non_primary_key() const {
+    if (!_base_info) {
+        on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
+    }
+    return _base_info->has_computed_column_depending_on_base_non_primary_key;
+}
+
+bool view_info::is_partition_key_permutation_of_base_partition_key() const {
+    if (!_base_info) {
+        on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
+    }
+    return _base_info->is_partition_key_permutation_of_base_partition_key;
 }
 
 clustering_row db::view::clustering_or_static_row::as_clustering_row(const schema& s) const {
