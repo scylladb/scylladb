@@ -242,6 +242,8 @@ globally driven by the topology change coordinator and serialized per-tablet. Tr
 
 - rebuild - new tablet replica is rebuilt from existing ones, possibly dropping old replica afterwards (on node removal or replace)
 
+- rebuild_v2 - same as rebuild, but repairs a tablet and streams data from one replica, instead of streaming data from all replicas
+
 - repair - tablet replicas are repaired
 
 Each tablet has its own state machine for keeping state of transition stored in group0 which is part of the tablet state. It involves
