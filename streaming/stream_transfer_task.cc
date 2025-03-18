@@ -31,7 +31,7 @@
 #include <fmt/ranges.h>
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
-#include "repair/table_check.hh"
+#include "streaming/table_check.hh"
 #include "gms/feature_service.hh"
 #include "utils/error_injection.hh"
 #include "idl/streaming.dist.hh"
@@ -209,7 +209,7 @@ future<> stream_transfer_task::execute() {
     auto cf_id = this->cf_id;
     auto id = session->peer;
     auto& sm = session->manager();
-    auto table_dropped = co_await repair::with_table_drop_silenced(sm.db(), sm.mm(), cf_id, [this, &sm, cf_id, plan_id, id] (const table_id &) {
+    auto table_dropped = co_await streaming::with_table_drop_silenced(sm.db(), sm.mm(), cf_id, [this, &sm, cf_id, plan_id, id] (const table_id &) {
         auto dst_cpu_id = session->dst_cpu_id;
         sslog.debug("[Stream #{}] stream_transfer_task: cf_id={}", plan_id, cf_id);
         sort_and_merge_ranges();
