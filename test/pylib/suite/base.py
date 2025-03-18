@@ -15,6 +15,7 @@ import os
 import pathlib
 import re
 import shlex
+import subprocess
 import sys
 import time
 import traceback
@@ -419,6 +420,8 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
 
         try:
             cleanup_fn, finject_desc, test_env = await test.setup(ldap_port, options)
+        except subprocess.CalledProcessError as e:
+            report_error("Test setup failed ({}: {})\n{}".format(e, e.stdout))
         except Exception as e:
             report_error("Test setup failed ({})\n{}".format(str(e), traceback.format_exc()))
             return False

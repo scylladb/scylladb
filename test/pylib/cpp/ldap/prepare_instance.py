@@ -269,7 +269,8 @@ def setup(project_root: Path, port: int, instance_root: Path, byte_limit: int):
     proxy_name = 'p{}'.format(port)
     subprocess.check_output(
         ['toxiproxy-cli', 'c', proxy_name, '--listen', 'localhost:{}'.format(port + 2), '--upstream',
-            'localhost:{}'.format(port)])
+            'localhost:{}'.format(port)],
+        stderr=subprocess.STDOUT)
     subprocess.check_output(['toxiproxy-cli', 't', 'a', proxy_name, '-t', 'limit_data', '-n', 'limiter', '-a',
                              'bytes={}'.format(byte_limit)])
     # Change the data folder in the default config.
