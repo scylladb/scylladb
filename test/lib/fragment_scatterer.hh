@@ -11,7 +11,7 @@
 #include "mutation/mutation.hh"
 #include "mutation/mutation_rebuilder.hh"
 
-// A StreamedMutationConsumer which distributes fragments randomly into several mutations.
+// A FlattenedConsumer which distributes fragments randomly into several mutations.
 class fragment_scatterer {
     schema_ptr _schema;
     size_t _n;
