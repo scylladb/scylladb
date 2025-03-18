@@ -15,6 +15,7 @@
 #include "test/lib/log.hh"
 #include "types/types.hh"
 #include "types/comparable_bytes.hh"
+#include "utils/big_decimal.hh"
 #include "utils/multiprecision_int.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
@@ -328,4 +329,34 @@ BOOST_AUTO_TEST_CASE(test_count_digits) {
     test_precision(boost::multiprecision::cpp_int("9999999"));
     test_precision(boost::multiprecision::cpp_int(
         "123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"));
+}
+
+BOOST_AUTO_TEST_CASE(test_decimal) {
+    // generate few multiprecision ints to be used as unscaled_values in the big_decimal
+    std::vector<boost::multiprecision::cpp_int> unscaled_values;
+    auto multiprecision_one = utils::multiprecision_int(1);
+    for (int shift = 1; shift <= 10; shift++) {
+        for (auto shift_prod : {1, 2, 4, 8, 10, 32, 64, 100, 256}) {
+            auto mp_num = multiprecision_one << shift * shift_prod;
+            for (auto n : std::initializer_list<utils::multiprecision_int>{mp_num, mp_num - 1, -mp_num, -(mp_num - 1)}) {
+                unscaled_values.push_back(std::move(n));
+            }
+        }
+    }
+    // scales to generate the big_decimal
+    std::vector<int32_t> scales{1, 2, 4, 5, 10, 100, 1000};
+
+    std::vector<data_value> _test_data;
+    _test_data.reserve(unscaled_values.size() * scales.size() * 5);
+    for (const auto& unscaled_value : unscaled_values) {
+        _test_data.emplace_back(big_decimal(0, unscaled_value));
+        _test_data.emplace_back(big_decimal(std::numeric_limits<int32_t>::min(), unscaled_value));
+        _test_data.emplace_back(big_decimal(std::numeric_limits<int32_t>::max(), unscaled_value));
+        for (const auto& scale : scales) {
+            _test_data.emplace_back(big_decimal(scale, unscaled_value));
+            _test_data.emplace_back(big_decimal(-scale, unscaled_value));
+        }
+    }
+
+    byte_comparable_test(std::move(_test_data));
 }
