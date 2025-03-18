@@ -958,14 +958,6 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
 }
 
 future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new) {
-    if (schema->is_view()) {
-        try {
-            auto base_schema = find_schema(schema->view_info()->base_id());
-            schema->view_info()->set_base_info(schema->view_info()->make_base_dependent_view_info(*base_schema));
-        } catch (no_such_column_family&) {
-            throw std::invalid_argument("The base table " + schema->view_info()->base_name() + " was already dropped");
-        }
-    }
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1011,14 +1003,6 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema, is_ne
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
-    if (new_schema->is_view()) {
-        try {
-            auto base_schema = find_schema(new_schema->view_info()->base_id());
-            new_schema->view_info()->set_base_info(new_schema->view_info()->make_base_dependent_view_info(*base_schema));
-        } catch (no_such_column_family&) {
-            throw std::invalid_argument("The base table " + new_schema->view_info()->base_name() + " was already dropped");
-        }
-    }
     column_family& cfm = find_column_family(new_schema->id());
     bool columns_changed = !cfm.schema()->equal_columns(*new_schema);
     auto s = local_schema_registry().learn(new_schema);
