@@ -2453,12 +2453,8 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
     return index_metadata{index_name, options, kind, is_local};
 }
 
-/*
- * View metadata serialization/deserialization.
- */
-
-view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, schema_ptr base_schema, std::optional<table_schema_version> version)  {
-    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+static schema_builder prepare_view_schema_builder_from_mutations(const schema_ctxt& ctxt, const schema_mutations& sm, std::optional<table_schema_version> version,
+                                                                const query::result_set& table_rs) {
     const query::result_set_row& row = table_rs.row(0);
 
     auto ks_name = row.get_nonnull<sstring>("keyspace_name");
@@ -2492,11 +2488,34 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     } else {
         builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
     }
+    return builder;
+}
 
+/*
+ * View metadata serialization/deserialization.
+ */
+
+ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, schema_ptr base_schema, std::optional<table_schema_version> version)  {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    auto builder = prepare_view_schema_builder_from_mutations(ctxt, sm, version, table_rs);
+    const query::result_set_row& row = table_rs.row(0);
     auto include_all_columns = row.get_nonnull<bool>("include_all_columns");
     auto where_clause = row.get_nonnull<sstring>("where_clause");
 
     builder.with_view_info(std::move(base_schema), include_all_columns, std::move(where_clause));
+    return view_ptr(builder.build());
+}
+
+view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, db::view::base_dependent_view_info base_info, std::optional<table_schema_version> version)  {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    auto builder = prepare_view_schema_builder_from_mutations(ctxt, sm, version, table_rs);
+    const query::result_set_row& row = table_rs.row(0);
+    auto id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
+    auto base_name = row.get_nonnull<sstring>("base_table_name");
+    auto include_all_columns = row.get_nonnull<bool>("include_all_columns");
+    auto where_clause = row.get_nonnull<sstring>("where_clause");
+
+    builder.with_view_info(id, base_name, include_all_columns, std::move(where_clause), std::move(base_info));
     return view_ptr(builder.build());
 }
 

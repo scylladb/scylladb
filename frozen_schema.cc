@@ -8,6 +8,7 @@
 
 #include "frozen_schema.hh"
 #include "db/schema_tables.hh"
+#include "db/view/view.hh"
 #include "mutation/canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "idl/frozen_schema.dist.hh"
@@ -25,17 +26,22 @@ frozen_schema::frozen_schema(const schema_ptr& s)
     }())
 { }
 
-schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, std::optional<schema_ptr> base_schema) const {
+schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt) const {
     auto in = ser::as_input_stream(_data);
     auto sv = ser::deserialize(in, std::type_identity<ser::schema_view>());
     if (sv.mutations().is_view()) {
-        if (!base_schema) {
-            throw std::runtime_error("Cannot unfreeze view schema without base schema");
-        }
-        return db::schema_tables::create_view_from_mutations(ctxt, sv.mutations(), *base_schema, sv.version());
-    } else {
-        return db::schema_tables::create_table_from_mutations(ctxt, sv.mutations(), sv.version());
+        throw std::runtime_error("Cannot unfreeze view schema without base schema");
     }
+    return db::schema_tables::create_table_from_mutations(ctxt, sv.mutations(), sv.version());
+}
+
+schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, db::view::base_dependent_view_info base_info) const {
+    auto in = ser::as_input_stream(_data);
+    auto sv = ser::deserialize(in, std::type_identity<ser::schema_view>());
+    if (!sv.mutations().is_view()) {
+        throw std::runtime_error("Trying to unfreeze regular table schema with base info");
+    }
+    return db::schema_tables::create_view_from_mutations(ctxt, sv.mutations(), std::move(base_info), sv.version());
 }
 
 frozen_schema::frozen_schema(bytes_ostream b)
