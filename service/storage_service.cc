@@ -6567,7 +6567,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+            .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.local().features()))
             .build());
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
@@ -6612,7 +6612,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+            .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.local().features()))
             .build());
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
