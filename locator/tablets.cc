@@ -140,6 +140,25 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
             });
 
             return result;
+        case tablet_transition_kind::rebuild_v2: {
+            if (!trinfo.pending_replica.has_value()) {
+                return result; // No nodes to stream to -> no nodes to stream from
+            }
+
+            auto s = std::unordered_set<tablet_replica>(trinfo.next.begin(), trinfo.next.end());
+            erase_if(s, [&] (const tablet_replica& r) {
+                if (r == *trinfo.pending_replica) {
+                    return false;
+                }
+                auto* n = topo.find_node(r.host);
+                return !n || n->is_excluded();
+            });
+            result.stream_weight = locator::tablet_migration_stream_weight_repair;
+            result.read_from = s;
+            result.written_to = std::move(s);
+
+            return result;
+        }
         case tablet_transition_kind::repair:
             auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
             result.stream_weight = locator::tablet_migration_stream_weight_repair;
@@ -544,6 +563,7 @@ static const std::unordered_map<tablet_transition_kind, sstring> tablet_transiti
         {tablet_transition_kind::migration, "migration"},
         {tablet_transition_kind::intranode_migration, "intranode_migration"},
         {tablet_transition_kind::rebuild, "rebuild"},
+        {tablet_transition_kind::rebuild_v2, "rebuild_v2"},
         {tablet_transition_kind::repair, "repair"},
 };
 

@@ -241,6 +241,10 @@ enum class tablet_transition_kind {
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     rebuild,
 
+    // Like rebuild, but instead of streaming data from all tablet replicas,
+    // it streams data from one replica and repairs the tablet.
+    rebuild_v2,
+
     // Repair the tablet replicas
     repair,
 };
