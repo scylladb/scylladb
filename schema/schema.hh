@@ -31,6 +31,7 @@
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
 #include "schema_fwd.hh"
+#include "db/view/base_info.hh"
 
 namespace dht {
 
@@ -623,7 +624,7 @@ private:
     schema(const schema&, const std::function<void(schema&)>&);
     class private_tag{};
 public:
-    schema(private_tag, const raw_schema&, const schema_static_props& props, std::optional<schema_ptr> base_schema);
+    schema(private_tag, const raw_schema&, const schema_static_props& props, std::optional<std::variant<schema_ptr, db::view::base_dependent_view_info>> base = std::nullopt);
     schema(const schema&);
     // See \ref make_reversed().
     schema(reversed_tag, const schema&);
