@@ -138,8 +138,7 @@ const column_definition* view_info::view_column(const column_definition& base_de
     return _schema.get_column_definition(base_def.name());
 }
 
-void view_info::set_base_info(db::view::base_info_ptr base_info) {
-    _base_info = std::move(base_info);
+void view_info::reset_view_info() {
     // Forget the cached objects which may refer to the base schema.
     _select_statement = nullptr;
     _partition_slice = std::nullopt;
