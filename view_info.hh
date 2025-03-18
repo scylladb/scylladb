@@ -59,7 +59,7 @@ public:
     /// base_dependent_view_info contains information about the view that depends on the base table,
     /// which isn't dependent on the base schema version
     const db::view::base_info_ptr& base_info() const { return _base_info; }
-    void set_base_info(db::view::base_info_ptr);
+    void reset_view_info();
     db::view::base_info_ptr make_base_dependent_view_info(const schema& base_schema) const;
 
     friend bool operator==(const view_info& x, const view_info& y) {
