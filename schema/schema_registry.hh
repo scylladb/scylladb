@@ -15,20 +15,20 @@
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
 #include "replica/database_fwd.hh"
-
+#include "db/view/base_info.hh"
 namespace db {
 class schema_ctxt;
 }
 
 class schema_registry;
 
-struct base_and_view_schemas {
+struct view_schema_and_base_info {
     frozen_schema schema;
-    std::optional<schema_ptr> base_schema;
+    std::optional<db::view::base_dependent_view_info> base_info;
 };
 
-using async_schema_loader = std::function<future<base_and_view_schemas>(table_schema_version)>;
-using schema_loader = std::function<base_and_view_schemas(table_schema_version)>;
+using async_schema_loader = std::function<future<view_schema_and_base_info>(table_schema_version)>;
+using schema_loader = std::function<view_schema_and_base_info(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
 public:
@@ -66,7 +66,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
 
     std::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
-    std::optional<schema_ptr> _base_schema;// engaged when state == LOADED for view schemas
+    std::optional<db::view::base_dependent_view_info> _base_info;// engaged when state == LOADED for view schemas
 
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
@@ -84,7 +84,7 @@ public:
     schema_registry_entry(schema_registry_entry&&) = delete;
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
-    schema_ptr load(base_and_view_schemas);
+    schema_ptr load(view_schema_and_base_info);
     schema_ptr load(schema_ptr);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
@@ -94,9 +94,9 @@ public:
     future<> maybe_sync(std::function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
-    // Updates the frozen base schema for a view, should be called when updating the base info
+    // Updates the frozen base info for a view, should be called when updating the base info
     // Is not needed when we set the base info for the first time - that means this schema is not in the registry
-    void update_base_schema(schema_ptr);
+    void update_base_info(db::view::base_dependent_view_info);
     // Can be called from other shards
     frozen_schema frozen() const;
     // Can be called from other shards
