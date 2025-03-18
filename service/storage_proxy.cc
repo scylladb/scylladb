@@ -4357,14 +4357,15 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             ++stats.writes_errors.get_ep_stat(handler_ptr->_effective_replication_map_ptr->get_topology(), coordinator);
             error err = error::FAILURE;
             std::optional<sstring> msg;
+
             if (try_catch<replica::rate_limit_exception>(eptr)) {
                 // There might be a lot of those, so ignore
                 err = error::RATE_LIMIT;
             } else if (const auto* stale = try_catch<replica::stale_topology_exception>(eptr)) {
                 msg = stale->what();
-            } else if (try_catch<rpc::closed_error>(eptr)) {
+            } else if (try_catch_nested<rpc::closed_error>(eptr)) {
                 // ignore, disconnect will be logged by gossiper
-            } else if (try_catch<seastar::gate_closed_exception>(eptr)) {
+            } else if (try_catch_nested<seastar::gate_closed_exception>(eptr)) {
                 // may happen during shutdown, ignore it
             } else if (try_catch<timed_out_error>(eptr)) {
                 // from lmutate(). Ignore so that logs are not flooded
