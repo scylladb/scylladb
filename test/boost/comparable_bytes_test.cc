@@ -15,6 +15,7 @@
 #include "test/lib/random_utils.hh"
 #include "types/types.hh"
 #include "types/comparable_bytes.hh"
+#include "utils/big_decimal.hh"
 #include "utils/multiprecision_int.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
@@ -57,9 +58,25 @@ void byte_comparable_test(std::vector<data_value>&& test_data) {
         auto original_serialized_bytes = managed_bytes(value.serialize_nonnull());
         comparable_bytes comparable_bytes(*test_data_type, original_serialized_bytes);
         auto decoded_serialized_bytes = comparable_bytes.to_serialized_bytes(*test_data_type).value();
-        BOOST_REQUIRE_MESSAGE(original_serialized_bytes == decoded_serialized_bytes, seastar::value_of([&] () {
-            return fmt::format("comparable bytes encode/decode failed for value : {}", value);
-        }));
+        if (test_data_type == decimal_type) {
+            // The `decimal_type` requires special handling because its comparable byte representation
+            // normalizes the scale and unscaled value. This means the serialized bytes after
+            // decoding from comparable bytes might not be identical to the original serialized bytes,
+            // despite them representing the same decimal value.
+            // For instance, 2e-1 (scale=1, unscaled_value=2) and 20e-2 (scale=2, unscaled_value=20)
+            // are equivalent decimals but have different serialized forms. Comparable byte encoding
+            // will normalize them. So, instead of directly comparing serialized bytes, compare the
+            // deserialized decoded value against the original decimal value.
+            auto decoded_value = decimal_type->deserialize_value(managed_bytes_view(decoded_serialized_bytes));
+            BOOST_REQUIRE_MESSAGE(value == decoded_value, seastar::value_of([&] () {
+                return fmt::format("comparable bytes encode/decode failed for value : {}", value);
+            }));
+        } else {
+            // Compare the serialized bytes directly
+            BOOST_REQUIRE_MESSAGE(original_serialized_bytes == decoded_serialized_bytes, seastar::value_of([&] () {
+                return fmt::format("comparable bytes encode/decode failed for value : {}", value);
+            }));
+        }
 
         // collect the data in a vector to verify ordering later
         test_items.emplace_back(original_serialized_bytes, comparable_bytes);
@@ -354,4 +371,34 @@ BOOST_AUTO_TEST_CASE(test_count_digits) {
     test_precision(boost::multiprecision::cpp_int("9999999"));
     test_precision(boost::multiprecision::cpp_int(
         "123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"));
+}
+
+BOOST_AUTO_TEST_CASE(test_decimal) {
+    // generate few multiprecision ints to be used as unscaled_values in the big_decimal
+    std::vector<boost::multiprecision::cpp_int> unscaled_values;
+    auto multiprecision_one = utils::multiprecision_int(1);
+    for (int shift = 1; shift <= 10; shift++) {
+        for (auto shift_prod : {1, 2, 4, 8, 10, 32, 64, 100, 256}) {
+            auto mp_num = multiprecision_one << shift * shift_prod;
+            for (auto n : std::initializer_list<utils::multiprecision_int>{mp_num, mp_num - 1, -mp_num, -(mp_num - 1)}) {
+                unscaled_values.push_back(std::move(n));
+            }
+        }
+    }
+    // scales to generate the big_decimal
+    std::vector<int32_t> scales{1, 2, 4, 5, 10, 100, 1000};
+
+    std::vector<data_value> _test_data;
+    _test_data.reserve(unscaled_values.size() * scales.size() * 5);
+    for (const auto& unscaled_value : unscaled_values) {
+        _test_data.emplace_back(big_decimal(0, unscaled_value));
+        _test_data.emplace_back(big_decimal(std::numeric_limits<int32_t>::min(), unscaled_value));
+        _test_data.emplace_back(big_decimal(std::numeric_limits<int32_t>::max(), unscaled_value));
+        for (const auto& scale : scales) {
+            _test_data.emplace_back(big_decimal(scale, unscaled_value));
+            _test_data.emplace_back(big_decimal(-scale, unscaled_value));
+        }
+    }
+
+    byte_comparable_test(std::move(_test_data));
 }

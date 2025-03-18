@@ -13,11 +13,20 @@
 
 #include "bytes_ostream.hh"
 #include "concrete_types.hh"
+#include "types/types.hh"
+#include "utils/multiprecision_int.hh"
 
 logging::logger cblogger("comparable_bytes");
 
 static constexpr uint8_t BYTE_SIGN_MASK = 0x80;
 static constexpr int VARINT_FULL_FORM_THRESHOLD = 7;
+
+// Constants or escaping values needed to encode/decode variable-length
+// floating point numbers (decimals) to the byte comparable format.
+static constexpr uint8_t POSITIVE_DECIMAL_HEADER_MASK = 0x80;
+static constexpr uint8_t NEGATIVE_DECIMAL_HEADER_MASK = 0x00;
+static constexpr uint8_t DECIMAL_EXPONENT_LENGTH_HEADER_MASK = 0x40;
+static constexpr uint8_t DECIMAL_LAST_BYTE = 0x00;
 
 static void read_fragmented_checked(managed_bytes_view& view, size_t bytes_to_read, bytes::value_type* out) {
     if (view.size_bytes() < bytes_to_read) {
@@ -41,6 +50,11 @@ template<std::integral T, std::size_t array_size>
 static void write_native_int_array(bytes_ostream& out, std::array<T, array_size>& buffer) {
     constexpr auto bytes_to_write = array_size * sizeof(T);
     out.write(bytes_view(reinterpret_cast<const signed char*>(buffer.data()), bytes_to_write));
+}
+
+template<std::integral T, std::size_t array_size>
+static void write_native_int_array(bytes_ostream& out, std::array<T, array_size>& buffer, size_t n) {
+    out.write(bytes_view(reinterpret_cast<const signed char*>(buffer.data()), n * sizeof(T)));
 }
 
 template <std::integral T>
@@ -469,6 +483,215 @@ std::size_t count_digits(const boost::multiprecision::cpp_int& value) {
     return num_of_digits;
 }
 
+// Constructs a byte-comparable representation of the decimal_type_impl, which is stored as a big_decimal.
+//
+// To compare, we need a normalized value, i.e. one with a sign, exponent and (0,1) mantissa.
+// To avoid loss of precision, both exponent and mantissa need to be base-100.
+// We cannot get this directly off the serialized bytes and the unscaled value has to be reconstructed first.
+// After calculating such a mantissa and base 100 exponent, the value is encoded as follows :
+//     - sign bit inverted + 0x40 + signed exponent length, where exponent is negated if value is negative
+//     - zero or more exponent bytes (as given by length)
+//     - 0x80 + first pair of decimal digits, negative if the decimal is negative and the digits are rounded to -inf
+//     - zero or more 0x80 + pair of decimal digits, always positive
+//     - trailing 0x00
+// Zero is special-cased as 0x80.
+//
+// Because the trailing 00 cannot be produced from a pair of decimal digits (positive or not),
+// no value can be a prefix of another.
+//
+// Encoding examples:
+//    1.1    as       c1 = 0x80 (positive number) + 0x40 + (positive exponent) 0x01 (exp length 1)
+//                    01 = exponent 1 (100^1)
+//                    81 = 0x80 + 01 (0.01)
+//                    8a = 0x80 + 10 (....10)   0.0110e2
+//                    00
+//    -1     as       3f = 0x00 (negative number) + 0x40 - (negative exponent) 0x01 (exp length 1)
+//                    ff = exponent -1. negative number, thus 100^1
+//                    7f = 0x80 - 01 (-0.01)    -0.01e2
+//                    00
+//    -99.9  as       3f = 0x00 (negative number) + 0x40 - (negative exponent) 0x01 (exp length 1)
+//                    ff = exponent -1. negative number, thus 100^1
+//                    1c = 0x80 - 100 (-1.00)
+//                    8a = 0x80 + 10  (+....10) -0.999e2
+//                    00
+static void encode_decimal_type(managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    const int32_t scale = read_simple<int32_t>(serialized_bytes_view);
+    const boost::multiprecision::cpp_int unscaled_value =
+            value_cast<utils::multiprecision_int>(varint_type->deserialize_value(serialized_bytes_view));
+    if (unscaled_value.is_zero()) {
+        // special case for 0
+        write_native_int(out, POSITIVE_DECIMAL_HEADER_MASK);
+        return;
+    }
+
+    // The big_decimal stores decimal of form unscaled_value * pow(10, -scale)
+    // A positive scale moves the decimal point to the left and a negative scale moves it to the right.
+    // The decimal 123.456 can be stored as unscaled value = 123456 and scale = 3.
+    // This needs to be normalized and converted to a mantissa that lies in [0.01, 1) and a base-100 exponent.
+    // such that the big_decimal value = mantissa [0.01, 1) * 100 ^ exponent.
+    // The decimal 123.456 becomes mantissa = 0.0123456 and base 100 exponent = 2 (i.e.) 0.0123456 * 100 ^ 2.
+    // So, first deduce the scale for an adjusted mantissa that lies in [0.01, 1)
+    int64_t adjusted_scale = scale - count_digits(unscaled_value);
+    // The base 100 exponent is half of the negative scale rounded up to the nearest integer and will fit within in 4 bytes.
+    int64_t exponent_base_100 = std::ceil(double(-adjusted_scale) / 2);
+    // Flip the exponent sign for negative big_decimals, so that ones with larger magnitudes are ordered before the smaller ones.
+    bool value_is_negative = unscaled_value.sign() < 0;
+    int32_t modulated_exponent = value_is_negative ? -exponent_base_100 : exponent_base_100;
+
+    // Use an intermediate buffer instead of directly writing every byte into bytes_ostream.
+    std::array<uint8_t, 512> buffer;
+    size_t buffer_pos = 0;
+    // Write the header byte in the byte comparable format, as follows:
+    // sign bit inverted + 0x40 + signed exponent length, where exponent is negated if value is negative
+    auto num_exponent_bytes_to_write = 4 - (std::countl_zero<uint32_t>(std::abs(modulated_exponent)) / 8);
+    buffer[buffer_pos++] = uint8_t((value_is_negative ? NEGATIVE_DECIMAL_HEADER_MASK : POSITIVE_DECIMAL_HEADER_MASK)
+            + DECIMAL_EXPONENT_LENGTH_HEADER_MASK
+            + (modulated_exponent < 0 ? -num_exponent_bytes_to_write : num_exponent_bytes_to_write));
+    // Write out the non zero bytes from modulated exponent
+    while (num_exponent_bytes_to_write--) {
+        buffer[buffer_pos++] = uint8_t((modulated_exponent >> (num_exponent_bytes_to_write * 8)) & 0xFF);
+    }
+
+    // The mantissa is to be written as a sequence of pair of digits.
+    // Calculate the base 10 exponent that can convert the unscaled value into the mantissa [0.01, 1).
+    // (i.e.) expected mantissa = unscaled_value * 10 ^ unscaled_to_mantissa_exponent.
+    // Note that unscaled_to_mantissa_exponent will always be positive as it is intended
+    // to convert the unscaled_value, which is an integer to a mantissa that lies in [0.01, 1).
+    int64_t unscaled_to_mantissa_exponent = scale + 2 * exponent_base_100;
+    // Using the unscaled_to_mantissa_exponent, iterate and split the unscaled value into a sequence of pair of digits.
+    static const boost::multiprecision::cpp_int mp_10(10);
+    boost::multiprecision::cpp_int mantissa = unscaled_value;
+    while (!mantissa.is_zero()) {
+        // extract the first two digits
+        unscaled_to_mantissa_exponent -= 2;
+        int8_t pair_of_digits = 0;
+        if (unscaled_to_mantissa_exponent >= 0) {
+            boost::multiprecision::cpp_int dividend = boost::multiprecision::pow(mp_10, unscaled_to_mantissa_exponent);
+            pair_of_digits = int8_t(mantissa / dividend);
+            // after extracting the first pair, remove it from the unscaled value
+            mantissa = mantissa % dividend;
+            if (mantissa.sign() < 0) {
+                // Negative decimal with more than one pair of digits in mantissa.
+                // First pair of digits are rounded to -inf and the sign is retained.
+                // The remaining digits contain the positive difference between the round'd value and the unscaled value.
+                // For example : -1234.56's unscaled value = -123456, and it is treated as as -130000 + 6544 the pairs are : -13, 65, 44.
+                // So, round off the current pair (which is the first pair) by decreasing it.
+                pair_of_digits--;
+                // Update mantissa with the positive difference
+                mantissa = unscaled_value - pair_of_digits * dividend;
+            }
+        } else {
+            // unscaled_to_mantissa_exponent is negative as the last pair of digit is a single digit.
+            // So, multiply by 10 to get the last pair of digits.
+            // example : if mantissa = 0.12345 => 50 is the pair of digits : 12, 34, 50
+            // However, if mantissa = 0.012345, the pairs are 01, 23, 45 and the control will never reach here.
+            pair_of_digits = int8_t(mantissa * 10);
+            mantissa = 0;
+        }
+
+        // Add 0x80 to the mantissa digit pairs and then write them.
+        //
+        // Adding 0x80 ensures:
+        // 1. Negative mantissa values are ordered before the positive ones
+        //    - Negative pairs (after rounding toward -∞) are shifted into the 0x00–0x7F range.
+        //    - Positive pairs are shifted into the 0x80–0xFF range.
+        //    Example:
+        //       a) -0.12345 (rounded to -13) → -13 + 0x80 = 0x73
+        //       b) 0.12345 (rounded to 12)   → 12 + 0x80 = 0x8C
+        //       Since 0x73 < 0x8C, the negative value (-0.12345) is ordered first.
+        // 2. Mantissa bytes are distinct from the 0x00 terminator.
+        buffer[buffer_pos++] = 0x80 + pair_of_digits;
+
+        if (buffer_pos == buffer.size()) {
+            write_native_int_array(out, buffer);
+            buffer_pos = 0;
+        }
+    }
+
+    // Finally, write the byte to mark end of decimal and flush any remaining data to out
+    buffer[buffer_pos++] = DECIMAL_LAST_BYTE;
+    write_native_int_array(out, buffer, buffer_pos);
+}
+
+// Decoder for decimal type.
+// Refer encode_decimal_type() for the encoding scheme
+static void decode_decimal_type(managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    uint8_t header_byte = read_simple<uint8_t>(comparable_bytes_view);
+    if (header_byte == POSITIVE_DECIMAL_HEADER_MASK) {
+        // special cased zero
+        static const auto big_decimal_zero_serialized_bytes = data_value(big_decimal()).serialize_nonnull();
+        out.write(big_decimal_zero_serialized_bytes);
+        return;
+    }
+
+    // The header byte is encoded with the sign of the decimal,
+    // and the sign and the length (in bytes) of the decimal exponent.
+    // Extract sign of the decimal
+    const bool value_is_negative = header_byte < POSITIVE_DECIMAL_HEADER_MASK;
+    header_byte -= value_is_negative ? NEGATIVE_DECIMAL_HEADER_MASK : POSITIVE_DECIMAL_HEADER_MASK;
+    header_byte -= DECIMAL_EXPONENT_LENGTH_HEADER_MASK;
+    // Now only the sign and length of the exponent remains in header_byte.
+    // The length is encoded as negative if the exponent is negative.
+    const bool exponent_is_negative = header_byte > 0x80;
+    header_byte = exponent_is_negative ? -header_byte : header_byte;
+    // Exponent length (in bytes) is now in header_byte.
+    // First, initialise the exponent variable with 1s if the exponent is negative.
+    int64_t exponent = exponent_is_negative ? -1 : 0;
+    // Extract the exponent.
+    while (header_byte--) {
+        exponent = (exponent << 8) | read_simple<uint8_t>(comparable_bytes_view);
+    }
+    // Exponent sign is flipped for negative decimals. Unflip it.
+    exponent = value_is_negative ? -exponent : exponent;
+
+    // Extract the mantissa as an multiprecision_int and recosntruct the unscaled value of the big_decimal.
+    // The mantissa lies in [0.01, 1) and is encoded as a sequence of pair of digits.
+    utils::multiprecision_int unscaled_value(0);
+    int8_t curr_byte = read_simple<int8_t>(comparable_bytes_view);
+    while (curr_byte != DECIMAL_LAST_BYTE) {
+        // Every mantissa byte has an offset 0x80, subtract that from curr byte
+        curr_byte -= 0x80;
+        // Move the existing digits in unscaled_value to the right by
+        // multiplying it by base (100) and then add int the curr digits.
+        unscaled_value = (unscaled_value * 100) + curr_byte;
+        // Reduce exponent as this iteration multiplies the unscaled_value by 100
+        exponent--;
+        curr_byte = read_simple<uint8_t>(comparable_bytes_view);
+    }
+
+    // Calculate the big_decimal scale from the base-100 exponent.
+    // The big_decimal's scale is a base-10 exponent with the sign flipped, stored as a 32-bit integer.
+    int64_t scale = exponent * -2;
+
+    // The scale has undergone various transformations along with unscaled_value,
+    // so there’s a chance it might be out of bounds relative to the int32 limits.
+    if (scale < std::numeric_limits<int32_t>::min()) {
+        // The scale is lower than the minimum int32 value.
+        // This can happen if unscaled_value had multiple trailing zeros, which got absorbed into an already too-small scale.
+        // For example, unscaled_value = 1234000 and scale = std::numeric_limits<int32_t>::min() will become
+        //              unscaled_value = 1234 and scale = std::numeric_limits<int32_t>::min() - 3, after encoding/decoding.
+        // Append zeros to unscaled_value to bring the scale within limits.
+        const int32_t scale_reduction = std::numeric_limits<int32_t>::min() - scale;
+        static const boost::multiprecision::cpp_int mp_10(10);
+        unscaled_value *= boost::multiprecision::pow(mp_10, scale_reduction);
+        scale = std::numeric_limits<int32_t>::min();
+    } else if (scale > std::numeric_limits<int32_t>::max()) {
+        // The scale is greater than the maximum int32 value.
+        // This can happen iff the last pair of digits in the mantissa required multiplication by 10 during encoding.
+        // And that would increase the scale by 1 after decoding, pushing it past its maximum limit.
+        // For example, a decimal with unscaled_value = 12345 and scale = std::numeric_limits<int32_t>::max()
+        //     will be encoded as mantissa = 0.12345, with digit pairs: 12, 34, 50.
+        //     After decoding, the unscaled_value becomes 123450 and scale = std::numeric_limits<int32_t>::max() + 1.
+        // Trim the zero from the unscaled value and update the scale.
+        unscaled_value /= 10;
+        scale = std::numeric_limits<int32_t>::max();
+    }
+
+    // Write out the scale and unscaled values
+    write_be(reinterpret_cast<char*>(out.write_place_holder(sizeof(int32_t))), int32_t(scale));
+    out.write(data_value(std::move(unscaled_value)).serialize_nonnull());
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -522,6 +745,10 @@ struct to_comparable_bytes_visitor {
     // Encode timeuuid
     void operator()(const timeuuid_type_impl&) {
         convert_timeuuid<true>(serialized_bytes_view, out);
+    }
+
+    void operator()(const decimal_type_impl&) {
+        encode_decimal_type(serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -597,6 +824,10 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const timeuuid_type_impl&) {
         convert_timeuuid<false>(comparable_bytes_view, out);
+    }
+
+    void operator()(const decimal_type_impl&) {
+        decode_decimal_type(comparable_bytes_view, out);
     }
 
     // TODO: Handle other types
