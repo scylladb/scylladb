@@ -2315,7 +2315,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     std::optional<inet_address> existing;
 
     if (tmptr->get_topology().find_node(host_id)) {
-        // If node is not in the topology there is no existsing address
+        // If node is not in the topology there is no existing address
         // If there are two addresses for the same id the "other" one is existing
         // If there is only one it is existing
         if (ips.size() == 2) {
