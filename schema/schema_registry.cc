@@ -244,10 +244,6 @@ schema_ptr schema_registry_entry::get_schema() {
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
-        if (s->is_view()) {
-            // We may encounter a no_such_column_family here, which means that the base table was deleted and we should fail the request
-            s->view_info()->set_base_info(make_lw_shared<const db::view::base_dependent_view_info>(*_base_info));
-        }
         _erase_timer.cancel();
         s->_registry_entry = this;
         _schema = &*s;
@@ -266,10 +262,6 @@ void schema_registry_entry::detach_schema() noexcept {
 frozen_schema schema_registry_entry::frozen() const {
     SCYLLA_ASSERT(_state >= state::LOADED);
     return *_frozen_schema;
-}
-
-void schema_registry_entry::update_base_info(db::view::base_dependent_view_info base_info) {
-    _base_info = std::move(base_info);
 }
 
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {

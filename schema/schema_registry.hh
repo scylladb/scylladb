@@ -94,9 +94,6 @@ public:
     future<> maybe_sync(std::function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
-    // Updates the frozen base info for a view, should be called when updating the base info
-    // Is not needed when we set the base info for the first time - that means this schema is not in the registry
-    void update_base_info(db::view::base_dependent_view_info);
     // Can be called from other shards
     frozen_schema frozen() const;
     // Can be called from other shards
