@@ -111,18 +111,6 @@ concept MutationFragmentVisitorV2 =
         { t(eop) } -> std::same_as<ReturnType>;
     };
 
-template<typename T, typename ReturnType>
-concept FragmentConsumerReturningV2 =
-requires(T t, static_row sr, clustering_row cr, range_tombstone_change rt, tombstone tomb) {
-    { t.consume(std::move(sr)) } -> std::same_as<ReturnType>;
-    { t.consume(std::move(cr)) } -> std::same_as<ReturnType>;
-    { t.consume(std::move(rt)) } -> std::same_as<ReturnType>;
-};
-
-template<typename T>
-concept FragmentConsumerV2 =
-FragmentConsumerReturningV2<T, stop_iteration> || FragmentConsumerReturningV2<T, future<stop_iteration>>;
-
 class mutation_fragment_v2 {
 public:
     enum class kind {
