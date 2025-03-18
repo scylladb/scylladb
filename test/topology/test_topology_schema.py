@@ -10,6 +10,8 @@ import time
 from test.topology.util import wait_for_token_ring_and_group0_consistency
 import pytest
 
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
 
 @pytest.mark.asyncio
 async def test_topology_schema_changes(manager, random_tables):
@@ -24,7 +26,7 @@ async def test_topology_schema_changes(manager, random_tables):
     await random_tables.verify_schema()
 
     # Test add column after adding a server
-    await manager.server_add()
+    await manager.server_add(property_file=servers[1].property_file())
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     await table.add_column()
     await random_tables.verify_schema()
