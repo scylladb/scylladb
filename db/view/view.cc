@@ -85,6 +85,12 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, s
         , _base_info(make_base_dependent_view_info(*base_schema))
 { }
 
+view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, db::view::base_dependent_view_info base_info)
+        : _schema(schema)
+        , _raw(raw_view_info)
+        , _base_info(make_lw_shared<const db::view::base_dependent_view_info>(base_info))
+{ }
+
 cql3::statements::select_statement& view_info::select_statement(data_dictionary::database db) const {
     if (!_select_statement) {
         std::unique_ptr<cql3::statements::raw::select_statement> raw;

@@ -11,6 +11,7 @@
 #include "schema/schema_fwd.hh"
 #include "mutation/frozen_mutation.hh"
 #include "bytes_ostream.hh"
+#include "db/view/base_info.hh"
 
 namespace db {
 class schema_ctxt;
@@ -27,6 +28,6 @@ public:
     frozen_schema(const frozen_schema&) = default;
     frozen_schema& operator=(const frozen_schema&) = default;
     frozen_schema& operator=(frozen_schema&&) = default;
-    schema_ptr unfreeze(const db::schema_ctxt&, std::optional<schema_ptr> base = std::nullopt) const;
+    schema_ptr unfreeze(const db::schema_ctxt&, std::optional<db::view::base_dependent_view_info> base_info = {}) const;
     const bytes_ostream& representation() const;
 };

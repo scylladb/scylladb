@@ -13,6 +13,7 @@
 #include "cdc/log.hh"
 #include "timestamp.hh"
 #include "tombstone_gc_options.hh"
+#include "db/view/base_info.hh"
 
 namespace db {
 class per_partition_rate_limit_options;
@@ -30,6 +31,7 @@ private:
     std::variant<from_time, from_hash, table_schema_version> _version = from_time{};
     std::optional<raw_view_info> _view_info;
     std::optional<schema_ptr> _base_schema;
+    std::optional<db::view::base_dependent_view_info> _base_info;
     schema_builder(const schema::raw_schema&);
     static std::vector<static_configurator>& static_configurators();
 public:
@@ -275,6 +277,7 @@ public:
     schema_builder& with_hash_version();
 
     schema_builder& with_view_info(schema_ptr base_schema, bool include_all_columns, sstring where_clause);
+    schema_builder& with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause, db::view::base_dependent_view_info base);
 
     schema_builder& with_index(const index_metadata& im);
     schema_builder& without_index(const sstring& name);
