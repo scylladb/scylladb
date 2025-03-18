@@ -18,7 +18,7 @@ from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio

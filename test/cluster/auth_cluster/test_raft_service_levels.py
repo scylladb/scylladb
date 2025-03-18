@@ -107,7 +107,7 @@ async def test_service_levels_upgrade(request, manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
     # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
-    servers = await manager.servers_add(3, config=auth_config)
+    servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
 
     logging.info("Waiting until driver connects to every server")
     cql = manager.get_cql()
@@ -237,7 +237,7 @@ async def assert_connections_params(manager: ManagerClient, hosts, expect):
 @pytest.mark.asyncio
 @skip_mode('release', 'cql server testing REST API is not supported in release mode')
 async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
-    servers = await manager.servers_add(3, config=auth_config)
+    servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -320,7 +320,7 @@ async def test_connections_parameters_auto_update(manager: ManagerClient, build_
 
 @pytest.mark.asyncio
 async def test_service_level_cache_after_restart(manager: ManagerClient):
-    servers = await manager.servers_add(1, config=auth_config)
+    servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -449,7 +449,7 @@ async def test_service_levels_over_limit(manager: ManagerClient):
 # Reproduces issue scylla-enterprise#4912
 @pytest.mark.asyncio
 async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
-    servers = await manager.servers_add(2, config=auth_config)
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
     s = servers[0]
     cql = manager.get_cql()
     [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
@@ -480,5 +480,5 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
     await cql.run_async(f"DROP SERVICE LEVEL {sl2}", host=h)
 
     # Check if group0 is healthy
-    s2 = await manager.server_add(config=auth_config)
+    s2 = await manager.server_add(config=auth_config, property_file={"dc": "dc1", "rack": "rack3"})
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
