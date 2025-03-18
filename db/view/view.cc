@@ -139,13 +139,6 @@ const column_definition* view_info::view_column(const column_definition& base_de
     return _schema.get_column_definition(base_def.name());
 }
 
-void view_info::set_base_info(db::view::base_info_ptr base_info) {
-    _base_info = std::move(base_info);
-    // Forget the cached objects which may refer to the base schema.
-    _select_statement = nullptr;
-    _partition_slice = std::nullopt;
-}
-
 // A constructor for a base info that can facilitate reads and writes from the materialized view.
 db::view::base_dependent_view_info::base_dependent_view_info(bool has_computed_column_depending_on_base_non_primary_key,
         bool is_partition_key_permutation_of_base_partition_key,
