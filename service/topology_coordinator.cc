@@ -892,7 +892,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
                                         .set_new_replicas(last_token, tablet_info.replicas)
                                         .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-                                        .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+                                        .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.features()))
                                         .build()
                         ));
                         co_await coroutine::maybe_yield();
