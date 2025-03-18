@@ -108,7 +108,6 @@ future<> backup_task_impl::do_backup() {
         throw std::invalid_argument(fmt::format("snapshot does not exist at {}", _snapshot_dir.native()));
     }
 
-    std::exception_ptr ex;
     gate uploads;
     auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
 
@@ -117,8 +116,8 @@ future<> backup_task_impl::do_backup() {
         try {
             component_ent = co_await snapshot_dir_lister.get();
         } catch (...) {
-            if (!ex) {
-                ex = std::current_exception();
+            if (!_ex) {
+                _ex = std::current_exception();
                 break;
             }
         }
@@ -130,24 +129,24 @@ future<> backup_task_impl::do_backup() {
         // Pre-upload break point. For testing abort in actual s3 client usage.
         co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
 
-        std::ignore = upload_component(component_ent->name).handle_exception([&ex] (std::exception_ptr e) {
+        std::ignore = upload_component(component_ent->name).handle_exception([this] (std::exception_ptr e) {
             // keep the first exception
-            if (!ex) {
-                ex = std::move(e);
+            if (!_ex) {
+                _ex = std::move(e);
             }
         }).finally([gh = std::move(gh)] {});
         co_await coroutine::maybe_yield();
         co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
         if (impl::_as.abort_requested()) {
-            ex = impl::_as.abort_requested_exception_ptr();
+            _ex = impl::_as.abort_requested_exception_ptr();
             break;
         }
     }
 
     co_await snapshot_dir_lister.close();
     co_await uploads.close();
-    if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
+    if (_ex) {
+        co_await coroutine::return_exception_ptr(std::move(_ex));
     }
 }
 

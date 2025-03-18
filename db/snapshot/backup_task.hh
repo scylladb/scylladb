@@ -10,6 +10,8 @@
 #pragma once
 
 #include <filesystem>
+#include <exception>
+
 #include "utils/s3/client_fwd.hh"
 #include "tasks/task_manager.hh"
 
@@ -26,6 +28,8 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     std::filesystem::path _snapshot_dir;
     bool _remove_on_uploaded;
     s3::upload_progress _progress = {};
+
+    std::exception_ptr _ex;
 
     future<> do_backup();
     future<> upload_component(sstring name);
