@@ -4572,8 +4572,12 @@ public:
         if (response_count() == 1) {
             return true;
         }
-        auto& first = *_digest_results.begin();
-        return std::find_if(_digest_results.begin() + 1, _digest_results.end(), [&first] (const digest_and_last_pos& digest) { return digest.digest != first.digest; }) == _digest_results.end();
+        auto it = std::ranges::begin(_digest_results);
+        const auto& first_digest = it->digest;
+        return std::ranges::all_of(std::ranges::subrange(++it, std::ranges::end(_digest_results)),
+                                   [&first_digest] (const digest_and_last_pos& digest) {
+                                       return digest.digest == first_digest;
+                                   });
     }
     const std::optional<full_position>& min_position() const {
         return std::min_element(_digest_results.begin(), _digest_results.end(), [this] (const digest_and_last_pos& a, const digest_and_last_pos& b) {
