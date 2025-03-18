@@ -91,7 +91,7 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
         partition_key pk = mut.key();
         auto m2 = make_memtable(s, {mut});
         m->apply(mut);
-        auto reader = mutation_fragment_v1_stream(m2->make_flat_reader(s, permit));
+        auto reader = mutation_fragment_v1_stream(m2->make_mutation_reader(s, permit));
         auto close_reader = deferred_close(reader);
         std::list<frozen_mutation_fragment> mfs;
         reader.consume_pausable([s, &mfs](mutation_fragment mf) {
@@ -136,7 +136,7 @@ SEASTAR_TEST_CASE(flush_repair_rows_on_wire_to_sstable) {
         std::list<repair_row> repair_rows = to_repair_rows_list(std::move(input), s, seed, repair_master::yes, permit, repair_hasher(seed, s)).get();
         flush_rows(s, repair_rows, writer);
         writer->wait_for_writer_done().get();
-        compare_readers(*s, m->make_flat_reader(s, permit), make_mutation_reader_from_fragments(s, permit, std::move(fragments)));
+        compare_readers(*s, m->make_mutation_reader(s, permit), make_mutation_reader_from_fragments(s, permit, std::move(fragments)));
     });
 }
 

@@ -182,7 +182,7 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
         std::function<void(size_t)> reserve_fn) const {
     auto add_memtables_from_cg = [&] (compaction_group& cg) mutable {
         for (auto&& mt: *cg.memtables()) {
-            if (auto reader_opt = mt->make_flat_reader_opt(s, permit, range, slice, trace_state, fwd, fwd_mr)) {
+            if (auto reader_opt = mt->make_mutation_reader_opt(s, permit, range, slice, trace_state, fwd, fwd_mr)) {
                 readers.emplace_back(std::move(*reader_opt));
             }
         }
