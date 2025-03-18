@@ -164,8 +164,7 @@ class compact_mutation_state {
     uint32_t _current_partition_limit;
     bool _empty_partition{};
     bool _empty_partition_in_gc_consumer{};
-    const dht::decorated_key* _dk{};
-    dht::decorated_key _last_dk;
+    std::optional<dht::decorated_key> _dk;
     bool _return_static_content_on_partition_with_no_rows{};
 
     std::optional<static_row> _last_static_row;
@@ -310,7 +309,6 @@ public:
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
         , _tombstone_gc_state(nullptr)
-        , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_pos(position_in_partition::for_partition_end())
         , _validator("mutation_compactor for read", _schema, validation_level)
     {
@@ -326,7 +324,6 @@ public:
         , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable); })
         , _slice(s.full_slice())
         , _tombstone_gc_state(gc_state)
-        , _last_dk({dht::token(), partition_key::make_empty()})
         , _last_pos(position_in_partition::for_partition_end())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
         // We already have a validator for compaction in the sstable writer, no need to validate twice
@@ -337,10 +334,10 @@ public:
 
     void consume_new_partition(const dht::decorated_key& dk) {
         _validator(mutation_fragment_v2::kind::partition_start, position_in_partition_view::for_partition_start(), {});
-        _validator(dk);
         _stop = stop_iteration::no;
-        auto& pk = dk.key();
-        _dk = &dk;
+        _dk = dk;
+        auto& pk = _dk->key();
+        _validator(*_dk);
         _return_static_content_on_partition_with_no_rows =
             _slice.options.contains(query::partition_slice::option::always_return_static_content) ||
             !has_ck_selector(_slice.row_ranges(_schema, pk));
@@ -531,10 +528,6 @@ public:
     requires CompactedFragmentsConsumerV2<Consumer> && CompactedFragmentsConsumerV2<GCConsumer>
     auto consume_end_of_stream(Consumer& consumer, GCConsumer& gc_consumer) {
         _validator.on_end_of_stream();
-        if (_dk) {
-            _last_dk = *_dk;
-            _dk = &_last_dk;
-        }
         if constexpr (std::is_void_v<std::invoke_result_t<decltype(&GCConsumer::consume_end_of_stream), GCConsumer&>>) {
             gc_consumer.consume_end_of_stream();
             return consumer.consume_end_of_stream();
@@ -546,7 +539,7 @@ public:
     /// The decorated key of the partition the compaction is positioned in.
     /// Can be null if the compaction wasn't started yet.
     const dht::decorated_key* current_partition() const {
-        return _dk;
+        return _dk ? &*_dk : nullptr;
     }
 
     // Only updated when SSTableCompaction == compact_for_sstables::no.
@@ -629,7 +622,7 @@ public:
         if (!_stop) {
             return {};
         }
-        partition_start ps(std::move(_last_dk), _partition_tombstone);
+        partition_start ps(*std::exchange(_dk, std::nullopt), _partition_tombstone);
         if (_effective_tombstone) {
             return detached_compaction_state{std::move(ps), std::move(_last_static_row),
                     range_tombstone_change(position_in_partition::after_key(_schema, _last_pos), _effective_tombstone)};
