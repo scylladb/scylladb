@@ -370,12 +370,12 @@ protected:
 
 PERF_TEST_F(memtable_single_row, one_partition)
 {
-    return consume_all(mt().make_flat_reader(schema(), permit(), single_partition_range()));
+    return consume_all(mt().make_mutation_reader(schema(), permit(), single_partition_range()));
 }
 
 PERF_TEST_F(memtable_single_row, many_partitions)
 {
-    return consume_all(mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
+    return consume_all(mt().make_mutation_reader(schema(), permit(), multi_partition_range(25)));
 }
 
 class memtable_multi_row : public memtable {
@@ -405,12 +405,12 @@ protected:
 
 PERF_TEST_F(memtable_multi_row, one_partition)
 {
-    return consume_all(mt().make_flat_reader(schema(), permit(), single_partition_range()));
+    return consume_all(mt().make_mutation_reader(schema(), permit(), single_partition_range()));
 }
 
 PERF_TEST_F(memtable_multi_row, many_partitions)
 {
-    return consume_all(mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
+    return consume_all(mt().make_mutation_reader(schema(), permit(), multi_partition_range(25)));
 }
 
 class memtable_large_partition : public memtable {
@@ -440,12 +440,12 @@ protected:
 
 PERF_TEST_F(memtable_large_partition, one_partition)
 {
-    return consume_all(mt().make_flat_reader(schema(), permit(), single_partition_range()));
+    return consume_all(mt().make_mutation_reader(schema(), permit(), single_partition_range()));
 }
 
 PERF_TEST_F(memtable_large_partition, many_partitions)
 {
-    return consume_all(mt().make_flat_reader(schema(), permit(), multi_partition_range(25)));
+    return consume_all(mt().make_mutation_reader(schema(), permit(), multi_partition_range(25)));
 }
 
 }

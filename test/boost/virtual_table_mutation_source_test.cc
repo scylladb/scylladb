@@ -39,7 +39,7 @@ public:
     virtual future<> execute(reader_permit permit, db::result_collector& rc) override {
         return async([this, permit, &rc] {
             auto mt = make_memtable(_s, _mutations);
-            auto rdr = mt->make_flat_reader(_s, permit);
+            auto rdr = mt->make_mutation_reader(_s, permit);
             auto close_rdr = deferred_close(rdr);
             rdr.consume_pausable([&rc] (mutation_fragment_v2 mf) {
                 return rc.take(std::move(mf)).then([] { return stop_iteration::no; });

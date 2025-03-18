@@ -269,21 +269,21 @@ public:
     // The 'range' parameter must be live as long as the reader is being used
     //
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_flat_reader(schema_ptr s,
+    mutation_reader make_mutation_reader(schema_ptr s,
                                              reader_permit permit,
                                              const dht::partition_range& range,
                                              const query::partition_slice& slice,
                                              tracing::trace_state_ptr trace_state_ptr = nullptr,
                                              streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                              mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) {
-        if (auto reader_opt = make_flat_reader_opt(s, permit, range, slice, std::move(trace_state_ptr), fwd, fwd_mr)) {
+        if (auto reader_opt = make_mutation_reader_opt(s, permit, range, slice, std::move(trace_state_ptr), fwd, fwd_mr)) {
             return std::move(*reader_opt);
         }
         [[unlikely]] return make_empty_flat_reader_v2(std::move(s), std::move(permit));
     }
-    // Same as make_flat_reader, but returns an empty optional instead of a no-op reader when there is nothing to
+    // Same as make_mutation_reader, but returns an empty optional instead of a no-op reader when there is nothing to
     // read. This is an optimization.
-    mutation_reader_opt make_flat_reader_opt(schema_ptr query_schema,
+    mutation_reader_opt make_mutation_reader_opt(schema_ptr query_schema,
                                           reader_permit permit,
                                           const dht::partition_range& range,
                                           const query::partition_slice& slice,
@@ -291,11 +291,11 @@ public:
                                           streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                           mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes);
 
-    mutation_reader make_flat_reader(schema_ptr s,
+    mutation_reader make_mutation_reader(schema_ptr s,
                                              reader_permit permit,
                                              const dht::partition_range& range = query::full_partition_range) {
         auto& full_slice = s->full_slice();
-        return make_flat_reader(s, std::move(permit), range, full_slice);
+        return make_mutation_reader(s, std::move(permit), range, full_slice);
     }
 
     mutation_reader make_flush_reader(schema_ptr, reader_permit permit);

@@ -3207,8 +3207,8 @@ static sstables::shared_sstable write_sstables(test_env& env, schema_ptr s, lw_s
 
     sst->write_components(make_combined_reader(s,
         env.make_reader_permit(),
-        mt1->make_flat_reader(s, env.make_reader_permit()),
-        mt2->make_flat_reader(s, env.make_reader_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
+        mt1->make_mutation_reader(s, env.make_reader_permit()),
+        mt2->make_mutation_reader(s, env.make_reader_permit())), 1, s, env.manager().configure_writer(), mt1->get_encoding_stats()).get();
     return sst;
 }
 
@@ -5162,7 +5162,7 @@ static void test_sstable_write_large_row_f(schema_ptr s, reader_permit permit, r
         // trigger depends on the size of rows after they are written in the MC format and that size
         // depends on the encoding statistics (because of variable-length encoding). The original values
         // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-        sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
+        sst->write_components(mt.make_mutation_reader(s, std::move(permit)), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
         BOOST_REQUIRE_EQUAL(i, expected.size());
     }, { &handler }).get();
 }
@@ -5216,7 +5216,7 @@ static void test_sstable_write_large_cell_f(schema_ptr s, reader_permit permit, 
         // trigger depends on the size of rows after they are written in the MC format and that size
         // depends on the encoding statistics (because of variable-length encoding). The original values
         // were chosen with the default-constructed encoding_stats, so let's keep it that way.
-        sst->write_components(mt.make_flat_reader(s, std::move(permit)), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
+        sst->write_components(mt.make_mutation_reader(s, std::move(permit)), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
         BOOST_REQUIRE_EQUAL(i, expected.size());
     }, { &handler }).get();
 }
@@ -5275,7 +5275,7 @@ static void test_sstable_log_too_many_rows_f(int rows, int range_tombstones, uin
 
     sstables::test_env::do_with_async([&] (auto& env) {
         auto sst = env.make_sstable(sc, version);
-        sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
+        sst->write_components(mt->make_mutation_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         BOOST_REQUIRE_EQUAL(logged, expected);
     }, { &handler }).get();
@@ -5388,7 +5388,7 @@ static void test_sstable_log_too_many_dead_rows_f(int rows, uint64_t threshold, 
 
     sstables::test_env::do_with_async([&] (auto& env) {
         auto sst = env.make_sstable(sc, version);
-        sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
+        sst->write_components(mt->make_mutation_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         BOOST_REQUIRE_EQUAL(logged, expected);
     }, { &handler }).get();
@@ -5440,7 +5440,7 @@ static void test_sstable_too_many_collection_elements_f(int elements, uint64_t t
 
     sstables::test_env::do_with_async([&] (auto& env) {
         auto sst = env.make_sstable(sc, version);
-        sst->write_components(mt->make_flat_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
+        sst->write_components(mt->make_mutation_reader(sc, semaphore.make_permit()), 1, sc, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         BOOST_REQUIRE_EQUAL(logged, expected);
     }, { &handler }).get();
@@ -5639,7 +5639,7 @@ SEASTAR_TEST_CASE(test_alter_bloom_fp_chance_during_write) {
         mt->apply(m);
 
         auto sst = env.make_sstable(s2, sstable_version_types::me);
-        sst->write_components(mt->make_flat_reader(s1, env.make_reader_permit()), 1, s1, env.manager().configure_writer(), mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_mutation_reader(s1, env.make_reader_permit()), 1, s1, env.manager().configure_writer(), mt->get_encoding_stats()).get();
 
         sstable_assertions sa(env, sst);
         sa.load();
@@ -5679,7 +5679,7 @@ SEASTAR_TEST_CASE(test_alter_compression_during_write) {
         mt->apply(m);
 
         auto sst = env.make_sstable(s2, sstable_version_types::me);
-        sst->write_components(mt->make_flat_reader(s1, env.make_reader_permit()), 1, s1, env.manager().configure_writer(), mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_mutation_reader(s1, env.make_reader_permit()), 1, s1, env.manager().configure_writer(), mt->get_encoding_stats()).get();
 
         sstable_assertions sa(env, sst);
         sa.load();

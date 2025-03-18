@@ -84,7 +84,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
                     const query::partition_slice& slice,
                     tracing::trace_state_ptr trace_state,
                     mutation_reader::forwarding fwd_mr) {
-                    auto reader = remote_memtables->at(this_shard_id())->make_flat_reader(s, std::move(permit), range, slice, std::move(trace_state),
+                    auto reader = remote_memtables->at(this_shard_id())->make_mutation_reader(s, std::move(permit), range, slice, std::move(trace_state),
                             streamed_mutation::forwarding::no, fwd_mr);
                     if (single_fragment_buffer) {
                         reader.set_max_buffer_size(1);

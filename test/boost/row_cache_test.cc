@@ -385,7 +385,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
         auto make_cache = [&tracker, &mt](schema_ptr s, int& secondary_calls_count) -> lw_shared_ptr<row_cache> {
             auto secondary = mutation_source([&mt, &secondary_calls_count] (schema_ptr s, reader_permit permit, const dht::partition_range& range,
                     const query::partition_slice& slice, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-                return make_counting_reader(mt->make_flat_reader(s, std::move(permit), range, slice, std::move(trace), std::move(fwd)), secondary_calls_count);
+                return make_counting_reader(mt->make_mutation_reader(s, std::move(permit), range, slice, std::move(trace), std::move(fwd)), secondary_calls_count);
             });
 
             return make_lw_shared<row_cache>(s, snapshot_source_from_snapshot(secondary), tracker);
@@ -1552,7 +1552,7 @@ SEASTAR_TEST_CASE(test_mvcc) {
                 }
             });
             if (with_active_memtable_reader) {
-                mt1_reader_opt = mt1->make_flat_reader(s, semaphore.make_permit());
+                mt1_reader_opt = mt1->make_mutation_reader(s, semaphore.make_permit());
                 mt1_reader_opt->set_max_buffer_size(1);
                 mt1_reader_opt->fill_buffer().get();
             }
@@ -2528,7 +2528,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 
             // Make snapshot on pkeys[2]
             auto pr = dht::partition_range::make_singular(pkeys[2]);
-            snap = mt->make_flat_reader(s.schema(), semaphore.make_permit(), pr);
+            snap = mt->make_mutation_reader(s.schema(), semaphore.make_permit(), pr);
             snap->set_max_buffer_size(1);
             snap->fill_buffer().get();
 
@@ -3522,7 +3522,7 @@ SEASTAR_TEST_CASE(test_alter_then_preempted_update_then_memtable_read) {
             yield().get();
         }
 
-        auto mt2_reader = mt2->make_flat_reader(s, semaphore.make_permit(), pr, s->full_slice(),
+        auto mt2_reader = mt2->make_mutation_reader(s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
         auto cache_reader = cache.make_reader(s, semaphore.make_permit(), pr, s->full_slice(),
             nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
@@ -3559,12 +3559,12 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
 
         mt->apply(m1);
 
-        auto mt_rd1 = mt->make_flat_reader(s, semaphore.make_permit());
+        auto mt_rd1 = mt->make_mutation_reader(s, semaphore.make_permit());
         mt_rd1.set_max_buffer_size(1);
         mt_rd1.fill_buffer().get();
         BOOST_REQUIRE(mt_rd1.is_buffer_full()); // If fails, increase n_rows
 
-        auto mt_rd2 = mt->make_flat_reader(s, semaphore.make_permit());
+        auto mt_rd2 = mt->make_mutation_reader(s, semaphore.make_permit());
         mt_rd2.set_max_buffer_size(1);
         mt_rd2.fill_buffer().get();
 
@@ -4220,7 +4220,7 @@ SEASTAR_TEST_CASE(test_eviction_of_upper_bound_of_population_range) {
             auto close_rd = deferred_close(rd);
             auto m_cache = read_mutation_from_mutation_reader(rd).get();
             close_rd.close_now();
-            rd = cache_mt->make_flat_reader(s.schema(), semaphore.make_permit(), pr, slice);
+            rd = cache_mt->make_mutation_reader(s.schema(), semaphore.make_permit(), pr, slice);
             auto close_rd2 = deferred_close(rd);
             auto m_mt = read_mutation_from_mutation_reader(rd).get();
             BOOST_REQUIRE(m_mt);
@@ -4805,7 +4805,7 @@ SEASTAR_THREAD_TEST_CASE(test_preempt_cache_update) {
             // the inserted data.
             std::vector<mutation_reader> readers;
             readers.push_back(cache.make_reader(s.schema(), semaphore.make_permit()));
-            readers.push_back(mt->make_flat_reader(s.schema(), semaphore.make_permit()));
+            readers.push_back(mt->make_mutation_reader(s.schema(), semaphore.make_permit()));
             auto at = assert_that(make_combined_reader(s.schema(), semaphore.make_permit(), std::move(readers)));
             for (const auto& m : mutations) {
                 at.produces(m);
