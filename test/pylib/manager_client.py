@@ -12,7 +12,7 @@ import pathlib
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Optional, Callable, Any, Awaitable, Dict, Tuple
+from typing import List, Optional, Callable, Any, Awaitable, Dict, Tuple, Union
 from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
@@ -297,7 +297,7 @@ class ManagerClient():
                                 replace_cfg: Optional[ReplaceConfig],
                                 cmdline: Optional[List[str]],
                                 config: Optional[dict[str, Any]],
-                                property_file: Optional[dict[str, Any]],
+                                property_file: Union[List[dict[str, Any]], dict[str, Any], None],
                                 start: bool,
                                 seeds: Optional[List[IPAddress]],
                                 expected_error: Optional[str],
@@ -380,7 +380,7 @@ class ManagerClient():
     async def servers_add(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
-                          property_file: Optional[dict[str, Any]] = None,
+                          property_file: Union[List[dict[str, Any]], dict[str, Any], None] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
                           driver_connect_opts: dict[str, Any] = {},
