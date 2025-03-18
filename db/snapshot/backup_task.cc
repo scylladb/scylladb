@@ -109,29 +109,8 @@ future<> backup_task_impl::do_backup() {
 
     co_await process_snapshot_dir();
 
-    gate uploads;
+    co_await uploads_worker();
 
-    for (auto it = _files.begin(); it != _files.end() && !_ex; ++it) {
-        auto gh = uploads.hold();
-
-        // Pre-upload break point. For testing abort in actual s3 client usage.
-        co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
-
-        std::ignore = upload_component(*it).handle_exception([this] (std::exception_ptr e) {
-            // keep the first exception
-            if (!_ex) {
-                _ex = std::move(e);
-            }
-        }).finally([gh = std::move(gh)] {});
-        co_await coroutine::maybe_yield();
-        co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
-        if (impl::_as.abort_requested()) {
-            _ex = impl::_as.abort_requested_exception_ptr();
-            break;
-        }
-    }
-
-    co_await uploads.close();
     if (_ex) {
         co_await coroutine::return_exception_ptr(std::move(_ex));
     }
@@ -155,6 +134,40 @@ future<> backup_task_impl::process_snapshot_dir() {
     }
 
     co_await snapshot_dir_lister.close();
+    if (_ex) {
+        co_await coroutine::return_exception_ptr(_ex);
+    }
+}
+
+future<> backup_task_impl::uploads_worker() {
+    gate uploads;
+
+    try {
+        for (auto it = _files.begin(); it != _files.end() && !_ex; ++it) {
+            auto gh = uploads.hold();
+
+            // Pre-upload break point. For testing abort in actual s3 client usage.
+            co_await utils::get_local_injector().inject("backup_task_pre_upload", utils::wait_for_message(std::chrono::minutes(2)));
+
+            std::ignore = upload_component(*it).handle_exception([this] (std::exception_ptr e) {
+                // keep the first exception
+                if (!_ex) {
+                    _ex = std::move(e);
+                }
+            }).finally([gh = std::move(gh)] {});
+            co_await coroutine::maybe_yield();
+            co_await utils::get_local_injector().inject("backup_task_pause", utils::wait_for_message(std::chrono::minutes(2)));
+            if (impl::_as.abort_requested()) {
+                _ex = impl::_as.abort_requested_exception_ptr();
+                break;
+            }
+        }
+    } catch (...) {
+        _ex = std::current_exception();
+    }
+
+    co_await uploads.close();
+
     if (_ex) {
         co_await coroutine::return_exception_ptr(_ex);
     }
