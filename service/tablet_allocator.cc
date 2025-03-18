@@ -2651,7 +2651,7 @@ public:
 
             tablet_transition_kind kind = (src_node_info.state() == locator::node::state::being_removed
                                            || src_node_info.state() == locator::node::state::left)
-                       ? tablet_transition_kind::rebuild : tablet_transition_kind::migration;
+                       ? locator::choose_rebuild_transition_kind(_db.features()) : tablet_transition_kind::migration;
             auto mig = get_migration_info(source_tablets, kind, src, dst);
             auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
 
