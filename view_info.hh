@@ -25,6 +25,7 @@ class view_info final {
     db::view::base_info_ptr _base_info;
 public:
     view_info(const schema& schema, const raw_view_info& raw_view_info, schema_ptr base_schema);
+    view_info(const schema& schema, const raw_view_info& raw_view_info, db::view::base_dependent_view_info base_info);
 
     const raw_view_info& raw() const {
         return _raw;
