@@ -23,6 +23,7 @@
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
+#include "timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"
@@ -2931,9 +2932,8 @@ future<std::optional<mutation>> system_keyspace::get_service_levels_version_muta
     return get_scylla_local_mutation(_db, SERVICE_LEVELS_VERSION_KEY);
 }
 
-future<mutation> system_keyspace::make_service_levels_version_mutation(int8_t version, const service::group0_guard& guard) {
+future<mutation> system_keyspace::make_service_levels_version_mutation(int8_t version, api::timestamp_type timestamp) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
-    auto timestamp = guard.write_timestamp();
     auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), timestamp, {SERVICE_LEVELS_VERSION_KEY, format("{}", version)});
 
     if (muts.size() != 1) {
