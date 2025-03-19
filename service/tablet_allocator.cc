@@ -3207,6 +3207,57 @@ public:
         return tablet_map(base_table_id);
     }
 
+    void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, std::vector<mutation>& muts, api::timestamp_type ts) override {
+        locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
+        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
+        if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
+            auto tm = _db.get_shared_token_metadata().get();
+
+            std::unordered_map<table_id, schema_ptr> new_cfms_map;
+            for (auto s : cfms) {
+                new_cfms_map[s->id()] = s;
+            }
+
+            const bool colocated_tablets_enabled = _db.features().colocated_tablets;
+            std::unordered_map<table_id, std::vector<schema_ptr>> table_groups;
+            for (auto s : cfms) {
+                std::optional<table_id> base_id;
+                if (colocated_tablets_enabled) {
+                    base_id = _db.get_base_table_for_tablet_colocation(*s, new_cfms_map);
+                }
+                table_groups[base_id.value_or(s->id())].push_back(s);
+            }
+
+            auto allocate_child_tablets = [&] (table_id base_id, const tablet_map& base_map, const auto& group_schemas) {
+                // note the child tablet map is the same for all children. it is not dependent on the child schema.
+                // so we create it once and reuse it for all children.
+                auto child_map = allocate_tablets_for_new_table_from_base(base_id, base_map);
+                for (auto sp : group_schemas) {
+                    const auto& s = *sp;
+                    if (s.id() != base_id) {
+                        lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
+                        muts.emplace_back(tablet_map_to_mutation(child_map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
+                    }
+                }
+            };
+
+            for (const auto& [base_id, group_schemas] : table_groups) {
+                if (auto it = new_cfms_map.find(base_id); it != new_cfms_map.end()) {
+                    // base is a new table. we need to allocate tablets for it as well as for its children.
+                    const auto& base_schema = *it->second;
+                    auto base_map = allocate_tablets_for_new_table(tablet_rs, base_schema);
+                    muts.emplace_back(tablet_map_to_mutation(base_map, base_schema.id(), base_schema.ks_name(), base_schema.cf_name(), ts, _db.features()).get());
+
+                    allocate_child_tablets(base_id, base_map, group_schemas);
+                } else {
+                    // base is an existing table. allocate tablets for its children based on the existing base tablet map.
+                    const auto& base_map = tm->tablets().get_tablet_map(base_id);
+                    allocate_child_tablets(base_id, base_map, group_schemas);
+                }
+            }
+        }
+    }
+
     void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
