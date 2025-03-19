@@ -27,12 +27,14 @@ public:
         GLOBAL_TABLES_SPEC = 0,
         HAS_MORE_PAGES = 1,
         NO_METADATA = 2,
+        METADATA_CHANGED = 3,
     };
 
     using flag_enum = super_enum<flag,
         flag::GLOBAL_TABLES_SPEC,
         flag::HAS_MORE_PAGES,
-        flag::NO_METADATA>;
+        flag::NO_METADATA,
+        flag::METADATA_CHANGED>;
 
     using flag_enum_set = enum_set<flag_enum>;
 
