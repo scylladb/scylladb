@@ -704,6 +704,7 @@ public:
     future<> stop();
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;
+    future<> drain_hints_for_left_nodes();
     future<> abort_view_writes();
 
     future<> change_hints_host_filter(db::hints::host_filter new_filter);

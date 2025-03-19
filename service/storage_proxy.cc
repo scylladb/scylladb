@@ -6772,6 +6772,10 @@ void storage_proxy::allow_replaying_hints() noexcept {
     return _hints_resource_manager.allow_replaying();
 }
 
+future<> storage_proxy::drain_hints_for_left_nodes() {
+    return _hints_resource_manager.drain_hints_for_left_nodes();
+}
+
 future<> storage_proxy::change_hints_host_filter(db::hints::host_filter new_filter) {
     if (new_filter == _hints_manager.get_host_filter()) {
         co_return;

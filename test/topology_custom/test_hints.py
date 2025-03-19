@@ -235,3 +235,79 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
     logger.info("Verify that no data stored in hints have been lost")
     for i in range(100):
         assert list(await cql.run_async(f"SELECT v FROM ks.t WHERE pk = {i}")) == [(i + 1,)]
+
+@pytest.mark.asyncio
+async def test_draining_hints(manager: ManagerClient):
+    """
+    This test verifies that all hints are drained when a node is being decommissioned.
+    """
+
+    s1, s2, _ = await manager.servers_add(3)
+    cql = manager.get_cql()
+
+    await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(s2.server_id)
+
+    # Generate hints towards s2 on s1 with probability 1 - ((#nodes - 1) / #nodes)^1000 ~= 1.
+    for i in range(1000):
+        await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+
+    sync_point = create_sync_point(s1)
+    await manager.server_start(s2.server_id)
+
+
+    async def wait():
+        assert await_sync_point(s1, sync_point, 60)
+
+    async with asyncio.TaskGroup() as tg:
+        _ = tg.create_task(manager.decommission_node(s1.server_id, timeout=60))
+        _ = tg.create_task(wait())
+
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_canceling_hint_draining(manager: ManagerClient):
+    """
+    This test verifies that draining hints is canceled as soon as we issue a shutdown,
+    but it's resumed after starting the node again.
+    """
+
+    s1, s2, _ = await manager.servers_add(3)
+    cql = manager.get_cql()
+
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
+
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+
+    await manager.server_stop_gracefully(s2.server_id)
+
+    # Generate hints towards s2 on s1 with probability 1 - ((#nodes - 1) / #nodes)^1000 ~= 1.
+    for i in range(1000):
+        await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+
+    sync_point = create_sync_point(s1)
+
+    await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
+    await manager.remove_node(s1.server_id, s2.server_id)
+    await manager.server_stop_gracefully(s1.server_id)
+
+    s1_log = await manager.server_open_log(s1.server_id)
+    s1_mark = await s1_log.mark()
+
+    await manager.server_update_cmdline(s1.server_id, ["--logger-log-level", "hints_manager=trace"])
+    await manager.server_start(s1.server_id)
+
+    s1_log = await manager.server_open_log(s1.server_id)
+
+    # Make sure the node still knows about the decommissioned node and does start draining for it.
+    await s1_log.wait_for(f"Draining starts for {host_id2}", s1_mark)
+
+    # Make sure draining finishes successfully.
+    assert await_sync_point(s1, sync_point, 60)
+    await s1_log.wait_for(f"Removed hint directory for {host_id2}")
