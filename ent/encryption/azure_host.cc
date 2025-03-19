@@ -88,6 +88,7 @@ private:
     const std::string _log_prefix;
     const host_options _options;
     std::unique_ptr<azure::credentials> _credentials;
+    bool _initialized;
 
     struct attr_cache_key {
         seastar::sstring master_key;
@@ -149,6 +150,7 @@ azure_host::impl::impl(const std::string& name, const host_options& options)
     , _log_prefix(fmt::format("AzureVault:{}", name))
     , _options(options)
     , _credentials()
+    , _initialized(false)
     , _attr_cache(utils::loading_cache_config{
         .max_size = std::numeric_limits<size_t>::max(),
         .expiry = options.key_cache_expiry.value_or(default_expiry),
@@ -190,7 +192,28 @@ static future<T> wrap_exceptions(const std::string& context, Callable&& func) {
 }
 
 future<> azure_host::impl::init() {
-    throw std::logic_error("Not implemented");
+    if (_initialized) {
+        co_return;
+    }
+    if (_options.master_key.empty()) {
+        azlog.info("[{}] No master key configured. Not verifying.", _log_prefix);
+        co_return;
+    }
+    azlog.info("[{}] Verifying access to master key {}", _log_prefix, _options.master_key);
+    co_await wrap_exceptions<void>("init", [this] -> future<> {
+        azlog.debug("[{}] Wrapping a dummy key", _log_prefix);
+        attr_cache_key k{
+            .master_key = _options.master_key,
+            .info = key_info{ .alg = "AES", .len = 128 },
+        };
+        auto [key, id] = co_await create_key(k);
+        azlog.debug("[{}] Unwrapping the dummy key", _log_prefix);
+        auto data = co_await find_key({ .id = id });
+        if (key->key() != data) {
+            throw service_error(fmt::format("[{}] Key verification failed", _log_prefix));
+        }
+        _initialized = true;
+    });
 }
 
 const azure_host::host_options& azure_host::impl::options() const {
