@@ -1624,6 +1624,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 gcfg.host_id = host_id;
                 gcfg.failure_detector_timeout_ms = cfg->failure_detector_timeout_in_ms;
                 gcfg.force_gossip_generation = cfg->force_gossip_generation;
+                gcfg.recovery_leader = cfg->recovery_leader;
                 return gcfg;
             });
 
