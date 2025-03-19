@@ -8,3 +8,4 @@ from pathlib import Path
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
 TOP_SRC_DIR = Path(__file__).parent.parent # ScyllaDB's source code root directory
+BUILD_DIR = TOP_SRC_DIR / "build"
