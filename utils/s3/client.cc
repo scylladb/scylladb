@@ -114,8 +114,8 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
         , _retry_strategy(std::move(rs)) {
     _creds_provider_chain
         .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
-        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn))
-        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>());
+        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
+        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
 
     _creds_update_timer.arm(lowres_clock::now());
 }
