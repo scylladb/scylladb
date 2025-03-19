@@ -30,7 +30,7 @@ from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-modu
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
 from test import TEST_RUNNER
-from test.pylib.cpp.ldap.prepare_instance import start_ldap
+from test.pylib.ldap_server import start_ldap
 from test.pylib.host_registry import HostRegistry
 from test.pylib.internal_types import ServerInfo
 from test.pylib.minio_server import MinioServer
