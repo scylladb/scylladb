@@ -3208,22 +3208,58 @@ public:
         return map;
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    // Allocate tablets for multiple new tables, which may be co-located with each other, or co-located with an existing base table.
+    void allocate_tablets_for_new_tables(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, std::vector<mutation>& muts, api::timestamp_type ts) {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
             auto tm = _db.get_shared_token_metadata().get();
 
-            if (auto base_table_opt = _db.get_base_table_for_tablet_colocation(s); base_table_opt && _db.features().colocated_tablets) {
-                auto base_table = *base_table_opt;
-                lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_table);
-                muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_table, ts));
-            } else {
-                lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
-                tablet_map map = allocate_tablets_for_new_base_table(tablet_rs, s);
-                muts.emplace_back(tablet_map_to_mutation(std::move(map), s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
+            std::unordered_map<table_id, schema_ptr> new_cfms_map;
+            for (auto s : cfms) {
+                new_cfms_map[s->id()] = s;
+            }
+
+            // Group the new tables by co-location groups.
+            // The key is the base table id, which may be a new table or an existing table.
+            const bool colocated_tablets_enabled = _db.features().colocated_tablets;
+            std::unordered_map<table_id, std::vector<schema_ptr>> table_groups;
+            for (auto s : cfms) {
+                std::optional<table_id> base_id;
+                if (colocated_tablets_enabled) {
+                    base_id = _db.get_base_table_for_tablet_colocation(*s, new_cfms_map);
+                }
+                table_groups[base_id.value_or(s->id())].push_back(s);
+            }
+
+            // allocate tablets for each co-location group.
+            // if the base is a new table, allocate new tablets for it.
+            // for the other tables in the group, create a co-located tablet map.
+            for (const auto& [base_id, group_schemas] : table_groups) {
+                if (auto it = new_cfms_map.find(base_id); it != new_cfms_map.end()) {
+                    const auto& s = *it->second;
+                    lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
+                    auto base_map = allocate_tablets_for_new_base_table(tablet_rs, s);
+                    muts.emplace_back(tablet_map_to_mutation(std::move(base_map), s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
+                }
+
+                for (auto sp : group_schemas) {
+                    const auto& s = *sp;
+                    if (s.id() != base_id) {
+                        lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
+                        muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_id, ts));
+                    }
+                }
             }
         }
+    }
+
+    void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, std::vector<mutation>& muts, api::timestamp_type ts) override {
+        allocate_tablets_for_new_tables(ksm, cfms, muts, ts);
+    }
+
+    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+        allocate_tablets_for_new_tables(ksm, {s.shared_from_this()}, muts, ts);
     }
 
     void on_before_drop_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {

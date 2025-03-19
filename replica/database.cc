@@ -940,7 +940,7 @@ void database::init_schema_commitlog() {
     }).release();
 }
 
-std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s) {
+std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s, const std::unordered_map<table_id, schema_ptr>& new_cfms) {
     return std::nullopt;
 }
 
