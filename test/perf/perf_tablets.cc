@@ -14,6 +14,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/util/defer.hh>
 
 #include "locator/tablets.hh"
 #include "replica/tablet_mutation_builder.hh"
@@ -210,9 +211,8 @@ int scylla_tablets_main(int argc, char** argv) {
                 logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
                 logging::logger_registry().set_logger_level("testlog", testlog_level);
             }
-            engine().at_exit([] {
+            auto stop_test = defer([] {
                 aborted.request_abort();
-                return make_ready_future();
             });
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             try {

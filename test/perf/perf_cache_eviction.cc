@@ -19,6 +19,7 @@
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"
 #include <seastar/core/reactor.hh>
+#include <seastar/util/defer.hh>
 
 static thread_local bool cancelled = false;
 
@@ -63,9 +64,8 @@ int main(int argc, char** argv) {
             auto reads_enabled = !app.configuration().contains("no-reads");
             auto seconds = app.configuration()["seconds"].as<unsigned>();
 
-            engine().at_exit([] {
+            auto stop_test = defer([] {
                 cancelled = true;
-                return make_ready_future();
             });
 
             timer<> completion_timer;
