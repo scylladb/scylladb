@@ -157,6 +157,12 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_con
     return parse_table_infos(ks_name, ctx, it != query_params.end() ? it->second : "");
 }
 
+std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context& ctx, const http::request& req) {
+    auto keyspace = validate_keyspace(ctx, req);
+    auto tis = parse_table_infos(keyspace, ctx, req.query_parameters, "cf");
+    return std::make_pair(std::move(keyspace), std::move(tis));
+}
+
 static ss::token_range token_range_endpoints_to_json(const dht::token_range_endpoints& d) {
     ss::token_range r;
     r.start_token = d._start_token;
@@ -779,8 +785,7 @@ static
 future<json::json_return_type>
 rest_force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
         const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
         if (rs.get_type() == locator::replication_strategy_type::local || !rs.is_vnode_based()) {
             auto reason = rs.get_type() == locator::replication_strategy_type::local ? "require" : "support";
@@ -837,8 +842,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 static
 future<json::json_return_type>
 rest_perform_keyspace_offstrategy_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
@@ -857,8 +861,7 @@ static
 future<json::json_return_type>
 rest_upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
@@ -888,8 +891,7 @@ rest_force_flush(http_context& ctx, std::unique_ptr<http::request> req) {
 static
 future<json::json_return_type>
 rest_force_keyspace_flush(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
+        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
         apilog.info("perform_keyspace_flush: keyspace={} tables={}", keyspace, table_infos);
         auto& db = ctx.db;
         co_await replica::database::flush_tables_on_all_shards(db, std::move(table_infos));

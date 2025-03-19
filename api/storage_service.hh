@@ -56,6 +56,8 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_con
 
 std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, sstring value);
 
+std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context& ctx, const http::request& req);
+
 struct scrub_info {
     sstables::compaction_type_options::scrub opts;
     sstring keyspace;

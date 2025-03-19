@@ -902,17 +902,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
-
+        auto [keyspace, tables] = parse_table_infos(ctx, *req);
         apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, std::move(tables), true);
     });
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
-
+        auto [keyspace, tables] = parse_table_infos(ctx, *req);
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
         return set_tables_autocompaction(ctx, std::move(tables), false);
     });
@@ -936,17 +932,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     ss::enable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
-
+        auto [keyspace, tables] = parse_table_infos(ctx, *req);
         apilog.info("enable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
         return set_tables_tombstone_gc(ctx, std::move(tables), true);
     });
 
     ss::disable_tombstone_gc.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto tables = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
-
+        auto [keyspace, tables] = parse_table_infos(ctx, *req);
         apilog.info("disable_tombstone_gc: keyspace={} tables={}", keyspace, tables);
         return set_tables_tombstone_gc(ctx, std::move(tables), false);
     });
