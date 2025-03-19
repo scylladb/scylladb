@@ -2812,6 +2812,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     }
 
     _stats.api_operations.batch_write_item_batch_total += batch_size;
+    _stats.api_operations.batch_write_item_histogram.add(batch_size);
     co_return co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([start_time, this] () {
         // FIXME: Issue #5650: If we failed writing some of the updates,
         // need to return a list of these failed updates in UnprocessedItems
@@ -4176,6 +4177,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     }
 
     _stats.api_operations.batch_get_item_batch_total += batch_size;
+    _stats.api_operations.batch_get_item_histogram.add(batch_size);
     // If we got here, all "requests" are valid, so let's start the
     // requests for the different partitions all in parallel.
     std::vector<future<std::vector<rjson::value>>> response_futures;
