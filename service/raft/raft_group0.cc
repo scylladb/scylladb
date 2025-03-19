@@ -731,7 +731,7 @@ future<> raft_group0::setup_group0(
         std::optional<replace_info> replace_info, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled,
         const join_node_request_params& params) {
     if (!co_await use_raft()) {
-        // The node is in the RECOVERY mode. We are in Maintenence Mode or the gossip-based recovery procedure.
+        // The node is in the RECOVERY mode. We are in Maintenance Mode or the gossip-based recovery procedure.
         co_return;
     }
 
