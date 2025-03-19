@@ -50,7 +50,10 @@ public:
     const std::vector<seastar::lw_shared_ptr<column_specification>> bound_names;
     const std::vector<uint16_t> partition_key_bind_indices;
     std::vector<sstring> warnings;
+private:
+    mutable std::optional<cql_metadata_id_type> _cached_metadata_id;
 
+public:
     prepared_statement(audit::audit_info_ptr&& audit_info, seastar::shared_ptr<cql_statement> statement_, std::vector<seastar::lw_shared_ptr<column_specification>> bound_names_,
                        std::vector<uint16_t> partition_key_bind_indices, std::vector<sstring> warnings = {});
 
@@ -64,6 +67,8 @@ public:
     checked_weak_ptr checked_weak_from_this() const {
         return checked_weak_ptr(this->weak_from_this());
     }
+
+    cql_metadata_id_type calculate_or_get_metadata_id() const;
 };
 
 }
