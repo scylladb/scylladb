@@ -18,12 +18,21 @@ concept FlatMutationReaderConsumer =
     };
 
 
+template<typename T, typename ReturnType>
+concept FlattenedConsumerReturning =
+    requires(T obj, const dht::decorated_key& dk, tombstone tomb, static_row sr, clustering_row cr, range_tombstone rt) {
+        { obj.consume_new_partition(dk) };
+        { obj.consume(tomb) };
+        { obj.consume(std::move(sr)) } -> std::same_as<ReturnType>;
+        { obj.consume(std::move(cr)) } -> std::same_as<ReturnType>;
+        { obj.consume(std::move(rt)) } -> std::same_as<ReturnType>;
+        { obj.consume_end_of_partition() };
+        { obj.consume_end_of_stream() };
+    };
+
 template<typename T>
 concept FlattenedConsumer =
-    StreamedMutationConsumer<T> && requires(T obj, const dht::decorated_key& dk) {
-        { obj.consume_new_partition(dk) };
-        { obj.consume_end_of_partition() };
-    };
+    FlattenedConsumerReturning<T, stop_iteration> || FlattenedConsumerReturning<T, future<stop_iteration>>;
 
 template<typename T>
 concept FlattenedConsumerFilter =
@@ -49,12 +58,21 @@ concept MutationConsumer =
         { c(std::move(m)) } -> std::same_as<future<stop_iteration>>;
     };
 
+template<typename T, typename ReturnType>
+concept FlattenedConsumerReturningV2 =
+    requires(T obj, const dht::decorated_key& dk, tombstone tomb, static_row sr, clustering_row cr, range_tombstone_change rt) {
+        { obj.consume_new_partition(dk) };
+        { obj.consume(tomb) };
+        { obj.consume(std::move(sr)) } -> std::same_as<ReturnType>;
+        { obj.consume(std::move(cr)) } -> std::same_as<ReturnType>;
+        { obj.consume(std::move(rt)) } -> std::same_as<ReturnType>;
+        { obj.consume_end_of_partition() };
+        { obj.consume_end_of_stream() };
+    };
+
 template<typename T>
 concept FlattenedConsumerV2 =
-    StreamedMutationConsumerV2<T> && requires(T obj, const dht::decorated_key& dk) {
-        { obj.consume_new_partition(dk) };
-        { obj.consume_end_of_partition() };
-    };
+FlattenedConsumerReturningV2<T, stop_iteration> || FlattenedConsumerReturningV2<T, future<stop_iteration>>;
 
 template<typename T>
 concept FlattenedConsumerFilterV2 =
