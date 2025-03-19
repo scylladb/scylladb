@@ -14,7 +14,20 @@
 namespace alternator {
 
 const char* ALTERNATOR_METRICS = "alternator";
-
+static seastar::metrics::histogram estimated_histogram_to_metrics(const utils::estimated_histogram& histogram) {
+    seastar::metrics::histogram res;
+    res.buckets.resize(histogram.bucket_offsets.size());
+    uint64_t cummulative_count = 0;
+    res.sample_count = histogram._count;
+    res.sample_sum = histogram._sample_sum;
+    for (size_t i = 0; i < res.buckets.size(); i++) {
+        auto& v = res.buckets[i];
+        v.upper_bound = histogram.bucket_offsets[i];
+        cummulative_count += histogram.buckets[i];
+        v.count = cummulative_count;
+    }
+    return res;
+}
 stats::stats() : api_operations{} {
     // Register the
     seastar::metrics::label op("op");
@@ -111,6 +124,10 @@ stats::stats() : api_operations{} {
                     api_operations.batch_write_item_batch_total)(alternator_label).set_skip_when_empty(),
             seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchGetItem")},
                     api_operations.batch_get_item_batch_total)(alternator_label).set_skip_when_empty(),
+            seastar::metrics::make_histogram("batch_item_sizes", seastar::metrics::description("Batches size distribution"),{op("BatchGetItem")},
+                    [this]{ return estimated_histogram_to_metrics(api_operations.batch_get_item_sizes);})(alternator_label).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_histogram("batch_item_sizes", seastar::metrics::description("Batches size distribution"),{op("BatchWriteItem")},
+                    [this]{ return estimated_histogram_to_metrics(api_operations.batch_write_item_sizes);})(alternator_label).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
     });
 }
 
