@@ -925,20 +925,26 @@ void database::init_schema_commitlog() {
     }).release();
 }
 
-std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s) {
+std::optional<table_id> database::get_base_table_for_tablet_colocation(const schema& s, const std::unordered_map<table_id, schema_ptr>& new_cfms) {
+    auto find_schema_from_db_or_new = [this, &new_cfms] (table_id table_id) -> schema_ptr {
+        auto it = new_cfms.find(table_id);
+        if (it != new_cfms.end()) {
+            return it->second;
+        }
+        if (column_family_exists(table_id)) {
+            return find_schema(table_id);
+        }
+        return {};
+    };
+
     bool is_colocated_view = std::invoke([&] {
         if (!s.is_view()) {
             return false;
         }
 
-        if (!column_family_exists(s.view_info()->base_id())) {
-            // TODO MICHAEL what if base and view are created together?
-            // see test_tablet_alternator_lsi_consistency
-            dblog.warn("Base table for view {}.{} not found", s.ks_name(), s.cf_name());
-            return false;
-        }
+        auto base_schema_ptr = find_schema_from_db_or_new(s.view_info()->base_id());
+        SCYLLA_ASSERT(base_schema_ptr);
 
-        auto base_schema_ptr = find_column_family(s.view_info()->base_id()).schema();
         if (s.partition_key_size() != base_schema_ptr->partition_key_size()) {
             return false;
         }
