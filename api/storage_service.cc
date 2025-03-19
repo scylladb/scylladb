@@ -152,14 +152,11 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_con
     return res;
 }
 
-std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name) {
-    auto it = query_params.find(param_name);
-    return parse_table_infos(ks_name, ctx, it != query_params.end() ? it->second : "");
-}
-
 std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context& ctx, const http::request& req, sstring cf_param_name) {
     auto keyspace = validate_keyspace(ctx, req);
-    auto tis = parse_table_infos(keyspace, ctx, req.query_parameters, cf_param_name);
+    const auto& query_params = req.query_parameters;
+    auto it = query_params.find(cf_param_name);
+    auto tis = parse_table_infos(keyspace, ctx, it != query_params.end() ? it->second : "");
     return std::make_pair(std::move(keyspace), std::move(tis));
 }
 
