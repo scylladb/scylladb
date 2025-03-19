@@ -6,11 +6,18 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "dht/i_partitioner_fwd.hh"
+
 namespace db {
 namespace view {
 class update_backlog {
     size_t get_current_bytes();
     size_t get_max_bytes();
 };
+
+verb [[cancellable]] build_views_range(table_id base_id, unsigned shard, dht::token_range range, std::vector<table_id> views);
+verb [[one_way]] abort_view_building_work(unsigned shard);
+verb [[cancellable]] register_staging_sstables(table_id base_id, unsigned shard, dht::token_range_vector ranges);
+verb [[one_way]] notify_staging_detector();
 }
 }
