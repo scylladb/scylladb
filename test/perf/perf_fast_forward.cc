@@ -2099,9 +2099,8 @@ int scylla_fast_forward_main(int argc, char** argv) {
 
                     sleep(1s).get(); // wait for system table flushes to quiesce
 
-                    engine().at_exit([&] {
+                    auto stop_test = defer([] {
                         cancel = true;
-                        return make_ready_future();
                     });
 
                     auto requested_test_groups = app.configuration()["run-tests"].as<std::vector<std::string>>() | std::ranges::to<std::unordered_set>();

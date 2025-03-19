@@ -271,9 +271,8 @@ int scylla_row_cache_update_main(int argc, char** argv) {
     app_template app;
     return app.run(argc, argv, [] {
         return seastar::async([&] {
-            engine().at_exit([] {
+            auto stop_test = defer([] {
                 cancelled = true;
-                return make_ready_future();
             });
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             test_small_partitions();
