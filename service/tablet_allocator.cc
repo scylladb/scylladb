@@ -730,11 +730,12 @@ public:
             plan.merge(std::move(dc_plan));
         }
 
+        // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
+        // Note : Resize plans should be generated before repair plans to avoid scheduling repairs for tables waiting for resize finalisation.
+        plan.merge_resize_plan(co_await make_resize_plan(plan));
+
         // Make plans for repair jobs
         plan.set_repair_plan(co_await make_repair_plan(plan));
-
-        // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
-        plan.merge_resize_plan(co_await make_resize_plan(plan));
 
         auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
         lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
@@ -836,7 +837,13 @@ public:
 
         std::vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
+        const auto& tables_waiting_for_resize_finalization = mplan.resize_plan().finalize_resize;
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
+            // Skip tables waiting for resize finalization
+            if (tables_waiting_for_resize_finalization.contains(table)) {
+                continue;
+            }
+
             auto& tmap = *tmap_;
             co_await coroutine::maybe_yield();
             auto& config = tmap.repair_scheduler_config();
