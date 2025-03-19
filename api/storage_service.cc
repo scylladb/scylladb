@@ -175,16 +175,6 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     return r;
 }
 
-using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<http::request>, sstring, std::vector<table_info>)>;
-
-static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
-    return [&ctx, f = std::move(f)](std::unique_ptr<http::request> req) {
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
-        return f(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
-    };
-}
-
 seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
     return q.scatter().then([&q, legacy_request] {
         return sleep(q.duration()).then([&q, legacy_request] {
@@ -846,7 +836,9 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
 static
 future<json::json_return_type>
-rest_perform_keyspace_offstrategy_compaction(http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) {
+rest_perform_keyspace_offstrategy_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
+        auto keyspace = validate_keyspace(ctx, req);
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         bool res = false;
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
@@ -863,8 +855,10 @@ rest_perform_keyspace_offstrategy_compaction(http_context& ctx, std::unique_ptr<
 
 static
 future<json::json_return_type>
-rest_upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) {
+rest_upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
+        auto keyspace = validate_keyspace(ctx, req);
+        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
 
         apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
@@ -1735,12 +1729,6 @@ static
 seastar::httpd::future_json_function
 rest_bind(FuncType func, BindArgs&... args) {
     return std::bind_front(func, std::ref(args)...);
-}
-
-static
-seastar::httpd::future_json_function
-rest_bind(ks_cf_func func, http_context& ctx) {
-    return wrap_ks_cf(ctx, func);
 }
 
 void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
