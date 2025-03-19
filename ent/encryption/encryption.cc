@@ -44,6 +44,7 @@
 #include "kms_host.hh"
 #include "gcp_key_provider.hh"
 #include "gcp_host.hh"
+#include "azure_host.hh"
 #include "bytes.hh"
 #include "utils/class_registrator.hh"
 #include "cql3/query_processor.hh"
@@ -276,6 +277,7 @@ class encryption_context_impl : public encryption_context {
     std::vector<std::unordered_map<sstring, shared_ptr<kmip_host>>> _per_thread_kmip_host_cache;
     std::vector<std::unordered_map<sstring, shared_ptr<kms_host>>> _per_thread_kms_host_cache;
     std::vector<std::unordered_map<sstring, shared_ptr<gcp_host>>> _per_thread_gcp_host_cache;
+    std::vector<std::unordered_map<sstring, shared_ptr<azure_host>>> _per_thread_azure_host_cache;
     std::vector<shared_ptr<encryption_schema_extension>> _per_thread_global_user_extension;
     std::unique_ptr<encryption_config> _cfg;
     sharded<cql3::query_processor>* _qp;;
@@ -291,6 +293,7 @@ public:
         , _per_thread_kmip_host_cache(smp::count)
         , _per_thread_kms_host_cache(smp::count)
         , _per_thread_gcp_host_cache(smp::count)
+        , _per_thread_azure_host_cache(smp::count)
         , _per_thread_global_user_extension(smp::count)
         , _cfg(std::move(cfg))
         , _qp(find_or_null<cql3::query_processor>(services))
@@ -404,6 +407,10 @@ public:
         return get_host<gcp_host>(host, _per_thread_gcp_host_cache, _cfg->gcp_hosts());
     }
 
+    shared_ptr<azure_host> get_azure_host(const sstring& host) override {
+        return get_host<azure_host>(host, _per_thread_azure_host_cache, _cfg->azure_hosts());
+    }
+
 
     const encryption_config& config() const override {
         return *_cfg;
@@ -464,7 +471,8 @@ public:
             _per_thread_kmip_host_cache[this_shard_id()].clear();
             _per_thread_kms_host_cache[this_shard_id()].clear();
             _per_thread_gcp_host_cache[this_shard_id()].clear();
-            _per_thread_global_user_extension[this_shard_id()] = {};            
+            _per_thread_azure_host_cache[this_shard_id()].clear();
+            _per_thread_global_user_extension[this_shard_id()] = {};
         });
     }
 
@@ -1048,6 +1056,14 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
             // only pre-create on shard 0.
             co_await parallel_for_each(cfg.gcp_hosts(), [ctxt](auto& p) {
                 auto host = ctxt->get_gcp_host(p.first);
+                return host->init();
+            });
+        }
+
+        if (!cfg.azure_hosts().empty()) {
+            // only pre-create on shard 0.
+            co_await parallel_for_each(cfg.azure_hosts(), [ctxt](auto& p) {
+                auto host = ctxt->get_azure_host(p.first);
                 return host->init();
             });
         }
