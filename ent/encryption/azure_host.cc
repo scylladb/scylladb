@@ -9,13 +9,23 @@
 
 #include <stdexcept>
 
+#include "utils/log.hh"
+#include "utils/hash.hh"
+#include "utils/loading_cache.hh"
 #include "azure_host.hh"
 #include "encryption.hh"
+
+using namespace std::chrono_literals;
+
+static logging::logger azlog("azure_vault");
 
 namespace encryption {
 
 class azure_host::impl {
 public:
+    static inline constexpr std::chrono::milliseconds default_expiry = 600s;
+    static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
+
     impl(const std::string& name, const host_options&);
     future<> init();
     const host_options& options() const;
@@ -24,9 +34,43 @@ public:
 private:
     const std::string _name;
     const host_options _options;
+
+    struct attr_cache_key {
+        seastar::sstring master_key;
+        key_info info;
+        bool operator==(const attr_cache_key& v) const = default;
+    };
+
+    struct attr_cache_key_hash {
+        size_t operator()(const attr_cache_key& k) const {
+            return utils::tuple_hash()(std::tie(k.master_key, k.info.len));
+        }
+    };
+
+    friend struct fmt::formatter<attr_cache_key>;
+
+    template<typename Key, typename Value, typename Hash>
+    using cache_type = utils::loading_cache<
+        Key,
+        Value,
+        2,
+        utils::loading_cache_reload_enabled::yes,
+        utils::simple_entry_size<Value>,
+        Hash
+    >;
+    cache_type<attr_cache_key, key_and_id_type, attr_cache_key_hash> _attr_cache;
+
+    future<key_and_id_type> create_key(const attr_cache_key&);
 };
 
-azure_host::impl::impl(const std::string& name, const host_options&) {}
+azure_host::impl::impl(const std::string& name, const host_options& options)
+    : _name(name)
+    , _options(options)
+    , _attr_cache(utils::loading_cache_config{
+        .max_size = std::numeric_limits<size_t>::max(),
+        .expiry = options.key_cache_expiry.value_or(default_expiry),
+        .refresh = options.key_cache_refresh.value_or(default_refresh)}, azlog, std::bind_front(&impl::create_key, this))
+{}
 
 future<> azure_host::impl::init() {
     throw std::logic_error("Not implemented");
@@ -37,6 +81,10 @@ const azure_host::host_options& azure_host::impl::options() const {
 }
 
 future<azure_host::key_and_id_type> azure_host::impl::get_or_create_key(const key_info& info) {
+    throw std::logic_error("Not implemented");
+}
+
+future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cache_key& key) {
     throw std::logic_error("Not implemented");
 }
 
@@ -97,3 +145,11 @@ future<azure_host::key_ptr> azure_host::get_key_by_id(const azure_host::id_type&
 }
 
 } // namespace encryption
+
+template<>
+struct fmt::formatter<encryption::azure_host::impl::attr_cache_key> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const encryption::azure_host::impl::attr_cache_key& d, fmt::format_context& ctxt) const {
+        return fmt::format_to(ctxt.out(), "{},{},{}", d.master_key, d.info.alg, d.info.len);
+    }
+};
