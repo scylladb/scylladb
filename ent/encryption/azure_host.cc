@@ -45,6 +45,7 @@ class vault_log_filter : public rest::http_log_filter {
 public:
     enum class op_type {
         wrapkey,
+        unwrapkey,
     };
 
     explicit vault_log_filter(op_type op) : _op(op) {}
@@ -57,7 +58,8 @@ public:
     }
 
     string_opt filter_body(body_type type, std::string_view body) const override {
-        if (_op == op_type::wrapkey && type == body_type::request) {
+        if ((_op == op_type::wrapkey && type == body_type::request)
+                || (_op == op_type::unwrapkey && type == body_type::response)) {
             auto j = rjson::parse(body);
             auto val = rjson::find(j, "value");
             if (val) {
@@ -130,6 +132,7 @@ private:
     static constexpr char AKV_PATH_TEMPLATE[] = "/keys/{}/{}/{}?api-version=7.4";
     static constexpr char AKV_LATEST_VERSION[] = ""; // an empty version denotes the latest
     static constexpr char AKV_WRAPKEY_OP[] = "wrapkey";
+    static constexpr char AKV_UNWRAPKEY_OP[] = "unwrapkey";
     static constexpr char AKV_ENCRYPTION_ALG[] = "RSA-OAEP-256";
     static constexpr char AKV_TOKEN_RESOURCE_URI[] = "https://vault.azure.net"; // no trailing slash
 
@@ -209,7 +212,11 @@ future<azure_host::key_and_id_type> azure_host::impl::get_or_create_key(const ke
 }
 
 future<azure_host::key_ptr> azure_host::impl::get_key_by_id(const azure_host::id_type& id, const key_info& info) {
-    throw std::logic_error("Not implemented");
+    id_cache_key key { .id = id };
+    co_return co_await wrap_exceptions<key_ptr>("get_key_by_id", [this, &key, &info] -> future<key_ptr> {
+        auto data = co_await _id_cache.get(key);
+        co_return make_shared<symmetric_key>(info, data);
+    });
 }
 
 std::tuple<std::string, std::string> azure_host::impl::parse_key(std::string_view spec) {
@@ -338,7 +345,43 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
 }
 
 future<bytes> azure_host::impl::find_key(const id_cache_key& k) {
-    throw std::logic_error("Not implemented");
+    static const vault_log_filter filter{vault_log_filter::op_type::unwrapkey};
+    const auto id = to_string_view(k.id);
+    azlog.debug("[{}] Finding key: {}", _log_prefix, id);
+
+    auto [vault, keyname, version, cipher] = [&id] {
+        // Regex for key ID in format:
+        // "<vault>/<keyname>/<version>:<cipher>" or "http(s)://<host>:<port>/<keyname>/<version>:<cipher>"
+        // Captures:
+        // 1. Vault (either a name or an endpoint)
+        // 2. Key name
+        // 3. Key version
+        // 4. Cipher text for data encryption key
+        static const boost::regex id_re(R"foo(((?:https?://[^/]+)|[^/]+)/([^/]+)/([^:]+):(.+))foo");
+        boost::match_results<std::string_view::const_iterator> match;
+        if (!boost::regex_match(id.begin(), id.end(), match, id_re)) {
+            throw std::invalid_argument(fmt::format("Not a valid key id: {}", id));
+        }
+        return std::make_tuple(match[1].str(), match[2].str(), match[3].str(), match[4].str());
+    }();
+
+    auto [scheme, host, port] = parse_vault(vault);
+    auto path = seastar::format(AKV_PATH_TEMPLATE, keyname, version, AKV_UNWRAPKEY_OP);
+    auto body = [&cipher] {
+        auto b = rjson::empty_object();
+        rjson::add(b, "alg", AKV_ENCRYPTION_ALG);
+        rjson::add(b, "value", cipher);
+        return b;
+    }();
+    rjson::value resp;
+    try {
+        resp = co_await send_request(host, port, scheme == "https", path, body, filter);
+    } catch (...) {
+        azlog.error("[{}] Failed to unwrap key {}: {}", _log_prefix, k.id, std::current_exception());
+        throw;
+    }
+    auto data = base64url_decode(rjson::get<std::string>(resp, "value"));
+    co_return data;
 }
 
 // ==================== azure_host class implementation ====================
