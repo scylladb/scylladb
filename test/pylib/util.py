@@ -23,7 +23,6 @@ import string
 
 from typing import Callable, Awaitable, Optional, TypeVar, Any
 
-import universalasync
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
@@ -338,7 +337,6 @@ def prepare_dirs(tempdir_base: str, modes: list[str]) -> None:
             prepare_dir(os.path.join(tempdir_base, mode, "pytest"), "*")
 
 
-@universalasync.async_to_sync_wraps
 async def start_s3_mock_services(minio_tempdir_base: str) -> None:
     ms = MinioServer(
         tempdir_base=minio_tempdir_base,

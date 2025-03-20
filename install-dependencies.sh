@@ -163,7 +163,6 @@ declare -A pip_packages=(
     [allure-pytest]=""
     [pytest-xdist]=""
     [pykmip]=""
-    [universalasync]=""
     [boto3-stubs[dynamodb]]=""
 )
 

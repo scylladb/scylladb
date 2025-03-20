@@ -90,25 +90,25 @@ def pytest_collection_modifyitems(config, items):
                 item.name = f'{item.name}.{run_id}'
 
 
-def pytest_sessionstart(session: pytest.Session) -> None:
+@pytest.fixture(scope="session", autouse=True)
+async def init_session(request):
+    session = request.session
     # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
     # we don't need this stuff.
-    if TEST_RUNNER != "pytest" or session.config.getoption("--collect-only"):
-        return
+    if (TEST_RUNNER == "pytest"
+        and session.config.getoption("--test-py-init")
+        and not session.config.getoption("--collect-only")
+    ):
+        init_testsuite_globals()
+        TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
 
-    if not session.config.getoption("--test-py-init"):
-        return
+        # Run stuff just once for the pytest session even running under xdist.
+        if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
+            temp_dir = os.path.join(session.config.rootpath, "..", session.config.getoption("--tmpdir"))
+            prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes())
+            await start_s3_mock_services(minio_tempdir_base=temp_dir)
 
-    init_testsuite_globals()
-    TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+    yield
 
-    # Run stuff just once for the pytest session even running under xdist.
-    if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
-        temp_dir = os.path.join(session.config.rootpath, "..", session.config.getoption("--tmpdir"))
-        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes())
-        start_s3_mock_services(minio_tempdir_base=temp_dir)
-
-
-def pytest_sessionfinish() -> None:
     if getattr(TestSuite, "artifacts", None) is not None:
-        asyncio.get_event_loop().run_until_complete(TestSuite.artifacts.cleanup_before_exit())
+        await TestSuite.artifacts.cleanup_before_exit()
