@@ -89,21 +89,6 @@ inline std::vector<sstring> split(const sstring& text, const char* separator) {
     return boost::split(tokens, text, boost::is_any_of(separator));
 }
 
-/**
- * A helper function to sum values on an a distributed object that
- * has a get_stats method.
- *
- */
-template<class T, class F, class V>
-future<json::json_return_type>  sum_stats(distributed<T>& d, V F::*f) {
-    return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, 0,
-            std::plus<V>()).then([](V val) {
-        return make_ready_future<json::json_return_type>(val);
-    });
-}
-
-
-
 inline
 httpd::utils_json::histogram to_json(const utils::ihistogram& val) {
     httpd::utils_json::histogram h;
@@ -125,32 +110,6 @@ httpd::utils_json::rate_moving_average_and_histogram timer_to_json(const utils::
     h.hist = to_json(val.hist);
     h.meter = meter_to_json(val.rate);
     return h;
-}
-
-template<class T, class F>
-future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
-
-    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).hist;}, utils::ihistogram(),
-            std::plus<utils::ihistogram>()).then([](const utils::ihistogram& val) {
-        return make_ready_future<json::json_return_type>(to_json(val));
-    });
-}
-
-template<class T, class F>
-future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
-
-    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
-            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
-        return make_ready_future<json::json_return_type>(timer_to_json(val));
-    });
-}
-
-template<class T, class F>
-future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_summary_and_histogram F::*f) {
-    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
-            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
-        return make_ready_future<json::json_return_type>(timer_to_json(val));
-    });
 }
 
 inline int64_t min_int64(int64_t a, int64_t b) {
