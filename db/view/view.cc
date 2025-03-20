@@ -24,6 +24,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "db/view/base_info.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
@@ -87,7 +88,7 @@ view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, s
 view_info::view_info(const schema& schema, const raw_view_info& raw_view_info, db::view::base_dependent_view_info base_info)
         : _schema(schema)
         , _raw(raw_view_info)
-        , _base_info(make_lw_shared<const db::view::base_dependent_view_info>(base_info))
+        , _base_info(std::move(base_info))
 { }
 
 cql3::statements::select_statement& view_info::select_statement(data_dictionary::database db) const {
@@ -153,7 +154,7 @@ db::view::base_dependent_view_info::base_dependent_view_info(bool has_computed_c
         , has_base_non_pk_columns_in_view_pk{has_base_non_pk_columns_in_view_pk}
 { }
 
-db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& base) const {
+db::view::base_dependent_view_info view_info::make_base_dependent_view_info(const schema& base) const {
     bool is_partition_key_permutation_of_base_partition_key =
         std::ranges::all_of(_schema.partition_key_columns(), [&base] (const column_definition& view_col) {
             const column_definition* base_col = base.get_column_definition(view_col.name());
@@ -181,35 +182,20 @@ db::view::base_info_ptr view_info::make_base_dependent_view_info(const schema& b
             has_base_non_pk_columns_in_view_pk = true;
         }
     }
-    return make_lw_shared<db::view::base_dependent_view_info>(has_computed_column_depending_on_base_non_primary_key,
+    return db::view::base_dependent_view_info(has_computed_column_depending_on_base_non_primary_key,
         is_partition_key_permutation_of_base_partition_key, has_base_non_pk_columns_in_view_pk);
 }
 
 bool view_info::has_base_non_pk_columns_in_view_pk() const {
-    // The base info is not always available, this is because
-    // the base info initialization is separate from the view
-    // info construction. If we are trying to get this info without
-    // initializing the base information it means that we have a
-    // schema integrity problem as the creator of owning view schema
-    // didn't make sure to initialize it with base information.
-    if (!_base_info) {
-        on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
-    }
-    return _base_info->has_base_non_pk_columns_in_view_pk;
+    return _base_info.has_base_non_pk_columns_in_view_pk;
 }
 
 bool view_info::has_computed_column_depending_on_base_non_primary_key() const {
-    if (!_base_info) {
-        on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
-    }
-    return _base_info->has_computed_column_depending_on_base_non_primary_key;
+    return _base_info.has_computed_column_depending_on_base_non_primary_key;
 }
 
 bool view_info::is_partition_key_permutation_of_base_partition_key() const {
-    if (!_base_info) {
-        on_internal_error(vlogger, "Tried to perform a view query which is base info dependent without initializing it");
-    }
-    return _base_info->is_partition_key_permutation_of_base_partition_key;
+    return _base_info.is_partition_key_permutation_of_base_partition_key;
 }
 
 clustering_row db::view::clustering_or_static_row::as_clustering_row(const schema& s) const {
@@ -959,7 +945,7 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
         // as part of its PK, there are NO virtual columns corresponding to the unselected columns in the view.
         // Because of that, we don't generate view updates when the value in an unselected column is created
         // or changes.
-        if (!column_is_selected && _base_info->has_base_non_pk_columns_in_view_pk) {
+        if (!column_is_selected && _base_info.has_base_non_pk_columns_in_view_pk) {
             return true;
         }
 
@@ -1134,7 +1120,7 @@ void view_updates::generate_update(
     // may change the view key and may require deleting an old view row and
     // inserting a new row. The other case, which we'll handle here first,
     // is easier and require just modifying one view row.
-    if (!_base_info->has_base_non_pk_columns_in_view_pk &&
+    if (!_base_info.has_base_non_pk_columns_in_view_pk &&
         !_view_info.has_computed_column_depending_on_base_non_primary_key()) {
         if (update.is_static_row()) {
             // TODO: support static rows in views with pk only including columns from base pk
