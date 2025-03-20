@@ -33,6 +33,10 @@ enum class schema_feature {
 
     // Per-table tablet options
     TABLET_OPTIONS,
+
+    // Internal columns are hidden from the SELECT* and DESCRIBE requests. They can be injected directly
+    // into the user table to store some scylla-internal state (e.g. paxos state for LWT queries).
+    INTERNAL_COLUMNS,
 };
 
 using schema_features = enum_set<super_enum<schema_feature,
@@ -43,7 +47,8 @@ using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY,
     schema_feature::GROUP0_SCHEMA_VERSIONING,
     schema_feature::IN_MEMORY_TABLES,
-    schema_feature::TABLET_OPTIONS
+    schema_feature::TABLET_OPTIONS,
+    schema_feature::INTERNAL_COLUMNS
     >>;
 
 }
