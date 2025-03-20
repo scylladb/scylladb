@@ -54,12 +54,15 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
         } catch (const std::system_error& ex) {
             e = std::current_exception();
             request_ex = aws_exception(aws_error::from_system_error(ex));
+        } catch (const std::exception& ex) {
+            e = std::current_exception();
+            request_ex = aws_exception(aws_error::from_maybe_nested_exception(ex));
         } catch (...) {
             e = std::current_exception();
             request_ex = aws_exception(aws_error{aws_error_type::UNKNOWN, format("{}", e), retryable::no});
         }
 
-        if (!_retry_strategy.should_retry(request_ex.error(), retries)) {
+        if (!co_await  _retry_strategy.should_retry(request_ex.error(), retries)) {
             break;
         }
         co_await seastar::sleep(_retry_strategy.delay_before_retry(request_ex.error(), retries));

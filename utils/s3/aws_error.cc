@@ -13,6 +13,7 @@
 #endif
 
 #include "aws_error.hh"
+#include <gnutls/gnutls.h>
 #include <memory>
 
 namespace aws {
@@ -127,19 +128,47 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
 }
 
 aws_error aws_error::from_system_error(const std::system_error& system_error) {
-    switch (static_cast<std::errc>(system_error.code().value())) {
-    case std::errc::interrupted:
-    case std::errc::resource_unavailable_try_again:
-    case std::errc::timed_out:
-    case std::errc::connection_aborted:
-    case std::errc::connection_reset:
-    case std::errc::broken_pipe:
-    case std::errc::network_unreachable:
-    case std::errc::host_unreachable:
+    switch (system_error.code().value()) {
+    case static_cast<int>(std::errc::interrupted):
+    case static_cast<int>(std::errc::resource_unavailable_try_again):
+    case static_cast<int>(std::errc::timed_out):
+    case static_cast<int>(std::errc::connection_aborted):
+    case static_cast<int>(std::errc::connection_reset):
+    case static_cast<int>(std::errc::broken_pipe):
+    case static_cast<int>(std::errc::network_unreachable):
+    case static_cast<int>(std::errc::host_unreachable):
+    // GNU TLS section. Since we pack gnutls error codes in std::system_error and rethrow it as std::nested_exception we have to handle them here.
+    case GNUTLS_E_PREMATURE_TERMINATION:
+    case GNUTLS_E_AGAIN:
+    case GNUTLS_E_INTERRUPTED:
+    case GNUTLS_E_PUSH_ERROR:
+    case GNUTLS_E_PULL_ERROR:
+    case GNUTLS_E_TIMEDOUT:
+    case GNUTLS_E_SESSION_EOF:
+    case GNUTLS_E_BAD_COOKIE: // as per RFC6347 section-4.2.1 client should retry
         return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::yes};
     default:
         return {aws_error_type::NETWORK_CONNECTION, system_error.code().message(), retryable::no};
     }
+}
+
+aws_error aws_error::from_maybe_nested_exception(const std::exception& maybe_nested_error) {
+    const std::exception* current_exception = &maybe_nested_error;
+    while (current_exception) {
+        if (auto sys_error = dynamic_cast<const std::system_error*>(current_exception)) {
+            return from_system_error(*sys_error);
+        }
+        try {
+            std::rethrow_if_nested(*current_exception);
+        } catch (const std::exception& inner) {
+            current_exception = &inner;
+            continue;
+        } catch (...) {
+            break;
+        }
+        current_exception = nullptr;
+    }
+    return {aws_error_type::UNKNOWN, maybe_nested_error.what(), retryable::no};
 }
 
 const aws_errors& aws_error::get_errors() {

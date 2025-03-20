@@ -118,6 +118,12 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
         .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>());
 
     _creds_update_timer.arm(lowres_clock::now());
+    if (!_retry_strategy) {
+        _retry_strategy = std::make_unique<aws::s3_retry_strategy>([this]() -> future<> {
+            auto units = co_await get_units(_creds_sem, 1);
+            co_await update_credentials_and_rearm();
+        });
+    }
 }
 
 future<> client::update_config(endpoint_config_ptr cfg) {
