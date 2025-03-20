@@ -409,24 +409,27 @@ dht::token_range tablet_map::get_token_range_after_split(const token& t) const n
     return get_token_range(id_after_split, log2_tablets_after_split);
 }
 
+std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, std::function<bool(const tablet_replica&)> filter) {
+    const auto replicas = replica_set | std::views::filter(std::move(filter)) | std::ranges::to<tablet_replica_set>();
+    return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
+}
+
 tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
     const auto& replicas = get_tablet_info(id).replicas;
     return replicas.at(size_t(id) % replicas.size());
 }
 
 tablet_replica tablet_map::get_primary_replica_within_dc(tablet_id id, const topology& topo, sstring dc) const {
-    const auto replicas = get_tablet_info(id).replicas | std::views::filter([&] (const auto& tr) {
+    return maybe_get_primary_replica(id, get_tablet_info(id).replicas, [&] (const auto& tr) {
         const auto& node = topo.get_node(tr.host);
         return node.dc_rack().dc == dc;
-    }) | std::ranges::to<tablet_replica_set>();
-    return replicas.at(size_t(id) % replicas.size());
+    }).value();
 }
 
 std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
-    const auto replicas = get_tablet_info(id).replicas | std::views::filter([&] (const auto& tr) {
+    return maybe_get_primary_replica(id, get_tablet_info(id).replicas, [&] (const auto& tr) {
         return tablet_task_info.selected_by_filters(tr, topo);
-    }) | std::ranges::to<tablet_replica_set>();
-    return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
+    });
 }
 
 future<std::vector<token>> tablet_map::get_sorted_tokens() const {
