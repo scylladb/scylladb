@@ -473,7 +473,7 @@ void mutation_fragment_stream_json_writer::start_stream() {
 
 void mutation_fragment_stream_json_writer::start_sstable(const sstables::sstable* const sst) {
     if (sst) {
-        writer().Key(sst->get_filename());
+        writer().Key(fmt::to_string(sst->get_filename()));
     } else {
         writer().Key("anonymous");
     }
@@ -1004,7 +1004,7 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
     writer.StartStream();
     for (const auto& sst : sstables) {
         const auto errors = sst->validate(permit, abort, [] (sstring what) { sst_log.info("{}", what); }).get();
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
         writer.Key("errors");
         writer.Uint64(errors);
@@ -1072,7 +1072,7 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
         sstables::index_reader idx_reader(sst, permit);
         auto close_idx_reader = deferred_close(idx_reader);
 
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartArray();
 
         while (!idx_reader.eof()) {
@@ -1111,7 +1111,7 @@ void dump_compression_info_operation(schema_ptr schema, reader_permit permit, co
     for (auto& sst : sstables) {
         const auto& compression = sst->get_compression();
 
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
         writer.Key("name");
         writer.String(disk_string_to_string(compression.name));
@@ -1149,7 +1149,7 @@ void dump_summary_operation(schema_ptr schema, reader_permit permit, const std::
     for (auto& sst : sstables) {
         auto& summary = sst->get_summary();
 
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
 
         writer.Key("header");
@@ -1448,7 +1448,7 @@ void dump_statistics_operation(schema_ptr schema, reader_permit permit, const st
     for (auto& sst : sstables) {
         auto& statistics = sst->get_statistics();
 
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
 
         writer.Key("offsets");
@@ -1631,7 +1631,7 @@ void dump_scylla_metadata_operation(schema_ptr schema, reader_permit permit, con
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
         auto m = sst->get_scylla_metadata();
         if (!m) {
@@ -1659,7 +1659,7 @@ void validate_checksums_operation(schema_ptr schema, reader_permit permit, const
     writer.StartStream();
     for (auto& sst : sstables) {
         const auto res = sstables::validate_checksums(sst, permit).get();
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartObject();
         writer.Key("has_checksums");
         switch (res.status) {
@@ -1701,8 +1701,7 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
             continue;
         }
 
-        auto output_filename = sst->get_filename();
-        output_filename += ".decompressed";
+        auto output_filename = fmt::format("{}.decompressed", sst->get_filename());
 
         auto ofile = open_file_dma(output_filename, open_flags::wo | open_flags::create).get();
         file_output_stream_options options;
@@ -2710,7 +2709,7 @@ void shard_of_with_vnodes(const std::vector<sstables::shared_sstable>& sstables,
             sst->get_version());
         new_sst->load_owner_shards(schema->get_sharder()).get();
 
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartArray();
         for (unsigned shard_id : new_sst->get_shards_for_this_sstable()) {
             writer.Uint(shard_id);
@@ -2732,7 +2731,7 @@ void shard_of_with_tablets(schema_ptr schema,
     json_writer writer;
     writer.StartStream();
     for (auto& sst : sstables) {
-        writer.Key(sst->get_filename());
+        writer.Key(fmt::to_string(sst->get_filename()));
         writer.StartArray();
 
         // token ranges are distributed across tablets, so we just check for

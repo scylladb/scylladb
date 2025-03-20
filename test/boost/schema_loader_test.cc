@@ -329,7 +329,7 @@ SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
 
             // Do the check in a separate method to ensure we don't accidentally
             // re-use the original schema.
-            check_sstable_schema(env, std::filesystem::path(sst->get_filename()), mutations);
+            check_sstable_schema(env, std::filesystem::path(fmt::to_string(sst->get_filename())), mutations);
         }
     });
 }
