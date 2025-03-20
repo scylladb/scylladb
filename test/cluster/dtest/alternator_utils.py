@@ -230,7 +230,7 @@ class BaseAlternator(Tester):
         start_time = time.time()
         nodes = probe(nodes)
         while nodes:
-            time.sleep(1)
+            time.sleep(0.1)
             last_try = (time.time() - start_time) >= timeout
             nodes = probe(nodes, allow_connection_error=not last_try)
 
