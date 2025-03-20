@@ -628,13 +628,6 @@ private:
     // Unsafe reference to all storage groups. Don't use it across preemption points.
     const storage_group_map& storage_groups() const;
 
-    // Safely iterate through SSTables, with deletion guard taken to make sure they're not
-    // removed during iteration.
-    // WARNING: Be careful that the action doesn't perform an operation that will itself
-    // take the deletion guard, as that will cause a deadlock. For example, memtable flush
-    // can wait on compaction (backpressure) which in turn takes deletion guard on completion.
-    future<> safe_foreach_sstable(const sstables::sstable_set&, noncopyable_function<future<>(const sstables::shared_sstable&)> action);
-
     // Returns a sstable set that can be safely used for purging any expired tombstone in a compaction group.
     // Only the sstables in the compaction group is not sufficient, since there might be other compaction
     // groups during tablet split with overlapping token range, and we need to include them all in a single
