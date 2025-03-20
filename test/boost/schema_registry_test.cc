@@ -292,10 +292,9 @@ SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
             .build();
     auto base_info = view_schema->view_info()->make_base_dependent_view_info(*base_schema);
     local_schema_registry().get_or_load(view_schema->version(),
-        [view_schema, base_info] (table_schema_version) -> view_schema_and_base_info { return {frozen_schema(view_schema), *base_info}; });
+        [view_schema, base_info] (table_schema_version) -> view_schema_and_base_info { return {frozen_schema(view_schema), base_info}; });
     auto view_registry_schema = local_schema_registry().get_or_null(view_schema->version());
     BOOST_REQUIRE(view_registry_schema);
-    BOOST_REQUIRE(view_registry_schema->view_info()->base_info());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

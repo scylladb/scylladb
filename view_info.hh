@@ -22,7 +22,7 @@ class view_info final {
     // The following fields are used to select base table rows.
     mutable shared_ptr<cql3::statements::select_statement> _select_statement;
     mutable std::optional<query::partition_slice> _partition_slice;
-    db::view::base_info_ptr _base_info;
+    db::view::base_dependent_view_info _base_info;
 public:
     view_info(const schema& schema, const raw_view_info& raw_view_info, schema_ptr base_schema);
     view_info(const schema& schema, const raw_view_info& raw_view_info, db::view::base_dependent_view_info base_info);
@@ -58,9 +58,9 @@ public:
 
     /// base_dependent_view_info contains information about the view that depends on the base table,
     /// which isn't dependent on the base schema version
-    const db::view::base_info_ptr& base_info() const { return _base_info; }
+    const db::view::base_dependent_view_info& base_info() const { return _base_info; }
     void reset_view_info();
-    db::view::base_info_ptr make_base_dependent_view_info(const schema& base_schema) const;
+    db::view::base_dependent_view_info make_base_dependent_view_info(const schema& base_schema) const;
 
     friend bool operator==(const view_info& x, const view_info& y) {
         return x._raw == y._raw;
