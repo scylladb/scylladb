@@ -918,7 +918,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
         },
         guard, std::move(description));
 
-    return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as);
+    return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as, raft_timeout{});
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
