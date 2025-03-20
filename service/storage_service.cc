@@ -1480,6 +1480,11 @@ raft::server* storage_service::get_group_server_if_raft_topolgy_enabled() {
     return raft_topology_change_enabled() ? &_group0->group0_server() : nullptr;
 }
 
+future<> storage_service::start_sys_dist_ks() const {
+    slogger.info("starting system distributed keyspace shards");
+    return _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+}
+
 future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
@@ -1802,8 +1807,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
         // Need to start system_distributed_keyspace before bootstrap because bootstrapping
         // process may access those tables.
-        supervisor::notify("starting system distributed keyspace");
-        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await start_sys_dist_ks();
 
         if (_sys_ks.local().bootstrap_complete()) {
             if (_topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
@@ -1930,13 +1934,12 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
-        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await start_sys_dist_ks();
         co_await _view_builder.local().mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
-        supervisor::notify("starting system distributed keyspace");
-        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+        co_await start_sys_dist_ks();
         bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
         if (bootstrap_tokens.empty()) {
             bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);
