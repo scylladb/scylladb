@@ -1726,10 +1726,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // Release the guard to avoid blocking group0 for long periods of time while invoking RPCs
                 release_guard(std::move(guard));
 
-                co_await utils::get_local_injector().inject("truncate_table_wait", [] (auto& handler) {
-                    rtlogger.info("truncate_table_wait: start");
-                    return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(2));
-                });
+                co_await utils::get_local_injector().inject("truncate_table_wait", utils::wait_for_message(std::chrono::minutes(2)));
 
                 // Check if all the nodes with replicas are alive
                 for (const locator::host_id& replica_host: replica_hosts) {
@@ -2316,10 +2313,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 rtbuilder.done();
                 switch(node.rs->state) {
                 case node_state::bootstrapping: {
-                    co_await utils::get_local_injector().inject("delay_node_bootstrap", [](auto& handler) {
-                        rtlogger.info("delay_node_bootstrap: waiting for message");
-                        return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
-                    });
+                    co_await utils::get_local_injector().inject("delay_node_bootstrap", utils::wait_for_message(std::chrono::minutes(5)));
                     std::vector<canonical_mutation> muts;
                     // Since after bootstrapping a new node some nodes lost some ranges they need to cleanup
                     muts = mark_nodes_as_cleanup_needed(node, false);
@@ -2338,10 +2332,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case node_state::removing: {
-                    co_await utils::get_local_injector().inject("delay_node_removal", [](auto& handler) {
-                        rtlogger.info("delay_node_removal: waiting for message");
-                        return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
-                    });
+                    co_await utils::get_local_injector().inject("delay_node_removal", utils::wait_for_message(std::chrono::minutes(5)));
                     node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
                 }
                     [[fallthrough]];
