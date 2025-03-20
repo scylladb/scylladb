@@ -13,6 +13,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <stdexcept>
 #include "alter_keyspace_statement.hh"
+#include "locator/tablets.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -25,6 +26,7 @@
 #include "create_keyspace_statement.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 
 using namespace std::string_literals;
 
@@ -194,9 +196,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         event::schema_change::target_type target_type = event::schema_change::target_type::KEYSPACE;
         auto ks = qp.db().find_keyspace(_name);
         auto ks_md = ks.metadata();
-        const auto& tm = *qp.proxy().get_token_metadata_ptr();
+        const auto tmptr = qp.proxy().get_token_metadata_ptr();
         const auto& feat = qp.proxy().features();
-        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, tm, feat);
+        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat);
         std::vector<mutation> muts;
         std::vector<sstring> warnings;
         auto old_ks_options = get_old_options_flattened(ks);
@@ -263,6 +265,36 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         } else {
             auto schema_mutations = service::prepare_keyspace_update_announcement(qp.db().real_database(), ks_md_update, ts);
             muts.insert(muts.begin(), schema_mutations.begin(), schema_mutations.end());
+        }
+
+        // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to perform a schema change that
+        // would lead to an RF-rack-valid keyspace. Verify that this change does not.
+        // For more context, see: scylladb/scylladb#23071.
+        if (qp.db().get_config().rf_rack_valid_keyspaces()) {
+            auto rs = locator::abstract_replication_strategy::create_replication_strategy(
+                    ks_md_update->strategy_name(),
+                    locator::replication_strategy_params(ks_md_update->strategy_options(), ks_md_update->initial_tablets()));
+
+            try {
+                // There are two things to note here:
+                // 1. We hold a group0_guard, so it's correct to check this here.
+                //    The topology or schema cannot change while we're performing this query.
+                // 2. The replication strategy we use here does NOT represent the actual state
+                //    we will arrive at after applying the schema change. For instance, if the user
+                //    did not specify the RF for some of the DCs, it's equal to 0 in the replication
+                //    strategy we pass to this function, while in reality that means that the RF
+                //    will NOT change. That is not a problem:
+                //    - RF=0 is valid for all DCs, so it won't trigger an exception on its own,
+                //    - the keyspace must've been RF-rack-valid before this change. We check that
+                //      condition for all keyspaces at startup.
+                //    The second hyphen is not really true because currently topological changes can
+                //    disturb it (see scylladb/scylladb#23345), but we ignore that.
+                locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
+            } catch (const std::exception& e) {
+                // There's no guarantee what the type of the exception will be, so we need to
+                // wrap it manually here in a type that can be passed to the user.
+                throw exceptions::invalid_request_exception(e.what());
+            }
         }
 
         auto ret = ::make_shared<event::schema_change>(

@@ -127,6 +127,12 @@ Glossary
       RBNO is enabled by default for a subset node operations. 
       See :doc:`Repair Based Node Operations </operating-scylla/procedures/cluster-management/repair-based-node-operation>` for details.
 
+    RF-rack-valid keyspace
+      A keyspace with :doc:`tablets </architecture/tablets>` enabled is RF-rack-valid if all of its data centers
+      have the :term:`Replication Factor (RF) <Replication Factor (RF)>` of 0, 1, or the number of racks in that data center.
+
+      Keyspaces with tablets disabled are always deemed RF-rack-valid, even if they do not satisfy the aforementioned condition.
+
     Shard
       Each ScyllaDB node is internally split into *shards*, an independent thread bound to a dedicated core.
       Each shard of data is allotted CPU, RAM, persistent storage, and networking resources which it uses as efficiently as possible.

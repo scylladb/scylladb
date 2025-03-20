@@ -10,6 +10,9 @@
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
+#include "locator/network_topology_strategy.hh"
+#include "locator/tablets.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "utils/log.hh"
 #include "replica/database_fwd.hh"
 #include "utils/assert.hh"
@@ -3182,6 +3185,14 @@ future<> database::on_before_service_level_change(qos::service_level_options slo
 future<>
 database::on_effective_service_levels_cache_reloaded() {
     co_return;
+}
+
+void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
+    SCYLLA_ASSERT(get_config().rf_rack_valid_keyspaces());
+
+    for (const auto& [name, info] : get_keyspaces()) {
+        locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
+    }
 }
 
 }

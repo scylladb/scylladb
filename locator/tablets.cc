@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/tablets.hh"
 #include "locator/tablet_metadata_guard.hh"
@@ -1040,6 +1041,64 @@ void tablet_metadata_guard::subscribe() {
     _callback = _erm->get_validity_abort_source().subscribe([this] () noexcept {
         check();
     });
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
+    tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Starting verifying that keyspace '{}' is RF-rack-valid", ks);
+
+    // Any keyspace that does NOT use tablets is RF-rack-valid.
+    if (!ars.uses_tablets()) {
+        tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid (no tablets)", ks);
+        return;
+    }
+
+    // Tablets can only be used with NetworkTopologyStrategy.
+    SCYLLA_ASSERT(ars.get_type() == replication_strategy_type::network_topology);
+    const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(ars));
+
+    const auto& dc_rack_map = tmptr->get_topology().get_datacenter_racks();
+
+    for (const auto& dc : nts.get_datacenters()) {
+        if (!dc_rack_map.contains(dc)) {
+            on_internal_error(tablet_logger, seastar::format(
+                    "Precondition violated: DC '{}' is part of the passed replication strategy, but it is not "
+                    "known by the passed locator::token_metadata_ptr.", dc));
+        }
+    }
+
+    for (const auto& [dc, rack_map] : dc_rack_map) {
+        tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Verifying for '{}' / '{}'", ks, dc);
+
+        size_t normal_rack_count = 0;
+        for (const auto& [_, rack_nodes] : rack_map) {
+            // We must ignore zero-token nodes because they don't take part in replication.
+            // Verify that this rack has at least one normal node.
+            const bool normal_rack = std::ranges::any_of(rack_nodes, [tmptr] (host_id host_id) {
+                return tmptr->is_normal_token_owner(host_id);
+            });
+            if (normal_rack) {
+                ++normal_rack_count;
+            }
+        }
+
+        const size_t rf = nts.get_replication_factor(dc);
+
+        // We must not allow for a keyspace to become RF-rack-invalid. Any attempt at that must be rejected.
+        // For more context, see: scylladb/scylladb#23276.
+        const bool invalid_rf = rf != normal_rack_count && rf != 1 && rf != 0;
+        // Edge case: the DC in question is an arbiter DC and does NOT take part in replication.
+        // Any positive RF for that DC is invalid.
+        const bool invalid_arbiter_dc = normal_rack_count == 0 && rf > 0;
+
+        if (invalid_rf || invalid_arbiter_dc) {
+            throw std::invalid_argument(std::format(
+                    "The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. "
+                    "That condition is violated: keyspace '{}' doesn't satisfy it for DC '{}': RF={} vs. rack count={}.",
+                    ks, std::string_view(dc), rf, normal_rack_count));
+        }
+    }
+
+    tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
 }
 
 }

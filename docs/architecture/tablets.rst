@@ -140,6 +140,12 @@ You can create a keyspace with tablets enabled with the ``tablets = {'enabled': 
 Limitations and Unsupported Features
 --------------------------------------
 
+.. warning::
+
+    If a keyspace has tablets enabled, it must remain :term:`RF-rack-valid <RF-rack-valid keyspace>`
+    throughout its lifetime. Failing to keep that invariant satisfied may result in data inconsistencies,
+    performance problems, or other issues.
+
 The following ScyllaDB features are not supported if a keyspace has tablets
 enabled:
 

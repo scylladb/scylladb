@@ -9,6 +9,7 @@
 #pragma once
 
 #include "dht/token.hh"
+#include "locator/token_metadata_fwd.hh"
 #include "utils/small_vector.hh"
 #include "locator/host_id.hh"
 #include "service/session.hh"
@@ -690,6 +691,30 @@ struct tablet_metadata_change_hint {
     bool operator==(const tablet_metadata_change_hint&) const = default;
     explicit operator bool() const noexcept { return !tables.empty(); }
 };
+
+class abstract_replication_strategy;
+
+/// Verify that the provided keyspace corresponding to the provided replication strategy is RF-rack-valid, i.e.
+/// whether it satisfies the following conditions:
+/// * does NOT use tablets, OR,
+/// * for every DC, the replication factor corresponding to that DC must be an element of the set
+///     {0, 1, the number of racks in that DC with at least one normal node}
+///   Special case: if the DC is an arbiter DC (i.e. only consists of zero-token nodes), the RF MUST be equal
+///   to 0 for that DC.
+///
+/// Result:
+/// * if the keyspace is RF-rack-valid, no side effect,
+/// * if the keyspace is RF-rack-invalid, an exception will be thrown. It will contain information about the reason
+///   why the keyspace is RF-rack-invalid and will be worded in a way that can be returned directly to the user.
+///   There are NO guarantees about the type of the exception.
+///
+/// Preconditions:
+/// * Every DC that takes part in replication according to the passed replication strategy MUST be known
+///   by the passed `token_metadata_ptr`.
+///
+/// Non-requirements:
+/// * The keyspace need not exist. We use its name purely for informational reasons (in error messages).
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr, const abstract_replication_strategy&);
 
 }
 
