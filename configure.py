@@ -1730,19 +1730,11 @@ def generate_version(date_stamp):
 # the program headers.
 def dynamic_linker_option():
     gcc_linker_output = subprocess.check_output(['gcc', '-###', '/dev/null', '-o', 't'], stderr=subprocess.STDOUT).decode('utf-8')
-    original_dynamic_linker = re.search('-dynamic-linker ([^ ]*)', gcc_linker_output).groups()[0]
+    original_dynamic_linker = re.search('"?-dynamic-linker"?[ =]"?([^ "]*)"?[ \n]', gcc_linker_output).groups()[0]
 
-    employ_ld_trickery = True
-    # distro-specific setup
-    if os.environ.get('NIX_CC'):
-        employ_ld_trickery = False
-
-    if employ_ld_trickery:
-        # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
-        # that. The 512 includes the null at the end, hence the 511 below.
-        dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
-    else:
-        dynamic_linker = original_dynamic_linker
+    # gdb has a SO_NAME_MAX_PATH_SIZE of 512, so limit the path size to
+    # that. The 512 includes the null at the end, hence the 511 below.
+    dynamic_linker = '/' * (511 - len(original_dynamic_linker)) + original_dynamic_linker
     return f'--dynamic-linker={dynamic_linker}'
 
 forced_ldflags = '-Wl,'
