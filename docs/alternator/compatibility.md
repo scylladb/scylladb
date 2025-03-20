@@ -231,6 +231,14 @@ in DynamoDB and Scylla - determined by the _sort key_ defined for that table.
 
 ---
 
+## Configurable or different limits
+
+Some features have fixed limits in DynamoDB, but the limit does not exist,
+is different, or can be configured in Alternator:
+
+* DynamoDB limits each BatchWriteItem request to 25 items. In Alternator,
+  this limit defaults to 100 but can be changed with 
+  the alternator_max_items_in_batch_write configuration parameter.
 
 ## Experimental API features
 
