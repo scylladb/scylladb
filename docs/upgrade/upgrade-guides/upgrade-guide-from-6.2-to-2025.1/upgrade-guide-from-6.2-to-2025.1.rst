@@ -9,9 +9,9 @@
 .. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 6.2 to 2025.1
 .. _SCYLLA_METRICS: ../metric-update-6.2-to-2025.1
 
-=============================================================================
-Upgrade |SCYLLA_NAME| from |SRC_VERSION| to |NEW_VERSION|
-=============================================================================
+=======================================================================================
+Upgrade from |SCYLLA_NAME| Open Source |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|
+=======================================================================================
 
 This document describes a step-by-step procedure for upgrading from |SCYLLA_NAME| |SRC_VERSION| 
 to |SCYLLA_NAME| |NEW_VERSION| and rollback to version |SRC_VERSION| if necessary.

@@ -1,5 +1,5 @@
 ==========================================================
-Upgrade - ScyllaDB 2024.x to ScyllaDB Enterprise 2025.1
+Upgrade - ScyllaDB Enterprise 2024.x to ScyllaDB 2025.1
 ==========================================================
 
 
@@ -10,6 +10,6 @@ Upgrade - ScyllaDB 2024.x to ScyllaDB Enterprise 2025.1
    ScyllaDB <upgrade-guide-from-2024.x-to-2025.1>
    Metrics <metric-update-2024.x-to-2025.1>
 
-* :doc:`Upgrade ScyllaDB from 2024.x.y to 2025.1.y <upgrade-guide-from-2024.x-to-2025.1>`
+* :doc:`Upgrade from ScyllaDB Enterprise 2024.x.y to ScyllaDB 2025.1.y <upgrade-guide-from-2024.x-to-2025.1>`
 * :doc:`Metrics Update Between 2024.x and 2025.1 <metric-update-2024.x-to-2025.1>`
 
