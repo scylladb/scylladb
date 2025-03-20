@@ -7,7 +7,6 @@
  */
 #pragma once
 
-#include "gms/inet_address.hh"
 #include "raft/raft.hh"
 
 namespace service {

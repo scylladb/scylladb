@@ -9,7 +9,7 @@
 
 #include <variant>
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 
 namespace service::broadcast_tables {
 

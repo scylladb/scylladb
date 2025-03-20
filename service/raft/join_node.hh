@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <set>
 #include <seastar/core/sstring.hh>
 #include "raft/raft.hh"
 

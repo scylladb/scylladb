@@ -10,8 +10,8 @@
 
 #include "db/consistency_level_type.hh"
 #include "seastarx.hh"
+#include <seastar/core/format.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/print.hh>
 #include <map>
 #include <stdexcept>
 #include <string_view>

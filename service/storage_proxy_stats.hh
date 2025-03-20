@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "gms/inet_address.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/histogram.hh"
 #include <seastar/core/metrics.hh>

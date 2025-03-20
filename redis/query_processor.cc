@@ -12,6 +12,7 @@
 #include "redis/command_factory.hh"
 #include "redis/options.hh"
 #include "service_permit.hh"
+#include <seastar/core/distributed.hh>
 
 namespace redis {
 

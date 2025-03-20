@@ -18,7 +18,6 @@
 #include "dht/token.hh"
 #include "mutation/canonical_mutation.hh"
 #include "mutation/mutation.hh"
-#include "raft/server.hh"
 #include "schema/schema.hh"
 #include "service/topology_state_machine.hh"
 #include "timestamp.hh"

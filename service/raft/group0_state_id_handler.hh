@@ -8,7 +8,6 @@
 #pragma once
 
 #include "raft/raft.hh"
-#include "service/raft/group0_fwd.hh"
 #include "utils/UUID.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/timer.hh>
