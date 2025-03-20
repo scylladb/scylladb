@@ -82,15 +82,23 @@ jobs:
       - run: |
           echo "::remove-matcher owner=clang-include-cleaner::"
       - run: |
-          if git -c safe.directory="$PWD" grep -E '#include +"seastar/' > "$SEASTAR_BAD_INCLUDE_OUTPUT_PATH"; then
-            echo "ERROR: Found #include \"seastar/ in the source code. Use angle brackets instead."
+          echo "::add-matcher::.github/seastar-bad-include.json"
+      - name: check for seastar includes
+        run: |
+          git -c safe.directory="$PWD"    \
+            grep -nE '#include +"seastar/' \
+            | tee "$SEASTAR_BAD_INCLUDE_OUTPUT_PATH"
+      - run: |
+          echo "::remove-matcher owner=seastar-bad-include::"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Logs
+          path: |
+            ${{ env.CLEANER_OUTPUT_PATH }}
+            ${{ env.SEASTAR_BAD_INCLUDE_OUTPUT_PATH }}
+      - name: fail if seastar headers are included as an internal library
+        run: |
+          if [ -s "$SEASTAR_BAD_INCLUDE_OUTPUT_PATH" ]; then
+            echo "::error::Found #include \"seastar/ in the source code. Use angle brackets instead."
             exit 1
           fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Logs (clang-include-cleaner)
-          path: "./${{ env.CLEANER_OUTPUT_PATH }}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Logs (seastar-bad-include)
-          path: "./${{ env.SEASTAR_BAD_INCLUDE_OUTPUT_PATH }}"
