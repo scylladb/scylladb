@@ -311,11 +311,11 @@ bool may_be_affected_by(data_dictionary::database db, const schema& base, const 
 }
 
 static bool update_requires_read_before_write(data_dictionary::database db, const schema& base,
-        const std::vector<view_and_base>& views,
+        const std::vector<view_ptr>& views,
         const dht::decorated_key& key,
         const rows_entry& update) {
     for (auto&& v : views) {
-        view_info& vf = *v.view->view_info();
+        view_info& vf = *v->view_info();
         if (may_be_affected_by(db, base, vf, key, update)) {
             return true;
         }
@@ -452,11 +452,11 @@ bool matches_view_filter(data_dictionary::database db, const schema& base, const
             && visitor.matches_view_filter();
 }
 
-view_updates::view_updates(view_and_base vab, schema_ptr base)
-    : _view(std::move(vab.view))
+view_updates::view_updates(view_ptr v, schema_ptr base)
+    : _view(std::move(v))
     , _view_info(*_view->view_info())
     , _base(std::move(base))
-    , _base_info(vab.base)
+    , _base_info(_view_info.base_info())
     , _updates(8, partition_key::hashing(*_view), partition_key::equality(*_view))
 {
     for (auto&& view_col : _view->primary_key_columns()) {
@@ -1664,11 +1664,11 @@ view_update_builder make_view_update_builder(
         data_dictionary::database db,
         const replica::table& base_table,
         const schema_ptr& base,
-        std::vector<view_and_base>&& views_to_update,
+        std::vector<view_ptr>&& views_to_update,
         mutation_reader&& updates,
         mutation_reader_opt&& existings,
         gc_clock::time_point now) {
-    auto vs = views_to_update | std::views::transform([&] (view_and_base v) {
+    auto vs = views_to_update | std::views::transform([&] (view_ptr v) {
         return view_updates(std::move(v), base);
     }) | std::ranges::to<std::vector<view_updates>>();
     return view_update_builder(std::move(db), base_table, base, std::move(vs), std::move(updates), std::move(existings), now);
@@ -1678,18 +1678,18 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
         const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
-        const std::vector<view_and_base>& views) {
+        const std::vector<view_ptr>& views) {
     utils::chunked_vector<interval<clustering_key_prefix_view>> row_ranges;
     utils::chunked_vector<interval<clustering_key_prefix_view>> view_row_ranges;
     clustering_key_prefix_view::tri_compare cmp(base);
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
             // FIXME: #2371
-            if (v.view->view_info()->select_statement(db).get_restrictions()->has_unrestricted_clustering_columns()) {
+            if (v->view_info()->select_statement(db).get_restrictions()->has_unrestricted_clustering_columns()) {
                 view_row_ranges.push_back(interval<clustering_key_prefix_view>::make_open_ended_both_sides());
                 break;
             }
-            for (auto&& r : v.view->view_info()->partition_slice(db).default_row_ranges()) {
+            for (auto&& r : v->view_info()->partition_slice(db).default_row_ranges()) {
                 view_row_ranges.push_back(r.transform(std::mem_fn(&clustering_key_prefix::view)));
                 co_await coroutine::maybe_yield();
             }
@@ -1737,7 +1737,7 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     co_return result_ranges;
 }
 
-bool needs_static_row(const mutation_partition& mp, const std::vector<view_and_base>& views) {
+bool needs_static_row(const mutation_partition& mp, const std::vector<view_ptr>& views) {
     // TODO: We could also check whether any of the views need static rows
     // and return false if none of them do
     return mp.partition_tombstone() || !mp.static_row().empty();
@@ -3008,13 +3008,12 @@ public:
         if (!_fragments.empty()) {
             _fragments.emplace_front(*_step.reader.schema(), _builder._permit, partition_start(_step.current_key, tombstone()));
             auto base_schema = _step.base->schema();
-            auto views = with_base_info_snapshot(_views_to_build);
             auto reader = make_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
             auto close_reader = defer([&reader] { reader.close().get(); });
             reader.upgrade_schema(base_schema);
             _gen->populate_views(
                     *_step.base,
-                    std::move(views),
+                    _views_to_build,
                     _step.current_token(),
                     std::move(reader),
                     _now).get();
@@ -3282,12 +3281,6 @@ view_updating_consumer::view_updating_consumer(view_update_generator& gen, schem
         return table->stream_view_replica_updates(gen, std::move(s), std::move(m), db::no_timeout, excluded_sstables);
     })
 { }
-
-std::vector<db::view::view_and_base> with_base_info_snapshot(std::vector<view_ptr> vs) {
-    return vs | std::views::transform([] (const view_ptr& v) {
-        return db::view::view_and_base{v, v->view_info()->base_info()};
-    }) | std::ranges::to<std::vector>();
-}
 
 delete_ghost_rows_visitor::delete_ghost_rows_visitor(service::storage_proxy& proxy, service::query_state& state, view_ptr view, db::timeout_clock::duration timeout_duration)
         : _proxy(proxy)
