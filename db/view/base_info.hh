@@ -37,9 +37,6 @@ struct base_dependent_view_info {
             bool has_base_non_pk_columns_in_view_pk);
 };
 
-// Immutable snapshot of view's base-schema-dependent part.
-using base_info_ptr = lw_shared_ptr<const base_dependent_view_info>;
-
 }
 
 }
