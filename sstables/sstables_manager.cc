@@ -52,6 +52,14 @@ sstables_manager::~sstables_manager() {
     SCYLLA_ASSERT(_undergoing_close.empty());
 }
 
+manager_signal_connection_type sstables_manager::subscribe(manager_signal_callback_type callback) {
+    return _signal_source.connect([this, callback = std::move(callback)] (sstables::generation_type gen, manager_event_type event) mutable -> future<> {
+        if (auto gh = _signal_gate.try_hold()) {
+            co_await callback(gen, event);
+        }
+    });
+}
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
@@ -260,6 +268,7 @@ void sstables_manager::reclaim_memory_and_stop_tracking_sstable(sstable* sst) {
 
 void sstables_manager::add(sstable* sst) {
     _active.push_back(*sst);
+    _signal_source(sst->generation(), manager_event_type::add);
 }
 
 void sstables_manager::deactivate(sstable* sst) {
@@ -319,6 +328,7 @@ future<> sstables_manager::close() {
     // stop the components reload fiber
     _components_memory_change_event.signal();
     co_await std::move(_components_reloader_status);
+    co_await _signal_gate.close();
 }
 
 void sstables_manager::plug_sstables_registry(std::unique_ptr<sstables::sstables_registry> sr) noexcept {
@@ -363,6 +373,7 @@ std::vector<std::filesystem::path> sstables_manager::get_local_directories(const
 
 void sstables_manager::on_unlink(sstable* sst) {
     reclaim_memory_and_stop_tracking_sstable(sst);
+    _signal_source(sst->generation(), manager_event_type::unlink);
 }
 
 sstables_registry::~sstables_registry() = default;

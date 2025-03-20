@@ -29,6 +29,8 @@ enum class component_type {
     Unknown,
 };
 
+constexpr size_t num_component_types = size_t(component_type::Unknown);
+
 }
 
 using component_type = ::sstables::component_type;
