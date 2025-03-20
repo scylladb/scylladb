@@ -35,8 +35,10 @@ protected:
 private:
     const bool _if_not_exists;
     const bool _if_exists;
+    const bool _is_local_replica;
 protected:
-    modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions = {}, bool if_not_exists = false, bool if_exists = false);
+    modification_statement(cf_name name, std::unique_ptr<attributes::raw> attrs, std::optional<expr::expression> conditions = {},
+            bool if_not_exists = false, bool if_exists = false, bool is_local_replica = false);
 
 public:
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
