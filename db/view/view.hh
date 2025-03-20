@@ -160,7 +160,7 @@ class view_updates final {
     view_ptr _view;
     const view_info& _view_info;
     schema_ptr _base;
-    base_info_ptr _base_info;
+    const base_dependent_view_info& _base_info;
     // Id of a regular base table column included in the view's PK, if any.
     // Scylla views only allow one such column, alternator can have up to two.
     std::vector<column_id> _base_regular_columns_in_view_pk;
