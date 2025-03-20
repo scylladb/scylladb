@@ -637,6 +637,7 @@ public:
     // rest of the information needs to be read from the base table map.
     const table_to_tablet_map& all_tables_raw() const { return _tablets; }
 
+    std::unordered_map<table_id, table_id> all_joining_tables() const;
     table_id get_base_table(table_id id) const;
     bool is_base_table(table_id id) const;
 

@@ -1114,6 +1114,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         for (auto&& [base_table, tables] : tm->tablets().all_table_groups()) {
             co_await coroutine::maybe_yield();
             const auto& tmap = tm->tablets().get_tablet_map(base_table);
+
             for (auto&& [tablet, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
                 func(tmap, base_table, tables, tablet, trinfo);
@@ -1608,6 +1609,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await await_event();
             }
             co_return;
+        }
+
+        const auto& join_map = get_token_metadata_ptr()->tablets().all_joining_tables();
+        for (auto&& [table, base_table] : join_map) {
+            updates.emplace_back(replica::tablet_mutation_builder(guard.write_timestamp(), table)
+                    .set_base_table(base_table)
+                    .del_join_base_table()
+                    .build());
         }
 
         if (drain) {

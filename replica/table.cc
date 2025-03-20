@@ -2686,6 +2686,15 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
             tablet_migrating_in = true;
         }
     }
+    for (auto tid : old_tablet_map->tablet_ids()) {
+        bool tablet_joins = old_tablet_map->join_base_table() && !new_tablet_map->join_base_table() && new_tablet_map->has_replica(tid, this_replica);
+
+        if (!_storage_groups.contains(tid.value()) && tablet_joins) {
+            auto range = new_tablet_map->get_token_range(tid);
+            _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
+            tablet_migrating_in = true;
+        }
+    }
 
     // update the per compaction group tombstone GC enabled flag
     for_each_storage_group([&] (size_t group_id, storage_group& sg) {

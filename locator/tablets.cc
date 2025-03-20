@@ -262,6 +262,17 @@ tablet_metadata::all_table_groups() const {
     return m;
 }
 
+std::unordered_map<table_id, table_id>
+tablet_metadata::all_joining_tables() const {
+    std::unordered_map<table_id, table_id> m;
+    for (auto&& [table, tmap] : _tablets) {
+        if (auto base_table = tmap->join_base_table()) {
+            m[table] = *base_table;
+        }
+    }
+    return m;
+}
+
 table_id tablet_metadata::get_base_table(table_id id) const {
     return _tablets.at(id)->base_table().value_or(id);
 }

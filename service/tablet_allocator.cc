@@ -3195,9 +3195,18 @@ public:
     }
 
     tablet_map allocate_tablets_for_new_table_from_base(table_id base_table_id, const tablet_map& base_map) {
-        // TODO fix creating tablet map from base when the base is in the middle of a migration
-        tablet_map map(base_map);
-        map.set_base_table(base_table_id);
+        tablet_map map(base_map.tablet_count());
+
+        bool base_has_transition = std::ranges::any_of(map.tablet_ids(), [&] (auto tid) {
+            return bool(base_map.get_tablet_transition_info(tid));
+        });
+
+        if (base_has_transition) {
+            map.set_join_base_table(base_table_id);
+        } else {
+            map.set_base_table(base_table_id);
+        }
+
         return map;
     }
 
