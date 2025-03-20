@@ -528,7 +528,7 @@ schema::schema(const schema& o, const std::function<void(schema&)>& transform)
 
     rebuild();
     if (o.is_view()) {
-        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw(), *o.view_info()->base_info());
+        _view_info = std::make_unique<::view_info>(*this, o.view_info()->raw(), o.view_info()->base_info());
     }
 }
 
@@ -1284,7 +1284,7 @@ schema_builder::schema_builder(const schema_ptr s)
     : schema_builder(s->_raw)
 {
     if (s->is_view()) {
-        _base_info = *s->view_info()->base_info();
+        _base_info = s->view_info()->base_info();
         _view_info = s->view_info()->raw();
     }
 }
@@ -2072,10 +2072,7 @@ schema_ptr schema::get_reversed() const {
         auto s = make_reversed();
 
         if (s->is_view()) {
-            if (!s->view_info()->base_info()) {
-                on_internal_error(dblog, format("Tried to make a reverse schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
-            }
-            return {frozen_schema(s), *s->view_info()->base_info()};
+            return {frozen_schema(s), s->view_info()->base_info()};
         }
         return {frozen_schema(s)};
     });

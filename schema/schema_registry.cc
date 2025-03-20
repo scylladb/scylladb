@@ -189,7 +189,7 @@ schema_ptr schema_registry_entry::load(view_schema_and_base_info fs) {
 schema_ptr schema_registry_entry::load(schema_ptr s) {
     _frozen_schema = frozen_schema(s);
     if (s->is_view()) {
-        _base_info = *s->view_info()->base_info();
+        _base_info = s->view_info()->base_info();
     }
     _schema = &*s;
     _schema->_registry_entry = this;
@@ -371,10 +371,7 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         } else {
             return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> view_schema_and_base_info {
                 if (s->is_view()) {
-                    if (!s->view_info()->base_info()) {
-                        on_internal_error(slogger, format("Tried to build a global schema for view {}.{} with an uninitialized base info", s->ks_name(), s->cf_name()));
-                    }
-                    return {frozen_schema(s), *s->view_info()->base_info()};
+                    return {frozen_schema(s), s->view_info()->base_info()};
                 } else {
                     return {frozen_schema(s)};
                 }
@@ -384,6 +381,6 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
 
     _ptr = ensure_registry_entry(ptr);
     if (_ptr->is_view()) {
-        _base_info = *_ptr->view_info()->base_info();
+        _base_info = _ptr->view_info()->base_info();
     }
 }
