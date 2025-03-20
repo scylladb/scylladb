@@ -422,6 +422,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     mutation_opt columns = do_load(db::schema_tables::columns);
     mutation_opt view_virtual_columns = do_load(db::schema_tables::view_virtual_columns);
     mutation_opt computed_columns = do_load(db::schema_tables::computed_columns);
+    mutation_opt internal_columns = do_load(db::schema_tables::internal_columns);
     mutation_opt indexes = do_load(db::schema_tables::indexes);
     mutation_opt dropped_columns = do_load(db::schema_tables::dropped_columns);
     mutation_opt scylla_tables = do_load([] () { return db::schema_tables::scylla_tables(); });
@@ -474,7 +475,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
         tables = std::move(views);
     }
 
-    schema_mutations muts(std::move(*tables), std::move(*columns), std::move(view_virtual_columns), std::move(computed_columns), std::move(indexes),
+    schema_mutations muts(std::move(*tables), std::move(*columns), std::move(view_virtual_columns), std::move(computed_columns), std::move(internal_columns), std::move(indexes),
             std::move(dropped_columns), std::move(scylla_tables));
     if (muts.is_view()) {
         query::result_set rs(muts.columnfamilies_mutation());

@@ -2965,7 +2965,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
         auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
         for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
             for (const auto& col : sstable_schema->columns(col_kind)) {
-                builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
+                builder.with_column(col.name(), col.type, col_kind, col.view_virtual(), col.is_internal());
 
                 // Register any user types, so they are known by the time we create the table.
                 if (col.type->is_user_type()) {
