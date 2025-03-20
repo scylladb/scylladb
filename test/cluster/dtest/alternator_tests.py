@@ -480,7 +480,7 @@ class TesterAlternator(BaseAlternator):
         for tables_num in range(concurrent_requests_limit * 5):
             create_tables_threads.append(self.run_create_table_thread())
 
-        @retrying(num_attempts=15, sleep_time=2, allowed_exceptions=ConcurrencyLimitNotExceededError, message="Running create-table request")
+        @retrying(num_attempts=150, sleep_time=0.2, allowed_exceptions=ConcurrencyLimitNotExceededError, message="Running create-table request")
         def wait_for_create_table_request_failure():
             try:
                 self.create_table(table_name=random_string(length=10), node=node1, wait_until_table_exists=False)
@@ -521,7 +521,7 @@ class TesterAlternator(BaseAlternator):
         if threshold is not None and response_json["threshold"] != threshold:
             raise SlowQueriesLoggingError(f"Got unexpected threshold value: {response_json['threshold']}")
 
-    @retrying(num_attempts=10, sleep_time=2, allowed_exceptions=SlowQueriesLoggingError, message="wait_for_slow_query_logs")
+    @retrying(num_attempts=100, sleep_time=0.2, allowed_exceptions=SlowQueriesLoggingError, message="wait_for_slow_query_logs")
     def wait_for_slow_query_logs(self, node):
         """
         Wait for a non-empty query of the scylla.alternator.system_traces.node_slow_log table.
@@ -559,7 +559,7 @@ class TesterAlternator(BaseAlternator):
             table_names.append(name)
         return table_names
 
-    @retrying(num_attempts=10, sleep_time=2, allowed_exceptions=SlowQueriesLoggingError, message="wait_for_a_specific_slow_query_logs")
+    @retrying(num_attempts=100, sleep_time=0.2, allowed_exceptions=SlowQueriesLoggingError, message="wait_for_a_specific_slow_query_logs")
     def wait_for_create_table_slow_query_logs(self, node, table_names: list):
         """
         Verify all created tables are logged as slow-query operation.
