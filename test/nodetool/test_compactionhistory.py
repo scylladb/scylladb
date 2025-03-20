@@ -23,53 +23,106 @@ def format_compacted_at(compacted_at: int):
 HISTORY_RESPONSE = [
         {
             "id": "edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4",
+            "shard_id": 0,
             "cf": "peers",
             "ks": "system",
+            "compaction_type": "Compact",
             "compacted_at": 1695973859380,
             "bytes_in": 11714,
             "bytes_out": 11808,
             "rows_merged": [{"key": 1, "value": 12}],
+            "sstables_in": [
+                {
+                    "generation": "3glx_0srx_1lvc01zhjn9048se29",
+                    "origin": "memtable",
+                    "size": 5466,
+                },
+                {
+                    "generation": "3glx_0sru_3zlr42ksepk902v8dt",
+                    "origin": "memtable",
+                    "size": 5519,
+                }],
+            "sstables_out": [
+                {
+                    "generation": "3glx_0srx_1o0hs1zhjn9048se29",
+                    "origin": "compaction",
+                    "size": 5457,
+                }],
+            "total_tombstone_purge_attempt": 14,
+            "total_tombstone_purge_failure_due_to_overlapping_with_memtable": 0,
+            "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable": 0,
         },
         {
             "id": "edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4",
+            "shard_id": 0,
             "cf": "functions",
             "ks": "system_schema",
+            "compaction_type": "Compact",
             "compacted_at": 1695973859491,
             "bytes_in": 5790,
             "bytes_out": 5944,
             "rows_merged": [{"key": 1, "value": 5}, {"key": 2, "value": 1}],
+            "sstables_in": [
+                {
+                    "generation": "3glx_0srx_1lvc02ksepk902v8dt",
+                    "origin": "memtable",
+                    "size": 5668,
+                },
+                {
+                    "generation": "3glx_0sru_3zlr42ksepk902v8dt",
+                    "origin": "memtable",
+                    "size": 5669,
+                }],
+            "sstables_out": [
+                {
+                    "generation": "3glx_0srx_1pasg2ksepk902v8dt",
+                    "origin": "compaction",
+                    "size": 5687,
+                }],
+            "total_tombstone_purge_attempt": 14,
+            "total_tombstone_purge_failure_due_to_overlapping_with_memtable": 5,
+            "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable": 5,
         }]
 
 EXPECTED_REQUEST = expected_request("GET", "/compaction_manager/compaction_history", response=HISTORY_RESPONSE)
 
 
-def test_text(request, nodetool):
-    expected_res_cassandra = \
+def _test_text_nodetool_cassandra(nodetool):
+    expected_response = \
 """Compaction History:
 id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged
 edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {} 5790     5944  {{1: 5, 2: 1}}
 edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {} 11714    11808 {{1: 12}}
 """.format(format_compacted_at(1695973859491), format_compacted_at(1695973859380))
 
-    # Scylla aligns number columns to the right except rows_merged column.
-    expected_res_scylla = "\n".join([
-"Compaction History:",
-"id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged ",
-"edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {}     5790      5944 {{1: 5, 2: 1}}".format(format_compacted_at(1695973859491)),
-"edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {}    11714     11808 {{1: 12}}     ".format(format_compacted_at(1695973859380)),
-""])
+    VALID_KEYS = ["id", "cf", "ks", "compaction_type", "compacted_at", "bytes_in", "bytes_out"]
+    CASSANDRA_HISTORY_RESPONSE = [{key: data[key] for key in VALID_KEYS} for data in HISTORY_RESPONSE]
+    CASSANDRA_EXPECTED_REQUEST = expected_request("GET", "/compaction_manager/compaction_history", response=CASSANDRA_HISTORY_RESPONSE)
+
+    for cmd in [("compactionhistory",), ("compactionhistory", "--format", "text")]:
+        response = nodetool(*cmd, expected_requests=[CASSANDRA_EXPECTED_REQUEST])
+        assert response.stdout == expected_response
+
+
+def _test_text_nodetool_scylla(nodetool):
+    # Scylla aligns number columns to the right.
+    expected_response = \
+"""Compaction History:
+id                                   shard_id keyspace_name columnfamily_name compaction_type compacted_at            bytes_in bytes_out rows_merged  sstables_in                                                                                                                                                          sstables_out                                                                         total_tombstone_purge_attempt total_tombstone_purge_failure_due_to_overlapping_with_memtable total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable 
+edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4        0 system_schema functions         Compact         {}     5790      5944 {{1: 5, 2: 1}} [{{generation: 5d022760-b617-11ef-a97d-8438c36f0e31, origin: memtable, size: 5668}}, {{generation: 5b756ce0-b617-11ef-a97d-8438c36f0e31, origin: memtable, size: 5669}}] [{{generation: 5d049860-b617-11ef-a97d-8438c36f0e31, origin: compaction, size: 5687}}] 14                            5                                                              5                                                                          
+edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4        0 system        peers             Compact         {}    11714     11808 {{1: 12}}      [{{generation: 5d022760-b617-11ef-8294-8437c36f0e31, origin: memtable, size: 5466}}, {{generation: 5b756ce0-b617-11ef-a97d-8438c36f0e31, origin: memtable, size: 5519}}] [{{generation: 5d03ae00-b617-11ef-8294-8437c36f0e31, origin: compaction, size: 5457}}] 14                            0                                                              0                                                                          
+""".format(format_compacted_at(1695973859491), format_compacted_at(1695973859380))
 
     for cmd in [("compactionhistory",), ("compactionhistory", "--format", "text"), ("compactionhistory", "-F", "text")]:
-        if request.config.getoption("nodetool") != "scylla" and len(cmd) > 1:
-            # The -F text is a scylla-extension, cassandra-nodetool doesn't support it
-            continue
+        response = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
+        assert response.stdout == expected_response
 
-        res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
 
-        if request.config.getoption("nodetool") == "scylla":
-            assert res.stdout == expected_res_scylla
-        else:
-            assert res.stdout == expected_res_cassandra
+def test_text(request, nodetool):
+    if request.config.getoption("nodetool") == "scylla":
+        _test_text_nodetool_scylla(nodetool)
+    else:
+        _test_text_nodetool_cassandra(nodetool)
 
 
 def test_json(nodetool):
@@ -77,8 +130,10 @@ def test_json(nodetool):
             "CompactionHistory": [
                 {
                     "id": "edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4",
+                    "shard_id": 0,
                     "columnfamily_name": "functions",
                     "keyspace_name": "system_schema",
+                    "compaction_type": "Compact",
                     "compacted_at": format_compacted_at(1695973859491),
                     "bytes_in": 5790,
                     "bytes_out": 5944,
@@ -92,11 +147,33 @@ def test_json(nodetool):
                             "value": 1
                         }
                     ],
+                    "sstables_in": [
+                        {
+                            "generation": "5d022760-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "memtable",
+                            "size": 5668,
+                        },
+                        {
+                            "generation": "5b756ce0-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "memtable",
+                            "size": 5669,
+                        }],
+                    "sstables_out": [
+                        {
+                            "generation": "5d049860-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "compaction",
+                            "size": 5687,
+                        }],
+                    "total_tombstone_purge_attempt": 14,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_memtable": 5,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable": 5,
                 },
                 {
                     "id": "edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4",
+                    "shard_id": 0,
                     "columnfamily_name": "peers",
                     "keyspace_name": "system",
+                    "compaction_type": "Compact",
                     "compacted_at": format_compacted_at(1695973859380),
                     "bytes_in": 11714,
                     "bytes_out": 11808,
@@ -106,13 +183,32 @@ def test_json(nodetool):
                             "value": 12
                         }
                     ],
+                    "sstables_in": [
+                        {
+                            "generation": "5d022760-b617-11ef-8294-8437c36f0e31",
+                            "origin": "memtable",
+                            "size": 5466,
+                        },
+                        {
+                            "generation": "5b756ce0-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "memtable",
+                            "size": 5519,
+                        }],
+                    "sstables_out": [
+                        {
+                            "generation": "5d03ae00-b617-11ef-8294-8437c36f0e31",
+                            "origin": "compaction",
+                            "size": 5457,
+                        }],
+                    "total_tombstone_purge_attempt": 14,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_memtable": 0,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable": 0,
                 }
             ]
         }
 
     for cmd in [("compactionhistory", "--format", "json"), ("compactionhistory", "-F", "json")]:
         res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
-
         assert json.loads(res.stdout) == expected_res
 
 
@@ -121,8 +217,10 @@ def test_yaml(nodetool):
             "CompactionHistory": [
                 {
                     "id": "edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4",
+                    "shard_id": 0,
                     "columnfamily_name": "functions",
                     "keyspace_name": "system_schema",
+                    "compaction_type": "Compact",
                     "compacted_at": format_compacted_at(1695973859491),
                     "bytes_in": 5790,
                     "bytes_out": 5944,
@@ -136,11 +234,33 @@ def test_yaml(nodetool):
                             "value": 1
                         }
                     ],
+                    "sstables_in": [
+                        {
+                            "generation": "5d022760-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "memtable",
+                            "size": 5668,
+                        },
+                        {
+                            "generation": "5b756ce0-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "memtable",
+                            "size": 5669,
+                        }],
+                    "sstables_out": [
+                        {
+                            "generation": "5d049860-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "compaction",
+                            "size": 5687,
+                        }],
+                    "total_tombstone_purge_attempt": 14,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_memtable": 5,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable": 5,
                 },
                 {
                     "id": "edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4",
+                    "shard_id": 0,
                     "columnfamily_name": "peers",
                     "keyspace_name": "system",
+                    "compaction_type": "Compact",
                     "compacted_at": format_compacted_at(1695973859380),
                     "bytes_in": 11714,
                     "bytes_out": 11808,
@@ -150,6 +270,26 @@ def test_yaml(nodetool):
                             "value": 12
                         }
                     ],
+                    "sstables_in": [
+                        {
+                            "generation": "5d022760-b617-11ef-8294-8437c36f0e31",
+                            "origin": "memtable",
+                            "size": 5466,
+                        },
+                        {
+                            "generation": "5b756ce0-b617-11ef-a97d-8438c36f0e31",
+                            "origin": "memtable",
+                            "size": 5519,
+                        }],
+                    "sstables_out": [
+                        {
+                            "generation": "5d03ae00-b617-11ef-8294-8437c36f0e31",
+                            "origin": "compaction",
+                            "size": 5457,
+                        }],
+                    "total_tombstone_purge_attempt": 14,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_memtable": 0,
+                    "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable": 0,
                 }
             ]
         }
