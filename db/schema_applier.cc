@@ -125,6 +125,15 @@ static std::optional<table_id> table_id_from_mutations(const schema_mutations& s
     return table_id(table_row.get_nonnull<utils::UUID>("id"));
 }
 
+static std::optional<table_id> base_id_from_mutations(const schema_mutations& sm) {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    if (table_rs.empty()) {
+        return std::nullopt;
+    }
+    const query::result_set_row& table_row = table_rs.row(0);
+    return table_id(table_row.get_nonnull<utils::UUID>("base_table_id"));
+}
+
 static
 future<std::map<table_id, schema_mutations>>
 read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names, table_kind kind,
@@ -210,6 +219,34 @@ static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, 
         const sstring name = schema_table->clustering_key_columns().begin()->name_as_text();
         return row.get_nonnull<sstring>(name);
     }) | std::ranges::to<std::vector>();
+}
+
+static
+future<std::map<table_id, schema_mutations>>
+read_views_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::map<table_id, schema_mutations>& base_tables,
+                          const std::unordered_map<sstring, table_selector>& tables_per_keyspace)
+{
+    if (proxy.local().local_db().features().immutable_base_info) {
+        co_return std::map<table_id, schema_mutations>{};
+    }
+    std::map<table_id, schema_mutations> result;
+
+    for (auto&& [keyspace_name, sel] : tables_per_keyspace) {
+        if (!sel.tables.contains(table_kind::table)) {
+            continue;
+        }
+        for (auto&& n : co_await read_table_names_of_keyspace(proxy, keyspace_name, get_table_holder(table_kind::view))) {
+            auto vqn = qualified_name(keyspace_name, n);
+            auto vmuts = co_await read_table_mutations(proxy, vqn, get_table_holder(table_kind::view));
+            auto base_id = base_id_from_mutations(vmuts);
+            if (base_id && base_tables.contains(*base_id)) {
+                if (auto vid = table_id_from_mutations(vmuts)) {
+                    result.emplace(std::move(*vid), std::move(vmuts));
+                }
+            }
+        }
+    }
+    co_return result;
 }
 
 // Applies deletion of the "version" column to system_schema.scylla_tables mutation rows
@@ -566,7 +603,8 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm));
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
+    bool need_reload_views = reload || !proxy.local().local_db().features().immutable_base_info;
+    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), need_reload_views, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -574,19 +612,23 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         // 2. The table was just created - the table is guaranteed to be published with the view in that case.
         // 3. The view itself was altered - in that case we already know the base table so we can take it from
         //    the database object.
-        view_ptr vp = create_view_from_mutations(proxy, std::move(sm));
+        query::result_set rs(sm.columnfamilies_mutation());
+        const query::result_set_row& view_row = rs.row(0);
+        auto ks_name = view_row.get_nonnull<sstring>("keyspace_name");
+        auto base_name = view_row.get_nonnull<sstring>("base_table_name");
+
         schema_ptr base_schema;
         for (auto&& altered : tables_diff.altered) {
             // Chose the appropriate version of the base table schema: old -> old, new -> new.
             schema_ptr s = side == schema_diff_side::left ? altered.old_schema : altered.new_schema;
-            if (s->ks_name() == vp->ks_name() && s->cf_name() == vp->view_info()->base_name() ) {
+            if (s->ks_name() == ks_name && s->cf_name() == base_name) {
                 base_schema = s;
                 break;
             }
         }
         if (!base_schema) {
             for (auto&& s : tables_diff.created) {
-                if (s.get()->ks_name() == vp->ks_name() && s.get()->cf_name() == vp->view_info()->base_name() ) {
+                if (s.get()->ks_name() == ks_name && s.get()->cf_name() == base_name) {
                     base_schema = s;
                     break;
                 }
@@ -594,14 +636,13 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         }
 
         if (!base_schema) {
-            base_schema = proxy.local().local_db().find_schema(vp->ks_name(), vp->view_info()->base_name());
+            base_schema = proxy.local().local_db().find_schema(ks_name, base_name);
         }
+        view_ptr vp = create_view_from_mutations(proxy, std::move(sm), base_schema);
 
         // Now when we have a referenced base - sanity check that we're not registering an old view
         // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
         check_no_legacy_secondary_index_mv_schema(proxy.local().get_db().local(), vp, base_schema);
-
-        vp->view_info()->set_base_info(vp->view_info()->make_base_dependent_view_info(*base_schema));
         return vp;
     });
 
@@ -628,23 +669,28 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         });
     }
 
+    // For updating and creating tables use the following order:
+    // 1. Create non-view tables
+    // 2. Atomically update non-view tables and views
+    // 3. Create views
+    // This order is needed to maintain consistency base and view schemas - we shouldn't create a view
+    // before updating the base schema and both base and view schemas need to be updated atomically.
+    // If this atomicity starts causing stalls, we can consider only atomically updating a table and its views,
+    // not all tables and views at once.
     co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
         // In order to avoid possible races we first create the tables and only then the views.
         // That way if a view seeks information about its base table it's guaranteed to find it.
         co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
             co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
         });
-        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
-        });
-    });
-    co_await db.invoke_on_all([&](replica::database& db) -> future<> {
         std::vector<bool> columns_changed;
         columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
         for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
             columns_changed.push_back(db.update_column_family(altered.new_schema));
-            co_await coroutine::maybe_yield();
         }
+        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
+            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
+        });
         auto it = columns_changed.begin();
         auto notify = [&] (auto& r, auto&& f) -> future<> {
             co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
@@ -800,8 +846,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
     auto&& old_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
     auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
+    auto&& old_views = co_await read_views_for_keyspaces(proxy, old_column_families, affected_tables);
     auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
+    old_views.merge(co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables));
     auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
     auto old_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
@@ -812,8 +859,9 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
     auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
     auto&& new_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
     auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
+    auto&& new_views = co_await read_views_for_keyspaces(proxy, new_column_families, affected_tables);
     auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
+    new_views.merge(co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables));
     auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
     auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
     auto new_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);

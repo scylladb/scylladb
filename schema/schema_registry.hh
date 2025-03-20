@@ -60,6 +60,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
 
     state _state;
     table_schema_version _version; // always valid
+    std::optional<table_schema_version> _base_version; // always valid, engaged for view schemas
     schema_registry& _registry; // always valid
 
     async_schema_loader _loader; // valid when state == LOADING
@@ -80,7 +81,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
 
     friend class schema_registry;
 public:
-    schema_registry_entry(table_schema_version v, schema_registry& r);
+    schema_registry_entry(table_schema_version v, std::optional<table_schema_version> b, schema_registry& r);
     schema_registry_entry(schema_registry_entry&&) = delete;
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
@@ -94,9 +95,6 @@ public:
     future<> maybe_sync(std::function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
-    // Updates the frozen base schema for a view, should be called when updating the base info
-    // Is not needed when we set the base info for the first time - that means this schema is not in the registry
-    void update_base_schema(schema_ptr);
     // Can be called from other shards
     frozen_schema frozen() const;
     // Can be called from other shards
@@ -121,6 +119,7 @@ public:
 // Schemas of views returned by this registry always have base_info set.
 class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
+    std::unordered_map<std::pair<table_schema_version, table_schema_version>, lw_shared_ptr<schema_registry_entry>> _view_entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
 
     friend class schema_registry_entry;
@@ -137,7 +136,7 @@ public:
 
     // Looks up schema by version or loads it using supplied loader.
     // If the schema refers to a view, the loader must return both view and base schemas.
-    schema_ptr get_or_load(table_schema_version, const schema_loader&);
+    schema_ptr get_or_load(table_schema_version, const schema_loader&, std::optional<table_schema_version> base = std::nullopt);
 
     // Looks up schema by version or returns an empty pointer if not available.
     schema_ptr get_or_null(table_schema_version) const;
@@ -147,7 +146,7 @@ public:
     // returns. If the loader fails, the future resolves with
     // schema_version_loading_failed.
     // If the schema refers to a view, the loader must return both view and base schemas.
-    future<schema_ptr> get_or_load(table_schema_version, const async_schema_loader&);
+    future<schema_ptr> get_or_load(table_schema_version, const async_schema_loader&, std::optional<table_schema_version> base = std::nullopt);
 
     // Looks up schema version. Throws schema_version_not_found when not found
     // or loading is in progress.

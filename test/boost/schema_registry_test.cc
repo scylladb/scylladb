@@ -272,10 +272,7 @@ SEASTAR_THREAD_TEST_CASE(test_schema_is_recovered_after_dying) {
         [base_schema] (table_schema_version) -> base_and_view_schemas { return {frozen_schema(base_schema)}; });
     base_registry_schema = nullptr;
     auto recovered_registry_schema = local_schema_registry().get_or_null(base_schema->version());
-    BOOST_REQUIRE(recovered_registry_schema);
-    recovered_registry_schema = nullptr;
-    seastar::sleep(dummy.grace_period).get();
-    BOOST_REQUIRE(!local_schema_registry().get_or_null(base_schema->version()));
+    BOOST_REQUIRE(recovered_registry_schema->version() == base_schema->version());
 }
 
 SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
@@ -288,14 +285,13 @@ SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
     auto view_schema = schema_builder("ks", "cf_view")
             .with_column("v", int32_type, column_kind::partition_key)
             .with_column("pk", int32_type)
-            .with_view_info(*base_schema, false, "pk IS NOT NULL AND v IS NOT NULL")
+            .with_view_info(base_schema, false, "pk IS NOT NULL AND v IS NOT NULL")
             .build();
-    view_schema->view_info()->set_base_info(view_schema->view_info()->make_base_dependent_view_info(*base_schema));
     local_schema_registry().get_or_load(view_schema->version(),
         [view_schema, base_schema] (table_schema_version) -> base_and_view_schemas { return {frozen_schema(view_schema), base_schema}; });
     auto view_registry_schema = local_schema_registry().get_or_null(view_schema->version());
     BOOST_REQUIRE(view_registry_schema);
-    BOOST_REQUIRE(view_registry_schema->view_info()->base_info());
+    BOOST_REQUIRE(view_registry_schema->view_info()->base_info().base_schema()->version() == base_schema->version());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

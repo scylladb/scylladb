@@ -135,6 +135,7 @@ class view_builder final : public service::migration_listener::only_view_notific
         // Ensure we pin the column_family. It may happen that all views are removed,
         // and that the base table is too before we can detect it.
         lw_shared_ptr<replica::column_family> base;
+        schema_ptr base_schema;
         query::partition_slice pslice;
         dht::partition_range prange;
         mutation_reader reader{nullptr};
@@ -227,7 +228,9 @@ public:
     future<> upgrade_to_v2();
 
     void init_virtual_table();
-
+    future<> update_base_schema(const replica::column_family& base);
+    future<> drop_view(const sstring& ks_name, const sstring& view_name, build_step& step);
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override;
     virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
