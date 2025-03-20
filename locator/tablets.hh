@@ -632,6 +632,8 @@ public:
 // Check that all tablets which have replicas on this host, have a valid replica shard (< smp::count).
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
 
+std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, std::function<bool(const tablet_replica&)> filter);
+
 struct tablet_routing_info {
     tablet_replica_set tablet_replicas;
     std::pair<dht::token, dht::token> token_range;
