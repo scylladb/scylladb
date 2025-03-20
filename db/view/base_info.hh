@@ -30,22 +30,22 @@ private:
 public:
     const schema_ptr& base_schema() const;
 
-    const bool has_computed_column_depending_on_base_non_primary_key;
+    bool has_computed_column_depending_on_base_non_primary_key;
 
     // True if the partition key columns of the view are the same as the
     // partition key columns of the base, maybe in a different order.
-    const bool is_partition_key_permutation_of_base_partition_key;
+    bool is_partition_key_permutation_of_base_partition_key;
 
     // Indicates if the view hase pk columns which are not part of the base
     // pk, it seems that !base_non_pk_columns_in_view_pk.empty() is the same,
     // but actually there are cases where we can compute this boolean without
     // succeeding to reliably build the former.
-    const bool has_base_non_pk_columns_in_view_pk;
+    bool has_base_non_pk_columns_in_view_pk;
 
     // If base_non_pk_columns_in_view_pk couldn't reliably be built, this base
     // info can't be used for computing view updates, only for reading the materialized
     // view.
-    const bool use_only_for_reads;
+    bool use_only_for_reads;
 
     // A constructor for a base info that can facilitate reads and writes from the materialized view.
     base_dependent_view_info(schema_ptr base_schema,
