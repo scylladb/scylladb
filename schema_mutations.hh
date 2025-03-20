@@ -21,16 +21,19 @@ class schema_mutations {
     mutation _columns;
     mutation_opt _view_virtual_columns;
     mutation_opt _computed_columns;
+    mutation_opt _internal_columns;
     mutation_opt _indices;
     mutation_opt _dropped_columns;
     mutation_opt _scylla_tables;
 public:
-    schema_mutations(mutation columnfamilies, mutation columns, mutation_opt view_virtual_columns, mutation_opt computed_columns, mutation_opt indices, mutation_opt dropped_columns,
-        mutation_opt scylla_tables)
+    schema_mutations(mutation columnfamilies, mutation columns, mutation_opt view_virtual_columns, 
+        mutation_opt computed_columns, mutation_opt internal_columns, mutation_opt indices, 
+        mutation_opt dropped_columns, mutation_opt scylla_tables)
             : _columnfamilies(std::move(columnfamilies))
             , _columns(std::move(columns))
             , _view_virtual_columns(std::move(view_virtual_columns))
             , _computed_columns(std::move(computed_columns))
+            , _internal_columns(std::move(internal_columns))
             , _indices(std::move(indices))
             , _dropped_columns(std::move(dropped_columns))
             , _scylla_tables(std::move(scylla_tables))
@@ -42,7 +45,8 @@ public:
                      std::optional<canonical_mutation> dropped_columns,
                      std::optional<canonical_mutation> scylla_tables,
                      std::optional<canonical_mutation> view_virtual_columns,
-                     std::optional<canonical_mutation> computed_columns);
+                     std::optional<canonical_mutation> computed_columns,
+                     std::optional<canonical_mutation> internal_columns);
 
     schema_mutations(schema_mutations&&) = default;
     schema_mutations& operator=(schema_mutations&&) = default;
@@ -65,6 +69,10 @@ public:
 
     const mutation_opt& computed_columns_mutation() const {
         return _computed_columns;
+    }
+
+    const mutation_opt& internal_columns_mutation() const {
+        return _internal_columns;
     }
 
     const mutation_opt& scylla_tables() const {
@@ -100,6 +108,13 @@ public:
     std::optional<canonical_mutation> computed_columns_canonical_mutation() const {
         if (_computed_columns) {
             return canonical_mutation(*_computed_columns);
+        }
+        return {};
+    }
+
+    std::optional<canonical_mutation> internal_columns_canonical_mutation() const {
+        if (_internal_columns) {
+            return canonical_mutation(*_internal_columns);
         }
         return {};
     }
