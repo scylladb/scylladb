@@ -3821,7 +3821,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
         co_return row_locker::lock_holder();
     }
 
-    auto views = db::view::with_base_info_snapshot(affected_views(gen, base, m));
+    auto views = affected_views(gen, base, m);
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }
