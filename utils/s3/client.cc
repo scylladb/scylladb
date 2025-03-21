@@ -438,6 +438,14 @@ future<> client::delete_object_tagging(sstring object_name, seastar::abort_sourc
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
+static sstring format_range_header(const range& range) {
+    auto end_bytes = range.off + range.len - 1;
+    if (end_bytes < range.off) {
+        throw std::overflow_error("End of the range exceeds 64-bits");
+    }
+    return format("bytes={}-{}", range.off, end_bytes);
+}
+
 future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
@@ -445,11 +453,7 @@ future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name
         if (range->len == 0) {
             co_return temporary_buffer<char>();
         }
-        auto end_bytes = range->off + range->len - 1;
-        if (end_bytes < range->off) {
-            throw std::overflow_error("End of the range exceeds 64-bits");
-        }
-        auto range_header = format("bytes={}-{}", range->off, end_bytes);
+        auto range_header = format_range_header(*range);
         s3l.trace("GET {} contiguous range='{}'", object_name, range_header);
         req._headers["Range"] = std::move(range_header);
         expected = http::reply::status_type::partial_content;
@@ -981,6 +985,102 @@ data_sink client::make_upload_sink(sstring object_name, seastar::abort_source* a
 
 data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
     return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece, as));
+}
+
+class client::download_source final : public seastar::data_source_impl {
+    shared_ptr<client> _client;
+    sstring _object_name;
+    seastar::abort_source* _as;
+    range _range;
+
+    struct external_body {
+        input_stream<char>& b;
+        promise<> done;
+        external_body(input_stream<char>& b_) noexcept : b(b_), done() {}
+    };
+
+    std::optional<external_body> _body;
+    gate _bg;
+
+    future<external_body> request_body();
+
+public:
+    download_source(shared_ptr<client> cln, sstring object_name, std::optional<range> range, seastar::abort_source* as)
+        : _client(std::move(cln))
+        , _object_name(std::move(object_name))
+        , _as(as)
+        , _range(range.value_or(s3::range{0, std::numeric_limits<uint64_t>::max()}))
+    {
+    }
+
+    virtual future<temporary_buffer<char>> get() override;
+    virtual future<> close() override {
+        if (_body.has_value()) {
+            _body->done.set_value();
+            _body.reset();
+        }
+        return _bg.close();
+    }
+};
+
+data_source client::make_download_source(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
+    return data_source(std::make_unique<download_source>(shared_from_this(), std::move(object_name), range, as));
+}
+
+auto client::download_source::request_body() -> future<external_body> {
+    auto req = http::request::make("GET", _client->_host, _object_name);
+    auto range_header = format_range_header(_range);
+    s3l.trace("GET {} download range {}:{}", _object_name, _range.off, _range.len);
+    req._headers["Range"] = std::move(range_header);
+
+    auto bp = std::make_unique<std::optional<promise<external_body>>>(std::in_place);
+    auto& p = *bp;
+    future<external_body> f = p->get_future();
+
+    (void)_client->make_request(std::move(req), [this, &p] (group_client& gc, const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
+        s3l.trace("GET {} got the body ({} {} bytes)", _object_name, rep._status, rep.content_length);
+        if (rep._status != http::reply::status_type::partial_content && rep._status != http::reply::status_type::ok) {
+            co_await coroutine::return_exception(httpd::unexpected_status_error(rep._status));
+        }
+
+        auto in = std::move(in_);
+        external_body xb(in);
+        auto f = xb.done.get_future();
+        p->set_value(std::move(xb));
+        p.reset();
+        co_await std::move(f);
+    }, {}, _as).handle_exception([&p] (auto ex) {
+        if (p.has_value()) {
+            p->set_exception(std::move(ex));
+        }
+    }).finally([bp = std::move(bp), h = _bg.hold()] {});
+
+    return f;
+}
+
+future<temporary_buffer<char>> client::download_source::get() {
+    while (true) {
+        if (_body.has_value()) {
+            try {
+                auto buf = co_await _body->b.read_up_to(_range.len);
+                _range.off += buf.size();
+                _range.len -= buf.size();
+                s3l.trace("GET {} got the {}-bytes buffer", _object_name, buf.size());
+                if (buf.empty()) {
+                    _body->done.set_value();
+                    _body.reset();
+                }
+                co_return std::move(buf);
+            } catch (...) {
+                s3l.trace("GET {} error reading body, completing it and re-trying", _object_name);
+                _body->done.set_exception(std::current_exception());
+                _body.reset();
+            }
+        }
+
+        auto xb = co_await request_body();
+        _body.emplace(std::move(xb));
+    }
 }
 
 // unlike upload_sink and upload_jumbo_sink, do_upload_file reads from the
