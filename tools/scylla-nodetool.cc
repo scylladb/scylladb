@@ -256,7 +256,7 @@ public:
         std::vector<uint64_t> samples;
         if (histogram_object.HasMember("sample")) {
             for (const auto& sample : histogram_object["sample"].GetArray()) {
-                samples.push_back(sample.GetInt());
+                samples.push_back(sample.GetInt64());
             }
         }
         return buffer_samples(std::move(samples));
@@ -560,7 +560,7 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
         std::map<int32_t, int64_t> rows_merged;
         for (const auto& rows_merged_json : history_entry_json_object["rows_merged"].GetArray()) {
             const auto& rows_merged_json_object = rows_merged_json.GetObject();
-            rows_merged.emplace(rows_merged_json_object["key"].GetInt(), rows_merged_json_object["value"].GetInt64());
+            rows_merged.emplace(rows_merged_json_object["key"].GetInt64(), rows_merged_json_object["value"].GetInt64());
         }
 
         history.emplace_back(history_entry{
@@ -674,7 +674,7 @@ std::string format_percent(uint64_t completed, uint64_t total) {
 void report_compaction_remaining_time(scylla_rest_client& client, uint64_t remaining_bytes) {
     std::string fmt_remaining_time;
     auto res = client.get("/storage_service/compaction_throughput");
-    int compaction_throughput_mb_per_sec = res.GetInt();
+    int compaction_throughput_mb_per_sec = res.GetInt64();
     if (compaction_throughput_mb_per_sec != 0) {
         auto remaining_time_in_secs = remaining_bytes / (compaction_throughput_mb_per_sec * 1_MiB);
         std::chrono::hh_mm_ss remaining_time{std::chrono::seconds(remaining_time_in_secs)};
@@ -968,7 +968,7 @@ void gossipinfo_operation(scylla_rest_client& client, const bpo::variables_map&)
 
         for (auto& element : endpoint["application_state"].GetArray()) {
             const auto& obj = element.GetObject();
-            auto state = static_cast<gms::application_state>(obj["application_state"].GetInt());
+            auto state = static_cast<gms::application_state>(obj["application_state"].GetInt64());
             if (state == gms::application_state::TOKENS) {
                 // skip tokens' state
                 continue;
@@ -1011,7 +1011,7 @@ void info_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     fmt::print("{:<23}: {}\n", "Native Transport active", client.get("/storage_service/native_transport").GetBool());
     fmt::print("{:<23}: {}\n", "Load", file_size_printer(client.get("/storage_service/load").GetDouble()));
     if (gossip_running) {
-        fmt::print("{:<23}: {}\n", "Generation No", client.get("/storage_service/generation_number").GetInt());
+        fmt::print("{:<23}: {}\n", "Generation No", client.get("/storage_service/generation_number").GetInt64());
     } else {
         fmt::print("{:<23}: {}\n", "Generation No", 0);
     }
@@ -1148,15 +1148,15 @@ void print_stream_session(
 
     uint64_t total_count{}, total_size{}, done_count{}, done_size{};
     for (const auto& tbl : summaries.GetArray()) {
-        total_count += tbl["files"].GetInt();
-        total_size += tbl["total_size"].GetInt();
+        total_count += tbl["files"].GetInt64();
+        total_size += tbl["total_size"].GetInt64();
     }
     for (const auto& file_entry : files.GetArray()) {
         const auto& file = file_entry["value"];
-        if (file["current_bytes"].GetInt() == file["total_bytes"].GetInt()) {
+        if (file["current_bytes"].GetInt64() == file["total_bytes"].GetInt64()) {
             ++done_count;
         }
-        done_size += file["current_bytes"].GetInt();
+        done_size += file["current_bytes"].GetInt64();
     }
 
     auto format_bytes = [] (uint64_t value, bool human_readable) {
@@ -1178,12 +1178,12 @@ void print_stream_session(
         const auto& file = file_entry["value"];
         fmt::print(std::cout, "            {} {}/{} bytes({}%) {} {} idx:{}/{}\n",
                 rjson::to_string_view(file["file_name"]),
-                file["current_bytes"].GetInt(),
-                file["total_bytes"].GetInt(),
+                file["current_bytes"].GetInt64(),
+                file["total_bytes"].GetInt64(),
                 uint64_t(file["current_bytes"].GetDouble() / file["total_bytes"].GetDouble() * 100.0),
                 action_perfect,
                 target,
-                file["session_index"].GetInt(),
+                file["session_index"].GetInt64(),
                 rjson::to_string_view(file["peer"]));
     }
 }
@@ -1224,16 +1224,16 @@ void netstats_operation(scylla_rest_client& client, const bpo::variables_map& vm
     }
 
     fmt::print(std::cout, "Read Repair Statistics:\n");
-    fmt::print(std::cout, "Attempted: {}\n", client.get("/storage_proxy/read_repair_attempted").GetInt());
-    fmt::print(std::cout, "Mismatch (Blocking): {}\n", client.get("/storage_proxy/read_repair_repaired_blocking").GetInt());
-    fmt::print(std::cout, "Mismatch (Background): {}\n", client.get("/storage_proxy/read_repair_repaired_background").GetInt());
+    fmt::print(std::cout, "Attempted: {}\n", client.get("/storage_proxy/read_repair_attempted").GetInt64());
+    fmt::print(std::cout, "Mismatch (Blocking): {}\n", client.get("/storage_proxy/read_repair_repaired_blocking").GetInt64());
+    fmt::print(std::cout, "Mismatch (Background): {}\n", client.get("/storage_proxy/read_repair_repaired_background").GetInt64());
 
     constexpr auto line_fmt = "{:<25}{:>10}{:>10}{:>15}{:>10}\n";
 
     auto sum_nodes = [] (auto&& res) {
         uint64_t sum = 0;
         for (const auto& node : res.GetArray()) {
-            sum += node["value"].GetInt();
+            sum += node["value"].GetInt64();
         }
         return sum;
     };
@@ -1500,7 +1500,7 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     for (const auto& keyspace : keyspaces) {
         const auto url = format("/storage_service/repair_async/{}", keyspace);
 
-        const auto id = client.post(url, repair_params).GetInt();
+        const auto id = client.post(url, repair_params).GetInt64();
 
         log("Starting repair command #{}, repairing 1 ranges for keyspace {} (parallelism=SEQUENTIAL, full=true)", id, keyspace);
         log("Repair session {}", id);
@@ -1901,7 +1901,7 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 
     std::vector<api::scrub_status> statuses;
     for (const auto& keyspace : keyspaces) {
-        statuses.push_back(api::scrub_status(client.get(format("/storage_service/keyspace_scrub/{}", keyspace), params).GetInt()));
+        statuses.push_back(api::scrub_status(client.get(format("/storage_service/keyspace_scrub/{}", keyspace), params).GetInt64()));
     }
 
     for (const auto status : statuses) {
@@ -3277,7 +3277,7 @@ void version_operation(scylla_rest_client& client, const bpo::variables_map& vm)
 
 void getcompactionthroughput_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto res = client.get("/storage_service/compaction_throughput");
-    uint32_t compaction_throughput_mb_per_sec = res.GetInt();
+    uint32_t compaction_throughput_mb_per_sec = res.GetInt64();
     fmt::print("{}\n", compaction_throughput_mb_per_sec);
 }
 
@@ -3293,7 +3293,7 @@ void setcompactionthroughput_operation(scylla_rest_client& client, const bpo::va
 
 void getstreamthroughput_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     auto res = client.get("/storage_service/stream_throughput");
-    uint32_t throughput_mb_per_sec = res.GetInt();
+    uint32_t throughput_mb_per_sec = res.GetInt64();
     if (vm.contains("mib")) {
         fmt::print("{}\n", throughput_mb_per_sec);
     } else {
