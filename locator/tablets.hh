@@ -444,6 +444,7 @@ private:
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
     repair_scheduler_config _repair_scheduler_config;
+    std::optional<table_id> _base_table;
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
@@ -570,12 +571,15 @@ public:
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
     const locator::repair_scheduler_config& repair_scheduler_config() const;
+
+    std::optional<table_id> base_table() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
     void set_repair_scheduler_config(locator::repair_scheduler_config config);
+    void set_base_table(table_id base_table);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
@@ -605,6 +609,7 @@ public:
     // See storage_service::replicate_to_all_cores().
     using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
     using table_to_tablet_map = std::unordered_map<table_id, tablet_map_ptr>;
+    using table_group_map = std::unordered_map<table_id, std::unordered_set<table_id>>;
 private:
     table_to_tablet_map _tablets;
 
@@ -616,6 +621,10 @@ public:
     const table_to_tablet_map& all_tables() const { return _tablets; }
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
+
+    table_group_map all_table_groups() const;
+    table_id get_base_table(table_id id) const;
+
 public:
     tablet_metadata() = default;
     // No implicit copy, use copy()

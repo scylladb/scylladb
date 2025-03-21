@@ -248,6 +248,19 @@ const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     }
 }
 
+locator::tablet_metadata::table_group_map
+tablet_metadata::all_table_groups() const {
+    table_group_map m;
+    for (auto&& [table, tmap_] : all_tables()) {
+        m[get_base_table(table)].insert(table);
+    }
+    return m;
+}
+
+table_id tablet_metadata::get_base_table(table_id id) const {
+    return _tablets.at(id)->base_table().value_or(id);
+}
+
 void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
@@ -446,6 +459,10 @@ void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config co
     _repair_scheduler_config = std::move(config);
 }
 
+void tablet_map::set_base_table(table_id base_table) {
+    _base_table = base_table;
+}
+
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
     _transitions.erase(id);
@@ -629,6 +646,10 @@ const tablet_task_info& tablet_map::resize_task_info() const {
 
 const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() const {
     return _repair_scheduler_config;
+}
+
+std::optional<table_id> tablet_map::base_table() const {
+    return _base_table;
 }
 
 static auto to_resize_type(sstring decision) {
