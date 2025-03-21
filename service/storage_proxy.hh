@@ -22,7 +22,6 @@
 #include "db/hints/manager.hh"
 #include "db/view/node_view_update_backlog.hh"
 #include "tracing/trace_state.hh"
-#include <seastar/core/metrics.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include "storage_proxy_stats.hh"
 #include "service_permit.hh"

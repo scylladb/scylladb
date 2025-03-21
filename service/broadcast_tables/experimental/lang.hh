@@ -12,7 +12,7 @@
 
 #include <seastar/core/future.hh>
 
-#include "bytes.hh"
+#include "bytes_fwd.hh"
 #include "utils/UUID.hh"
 #include "exceptions/exceptions.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"

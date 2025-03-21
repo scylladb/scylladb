@@ -8,6 +8,7 @@
 
 #include "service/session.hh"
 #include "utils/log.hh"
+#include <seastar/core/coroutine.hh>
 
 namespace service {
 

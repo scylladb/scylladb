@@ -12,7 +12,6 @@
 #include "seastarx.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service_level_controller.hh"
-#include "mutation/mutation.hh"
 
 namespace cql3 {
 class query_processor;

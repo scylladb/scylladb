@@ -12,13 +12,11 @@
 
 #include "service/migration_listener.hh"
 #include "gms/endpoint_state.hh"
-#include <seastar/core/distributed.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
 #include "gms/inet_address.hh"
 #include "gms/feature.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
-#include "message/msg_addr.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/serialized_action.hh"
 #include "service/raft/raft_group_registry.hh"

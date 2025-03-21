@@ -10,7 +10,6 @@
 
 #include "utils/UUID.hh"
 
-#include <seastar/core/coroutine.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/semaphore.hh>

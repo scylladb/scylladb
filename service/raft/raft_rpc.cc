@@ -13,8 +13,9 @@
 #include "message/msg_addr.hh"
 #include "message/messaging_service.hh"
 #include "db/timeout_clock.hh"
-#include "idl/raft.dist.hh"
 #include "service/raft/raft_state_machine.hh"
+#include "service/raft/group0_fwd.hh"
+#include "idl/raft.dist.hh"
 
 namespace service {
 

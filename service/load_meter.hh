@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <seastar/core/shared_ptr.hh>
 #include <seastar/core/distributed.hh>
 #include "service/load_broadcaster.hh"
 

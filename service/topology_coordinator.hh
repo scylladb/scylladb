@@ -15,7 +15,6 @@
 
 #include "utils/log.hh"
 #include "raft/raft.hh"
-#include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_state_machine.hh"

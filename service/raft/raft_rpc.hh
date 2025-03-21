@@ -11,8 +11,6 @@
 #include <seastar/util/std-compat.hh>
 #include "raft/raft.hh"
 #include "message/messaging_service_fwd.hh"
-#include "utils/UUID.hh"
-#include "service/raft/group0_fwd.hh"
 
 namespace service {
 

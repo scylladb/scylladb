@@ -9,7 +9,7 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "service/raft/group0_state_machine.hh"
-#include "service/storage_proxy.hh"
+#include "mutation/mutation.hh"
 
 namespace service {
 

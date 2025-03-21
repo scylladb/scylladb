@@ -14,10 +14,10 @@
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "service/raft/group0_state_id_handler.hh"
-#include "utils/UUID_gen.hh"
 #include "mutation/canonical_mutation.hh"
 #include "service/raft/raft_state_machine.hh"
 #include "gms/feature.hh"
+#include "gms/inet_address.hh"
 
 namespace gms {
 class feature_service;
