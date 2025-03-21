@@ -1100,10 +1100,10 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
     };
 
     auto reversed_forward_reader = assert_that(compacted(
-            make_reversing_reader(forward_mt->make_flat_reader(forward_schema, permit),
+            make_reversing_reader(forward_mt->make_mutation_reader(forward_schema, permit),
                                   query::max_result_size(1 << 20))));
 
-    auto reverse_reader = compacted(reverse_mt->make_flat_reader(reverse_schema, permit));
+    auto reverse_reader = compacted(reverse_mt->make_mutation_reader(reverse_schema, permit));
     auto deferred_reverse_close = deferred_close(reverse_reader);
 
     while (auto mf_opt = reverse_reader().get()) {

@@ -57,7 +57,7 @@ private:
         auto permit = semaphore.make_permit();
         std::vector<mutation_reader> readers;
         for (auto&& mt : _memtables) {
-            readers.push_back(mt->make_flat_reader(new_mt->schema(),
+            readers.push_back(mt->make_mutation_reader(new_mt->schema(),
                  permit,
                  query::full_partition_range,
                  new_mt->schema()->full_slice(),
