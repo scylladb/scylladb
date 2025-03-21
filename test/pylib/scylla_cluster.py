@@ -22,6 +22,7 @@ import time
 import traceback
 from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn, \
     Awaitable
+import urllib
 import uuid
 from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
@@ -823,6 +824,7 @@ class ScyllaCluster:
         property_file: dict[str, Any] | None
         config_from_test: dict[str, Any]
         cmdline_from_test: List[str]
+        executable: Optional[str]
         server_encryption: str
 
     def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
@@ -921,6 +923,7 @@ class ScyllaCluster:
     async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
+                         executable: Optional[pathlib.Path] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
                          seeds: Optional[List[IPAddress]] = None,
@@ -977,7 +980,8 @@ class ScyllaCluster:
             property_file = property_file,
             config_from_test = extra_config,
             server_encryption = server_encryption,
-            cmdline_from_test = cmdline or []
+            cmdline_from_test = cmdline or [],
+            executable = executable
         )
 
         server = None
@@ -1016,6 +1020,7 @@ class ScyllaCluster:
     async def add_servers(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
+                          executable: Optional[pathlib.Path] = None,
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
@@ -1024,7 +1029,7 @@ class ScyllaCluster:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
-        return await gather_safely(*(self.add_server(None, cmdline, config, property_file, start, seeds, server_encryption, expected_error)
+        return await gather_safely(*(self.add_server(None, cmdline, config, executable, property_file, start, seeds, server_encryption, expected_error)
                                       for _ in range(servers_num)))
 
     def endpoint(self) -> str:
@@ -1169,6 +1174,15 @@ class ScyllaCluster:
         assert server_id in self.running
         server = self.running[server_id]
         server.unpause()
+
+    def server_switch_executable(self, server_id: ServerNum, path: pathlib.Path) -> None:
+        """Switch the executable path of a stopped server"""
+        self.logger.info("Cluster %s upgrading server %s to executable %s", self.name, server_id, path)
+        server = self.servers[server_id]
+        assert not server.is_running, f"Server {server_id} is running: stop it first and then change its executable"
+        self.is_dirty = True
+        server.exe = path.resolve()
+        server.check_scylla_executable()
 
     def server_get_process_status(self, server_id: ServerNum) -> str:
         assert server_id in self.running
@@ -1415,6 +1429,7 @@ class ScyllaClusterManager:
         add_put('/cluster/server/{server_id}/start', self._cluster_server_start)
         add_put('/cluster/server/{server_id}/pause', self._cluster_server_pause)
         add_put('/cluster/server/{server_id}/unpause', self._cluster_server_unpause)
+        add_put('/cluster/server/{server_id}/switch_executable', self._cluster_server_switch_executable)
         add_put('/cluster/addserver', self._cluster_server_add)
         add_put('/cluster/addservers', self._cluster_servers_add)
         add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
@@ -1472,7 +1487,7 @@ class ScyllaClusterManager:
         cluster_str = await self._before_test(request.match_info['test_case_name'])
         return cluster_str
 
-    async def _after_test(self, _request) -> dict[str, bool]:
+    async def _after_test(self, _request) -> dict[str, bool|str]:
         assert self.cluster is not None
         assert self.current_test_case_full_name
         self.logger.info(self.repr_tasks_history())
@@ -1562,6 +1577,18 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         self.cluster.server_unpause(server_id)
 
+    async def _server_switch_executable(self, request: aiohttp.web.Request) -> None:
+        """Switch the executable of the server to the one specified by 'path'"""
+        assert self.cluster
+        path = pathlib.Path((await request.json())["path"])
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_switch_executable(server_id, path)
+
+    async def _cluster_server_switch_executable(self, request) -> None:
+        """Stop a specified server gracefully"""
+        assert self.cluster
+        await self._server_switch_executable(request)
+
     async def _cluster_server_add(self, request) -> dict[str, object]:
         """Add a new server."""
         assert self.cluster
@@ -1572,6 +1599,7 @@ class ScyllaClusterManager:
             replace_cfg=replace_cfg,
             cmdline=data.get("cmdline"),
             config=data.get("config"),
+            executable=data.get("executable"),
             property_file=data.get("property_file"),
             start=data.get("start", True),
             seeds=data.get("seeds"),
@@ -1585,7 +1613,7 @@ class ScyllaClusterManager:
         """Add new servers concurrently"""
         assert self.cluster
         data = await request.json()
-        s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'),
+        s_infos = await self.cluster.add_servers(data.get('servers_num'), data.get('cmdline'), data.get('config'), data.get('executable'),
                                                  data.get('property_file'), data.get('start', True),
                                                  data.get('seeds', None), data.get('server_encryption'), data.get('expected_error', None))
         return [s_info.as_dict() for s_info in s_infos]
@@ -1776,6 +1804,45 @@ class ScyllaClusterManager:
         server_id = ServerNum(int(request.match_info["server_id"]))
         return self.cluster.server_get_process_status(server_id)
 
+async def get_scylla_2025_1_executable() -> pathlib.Path:
+    async def run_process(cmd, **kwargs):
+        proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
+        await proc.communicate()
+        assert proc.returncode == 0
+
+    url = 'https://s3.amazonaws.com/downloads.scylladb.com/downloads/scylla/relocatable/scylladb-2025.1/scylla-2025.1.0~rc3-0.20250223.aa5cb15166d3.x86_64.tar.gz'
+    archive_filename = urllib.parse.urlparse(url).path.split("/")[-1]
+
+    xdg_cache_dir = pathlib.Path(os.getenv("XDG_CACHE_HOME", str(pathlib.Path.home() / ".cache")))
+    cache_dir = (xdg_cache_dir / "scylla" / "test.py" / archive_filename)
+    cache_dir.mkdir(exist_ok=True, parents=True)
+
+    archive_path = cache_dir/archive_filename
+    unpack_dir = cache_dir/"unpacked"
+    install_dir = cache_dir/"installed"
+
+    if not install_dir.exists():
+        if not unpack_dir.exists():
+            if not archive_path.exists():
+                try:
+                    await run_process(["curl", "--silent", "--show-error", "--output", archive_path, url])
+                except:
+                    archive_path.unlink(missing_ok=True)
+                    raise
+            unpack_dir.mkdir(exist_ok=True, parents=True)
+            try:
+                await run_process(["tar", "-xf", archive_path], cwd=unpack_dir)
+            except:
+                shutil.rmtree(unpack_dir, ignore_errors=True)
+                raise
+        install_dir.mkdir(exist_ok=True, parents=True)
+        try:
+            await run_process(["bash", "./install.sh", "--without-systemd", "--nonroot", "--prefix", install_dir], cwd=unpack_dir/"scylla")
+        except:
+            shutil.rmtree(install_dir, ignore_errors=True)
+            raise
+
+    return install_dir/"bin"/"scylla"
 
 @asynccontextmanager
 async def get_cluster_manager(test_uname: str, clusters: Pool[ScyllaCluster], test_path: str) \

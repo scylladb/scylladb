@@ -293,6 +293,9 @@ class ScyllaRESTAPIClient():
     async def disable_tablet_balancing(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "false"})
 
+    async def keyspace_upgrade_sstables(self, node_ip: str, ks: str) -> None:
+        await self.client.get(f"/storage_service/keyspace_upgrade_sstables/{ks}", host=node_ip)
+
     async def disable_injection(self, node_ip: str, injection: str) -> None:
         await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
 
@@ -441,6 +444,14 @@ class ScyllaRESTAPIClient():
     async def disable_autocompaction(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> None:
         """Disable autocompaction for the given keyspace/table"""
         await self.client.delete(self.__get_autocompaction_url(keyspace, table), host=node_ip)
+
+    async def retrain_dict(self, node_ip: str, keyspace: str, table: str):
+        url = f"/storage_service/retrain_dict?keyspace={keyspace}&cf={table}"
+        await self.client.post_json(url, host=node_ip)
+
+    async def estimate_compression_ratios(self, node_ip: str, keyspace: str, table: str):
+        url = f"/storage_service/estimate_compression_ratios?keyspace={keyspace}&cf={table}"
+        return await self.client.get_json(url, host=node_ip)
 
     async def get_sstable_info(self, node_ip: str, keyspace: Optional[str] = None, table: Optional[str] = None):
         url = "/storage_service/sstable_info"

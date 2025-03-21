@@ -24,6 +24,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "utils/s3/creds.hh"
 #include <boost/intrusive/list.hpp>
+#include "sstable_compressor_factory.hh"
 
 namespace db {
 
@@ -126,11 +127,13 @@ private:
 
     scheduling_group _maintenance_sg;
 
+    sstable_compressor_factory& _compressor_factory;
+
     const abort_source& _abort;
 
 public:
     explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem,
-                              noncopyable_function<locator::host_id()>&& resolve_host_id, const abort_source& abort, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
+                              noncopyable_function<locator::host_id()>&& resolve_host_id, sstable_compressor_factory&, const abort_source& abort, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
     shared_sstable make_sstable(schema_ptr schema,
@@ -198,6 +201,8 @@ public:
     void on_unlink(sstable* sst);
 
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
+
+    sstable_compressor_factory& get_compressor_factory() const { return _compressor_factory; }
 
 private:
     void add(sstable* sst);

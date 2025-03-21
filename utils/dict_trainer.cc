@@ -167,16 +167,6 @@ seastar::future<> dict_training_loop::start(
     }
 }
 
-static sha256_type get_sha256(std::span<const std::byte> in) {
-    sha256_hasher hasher;
-    hasher.update(reinterpret_cast<const char*>(in.data()), in.size());
-    auto b = hasher.finalize();
-    auto out = sha256_type();
-    assert(b.size() == out.size());
-    std::memcpy(&out, b.data(), b.size());
-    return out;
-}
-
 shared_dict::shared_dict(std::span<const std::byte> d, uint64_t timestamp, UUID origin_node, int zstd_compression_level)
     : id{
         .timestamp = timestamp,

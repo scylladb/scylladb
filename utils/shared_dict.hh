@@ -19,8 +19,6 @@
 
 namespace utils {
 
-using sha256_type = std::array<std::byte, 32>;
-
 // For performance reasons (cache pressure), it is desirable to have only
 // one instance of a particular dictionary on a node.
 //
@@ -38,7 +36,7 @@ struct shared_dict {
     struct dict_id {
         uint64_t timestamp = 0;
         UUID origin_node{};
-        sha256_type content_sha256{};
+        std::array<std::byte, 32> content_sha256{};
         bool operator==(const dict_id&) const = default;
     };
     dict_id id{};

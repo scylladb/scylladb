@@ -149,27 +149,29 @@ group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_rel
     modules_to_reload modules;
 
     for (auto& mut: mutations) {
-        auto id = mut.column_family_id();
-
-        if (id == db::system_keyspace::service_levels_v2()->id()) {
-            modules.service_levels_cache = true;
-        } else if (id == db::system_keyspace::role_members()->id() || id == db::system_keyspace::role_attributes()->id()) {
-            modules.service_levels_effective_cache = true;
-        }
-        if (mut.column_family_id() == db::system_keyspace::dicts()->id()) {
-            modules.compression_dictionary = true;
-        }
+        modules.entries.push_back({.pk = mut.key(), .table = mut.column_family_id()});
     }
 
     return modules;
 }
 
 future<> group0_state_machine::reload_modules(modules_to_reload modules) {
-    if (modules.service_levels_cache || modules.service_levels_effective_cache) { // this also updates SL effective cache
-        co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(modules.service_levels_cache), qos::query_context::group0);
+    bool update_service_levels_cache = false;
+    bool update_service_levels_effective_cache = false;
+    for (const auto& m : modules.entries) {
+        if (m.table == db::system_keyspace::service_levels_v2()->id()) {
+            update_service_levels_cache = true;
+        } else if (m.table == db::system_keyspace::role_members()->id() || m.table == db::system_keyspace::role_attributes()->id()) {
+            update_service_levels_effective_cache = true;
+        } else if (m.table == db::system_keyspace::dicts()->id()) {
+            auto pk_type = db::system_keyspace::dicts()->partition_key_type();
+            auto name_value = pk_type->deserialize_value(m.pk.representation());
+            auto name_string = value_cast<sstring>(pk_type->types().front()->deserialize(name_value.front()));
+            co_await _ss.compression_dictionary_updated_callback(name_string);
+        }
     }
-    if (modules.compression_dictionary) {
-        co_await _ss.compression_dictionary_updated_callback();
+    if (update_service_levels_cache || update_service_levels_effective_cache) { // this also updates SL effective cache
+        co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(update_service_levels_cache), qos::query_context::group0);
     }
 }
 
@@ -191,7 +193,9 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
     co_await std::visit(make_visitor(
     [&] (schema_change& chng) -> future<> {
-        return _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        auto modules_to_reload = get_modules_to_reload(chng.mutations);
+        co_await _mm.merge_schema_from(locator::host_id{cmd.creator_id.uuid()}, std::move(chng.mutations));
+        co_await reload_modules(std::move(modules_to_reload));
     },
     [&] (broadcast_table_query& query) -> future<> {
         auto result = co_await service::broadcast_tables::execute_broadcast_table_query(_sp, query.query, cmd.new_state_id);
@@ -325,7 +329,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     auto read_apply_mutex_holder = co_await _client.hold_read_apply_mutex(_abort_source);
     co_await _ss.topology_state_load();
     if (_feature_service.compression_dicts) {
-        co_await _ss.compression_dictionary_updated_callback();
+        co_await _ss.compression_dictionary_updated_callback_all();
     }
     _ss._topology_state_machine.event.broadcast();
 }

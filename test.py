@@ -195,6 +195,9 @@ def parse_cmd_line() -> argparse.Namespace:
                         help='Let me manually run the test executable at the moment this script would run it')
     parser.add_argument('--byte-limit', action="store", default=None, type=int,
                         help="Specific byte limit for failure injection (random by default)")
+    parser.add_argument('--run-internet-dependent-tests',
+                        dest="run_internet_dependent_tests", action="store_true", default=False,
+                        help="Run tests which need to download something from the internet.")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
                              help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")

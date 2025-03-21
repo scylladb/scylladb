@@ -284,6 +284,12 @@ class ManagerClient():
         logger.debug("ManagerClient unpausing %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/unpause")
 
+    async def server_switch_executable(self, server_id: ServerNum, path: pathlib.PurePath) -> None:
+        """Switch the executable path of a stopped server"""
+        logger.debug("ManagerClient starting %s", server_id)
+        data = {"path": str(path)}
+        await self.client.put_json(f"/cluster/server/{server_id}/switch_executable", data)
+
     async def server_wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str) -> None:
         """Delete all files for the given table from the data directory"""
         logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
@@ -297,6 +303,7 @@ class ManagerClient():
                                 replace_cfg: Optional[ReplaceConfig],
                                 cmdline: Optional[List[str]],
                                 config: Optional[dict[str, Any]],
+                                executable: Optional[pathlib.PurePath],
                                 property_file: Optional[dict[str, Any]],
                                 start: bool,
                                 seeds: Optional[List[IPAddress]],
@@ -310,6 +317,8 @@ class ManagerClient():
             data['cmdline'] = cmdline
         if config:
             data['config'] = config
+        if executable:
+            data['executable'] = str(executable)
         if property_file:
             data['property_file'] = property_file
         if seeds:
@@ -326,6 +335,7 @@ class ManagerClient():
                          replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
                          config: Optional[dict[str, Any]] = None,
+                         executable: Optional[pathlib.PurePath] = None,
                          property_file: Optional[dict[str, Any]] = None,
                          start: bool = True,
                          expected_error: Optional[str] = None,
@@ -340,6 +350,7 @@ class ManagerClient():
                 replace_cfg,
                 cmdline,
                 config,
+                executable,
                 property_file,
                 start,
                 seeds,
@@ -380,6 +391,7 @@ class ManagerClient():
     async def servers_add(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
+                          executable: Optional[pathlib.PurePath] = None,
                           property_file: Optional[dict[str, Any]] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
@@ -393,7 +405,7 @@ class ManagerClient():
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
 
         try:
-            data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, server_encryption, None)
+            data = self._create_server_add_data(None, cmdline, config, executable, property_file, start, seeds, expected_error, server_encryption, None)
             data['servers_num'] = servers_num
             server_infos = await self.client.put_json("/cluster/addservers", data, response_type="json",
                                                       timeout=ScyllaServer.TOPOLOGY_TIMEOUT * servers_num)

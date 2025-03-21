@@ -110,6 +110,8 @@ struct entry_descriptor;
 
 }
 
+class sstable_compressor_factory;
+
 namespace ser {
 template<typename T>
 class serializer;
@@ -650,13 +652,6 @@ private:
     void for_each_compaction_group(std::function<void(const compaction_group&)> action) const;
     // Unsafe reference to all storage groups. Don't use it across preemption points.
     const storage_group_map& storage_groups() const;
-
-    // Safely iterate through SSTables, with deletion guard taken to make sure they're not
-    // removed during iteration.
-    // WARNING: Be careful that the action doesn't perform an operation that will itself
-    // take the deletion guard, as that will cause a deadlock. For example, memtable flush
-    // can wait on compaction (backpressure) which in turn takes deletion guard on completion.
-    future<> safe_foreach_sstable(const sstables::sstable_set&, noncopyable_function<future<>(const sstables::shared_sstable&)> action);
 
     // Returns a sstable set that can be safely used for purging any expired tombstone in a compaction group.
     // Only the sstables in the compaction group is not sufficient, since there might be other compaction
@@ -1261,6 +1256,8 @@ private:
     void do_update_off_strategy_trigger();
 
     compaction_group* try_get_compaction_group_with_static_sharding() const;
+
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot_impl(dht::token_range tr, bool flush);
 public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
@@ -1286,6 +1283,9 @@ public:
     // all compaction groups that overlap with a given token range. The output is
     // a list of SSTables that represent the snapshot.
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
+
+    // Takes snapshot of current sstable set all compaction groups.
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_sstable_set_snapshot();
 
     // Clones storage of a given tablet. Memtable is flushed first to guarantee that the
     // snapshot (list of sstables) will include all the data written up to the time it was taken.
@@ -1652,7 +1652,7 @@ public:
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, const abort_source& abort,
+            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&, const abort_source& abort,
             utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
@@ -1951,6 +1951,24 @@ public:
     /** This callback is going to be called just before the service level is changed **/
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
     virtual future<> on_effective_service_levels_cache_reloaded() override;
+
+private:
+    // SSTable sampling might require considerable amounts of memory,
+    // so we want to limit the number of concurrent sampling operations.
+    //
+    // The `sharded` semaphore serializes the number of SSTable sampling operations
+    // for which this shard is the coordinator.
+    // The `local` semaphore serializes the number of SSTable sampling operations
+    // in which this shard is a participant.
+    semaphore _sample_data_files_sharded_concurrency_limiter{1};
+    semaphore _sample_data_files_local_concurrency_limiter{1};
+public:
+    // Returns a vector of file chunks randomly sampled from all Data.db files of this table.
+    future<utils::chunked_vector<bytes>> sample_data_files(
+        table_id id,
+        uint64_t chunk_size,
+        uint64_t n_chunks
+    );
 };
 
 // A helper function to parse the directory name back
