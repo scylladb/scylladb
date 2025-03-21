@@ -21,3 +21,8 @@ Note that:
 * Zero-token nodes never store replicated data, so running ``nodetool rebuild``,
   ``nodetool repair``, and ``nodetool cleanup`` can be skipped as it does not
   affect zero-token nodes.
+* Racks consisting solely of zero-token nodes are not taken into consideration
+  when deciding whether a keyspace is :term:`RF-rack-valid <RF-rack-valid keyspace>`.
+  However, an RF-rack-valid keyspace must have the replication factor equal to 0
+  in an :doc:`arbiter DC </operating-scylla/procedures/cluster-management/arbiter-dc>`.
+  Otherwise, it is RF-rack-invalid.
