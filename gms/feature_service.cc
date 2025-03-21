@@ -86,7 +86,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
         fcfg._disabled_features.insert("VIEWS_WITH_TABLETS"s);
     }
     if (cfg.force_gossip_topology_changes()) {
-        if (cfg.enable_tablets()) {
+        if (cfg.enable_tablets_by_default()) {
             throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --enable-tablets or --force-gossip-topology-changes, not both.");
         }
         logger.warn("The tablets feature is disabled due to forced gossip topology changes");
