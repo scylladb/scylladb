@@ -680,8 +680,8 @@ arg_parser.add_argument('--compiler', action='store', dest='cxx', default='clang
                         help='C++ compiler path')
 arg_parser.add_argument('--c-compiler', action='store', dest='cc', default='clang',
                         help='C compiler path')
-add_tristate(arg_parser, name='dpdk', dest='dpdk',
-                        help='Use dpdk (from seastar dpdk sources) (default=True for release builds)')
+add_tristate(arg_parser, name='dpdk', dest='dpdk', default=False,
+                        help='Use dpdk (from seastar dpdk sources)')
 arg_parser.add_argument('--dpdk-target', action='store', dest='dpdk_target', default='',
                         help='Path to DPDK SDK target location (e.g. <DPDK SDK dir>/x86_64-native-linuxapp-gcc)')
 arg_parser.add_argument('--debuginfo', action='store', dest='debuginfo', type=int, default=1,
@@ -1965,8 +1965,6 @@ def configure_seastar(build_dir, mode, mode_config):
         seastar_cmake_args += ['-DSeastar_STACK_GUARDS={}'.format(stack_guards)]
 
     dpdk = args.dpdk
-    if dpdk is None:
-        dpdk = platform.machine() == 'x86_64' and mode == 'release'
     if dpdk:
         seastar_cmake_args += ['-DSeastar_DPDK=ON', '-DSeastar_DPDK_MACHINE=westmere']
     if args.split_dwarf:
