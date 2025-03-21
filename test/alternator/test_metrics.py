@@ -129,6 +129,24 @@ def test_batch_write_item(test_table_s, metrics):
     with check_increases_operation(metrics, ['BatchWriteItem']):
         test_table_s.meta.client.batch_write_item(RequestItems = {
             test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
+@contextmanager
+def check_histogram_value(metrics, metric_name, labels, expected_value):
+    the_metrics = get_metrics(metrics)
+    saved_metrics = get_metric(metrics, metric_name, labels, the_metrics)
+    yield
+    the_metrics = get_metrics(metrics)
+    assert expected_value == get_metric(metrics, metric_name, labels, the_metrics) - saved_metrics
+
+def test_batch_write_item_size(test_table_s, metrics):
+    with check_histogram_value(metrics, "scylla_alternator_batch_item_sizes_bucket", {'op': 'BatchWriteItem', 'le': '3.000000'}, 1):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}]})
+
+def test_batch_get_item_size(test_table_s, metrics):
+    with check_histogram_value(metrics, "scylla_alternator_batch_item_sizes_bucket", {'op': 'BatchGetItem', 'le': '3.000000'}, 1):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
+
 
 # Reproduces issue #9406:
 def test_batch_get_item(test_table_s, metrics):
