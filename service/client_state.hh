@@ -355,6 +355,7 @@ public:
 
     void validate_login() const;
     void ensure_not_anonymous() const; // unauthorized_exception on error
+    bool is_anonymous() const; // non-throwing version of ensure_not_anonymous()
 
 #if 0
     public void ensureIsSuper(String message) throws UnauthorizedException

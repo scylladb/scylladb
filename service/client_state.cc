@@ -60,6 +60,15 @@ void service::client_state::ensure_not_anonymous() const {
     }
 }
 
+bool service::client_state::is_anonymous() const {
+    try {
+        ensure_not_anonymous();
+    } catch (const exceptions::unauthorized_exception&) {
+        return true;
+    }
+    return false;
+}
+
 future<> service::client_state::has_all_keyspaces_access(
                 auth::permission p) const {
     if (_is_internal) {
@@ -109,10 +118,10 @@ future<> service::client_state::has_schema_access(const sstring& ks_name, const 
 
 future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
-        return make_exception_future<>(exceptions::invalid_request_exception("You have not set a keyspace for this session"));
+        throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
     if (_is_internal) {
-        return make_ready_future();
+        co_return;
     }
 
     validate_login();
@@ -126,7 +135,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
         auto name = ks;
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
         if (is_system_keyspace(name) && cmd.type_ != auth::command_desc::type::ALTER_SYSTEM_WITH_ALLOWED_OPTS) {
-            return make_exception_future<>(exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable."));
+            throw exceptions::unauthorized_exception(ks + " keyspace is not user-modifiable.");
         }
 
         //
@@ -141,8 +150,8 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                 && (cmd.permission == auth::permission::DROP);
 
         if (dropping_anything_in_tracing || dropping_auth_keyspace) {
-            return make_exception_future<>(exceptions::unauthorized_exception(
-                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
+            throw exceptions::unauthorized_exception(
+                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
         }
     }
 
@@ -158,11 +167,11 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
     }();
 
     if (cmd.permission == auth::permission::SELECT && readable_system_resources.contains(cmd.resource)) {
-        return make_ready_future();
+        co_return;
     }
     if (alteration_permissions.contains(cmd.permission)) {
         if (auth::is_protected(*_auth_service, cmd)) {
-            return make_exception_future<>(exceptions::unauthorized_exception(format("{} is protected", cmd.resource)));
+            throw exceptions::unauthorized_exception(format("{} is protected", cmd.resource));
         }
     }
 
@@ -178,14 +187,23 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                         || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION
                         || resource_view.table() == db::system_distributed_keyspace::CDC_TIMESTAMPS
                         || resource_view.table() == db::system_distributed_keyspace::CDC_GENERATIONS_V2)) {
-                    return make_exception_future<>(exceptions::unauthorized_exception(
-                            format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
+                    throw exceptions::unauthorized_exception(
+                            format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
                 }
             }
         }
     }
 
-    return ensure_has_permission(cmd);
+    if (cmd.resource.kind() == auth::resource_kind::data
+            && !(cmd.permission == auth::permission::SELECT || cmd.permission == auth::permission::DESCRIBE)
+            && is_system_keyspace(ks)
+            && !is_anonymous()
+            && !co_await _auth_service->underlying_role_manager().is_superuser(*_user->name)) [[unlikely]] {
+        throw exceptions::unauthorized_exception(
+                ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
+    }
+
+    co_return co_await ensure_has_permission(cmd);
 }
 
 future<bool> service::client_state::check_has_permission(auth::command_desc cmd) const {
