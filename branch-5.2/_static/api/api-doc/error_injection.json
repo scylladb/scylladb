@@ -1,0 +1,90 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/error_injection",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/v2/error_injection/injection/{injection}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Activate an injection that triggers an error in code",
+               "type":"void",
+               "nickname":"enable_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name, should correspond to an injection added in code",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"one_shot",
+                     "description":"boolean flag indicating whether the injection should be enabled to trigger only once",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Deactivate an injection previously activated by the API",
+               "type":"void",
+               "nickname":"disable_injection",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"injection",
+                     "description":"injection name",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/v2/error_injection/injection",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"List all enabled injections on all shards, i.e. injections that will trigger an error in the code",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_enabled_injections_on_all",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            },
+            {
+               "method":"DELETE",
+               "summary":"Deactivate all injections previously activated on all shards by the API",
+               "type":"void",
+               "nickname":"disable_on_all",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[]
+            }
+         ]
+      }
+   ]
+}
