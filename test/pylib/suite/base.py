@@ -22,7 +22,6 @@ import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from importlib import import_module
 from typing import TYPE_CHECKING
-import socket
 
 import colorama
 import yaml
@@ -400,35 +399,11 @@ def read_log(log_filename: pathlib.Path) -> str:
 toxiproxy_id_gen = 0
 
 
-def is_port_available(host, port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.1)
-        return s.connect_ex((host, port)) != 0
-
-def can_connect_to_local_ports(ports_range):
-    for port in ports_range:
-        if not is_port_available('localhost', port):
-            return False
-    return True
-
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
     with test.log_filename.open("wb") as log:
-        global toxiproxy_id_gen
-        toxiproxy_id = toxiproxy_id_gen
-        toxiproxy_id_gen += 1
-        # Assign some NONE-busy ports to LDAP
-        ldap_port = 5000 + (toxiproxy_id * 3) % 55000
-        while not can_connect_to_local_ports(range(ldap_port, ldap_port+3)):
-            print("One of {} ports required by LDAP are busy, trying the next 3 ports".format(list(range(ldap_port, ldap_port+3))))
-            ldap_port = ldap_port + 3
-            if ldap_port > 65535: # it's the highest possible TCP port number
-                print("No more ports to check, exiting")
-                return False
-
         cleanup_fn = None
-        finject_desc = None
         def report_error(error, failure_injection_desc = None):
             msg = "=== TEST.PY SUMMARY START ===\n"
             msg += "{}\n".format(error)
@@ -437,11 +412,6 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 msg += 'failure injection: {}'.format(failure_injection_desc)
             log.write(msg.encode(encoding="UTF-8"))
 
-        try:
-            cleanup_fn, finject_desc, test_env = await test.setup(ldap_port, options)
-        except Exception as e:
-            report_error("Test setup failed ({})\n{}".format(str(e), traceback.format_exc()))
-            return False
         process = None
         stdout = None
         logging.info("Starting test %s: %s %s", test.uname, test.path, " ".join(test.args))
@@ -457,19 +427,6 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             "detect_stack_use_after_return=1",
             os.getenv("ASAN_OPTIONS"),
         ]
-        ldap_instance_path = os.path.join(
-            os.path.abspath(os.path.join(options.tmpdir, test.mode, 'ldap_instances')),
-            str(ldap_port))
-        saslauthd_mux_path = os.path.join(ldap_instance_path, 'mux')
-        if options.manual_execution:
-            print('Please run the following shell command, then press <enter>:')
-            test_env_string = " ".join([f"{k}={v}" for k,v in test_env.items()])
-            print('{} {}'.format(
-                test_env_string, ' '.join([shlex.quote(e) for e in [test.path, *test.args]])))
-            input('-- press <enter> to continue --')
-            if cleanup_fn is not None:
-                cleanup_fn()
-            return True
         try:
             resource_gather = get_resource_gather(options.gather_metrics, test, options.tmpdir)
             resource_gather.make_cgroup()
@@ -478,8 +435,6 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 ":".join(filter(None, UBSAN_OPTIONS))).encode(encoding="UTF-8"))
             log.write("export ASAN_OPTIONS='{}'\n".format(
                 ":".join(filter(None, ASAN_OPTIONS))).encode(encoding="UTF-8"))
-            for k,v in test_env.items():
-                log.write(f"export {k}={v}\n".encode(encoding="UTF-8"))
             log.write("{} {}\n".format(test.path, " ".join(test.args)).encode(encoding="UTF-8"))
             log.write("=== TEST.PY TEST {} OUTPUT ===\n".format(test.uname).encode(encoding="UTF-8"))
             log.flush()
@@ -495,18 +450,16 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             test_running_event = asyncio.Event()
             test_resource_watcher = resource_gather.cgroup_monitor(test_event=test_running_event)
 
-            test_env.update(
-                dict(os.environ,
-                     UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
-                     ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
-                     # TMPDIR env variable is used by any seastar/scylla
-                     # test for directory to store test temporary data.
-                     TMPDIR=os.path.join(options.tmpdir, test.mode),
-                     SCYLLA_TEST_ENV='yes',
-                     SCYLLA_TEST_RUNNER="test.py",
-                     **env,
-                     )
-            )
+            test_env = dict(os.environ,
+                            UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
+                            ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
+                            # TMPDIR env variable is used by any seastar/scylla
+                            # test for directory to store test temporary data.
+                            TMPDIR=os.path.join(options.tmpdir, test.mode),
+                            SCYLLA_TEST_ENV='yes',
+                            SCYLLA_TEST_RUNNER="test.py",
+                            **env,
+                            )
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
