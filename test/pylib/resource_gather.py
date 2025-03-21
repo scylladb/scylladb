@@ -4,6 +4,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
+from __future__ import annotations
+
 import asyncio
 import getpass
 import logging
@@ -11,17 +13,30 @@ import os
 import platform
 import subprocess
 from abc import ABC
-from asyncio import Task, Event
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING
 
 import psutil
 
 from test.pylib.db.model import Metric, SystemResourceMetric, CgroupMetric, Test
-from test.pylib.db.writer import DATE_TIME_TEMPLATE, SQLiteWriter, SYSTEM_RESOURCE_METRICS_TABLE, METRICS_TABLE, \
-    DEFAULT_DB_NAME, CGROUP_MEMORY_METRICS_TABLE, TESTS_TABLE
+from test.pylib.db.writer import (
+    CGROUP_MEMORY_METRICS_TABLE,
+    DATE_TIME_TEMPLATE,
+    DEFAULT_DB_NAME,
+    METRICS_TABLE,
+    SYSTEM_RESOURCE_METRICS_TABLE,
+    TESTS_TABLE,
+    SQLiteWriter,
+)
+
+if TYPE_CHECKING:
+    from asyncio import Task, Event
+    from typing import TextIO
+
+    from test.pylib.suite.base import Test as TestPyTest
+
 
 @lru_cache(maxsize=None)
 def get_cgroup() -> Path:
@@ -33,25 +48,25 @@ def get_cgroup() -> Path:
     # This can be used to manipulate the cgroup's controllers
     return Path(f"/sys/fs/cgroup/{cgroup_info[0].strip().split(':')[-1]}/initial")
 
-CGROUP_INITIAL: Path = get_cgroup()
-CGROUP_TESTS: Path = CGROUP_INITIAL.parent / 'tests'
-cancel_event_global = None
-stop_event_global = None
+
+CGROUP_INITIAL = get_cgroup()
+CGROUP_TESTS = CGROUP_INITIAL.parent / 'tests'
+
 
 class ResourceGather(ABC):
-    def __init__(self, test, tmp_dir: str):
+    def __init__(self, test: TestPyTest):
         self.test = test
-        self.db_path = Path(tmp_dir) / DEFAULT_DB_NAME
+        self.db_path = self.test.suite.log_dir / DEFAULT_DB_NAME
         standardized_name = self.test.shortname.replace("/", "_")
         self.cgroup_path = Path(
             f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.suite.mode}.{self.test.id}"
         )
         self.logger = logging.getLogger(__name__)
 
-    def make_cgroup(self):
+    def make_cgroup(self) -> None:
         pass
 
-    def put_process_to_cgroup(self):
+    def put_process_to_cgroup(self) -> None:
         os.setsid()
 
     def get_test_metrics(self) -> Metric:
@@ -60,21 +75,21 @@ class ResourceGather(ABC):
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         pass
 
-    def cgroup_monitor(self, test_event: Event):
+    def cgroup_monitor(self, test_event: Event) -> Task:
         pass
 
-    def remove_cgroup(self):
+    def remove_cgroup(self) -> None:
         pass
 
 
 class ResourceGatherOff(ResourceGather):
-    def cgroup_monitor(self, test_event) -> Task:
+    def cgroup_monitor(self, test_event: Event) -> Task:
         return asyncio.create_task(no_monitor())
 
 
 class ResourceGatherOn(ResourceGather):
-    def __init__(self, test, tmp_dir: str):
-        super().__init__(test, tmp_dir)
+    def __init__(self, test: TestPyTest):
+        super().__init__(test)
         self.sqlite_writer = SQLiteWriter(self.db_path)
         self.test_id: int = self.sqlite_writer.write_row_if_not_exist(
             Test(
@@ -86,7 +101,7 @@ class ResourceGatherOn(ResourceGather):
             ),
             TESTS_TABLE)
 
-    def make_cgroup(self):
+    def make_cgroup(self) -> None:
         os.makedirs(self.cgroup_path, exist_ok=True)
 
     def get_test_metrics(self) -> Metric:
@@ -107,14 +122,13 @@ class ResourceGatherOn(ResourceGather):
         metrics.success = success
         self.sqlite_writer.write_row(metrics, METRICS_TABLE)
 
-
-    def put_process_to_cgroup(self):
+    def put_process_to_cgroup(self) -> None:
         super().put_process_to_cgroup()
         pid = os.getpid()
         with open(self.cgroup_path / 'cgroup.procs', "a") as cgroup:
             cgroup.write(str(pid))
 
-    def remove_cgroup(self):
+    def remove_cgroup(self) -> None:
         os.rmdir(self.cgroup_path)
 
     def cgroup_monitor(self, test_event: Event) -> Task:
@@ -148,11 +162,12 @@ class ResourceGatherOn(ResourceGather):
                 setattr(metrics, stats[stat], float(value) / 1_000_000)
 
 
-def get_resource_gather(is_switched_on: bool, test, tmpdir: str) -> ResourceGather:
+def get_resource_gather(is_switched_on: bool, test: TestPyTest) -> ResourceGather:
     if is_switched_on:
-        return ResourceGatherOn(test, tmpdir)
+        return ResourceGatherOn(test)
     else:
-        return ResourceGatherOff(test, tmpdir)
+        return ResourceGatherOff(test)
+
 
 def _is_cgroup_rw() -> bool:
     with open('/proc/mounts', 'r') as f:
@@ -211,7 +226,7 @@ def setup_cgroup(is_required: bool) -> None:
             f.write(controllers)
 
 
-async def monitor_resources(cancel_event: asyncio.Event, stop_event: asyncio.Event, tmpdir: Path) -> None:
+async def monitor_resources(cancel_event: Event, stop_event: Event, tmpdir: Path) -> None:
     """Continuously monitors CPU and memory utilization."""
     sqlite_writer = SQLiteWriter(tmpdir / DEFAULT_DB_NAME)
     while not cancel_event.is_set() and not stop_event.is_set():
@@ -227,11 +242,11 @@ async def monitor_resources(cancel_event: asyncio.Event, stop_event: asyncio.Eve
         await asyncio.sleep(2)
 
 
-async def no_monitor():
+async def no_monitor() -> None:
     pass
 
 
-def run_resource_watcher(is_required, cancel_event, stop_event, tmpdir: str) -> Task:
+def run_resource_watcher(is_required: bool, cancel_event: Event, stop_event:Event, tmpdir: str) -> Task:
     if is_required:
         return asyncio.create_task(monitor_resources(cancel_event, stop_event, Path(tmpdir)))
     return asyncio.create_task(no_monitor())

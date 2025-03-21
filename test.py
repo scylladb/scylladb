@@ -32,13 +32,22 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
+from test import ALL_MODES, TOP_SRC_DIR, path_to
 from test.pylib import coverage_utils
 from test.pylib.cpp.ldap.prepare_instance import try_something_backoff, can_connect
-from test.pylib.suite.base import Test, TestSuite, all_modes, init_testsuite_globals, output_is_a_tty, palette, path_to
+from test.pylib.suite.base import (
+    Test,
+    TestSuite,
+    init_testsuite_globals,
+    output_is_a_tty,
+    palette,
+    prepare_dirs,
+    start_s3_mock_services,
+)
 from test.pylib.suite.boost import BoostTest
 from test.pylib.suite.ldap import LdapTest
 from test.pylib.resource_gather import setup_cgroup, run_resource_watcher
-from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja, prepare_dirs, start_s3_mock_services
+from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja
 
 if TYPE_CHECKING:
     from typing import List
@@ -127,16 +136,11 @@ def parse_cmd_line() -> argparse.Namespace:
                 "boost/memtable_test::test_hash_is_cached" to narrow down to
                 a certain test case. Default: run all tests in all suites.""",
     )
-    parser.add_argument(
-        "--tmpdir",
-        action="store",
-        default="testlog",
-        help="""Path to temporary test data and log files. The data is
-        further segregated per build mode. Default: ./testlog.""",
-    )
+    parser.add_argument("--tmpdir", action="store", default=str(TOP_SRC_DIR / "testlog"),
+                        help="Path to temporary test data and log files.  The data is further segregated per build mode.")
     parser.add_argument("--gather-metrics", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-failures", type=int, default=-1, help="Maximum number of failures to tolerate before cancelling rest of tests.")
-    parser.add_argument('--mode', choices=all_modes.keys(), action="append", dest="modes",
+    parser.add_argument('--mode', choices=ALL_MODES, action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
                         help="number of times to repeat test execution")

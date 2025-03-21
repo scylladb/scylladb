@@ -10,7 +10,7 @@ from asyncio loop.
 
 Example usage:
     from cassandra.cluster import Session, Cluster
-    from test.pylib.async_cql import event_loop, run_async
+    from test.pylib.async_cql import run_async
 
     Session.run_async = run_async
     ccluster = Cluster(...)
@@ -20,22 +20,11 @@ Example usage:
 
 import asyncio
 import logging
-from typing import List
-import pytest
+
 from cassandra.cluster import ResponseFuture     # type: ignore # pylint: disable=no-name-in-module
 
 
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture(scope="session")
-def event_loop(request):
-    """Change default pytest-asyncio event_loop fixture scope to session to
-       allow async fixtures with scope larger than function. (e.g. manager fixture)
-       See https://github.com/pytest-dev/pytest-asyncio/issues/68"""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 def _wrap_future(driver_response_future: ResponseFuture, all_pages: bool = False) -> asyncio.Future:
