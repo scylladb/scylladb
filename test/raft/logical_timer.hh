@@ -18,7 +18,7 @@
 
 using namespace seastar;
 
-constexpr raft::logical_clock::duration operator "" _t(unsigned long long ticks) {
+constexpr raft::logical_clock::duration operator ""_t(unsigned long long ticks) {
     return raft::logical_clock::duration{ticks};
 }
 
