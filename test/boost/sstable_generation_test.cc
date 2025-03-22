@@ -48,7 +48,8 @@ BOOST_AUTO_TEST_CASE(from_string_int_good) {
 
 BOOST_AUTO_TEST_CASE(invalid_identifier) {
   const auto invalid_id = sstables::generation_type{};
-  BOOST_CHECK_NO_THROW(fmt::to_string(invalid_id));
+  // Ignore return value explicitly since in fmt 11.1 it is marked as [[nodiscard]]
+  BOOST_CHECK_NO_THROW((void)fmt::to_string(invalid_id));
   BOOST_CHECK(!invalid_id);
 }
 
