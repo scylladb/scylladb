@@ -22,7 +22,7 @@ using namespace seastar;
 
 namespace {
 
-typename bytes::value_type operator "" _b(unsigned long long value) {
+typename bytes::value_type operator ""_b(unsigned long long value) {
     return static_cast<bytes::value_type>(value);
 }
 
