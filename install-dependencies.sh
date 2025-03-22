@@ -80,7 +80,7 @@ fedora_packages=(
     python3
     python3-aiohttp
     python3-pip
-    python3-magic
+    python3-file-magic
     python3-colorama
     python3-tabulate
     python3-boto3
