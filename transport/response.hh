@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "cql3/prepared_statements_cache.hh"
 #include "server.hh"
 
 namespace cql_transport {
@@ -76,7 +77,7 @@ public:
     void write_string_bytes_map(const std::unordered_map<sstring, bytes>& map);
     void write_value(bytes_opt value);
     void write_value(std::optional<managed_bytes_view> value);
-    void write(const cql3::metadata& m, bool skip = false);
+    void write(const cql3::metadata& m, bool no_metadata = false, std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt = {});
     void write(const cql3::prepared_metadata& m, uint8_t version);
 
     // Make a non-owning scattered_message of the response. Remains valid as long

@@ -27,6 +27,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shared_ptr.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
@@ -982,7 +983,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_op
 
 std::unique_ptr<cql_server::response>
 make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
-        cql_protocol_version_type version, bool skip_metadata = false);
+        cql_protocol_version_type version, bool skip_metadata, std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt);
 
 template <typename Process>
     requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
@@ -1078,7 +1079,13 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
+
+            std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt;
+            auto& client_state = q_state->query_state.get_client_state();
+            if (client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::USE_METADATA_ID)) {
+                metadata_id_opt = seastar::lw_shared_ptr<cql3::cql_metadata_id_type>{};
+            }
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata, metadata_id_opt)));
         }
     });
 }
@@ -1101,11 +1108,17 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
             return qp.prepare(std::move(query), client_state, dialect).discard_result();
     }).then([this, query, stream, &client_state, trace_state, dialect] () mutable {
         tracing::trace(trace_state, "Done preparing on remote shards");
-        return _server._query_processor.local().prepare(std::move(query), client_state, dialect).then([this, stream, trace_state] (auto msg) {
+
+        std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt;
+        if (client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::USE_METADATA_ID)) {
+            metadata_id_opt = seastar::lw_shared_ptr<cql3::cql_metadata_id_type>{};
+        }
+
+        return _server._query_processor.local().prepare(std::move(query), client_state, dialect).then([this, stream, trace_state, metadata_id_opt = std::move(metadata_id_opt)] (auto msg) {
             tracing::trace(trace_state, "Done preparing on a local shard - preparing a result. ID is [{}]", seastar::value_of([&msg] {
                 return messages::result_message::prepared::cql::get_id(msg);
             }));
-            return make_result(stream, *msg, trace_state, _version);
+            return make_result(stream, *msg, trace_state, _version, false, metadata_id_opt);
         });
     });
 }
@@ -1116,6 +1129,11 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
         cql3::dialect dialect) {
     cql3::prepared_cache_key_type cache_key(in.read_short_bytes(), dialect);
+
+    std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt;
+    if (client_state.is_protocol_extension_set(cql_protocol_extension::USE_METADATA_ID)) {
+        metadata_id_opt = make_lw_shared(cql3::cql_metadata_id_type(in.read_short_bytes()));
+    }
     auto& id = cql3::prepared_cache_key_type::cql_id(cache_key);
     bool needs_authorization = false;
 
@@ -1169,14 +1187,14 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
 
     tracing::trace(trace_state, "Processing a statement");
     return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
-            .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version] (auto msg) {
+            .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id_opt = std::move(metadata_id_opt)] (auto msg) {
         if (msg->move_to_shard()) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg)));
         } else if (msg->is_exception()) {
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata)));
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, q_state->query_state.get_trace_state(), version, skip_metadata, metadata_id_opt)));
         }
     });
 }
@@ -1296,7 +1314,12 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
             return cql_server::process_fn_return_type(convert_error_message_to_coordinator_result(msg.get()));
         } else {
             tracing::trace(q_state->query_state.get_trace_state(), "Done processing - preparing a result");
-            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version)));
+            std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt;
+            auto& client_state = q_state->query_state.get_client_state();
+            if (client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::USE_METADATA_ID)) {
+                metadata_id_opt = seastar::lw_shared_ptr<cql3::cql_metadata_id_type>{};
+            }
+            return cql_server::process_fn_return_type(make_foreign(make_result(stream, *msg, trace_state, version, false, metadata_id_opt)));
         }
     });
 }
@@ -1510,11 +1533,13 @@ private:
     uint8_t _version;
     cql_server::response& _response;
     bool _skip_metadata;
+    std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> _metadata_id_opt;
 public:
-    fmt_visitor(uint8_t version, cql_server::response& response, bool skip_metadata)
+    fmt_visitor(uint8_t version, cql_server::response& response, bool skip_metadata, std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt)
         : _version{version}
         , _response{response}
         , _skip_metadata{skip_metadata}
+        , _metadata_id_opt(std::move(metadata_id_opt))
     { }
 
     virtual void visit(const messages::result_message::void_message&) override {
@@ -1529,8 +1554,11 @@ public:
     virtual void visit(const messages::result_message::prepared::cql& m) override {
         _response.write_int(0x0004);
         _response.write_short_bytes(m.get_id());
+        if (_metadata_id_opt.has_value()) {
+            _response.write_short_bytes(m.result_metadata()->calculate_metadata_id()._metadata_id);
+        }
         _response.write(m.metadata(), _version);
-        _response.write(*m.result_metadata());
+        _response.write(*m.result_metadata(), false);
     }
 
     virtual void visit(const messages::result_message::schema_change& m) override {
@@ -1550,7 +1578,7 @@ public:
     virtual void visit(const messages::result_message::rows& m) override {
         _response.write_int(0x0002);
         auto& rs = m.rs();
-        _response.write(rs.get_metadata(), _skip_metadata);
+        _response.write(rs.get_metadata(), _skip_metadata, std::move(_metadata_id_opt));
         auto row_count_plhldr = _response.write_int_placeholder();
 
         class visitor {
@@ -1578,7 +1606,7 @@ public:
 
 std::unique_ptr<cql_server::response>
 make_result(int16_t stream, messages::result_message& msg, const tracing::trace_state_ptr& tr_state,
-        cql_protocol_version_type version, bool skip_metadata) {
+        cql_protocol_version_type version, bool skip_metadata, std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt) {
     auto response = std::make_unique<cql_server::response>(stream, cql_binary_opcode::RESULT, tr_state);
     if (__builtin_expect(!msg.warnings().empty() && version > 3, false)) {
         response->set_frame_flag(cql_frame_flags::warning);
@@ -1588,7 +1616,7 @@ make_result(int16_t stream, messages::result_message& msg, const tracing::trace_
         response->set_frame_flag(cql_frame_flags::custom_payload);
         response->write_string_bytes_map(msg.custom_payload().value());
     }
-    cql_server::fmt_visitor fmt{version, *response, skip_metadata};
+    cql_server::fmt_visitor fmt{version, *response, skip_metadata, std::move(metadata_id_opt)};
     msg.accept(fmt);
     return response;
 }
@@ -1996,13 +2024,25 @@ thread_local const type_codec::type_id_to_type_type type_codec::type_id_to_type 
     { inet_addr_type, type_id::INET },
 };
 
-void cql_server::response::write(const cql3::metadata& m, bool no_metadata) {
+void cql_server::response::write(const cql3::metadata& m, bool no_metadata, std::optional<seastar::lw_shared_ptr<cql3::cql_metadata_id_type>> metadata_id_opt) {
     auto flags = m.flags();
     bool global_tables_spec = m.flags().contains<cql3::metadata::flag::GLOBAL_TABLES_SPEC>();
     bool has_more_pages = m.flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>();
 
     if (no_metadata) {
         flags.set<cql3::metadata::flag::NO_METADATA>();
+    }
+
+    cql3::cql_metadata_id_type calculated_metadata_id{bytes{}};
+    if (metadata_id_opt.has_value() && metadata_id_opt.value() != nullptr)
+    {
+        calculated_metadata_id = m.calculate_metadata_id();
+        if (calculated_metadata_id != *metadata_id_opt.value())
+        {
+            flags.remove<cql3::metadata::flag::NO_METADATA>();
+            flags.set<cql3::metadata::flag::METADATA_CHANGED>();
+            no_metadata = false;
+        }
     }
 
     write_int(flags.mask());
@@ -2014,6 +2054,10 @@ void cql_server::response::write(const cql3::metadata& m, bool no_metadata) {
 
     if (no_metadata) {
         return;
+    }
+
+    if (flags.contains<cql3::metadata::flag::METADATA_CHANGED>()) {
+        write_bytes_as_string(calculated_metadata_id._metadata_id);
     }
 
     auto names_i = m.get_names().begin();
