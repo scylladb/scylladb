@@ -3243,6 +3243,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                     }
                     auto& view = db.find_column_family(view_id);
                     view.update_effective_replication_map(std::move(view_it->second));
+                    if (view.uses_tablets()) {
+                        register_tablet_split_candidate(view_it->first);
+                    }
                     view_erms.erase(view_it);
                 }
                 if (cf.uses_tablets()) {
