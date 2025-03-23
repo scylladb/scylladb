@@ -13,7 +13,7 @@ import pytest
 import urllib3
 import urllib.parse
 import ssl
-
+print('test')
 @pytest.fixture(scope="module")
 def https_url(dynamodb):
     url = dynamodb.meta.client._endpoint.host
