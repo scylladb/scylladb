@@ -11,6 +11,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/fstream.hh>
 #include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "utils/s3/client.hh"
@@ -84,11 +85,13 @@ public:
     future<> start() {
         if (_object_name.empty()) {
             co_await make_temporary_file();
+        } else {
+            _object_size = co_await _client->get_object_size(_object_name);
         }
     }
 
-    future<> run_download() {
-        plog.info("Downloading");
+    future<> run_contiguous_get() {
+        plog.info("Running GET-s");
         auto until = now() + _duration;
         uint64_t off = 0;
         do {
@@ -101,6 +104,24 @@ public:
                 _errors++;
             }
         } while (now() < until);
+    }
+
+    future<> run_download() {
+        plog.info("Downloading with input_stream");
+        auto in = input_stream<char>(_client->make_download_source(_object_name, s3::range{0, _object_size}));
+        auto start = now();
+        uint64_t sz = 0;
+        co_await in.consume([&sz] (auto buf) {
+            if (buf.empty()) {
+                return make_ready_future<consumption_result<char>>(stop_consuming(std::move(buf)));
+            }
+
+            sz += buf.size();
+            return make_ready_future<consumption_result<char>>(continue_consuming());
+        });
+        co_await in.close();
+        auto time = std::chrono::duration_cast<std::chrono::duration<double>>(now() - start);
+        plog.info("Downloaded {}MB in {}s, speed {}MB/s", sz >> 20, time.count(), (sz >> 20) / time.count());
     }
 
     future<> run_upload() {
@@ -140,7 +161,7 @@ int main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
-        ("upload", "test file upload")
+        ("operation", bpo::value<sstring>()->required(), "which test to perform (options: upload, get, download)")
         ("duration", bpo::value<unsigned>()->default_value(10), "seconds to run")
         ("sockets", bpo::value<unsigned>()->default_value(1), "maximum number of socket for http client")
         ("part_size_mb", bpo::value<unsigned>()->default_value(5), "part size")
@@ -154,7 +175,7 @@ int main(int argc, char** argv) {
         auto part_size = app.configuration()["part_size_mb"].as<unsigned>();
         auto oname = app.configuration()["object_name"].as<sstring>();
         auto osz = app.configuration()["object_size"].as<size_t>();
-        auto upload = app.configuration().contains("upload");
+        auto operation = app.configuration()["operation"].as<sstring>();
         sharded<tester> test;
         plog.info("Creating");
         co_await test.start(dur, sks, part_size, oname, osz);
@@ -162,10 +183,14 @@ int main(int argc, char** argv) {
             plog.info("Starting");
             co_await test.invoke_on_all(&tester::start);
             plog.info("Running");
-            if (upload) {
+            if (operation == "upload") {
                 co_await test.invoke_on_all(&tester::run_upload);
-            } else {
+            } else if (operation == "get") {
+                co_await test.invoke_on_all(&tester::run_contiguous_get);
+            } else if (operation == "download") {
                 co_await test.invoke_on_all(&tester::run_download);
+            } else {
+                throw std::runtime_error(format("Unknown operation {}", operation));
             }
         } catch (...) {
             plog.error("Error running: {}", std::current_exception());
