@@ -341,6 +341,13 @@ async def execute_lwt_transaction(manager: ManagerClient,
     ],
     reason="See issue #19151 (decommission process stuck while boostrapping node is paused)",
 )
+@deselect_for(
+    error_injections=[
+        "stop_after_sending_join_node_request",
+        "stop_after_bootstrapping_initial_raft_configuration",
+    ],
+    reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
+)
 async def init_tablet_transfer(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str) -> AsyncIterator[None]:
@@ -454,6 +461,13 @@ async def remove_data_dir_of_dead_node(manager: ManagerClient,
     ],
     reason="See issue #18640 (failed to add a node to a cluster if another bootstrapping node is stuck)",
 )
+@deselect_for(
+    error_injections=[
+        "stop_after_sending_join_node_request",
+        "stop_after_bootstrapping_initial_raft_configuration",
+    ],
+    reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
+)
 async def add_new_node(manager: ManagerClient,
                        random_tables: RandomTables,
                        error_injection: str) -> AsyncIterator[None]:
@@ -475,6 +489,13 @@ async def add_new_node(manager: ManagerClient,
         "stop_after_streaming",
     ],
     reason="See issue #19151 (decommission process stuck while bootstrapping node is paused)",
+)
+@deselect_for(
+    error_injections=[
+        "stop_after_sending_join_node_request",
+        "stop_after_bootstrapping_initial_raft_configuration",
+    ],
+    reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
 )
 async def decommission_node(manager: ManagerClient,
                             random_tables: RandomTables,
@@ -500,6 +521,13 @@ async def decommission_node(manager: ManagerClient,
         "stop_after_streaming",
     ],
     reason="Can't add a node to a cluster with a banned node",
+)
+@deselect_for(
+    error_injections=[
+        "stop_after_sending_join_node_request",
+        "stop_after_bootstrapping_initial_raft_configuration",
+    ],
+    reason="See https://github.com/scylladb/scylladb/issues/23302 (could not get host_id for endpoint)",
 )
 async def remove_node(manager: ManagerClient,
                       random_tables: RandomTables,
