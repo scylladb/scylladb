@@ -11,6 +11,8 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "exceptions/exceptions.hh"
+#include "locator/tablets.hh"
 #include "prepared_statement.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
@@ -90,14 +92,14 @@ void create_keyspace_statement::validate(query_processor& qp, const service::cli
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_keyspace_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
-    const auto& tm = *qp.proxy().get_token_metadata_ptr();
+    const auto tmptr = qp.proxy().get_token_metadata_ptr();
     const auto& feat = qp.proxy().features();
     const auto& cfg = qp.db().get_config();
     std::vector<mutation> m;
     std::vector<sstring> warnings;
 
     try {
-        auto ksm = _attrs->as_ks_metadata(_name, tm, feat, cfg);
+        auto ksm = _attrs->as_ks_metadata(_name, *tmptr, feat, cfg);
         m = service::prepare_new_keyspace_announcement(qp.db().real_database(), ksm, ts);
         // If the new keyspace uses tablets, as long as there are features
         // which aren't supported by tablets we want to warn the user that
@@ -115,6 +117,21 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
                 "To use CDC, LWT or counters, drop this keyspace and re-create it "
                 "without tablets by adding AND TABLETS = {'enabled': false} "
                 "to the CREATE KEYSPACE statement.");
+        }
+
+        // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to create an RF-rack-invalid keyspace.
+        // Verify that it's RF-rack-valid.
+        // For more context, see: scylladb/scylladb#23071.
+        if (cfg.rf_rack_valid_keyspaces()) {
+            try {
+                // We hold a group0_guard, so it's correct to check this here.
+                // The topology or schema cannot change while we're performing this query.
+                locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
+            } catch (const std::exception& e) {
+                // There's no guarantee what the type of the exception will be, so we need to
+                // wrap it manually here in a type that can be passed to the user.
+                throw exceptions::invalid_request_exception(e.what());
+            }
         }
     } catch (const exceptions::already_exists_exception& e) {
         if (!_if_not_exists) {
