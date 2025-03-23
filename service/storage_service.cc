@@ -6001,7 +6001,6 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
             throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
         }
         if (trinfo->session_id) {
-            // TODO: Propagate session id to repair
             slogger.debug("repair_tablet: tablet={} session_id={}", tablet, trinfo->session_id);
         } else {
             throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
@@ -6011,7 +6010,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
         service::tablet_operation_repair_result result;
         co_await do_with_repair_service(_repair, [&] (repair_service& local_repair) -> future<> {
-            auto time = co_await local_repair.repair_tablet(_address_map, guard, tablet);
+            auto time = co_await local_repair.repair_tablet(_address_map, guard, tablet, trinfo->session_id);
             result = service::tablet_operation_repair_result{time};
         });
         co_return result;
