@@ -62,6 +62,15 @@ This package installs all required packages for ScyllaDB,  including
 install_arg="--housekeeping"
 %endif
 ./install.sh --packaging --root "$RPM_BUILD_ROOT" --p11-trust-paths /etc/pki/ca-trust/source:/usr/share/pki/ca-trust-source $install_arg
+%if "%{_sbindir}" == "%{_bindir}"
+# according to the latest FHS, fedora 42 unifies /usr/bin and /usr/sbin, and
+# its /usr/sbin/ becomes a symlink to bin. see
+# https://fedoraproject.org/wiki/Releases/42/ChangeSet#Unify_/usr/bin_and_/usr/sbin
+mv -v %{buildroot}/usr/sbin/scylla_*setup %{buildroot}%{_bindir}/
+mv -v %{buildroot}/usr/sbin/scylla_kernel_check %{buildroot}%{_bindir}/
+mv -v %{buildroot}/usr/sbin/node_health_check %{buildroot}%{_bindir}/
+mv -v %{buildroot}/usr/sbin/seastar-cpu-map.sh %{buildroot}%{_bindir}/
+%endif
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -128,7 +137,8 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %{_bindir}/iotune
 %{_bindir}/scyllatop
 %{_bindir}/nodetool
-%{_sbindir}/scylla*
+%{_sbindir}/scylla_*setup
+%{_sbindir}/scylla_kernel_check
 %{_sbindir}/node_health_check
 %{_sbindir}/seastar-cpu-map.sh
 /opt/scylladb/scripts/*
