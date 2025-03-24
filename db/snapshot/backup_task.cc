@@ -33,6 +33,7 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
                                    sstring prefix,
                                    sstring ks,
                                    std::filesystem::path snapshot_dir,
+                                   table_id tid,
                                    bool move_files) noexcept
     : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
     , _snap_ctl(ctl)
@@ -40,6 +41,7 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
     , _snapshot_dir(std::move(snapshot_dir))
+    , _table_id(tid)
     , _remove_on_uploaded(move_files) {
     _status.progress_units = "bytes";
 }

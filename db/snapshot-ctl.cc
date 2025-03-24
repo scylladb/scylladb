@@ -171,7 +171,7 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
                 sstables::snapshots_dir /
                 std::string_view(snapshot_name));
     auto task = co_await _task_manager_module->make_and_start_task<::db::snapshot::backup_task_impl>(
-        {}, *this, std::move(cln), std::move(bucket), std::move(prefix), keyspace, dir, move_files);
+        {}, *this, std::move(cln), std::move(bucket), std::move(prefix), keyspace, dir, global_table->schema()->id(), move_files);
     co_return task->id();
 }
 
