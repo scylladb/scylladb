@@ -27,7 +27,6 @@
 #include <seastar/core/distributed.hh>
 #include <seastar/core/condition-variable.hh>
 #include "dht/token_range_endpoints.hh"
-#include <seastar/core/sleep.hh>
 #include "gms/application_state.hh"
 #include "gms/feature.hh"
 #include <seastar/core/semaphore.hh>
@@ -37,9 +36,7 @@
 #include <seastar/core/distributed.hh>
 #include "service/migration_listener.hh"
 #include <seastar/core/metrics_registration.hh>
-#include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/lowres_clock.hh>
 #include "cdc/generation_id.hh"
 #include "db/system_keyspace.hh"
 #include "raft/raft.hh"

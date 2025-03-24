@@ -17,7 +17,6 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/coroutine/generator.hh>
-#include <string>
 
 #include "service/broadcast_tables/experimental/query_result.hh"
 #include "service/raft/group0_fwd.hh"

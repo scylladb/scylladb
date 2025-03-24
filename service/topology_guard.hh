@@ -9,7 +9,6 @@
 #pragma once
 
 #include "service/session.hh"
-#include "replica/database_fwd.hh"
 
 namespace service {
 

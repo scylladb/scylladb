@@ -12,16 +12,14 @@
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/with_scheduling_group.hh>
 
 #include "seastarx.hh"
-#include "auth/role_manager.hh"
 #include "auth/service.hh"
 #include "cql3/description.hh"
 #include <map>
-#include <stack>
 #include "qos_common.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"
