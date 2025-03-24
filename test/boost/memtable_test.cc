@@ -1327,7 +1327,7 @@ static future<> exceptions_in_flush_on_sstable_write_helper(std::function<void()
         bool did_fail = false;
         std::function<void()> throw_func;
 
-        future<file> wrap_file(sstable& t, component_type type, file f, open_flags flags) override {
+        future<file> wrap_file(const sstable& t, component_type type, file f, open_flags flags) override {
             if (should_fail) {
                 class myimpl : public seastar::file_impl {
                     file _file;
@@ -1447,7 +1447,7 @@ static future<> exceptions_in_flush_on_sstable_open_helper(std::function<void()>
         bool did_fail = false;
         std::function<void()> throw_func;
 
-        future<file> wrap_file(sstable& t, component_type type, file f, open_flags flags) override {
+        future<file> wrap_file(const sstable& t, component_type type, file f, open_flags flags) override {
             if (should_fail) {
                 did_fail = true;
                 testlog.debug("Throwing exception");
