@@ -19,6 +19,7 @@
 #include <seastar/core/sstring.hh>
 #include "bytes_fwd.hh"
 #include "utils/assert.hh"
+#include "utils/hash.hh"
 #include "utils/hashing.hh"
 #include "utils/serialization.hh"
 
@@ -240,6 +241,15 @@ struct appending_hash<utils::tagged_uuid<Tag>> {
     }
 };
 
+template<typename Tag>
+struct appending_hash<std::pair<utils::tagged_uuid<Tag>, utils::tagged_uuid<Tag>>> {
+    template<typename Hasher>
+    void operator()(Hasher& h, const std::pair<utils::tagged_uuid<Tag>, utils::tagged_uuid<Tag>>& ids) const noexcept {
+        appending_hash<utils::UUID>{}(h, ids.first);
+        appending_hash<utils::UUID>{}(h, ids.second);
+    }
+};
+
 namespace std {
 template<>
 struct hash<utils::UUID> {
@@ -254,6 +264,13 @@ template<typename Tag>
 struct hash<utils::tagged_uuid<Tag>> {
     size_t operator()(const utils::tagged_uuid<Tag>& id) const noexcept {
         return hash<utils::UUID>()(id.id);
+    }
+};
+
+template<typename Tag>
+struct hash<std::pair<utils::tagged_uuid<Tag>, utils::tagged_uuid<Tag>>> {
+    size_t operator()(const std::pair<utils::tagged_uuid<Tag>, utils::tagged_uuid<Tag>>& ids) const noexcept {
+        return utils::hash_combine(hash<utils::tagged_uuid<Tag>>()(ids.first), hash<utils::tagged_uuid<Tag>>()(ids.second));
     }
 };
 
