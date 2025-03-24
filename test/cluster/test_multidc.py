@@ -168,7 +168,6 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
         else:
             rep_opts = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
         opts = f"replication = {{'class': 'NetworkTopologyStrategy', {rep_opts}}} AND tablets = {{'enabled': true}}"
-        print("CREATING KEYSPACE!")
         await cql.run_async(f"CREATE KEYSPACE {ks} WITH {opts}")
 
     async def create_ok(rfs: Union[List[int], int]) -> str:
@@ -183,17 +182,8 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
         with pytest.raises(InvalidRequest, match=err):
             await create_aux(ks, rfs)
 
-    async def create_fail(rfs: List[int], failed_dc: int, rf: int, rack_count: int) -> None:
-        ks = unique_name()
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
-              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{failed_dc}': RF={rf} vs. rack count={rack_count}."
-
-        with pytest.raises(InvalidRequest, match=err):
-            await create_aux(ks, rfs)
-
     async def alter_ok(ks: str, rfs: List[int]) -> None:
         dcs = ", ".join([f"'dc{i + 1}': {rf}" for i, rf in enumerate(rfs)])
-        print("ALTERING KEYSPACE!")
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}}")
 
     async def alter_fail(ks: str, rfs: List[int], failed_dc: int, rack_count: int) -> None:
@@ -340,7 +330,6 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
             rep_opts = f"'dc1': {rfs[0]}, 'dc2': {rfs[1]}"
         opts = f"replication = {{'class': 'NetworkTopologyStrategy', {rep_opts}}} AND tablets = {{'enabled': true}}"
         try:
-            print("CREATING KEYSPACE!")
             await cql.run_async(f"CREATE KEYSPACE {ks} WITH {opts}")
         finally:
             await cql.run_async(f"DROP KEYSPACE IF EXISTS {ks}")
