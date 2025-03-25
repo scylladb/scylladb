@@ -16,6 +16,7 @@
 #include "db/schema_tables.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "schema/schema_registry.hh"
+#include "service/storage_service.hh"
 
 #include <seastar/core/distributed.hh>
 
@@ -23,7 +24,7 @@ namespace db {
 
 namespace schema_tables {
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload = false);
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, distributed<service::storage_service>& ss, gms::feature_service& feat, std::vector<mutation> mutations, bool reload = false);
 
 enum class table_kind { table, view };
 
@@ -125,6 +126,7 @@ class schema_applier {
     using keyspace_name = sstring;
 
     sharded<service::storage_proxy>& _proxy;
+    sharded<service::storage_service>& _ss;
     sharded<db::system_keyspace>& _sys_ks;
     const bool _reload;
 
@@ -147,9 +149,10 @@ class schema_applier {
 public:
     schema_applier(
             sharded<service::storage_proxy>& proxy,
+            sharded<service::storage_service>& ss,
             sharded<db::system_keyspace>& sys_ks,
             bool reload = false)
-            : _proxy(proxy), _sys_ks(sys_ks), _reload(reload) {};
+            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks), _reload(reload) {};
 
     // Gets called before mutations are applied,
     // preferably no work should be done here but subsystem
