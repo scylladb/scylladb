@@ -140,6 +140,67 @@ def test_too_large_request_content_length(dynamodb, test_table):
     # the error code 413 which the server did send.
     assert response.status_code == 413
 
+# In addition to oversized request bodies that cause Scylla to OOM and the
+# previous tests verified are limited to 16 MB, there is also a risk that
+# huge headers that the Seastar HTTP server reads and saves in memory can
+# OOM Scylla. DynamoDB limits the total size of the headers to 16 KB, so
+# we can use the same limit too. In all useful cases, headers will be
+# much shorter.
+# Reproduces #23438.
+@pytest.mark.xfail(reason="issue #23438")
+def test_too_large_request_headers(dynamodb, test_table):
+    # First prepare a valid signed request, which works:
+    req = get_signed_request(dynamodb, 'PutItem',
+        '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.status_code == 200
+    # Add to the valid request, two extra headers "header1" and "header2",
+    # with short values. These extra headers are ignored (and do not change
+    # the signature computation), and the request still works:
+    headers = dict(req.headers)
+    headers.update({'header1': 'dog', 'header2': 'cat'})
+    response = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    assert response.status_code == 200
+    # Finally, make the two extra headers long - totaling more than 16 KB.
+    # The request should now fail with a 400 Bad Request. Although such a
+    # 400 Bad Request could have many reasons, we know the only difference
+    # between this request and the previous ones is the length of the extra
+    # headers, so it proves the server caught the oversized headers.
+    headers.update({'header1': 'x'*8192, 'header2': 'y'*8192})
+    response = requests.post(req.url, headers=headers, data=req.body, verify=False)
+    assert response.status_code == 400
+
+# In addition to oversized request bodies and headers tested in the above
+# tests, there is also a risk that a huge request *line* (the URL) can
+# cause the Seastar HTTP server to read it into memory and OOM Scylla.
+# DynamoDB limits the total size of the request line to 16 KB, so can we
+# can use the same limit too. In all useful cases, the request line will
+# be much shorter (for ordinary API requests, it is even empty).
+# Reproduces #23438.
+@pytest.mark.xfail(reason="issue #23438")
+def test_too_large_request_line(dynamodb, test_table):
+    # First prepare a valid signed request, which works:
+    req = get_signed_request(dynamodb, 'PutItem',
+        '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}')
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.status_code == 200
+    # Add to the valid request's URL some unnecessary garbage at the end,
+    # but short. Because the URL is part of the signed data, we expect to
+    # either get a InvalidSignatureException (this is what happens on AWS)
+    # or a 404 error (this is what happens on Scylla).
+    url = req.url + '/' + 'garbage'
+    response = requests.post(url, headers=req.headers, data=req.body, verify=False)
+    assert response.status_code == 404 or 'InvalidSignatureException' in response.text
+    # Finally, add some very long garbage to the end of the URL. Now we
+    # don't want to the 404 or InvalidSignatureException that were fine
+    # with the short URL - because either of those errors would mean that
+    # the server read the entire URL, and stored it entirely in memory.
+    # This time, we need to see a 400 Bad Request - but not one with a
+    # InvalidSignatureException error in its body.
+    url = req.url + '/' + 'x' * 17000
+    response = requests.post(url, headers=req.headers, data=req.body, verify=False)
+    assert response.status_code == 400 and not 'InvalidSignatureException' in response.text
+
 def test_incorrect_json(dynamodb, test_table):
     correct_req = '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
 
