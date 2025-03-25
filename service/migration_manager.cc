@@ -512,14 +512,6 @@ future<> migration_notifier::update_view(view_ptr view, bool columns_changed) {
     });
 }
 
-future<> migration_notifier::update_tablet_metadata(locator::tablet_metadata_change_hint hint) {
-    return seastar::async([this, hint = std::move(hint)] {
-        _listeners.thread_for_each([&hint] (migration_listener* listener) {
-            listener->on_update_tablet_metadata(hint);
-        });
-    });
-}
-
 future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
         listener->on_drop_keyspace(ks_name);

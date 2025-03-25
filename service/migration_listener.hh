@@ -62,7 +62,6 @@ public:
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) = 0;
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) = 0;
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) = 0;
-    virtual void on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) = 0;
 
     // The callback runs inside seastar thread
     virtual void on_drop_keyspace(const sstring& ks_name) = 0;
@@ -103,7 +102,6 @@ public:
     void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {}
     void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
-    void on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) override {}
 
     void on_drop_keyspace(const sstring& ks_name) override {}
     void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}
@@ -139,7 +137,6 @@ public:
     future<> update_column_family(schema_ptr cfm, bool columns_changed);
     future<> update_user_type(user_type type);
     future<> update_view(view_ptr view, bool columns_changed);
-    future<> update_tablet_metadata(locator::tablet_metadata_change_hint);
     future<> drop_keyspace(const sstring& ks_name);
     future<> drop_column_family(schema_ptr cfm);
     future<> drop_user_type(user_type type);
