@@ -100,13 +100,17 @@ public:
     future<> init();
     const host_options& options() const;
 
+    struct option_override {
+        std::optional<std::string> master_key;
+    };
+
     /**
      * Key Management API to create or retrieve data keys.
      *
      * Throws encryption::base_error derivatives to indicate failure conditions
      * such as host misconfigurations, network issues, or authentication failures.
      */
-    future<key_and_id_type> get_or_create_key(const key_info&);
+    future<key_and_id_type> get_or_create_key(const key_info&, const option_override* = nullptr);
     future<key_ptr> get_key_by_id(const id_type&, const key_info&);
 private:
     std::unique_ptr<impl> _impl;

@@ -82,7 +82,7 @@ public:
     impl(const std::string& name, const host_options&);
     future<> init();
     const host_options& options() const;
-    future<key_and_id_type> get_or_create_key(const key_info&);
+    future<key_and_id_type> get_or_create_key(const key_info&, const option_override* = nullptr);
     future<key_ptr> get_key_by_id(const id_type&, const key_info&);
 private:
     const std::string _name;
@@ -222,9 +222,17 @@ const azure_host::host_options& azure_host::impl::options() const {
     return _options;
 }
 
-future<azure_host::key_and_id_type> azure_host::impl::get_or_create_key(const key_info& info) {
+template<typename T, typename C>
+static T get_option(const encryption::azure_host::option_override* oov, std::optional<T> C::* f, const T& def) {
+    if (oov) {
+        return (oov->*f).value_or(def);
+    }
+    return def;
+};
+
+future<azure_host::key_and_id_type> azure_host::impl::get_or_create_key(const key_info& info, const option_override* oov) {
     attr_cache_key key {
-        .master_key = _options.master_key,
+        .master_key = get_option(oov, &option_override::master_key, _options.master_key),
         .info = info,
     };
 
@@ -525,8 +533,8 @@ const azure_host::host_options& azure_host::options() const {
     return _impl->options();
 }
 
-future<azure_host::key_and_id_type> azure_host::get_or_create_key(const key_info& info) {
-    return _impl->get_or_create_key(info);
+future<azure_host::key_and_id_type> azure_host::get_or_create_key(const key_info& info, const option_override* oov) {
+    return _impl->get_or_create_key(info, oov);
 }
 
 future<azure_host::key_ptr> azure_host::get_key_by_id(const azure_host::id_type& id, const key_info& info) {
