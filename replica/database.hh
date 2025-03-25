@@ -1758,7 +1758,7 @@ public:
     void init_schema_commitlog();
 
     using is_new_cf = bool_class<struct is_new_cf_tag>;
-    std::function<future<>()> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr);
+    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr);
     future<> make_column_family_directory(schema_ptr schema);
     future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
 
