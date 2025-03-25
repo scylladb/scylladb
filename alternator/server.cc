@@ -462,25 +462,81 @@ static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_
     return trace_state;
 }
 
+// This read_entire_stream() is similar to Seastar's read_entire_stream()
+// which reads the given content_stream until its end into non-contiguous
+// memory. The difference is that this implementation takes an extra length
+// limit, and throws an error if we read more than this limit.
+// This length-limited variant would not have been needed if Seastar's HTTP
+// server's set_content_length_limit() worked in every case, but unfortunately
+// it does not - it only works if the request has a Content-Length header (see
+// issue #8196). In contrast this function can limit the request's length no
+// matter how it's encoded. We need this limit to protect Alternator from
+// oversized requests that can deplete memory.
+static future<chunked_content>
+read_entire_stream(input_stream<char>& inp, size_t length_limit) {
+    chunked_content ret;
+    // We try to read length_limit + 1 bytes, so that we can throw an
+    // exception if we managed to read more than length_limit.
+    ssize_t remain = length_limit + 1;
+    do {
+        temporary_buffer<char> buf = co_await inp.read_up_to(remain);
+        if (buf.empty()) {
+            break;
+        }
+        remain -= buf.size();
+        ret.push_back(std::move(buf));
+    } while (remain > 0);
+    // If we read the full length_limit + 1 bytes, we went over the limit:
+    if (remain <= 0) {
+        // By throwing here an error, we may send a reply (the error message)
+        // without having read the full request body. Seastar's httpd will
+        // realize that we have not read the entire content stream, and
+        // correctly mark the connection unreusable, i.e., close it.
+        // This means we are currently exposed to issue #12166 caused by
+        // Seastar issue 1325), where the client may get an RST instead of
+        // a FIN, and may rarely get a "Connection reset by peer" before
+        // reading the error we send.
+        throw api_error::payload_too_large(fmt::format("Request content length limit of {} bytes exceeded", length_limit));
+    }
+    co_return ret;
+}
+
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
     _executor._stats.total_operations++;
     sstring target = req->get_header("X-Amz-Target");
     // target is DynamoDB API version followed by a dot '.' and operation type (e.g. CreateTable)
     auto dot = target.find('.');
     std::string_view op = (dot == sstring::npos) ? std::string_view() : std::string_view(target).substr(dot+1);
+    if (req->content_length > request_content_length_limit) {
+        // If we have a Content-Length header and know the request will be too
+        // long, we don't need to wait for read_entire_stream() below to
+        // discover it. And we definitely mustn't try to get_units() below for
+        // for such a size.
+        co_return api_error::payload_too_large(fmt::format("Request content length limit of {} bytes exceeded", request_content_length_limit));
+    }
     // JSON parsing can allocate up to roughly 2x the size of the raw
     // document, + a couple of bytes for maintenance.
-    // TODO: consider the case where req->content_length is missing. Maybe
-    // we need to take the content_length_limit and return some of the units
-    // when we finish read_content_and_verify_signature?
-    size_t mem_estimate = req->content_length * 2 + 8000;
+    // If the Content-Length of the request is not available, we assume
+    // the largest possible request (request_content_length_limit, i.e., 16 MB)
+    // and after reading the request we return_units() the excess.
+    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
     auto units_fut = get_units(*_memory_limiter, mem_estimate);
     if (_memory_limiter->waiters()) {
         ++_executor._stats.requests_blocked_memory;
     }
     auto units = co_await std::move(units_fut);
     SCYLLA_ASSERT(req->content_stream);
-    chunked_content content = co_await util::read_entire_stream(*req->content_stream);
+    chunked_content content = co_await read_entire_stream(*req->content_stream, request_content_length_limit);
+    // If the request had no Content-Length, we reserved too many units
+    // so need to return some
+    if (req->content_length == 0) {
+        size_t content_length = 0;
+        for (const auto& chunk : content) {
+            content_length += chunk.size();
+        }
+        size_t new_mem_estimate = content_length * 2 + 8000;
+        units.return_units(mem_estimate - new_mem_estimate);
+    }
     auto username = co_await verify_signature(*req, content);
     // As long as the system_clients_entry object is alive, this request will
     // be visible in the "system.clients" virtual table. When requested, this
@@ -659,14 +715,12 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
 
         if (port) {
             set_routes(_http_server._routes);
-            _http_server.set_content_length_limit(server::content_length_limit);
             _http_server.set_content_streaming(true);
             _http_server.listen(socket_address{addr, *port}).get();
             _enabled_servers.push_back(std::ref(_http_server));
         }
         if (https_port) {
             set_routes(_https_server._routes);
-            _https_server.set_content_length_limit(server::content_length_limit);
             _https_server.set_content_streaming(true);
 
             if (this_shard_id() == 0) {
