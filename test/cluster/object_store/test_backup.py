@@ -422,7 +422,8 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     async def do_backup(s):
         await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
         tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
-        await manager.api.wait_task(s.ip_addr, tid)
+        status = await manager.api.wait_task(s.ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
 
     await asyncio.gather(*(do_backup(s) for s in servers))
 
@@ -435,7 +436,8 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     async def do_restore(s, toc_names, scope):
         logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
         tid = await manager.api.restore(s.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names, scope)
-        await manager.api.wait_task(s.ip_addr, tid)
+        status = await manager.api.wait_task(s.ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
 
     if topology.dcs > 1:
         scope = 'dc'
