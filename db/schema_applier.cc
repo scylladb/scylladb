@@ -897,6 +897,7 @@ future<> schema_applier::update() {
     co_await merge_aggregates(_proxy, _functions_batch, _before.aggregates, _after.aggregates,
             _before.scylla_aggregates, _after.scylla_aggregates, _types_storage);
 }
+
 void schema_applier::commit_tables_and_views() {
     auto& sharded_db = _proxy.local().get_db();
     auto& db = sharded_db.local();
@@ -915,14 +916,12 @@ void schema_applier::commit_tables_and_views() {
 
     for (auto& schema : tables.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        auto cleanup = db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
-        // TODO: handle cleanup
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
     }
 
     for (auto& schema : views.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        auto cleanup = db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
-        // TODO: handle cleanup
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());

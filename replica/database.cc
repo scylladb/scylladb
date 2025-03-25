@@ -1008,8 +1008,17 @@ future<> database::create_local_system_table(
         cfg.memtable_to_cache_scheduling_group = default_scheduling_group();
     }
     auto lock = get_tables_metadata().hold_write_lock();
-    auto cleanup = add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
-    co_await cleanup();
+    std::exception_ptr ex;
+    try {
+        add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    // cleanup
+    if (ex && column_family_exists(table->id())) {
+        auto& cf = find_column_family(table);
+        co_await cf.stop();
+    }
 }
 
 db::commitlog* database::commitlog_for(const schema_ptr& schema) {
@@ -1018,7 +1027,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-std::function<future<>()> database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
+void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1051,21 +1060,9 @@ std::function<future<>()> database::add_column_family(keyspace& ks, schema_ptr s
         throw std::invalid_argument("Column family " + schema->cf_name() + " exists");
     }
     cf->start();
-    std::exception_ptr ex;
-    try {
-        _tables_metadata.add_table(*this, ks, *cf, schema);
-        // Table must be added before entry is marked synced.
-        schema->registry_entry()->mark_synced();
-    } catch (...) {
-        ex = std::current_exception();
-    };
-    // cleanup function
-    return [cf, ex] () -> future<> {
-        if (ex) {
-            co_await cf->stop();
-            co_await coroutine::return_exception_ptr(ex);
-        }
-    };
+    _tables_metadata.add_table(*this, ks, *cf, schema);
+    // Table must be added before entry is marked synced.
+    schema->registry_entry()->mark_synced();
 }
 
 future<> database::make_column_family_directory(schema_ptr schema) {
@@ -1077,8 +1074,17 @@ future<> database::make_column_family_directory(schema_ptr schema) {
 future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new) {
     auto lock = co_await get_tables_metadata().hold_write_lock();
     auto& ks = find_keyspace(schema->ks_name());
-    auto cleanup = add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
-    co_await cleanup();
+    std::exception_ptr ex;
+    try {
+        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    // cleanup
+    if (ex && column_family_exists(schema->id())) {
+        auto& cf = find_column_family(schema);
+        co_await cf.stop();
+    }
     co_await make_column_family_directory(schema);
 }
 
