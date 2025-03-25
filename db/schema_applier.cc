@@ -25,6 +25,7 @@
 
 #include <fmt/ranges.h>
 
+#include "service/storage_service.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "lang/manager.hh"
@@ -594,6 +595,7 @@ in_progress_types_storage_per_shard& in_progress_types_storage::local() {
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
 static future<affected_tables_and_views> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
+    distributed<service::storage_service>& ss,
     sharded<db::system_keyspace>& sys_ks,
     const std::map<table_id, schema_mutations>& tables_before,
     const std::map<table_id, schema_mutations>& tables_after,
@@ -666,9 +668,7 @@ static future<affected_tables_and_views> merge_tables_and_views(distributed<serv
         // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
         // and so that compaction groups are not destroyed altogether.
         // We must also do it before tables are created so that new tables see the tablet map.
-        co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-            co_await db.get_notifier().update_tablet_metadata(tablet_hint);
-        });
+        co_await ss.local().update_tablet_metadata(tablet_hint, service::storage_service::wake_up_load_balancer::yes);
     }
 
     co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
@@ -859,7 +859,7 @@ future<> schema_applier::update() {
     _affected_keyspaces = co_await merge_keyspaces(_proxy, _before.keyspaces, _after.keyspaces, _before.scylla_keyspaces, _after.scylla_keyspaces);
     co_await merge_types(_proxy, _before.types, _after.types, _affected_user_types);
     co_await _types_storage.init(_proxy.local().get_db(), _affected_keyspaces, _affected_user_types);
-    _affected_tables_and_views = co_await merge_tables_and_views(_proxy, _sys_ks,
+    _affected_tables_and_views = co_await merge_tables_and_views(_proxy, _ss, _sys_ks,
             _before.tables, _after.tables,
             _before.views, _after.views,
             _types_storage,
