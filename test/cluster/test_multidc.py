@@ -462,3 +462,16 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     await try_fail([4, 1], "dc1", 4, 3)
 
     _ = await manager.server_start(s1.server_id)
+
+@pytest.mark.asyncio
+async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    logger.info("Creating a new cluster")
+    for i in range(3):
+        s_info = await manager.server_add(
+            config=CONFIG,
+            property_file={'dc': f'dc{i}', 'rack': 'myrack1', 'prefer_local': 'true'}
+        )
+        logger.info(s_info)
+
+    await manager.server_stop_gracefully(s_info.server_id)
+    await manager.server_start(s_info.server_id)

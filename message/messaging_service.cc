@@ -1224,6 +1224,12 @@ void messaging_service::remove_rpc_client(msg_addr id, std::optional<locator::ho
         find_and_remove_client(c, id, [] (const auto&) { return true; });
     }
     if (!hid) {
+        if (!_address_to_host_id_mapper) {
+            if (!_clients_with_host_id.empty()) {
+                mlogger.warn("remove_rpc_client is called without host id and mapper function is not initialized yet");
+            }
+            return;
+        }
         hid = _address_to_host_id_mapper(id.addr);
     }
     for (auto& c : _clients_with_host_id) {
