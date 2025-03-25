@@ -1100,7 +1100,13 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy,  dis
     co_await ap.prepare(mutations);
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
     co_await ap.update();
-    co_await ap.commit();
+    try {
+        co_await ap.commit();
+    } catch (...) {
+        // We have no good way to recover from partial commit and continuing
+        // would mean that schema is in inconsistent state.
+        on_fatal_internal_error(slogger, format("schema commit failed: {}", std::current_exception()));
+    }
     co_await ap.post_commit();
     co_await ap.destroy();
 }
