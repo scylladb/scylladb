@@ -5540,13 +5540,6 @@ future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_
     }
 }
 
-void storage_service::on_update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
-    if (this_shard_id() != 0) {
-        return;
-    }
-    update_tablet_metadata(hint, wake_up_load_balancer::yes).get();
-}
-
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
     tasks::task_info tablet_split_task_info;
 
