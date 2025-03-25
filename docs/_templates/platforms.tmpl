@@ -1,0 +1,63 @@
+{% set total_versions = { 'count': 0 } %}
+{% for dist, versions in data['Linux Distributions'].items() %}
+    {% set _ = total_versions.update({'count': total_versions['count'] + versions|length}) %}
+{% endfor %}
+
+.. list-table::
+   :header-rows: 2
+   :widths: 30 {% for dist, versions in data['Linux Distributions'].items() %}{% for version in versions %}10 {% endfor %}{% endfor %}
+   :class: os-support-table
+
+   * - Linux Distributions
+     {% for dist, versions in data['Linux Distributions'].items() -%}
+     - {{ dist }}
+     {% for i in range(versions|length - 1) -%}
+     - 
+     {% endfor %}
+     {% endfor %}
+   * - ScyllaDB Version / OS Version
+     {% for dist, versions in data['Linux Distributions'].items() -%}
+     {% for version in versions -%}
+     - {{ version }}
+     {% endfor %}
+     {% endfor %}
+{% for version in data['ScyllaDB Versions'] %}
+   * - {{ version['version'] }}
+     {% for dist, versions in data['Linux Distributions'].items() -%}
+     {% for ver in versions -%}
+     - {% set stripped_ver = ver.replace('*', '') %}{% if stripped_ver + '*' in version['supported_OS'][dist] %}|v| ``*``{% elif stripped_ver in version['supported_OS'][dist] %}|v|{% else %}|x|{% endif %}
+     {% endfor %}
+     {% endfor %}
+{% endfor %}
+
+.. raw:: html
+
+   <script>
+   // Adds colspan support for list-table
+   document.addEventListener('DOMContentLoaded', () => {
+       const firstRow = document.querySelector('.os-support-table thead tr:first-child');
+       if (!firstRow) return;
+
+       const cells = Array.from(firstRow.children);
+       let currentIndex = 0;
+
+       while (currentIndex < cells.length) {
+           const currentCell = cells[currentIndex];
+           if (currentCell.textContent.trim()) {
+               let colspan = 1;
+               while (currentIndex + colspan < cells.length && 
+                      !cells[currentIndex + colspan].textContent.trim()) {
+                   colspan++;
+               }
+               currentCell.colSpan = colspan;
+               for (let i = 1; i < colspan; i++) {
+                   cells[currentIndex + i].remove();
+               }
+               currentIndex += colspan;
+           } else {
+               currentCell.remove();
+               cells.splice(currentIndex, 1);
+           }
+       }
+   });
+   </script>
