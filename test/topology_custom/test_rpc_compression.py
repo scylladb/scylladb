@@ -10,6 +10,8 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from test.pylib.manager_client import ManagerClient
+from test.topology.util import new_test_keyspace
+
 import pytest
 import asyncio
 import time
@@ -64,32 +66,31 @@ async def test_basic(manager: ManagerClient) -> None:
     cql = manager.get_cql()
 
     replication_factor = 2
-    ks = unique_name()
-    await cql.run_async(f"create keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}")
-    await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
-    write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
-    write_stmt.consistency_level = ConsistencyLevel.ALL
+    async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
+        await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
+        write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
+        write_stmt.consistency_level = ConsistencyLevel.ALL
 
-    # 128 kiB message, should give compression ratio of ~0.5 for lz4 and ~0.25 for zstd.
-    message = b''.join(bytes(random.choices(range(16), k=1024)) * 2 for _ in range(64))
+        # 128 kiB message, should give compression ratio of ~0.5 for lz4 and ~0.25 for zstd.
+        message = b''.join(bytes(random.choices(range(16), k=1024)) * 2 for _ in range(64))
 
-    async def test_algo(algo: str, expected_ratio: float):
-        n_messages = 100
-        metrics_before = await get_metrics(manager, servers)
-        await asyncio.gather(*[cql.run_async(write_stmt, parameters=[message, pk]) for pk in range(n_messages)])
-        metrics_after = await get_metrics(manager, servers)
+        async def test_algo(algo: str, expected_ratio: float):
+            n_messages = 100
+            metrics_before = await get_metrics(manager, servers)
+            await asyncio.gather(*[cql.run_async(write_stmt, parameters=[message, pk]) for pk in range(n_messages)])
+            metrics_after = await get_metrics(manager, servers)
 
-        volume = n_messages * len(message) * (replication_factor - 1)
-        uncompressed = uncompressed_sent(metrics_after, algo) - uncompressed_sent(metrics_before, algo)
-        compressed = compressed_sent(metrics_after, algo) - compressed_sent(metrics_before, algo)
-        assert approximately_equal(uncompressed, volume, 0.9)
-        assert approximately_equal(compressed, expected_ratio * volume, 0.9)
+            volume = n_messages * len(message) * (replication_factor - 1)
+            uncompressed = uncompressed_sent(metrics_after, algo) - uncompressed_sent(metrics_before, algo)
+            compressed = compressed_sent(metrics_after, algo) - compressed_sent(metrics_before, algo)
+            assert approximately_equal(uncompressed, volume, 0.9)
+            assert approximately_equal(compressed, expected_ratio * volume, 0.9)
 
-    await with_retries(functools.partial(test_algo, "lz4", 0.5), timeout=600)
+        await with_retries(functools.partial(test_algo, "lz4", 0.5), timeout=600)
 
-    await live_update_config(manager, servers, "internode_compression_zstd_max_cpu_fraction", "1.0")
+        await live_update_config(manager, servers, "internode_compression_zstd_max_cpu_fraction", "1.0")
 
-    await with_retries(functools.partial(test_algo, "zstd", 0.25), timeout=600)
+        await with_retries(functools.partial(test_algo, "zstd", 0.25), timeout=600)
 
 @pytest.mark.asyncio
 async def test_dict_training(manager: ManagerClient) -> None:
@@ -112,47 +113,46 @@ async def test_dict_training(manager: ManagerClient) -> None:
     cql = manager.get_cql()
 
     replication_factor = 2
-    ks = unique_name()
-    await cql.run_async(f"create keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}")
-    await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
-    write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
-    dict_stmt = cql.prepare(f"select data from system.dicts")
-    write_stmt.consistency_level = ConsistencyLevel.ALL
+    async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
+        await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
+        write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
+        dict_stmt = cql.prepare(f"select data from system.dicts")
+        write_stmt.consistency_level = ConsistencyLevel.ALL
 
-    msg_size = 16*1024
-    msg_train = random.randbytes(msg_size)
-    msg_notrain = random.randbytes(msg_size)
+        msg_size = 16*1024
+        msg_train = random.randbytes(msg_size)
+        msg_notrain = random.randbytes(msg_size)
 
-    async def write_messages(m: bytes):
-        n_messages = 100
-        assert n_messages * len(m) > training_min_bytes
-        await asyncio.gather(*[cql.run_async(write_stmt, parameters=[m, pk]) for pk in range(n_messages)])
+        async def write_messages(m: bytes):
+            n_messages = 100
+            assert n_messages * len(m) > training_min_bytes
+            await asyncio.gather(*[cql.run_async(write_stmt, parameters=[m, pk]) for pk in range(n_messages)])
 
-    async def set_dict_training_when(x: str):
-        await live_update_config(manager, servers, "rpc_dict_training_when", x)
+        async def set_dict_training_when(x: str):
+            await live_update_config(manager, servers, "rpc_dict_training_when", x)
 
-    await write_messages(msg_notrain)
-    await set_dict_training_when("when_leader")
-    await write_messages(msg_train)
-    await set_dict_training_when("never")
-    await write_messages(msg_notrain)
-    await set_dict_training_when("when_leader")
-    await write_messages(msg_train)
+        await write_messages(msg_notrain)
+        await set_dict_training_when("when_leader")
+        await write_messages(msg_train)
+        await set_dict_training_when("never")
+        await write_messages(msg_notrain)
+        await set_dict_training_when("when_leader")
+        await write_messages(msg_train)
 
-    ngram_size = 8
-    def make_ngrams(x: bytes) -> list[bytes]:
-        return [x[i:i+ngram_size] for i in range(len(x) - ngram_size)]
-    msg_train_ngrams = set(make_ngrams(msg_train))
-    msg_notrain_ngrams = set(make_ngrams(msg_notrain))
+        ngram_size = 8
+        def make_ngrams(x: bytes) -> list[bytes]:
+            return [x[i:i+ngram_size] for i in range(len(x) - ngram_size)]
+        msg_train_ngrams = set(make_ngrams(msg_train))
+        msg_notrain_ngrams = set(make_ngrams(msg_notrain))
 
-    async def test_once() -> None:
-        results = await cql.run_async(dict_stmt)
-        dicts = [bytes(x[0]) for x in results]
-        dict_ngrams = set(make_ngrams(bytes().join(dicts)))
-        assert len(msg_train_ngrams & dict_ngrams) > 0.5 * len(msg_train_ngrams)
-        assert len(msg_notrain_ngrams & dict_ngrams) < 0.5 * len(msg_notrain_ngrams)
+        async def test_once() -> None:
+            results = await cql.run_async(dict_stmt)
+            dicts = [bytes(x[0]) for x in results]
+            dict_ngrams = set(make_ngrams(bytes().join(dicts)))
+            assert len(msg_train_ngrams & dict_ngrams) > 0.5 * len(msg_train_ngrams)
+            assert len(msg_notrain_ngrams & dict_ngrams) < 0.5 * len(msg_notrain_ngrams)
 
-    await with_retries(test_once, timeout=600)
+        await with_retries(test_once, timeout=600)
 
 @pytest.mark.asyncio
 async def test_external_dicts(manager: ManagerClient) -> None:
@@ -175,47 +175,46 @@ async def test_external_dicts(manager: ManagerClient) -> None:
     cql = manager.get_cql()
 
     replication_factor = 2
-    ks = unique_name()
-    await cql.run_async(f"create keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}")
-    await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
-    write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
-    write_stmt.consistency_level = ConsistencyLevel.ALL
+    async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
+        await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
+        write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
+        write_stmt.consistency_level = ConsistencyLevel.ALL
 
-    msg_size = 32*1024
-    ngram_size = 64
-    common_ngrams = [random.randbytes(ngram_size) for _ in range(msg_size//2//ngram_size)]
+        msg_size = 32*1024
+        ngram_size = 64
+        common_ngrams = [random.randbytes(ngram_size) for _ in range(msg_size//2//ngram_size)]
 
-    # 128 kiB messages, should give compression ratio of ~0.5 for lz4 and ~0.25 for zstd
-    # when compressed with a common dictionary.
-    def make_message() -> bytes:
-        common_part = b''.join(random.sample(common_ngrams, k=msg_size//2//ngram_size))
-        assert len(common_part) == msg_size // 2
-        unique_part = bytes(random.choices(range(16), k=msg_size//2))
-        assert len(unique_part) == msg_size // 2
-        return common_part + unique_part
+        # 128 kiB messages, should give compression ratio of ~0.5 for lz4 and ~0.25 for zstd
+        # when compressed with a common dictionary.
+        def make_message() -> bytes:
+            common_part = b''.join(random.sample(common_ngrams, k=msg_size//2//ngram_size))
+            assert len(common_part) == msg_size // 2
+            unique_part = bytes(random.choices(range(16), k=msg_size//2))
+            assert len(unique_part) == msg_size // 2
+            return common_part + unique_part
 
-    async def test_once(algo: str, expected_ratio: float):
-        n_messages = 1000
-        metrics_before = await get_metrics(manager, servers)
-        messages = [make_message() for _ in range(n_messages)]
-        await asyncio.gather(*[cql.run_async(write_stmt, parameters=[m, pk]) for pk, m in enumerate(messages)])
-        metrics_after = await get_metrics(manager, servers)
+        async def test_once(algo: str, expected_ratio: float):
+            n_messages = 1000
+            metrics_before = await get_metrics(manager, servers)
+            messages = [make_message() for _ in range(n_messages)]
+            await asyncio.gather(*[cql.run_async(write_stmt, parameters=[m, pk]) for pk, m in enumerate(messages)])
+            metrics_after = await get_metrics(manager, servers)
 
-        volume = sum(len(m) for m in messages) * (replication_factor - 1)
-        uncompressed = uncompressed_sent(metrics_after, algo) - uncompressed_sent(metrics_before, algo)
-        compressed = compressed_sent(metrics_after, algo) - compressed_sent(metrics_before, algo)
-        assert approximately_equal(uncompressed, volume, 0.8)
-        assert approximately_equal(compressed, expected_ratio * volume, 0.8)
+            volume = sum(len(m) for m in messages) * (replication_factor - 1)
+            uncompressed = uncompressed_sent(metrics_after, algo) - uncompressed_sent(metrics_before, algo)
+            compressed = compressed_sent(metrics_after, algo) - compressed_sent(metrics_before, algo)
+            assert approximately_equal(uncompressed, volume, 0.8)
+            assert approximately_equal(compressed, expected_ratio * volume, 0.8)
 
-    await with_retries(functools.partial(test_once, "lz4", 0.5), timeout=600)
-    await live_update_config(manager, servers, "internode_compression_zstd_max_cpu_fraction", "1.0"),
-    await with_retries(functools.partial(test_once, "zstd", 0.25), timeout=600)
+        await with_retries(functools.partial(test_once, "lz4", 0.5), timeout=600)
+        await live_update_config(manager, servers, "internode_compression_zstd_max_cpu_fraction", "1.0"),
+        await with_retries(functools.partial(test_once, "zstd", 0.25), timeout=600)
 
-    # Test that the dicts are loaded on startup.
-    await asyncio.gather(*[manager.server_stop_gracefully(s.server_id) for s in servers])
-    await asyncio.gather(*[manager.server_update_config(s.server_id, 'rpc_dict_training_when', 'never') for s in servers])
-    await asyncio.gather(*[manager.server_start(s.server_id) for s in servers])
-    await with_retries(functools.partial(test_once, "lz4", 0.5), timeout=600)
+        # Test that the dicts are loaded on startup.
+        await asyncio.gather(*[manager.server_stop_gracefully(s.server_id) for s in servers])
+        await asyncio.gather(*[manager.server_update_config(s.server_id, 'rpc_dict_training_when', 'never') for s in servers])
+        await asyncio.gather(*[manager.server_start(s.server_id) for s in servers])
+        await with_retries(functools.partial(test_once, "lz4", 0.5), timeout=600)
 
 # Similar to test_external_dicts, but simpler.
 @pytest.mark.asyncio
@@ -239,24 +238,23 @@ async def test_external_dicts_sanity(manager: ManagerClient) -> None:
     cql = manager.get_cql()
 
     replication_factor = 2
-    ks = unique_name()
-    await cql.run_async(f"create keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}")
-    await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
-    write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
-    write_stmt.consistency_level = ConsistencyLevel.ALL
+    async with new_test_keyspace(manager, f"with replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {replication_factor}}}") as ks:
+        await cql.run_async(f"create table {ks}.cf (pk int, v blob, primary key (pk))")
+        write_stmt = cql.prepare(f"update {ks}.cf set v = ? where pk = ?")
+        write_stmt.consistency_level = ConsistencyLevel.ALL
 
-    msg = random.randbytes(8192)
+        msg = random.randbytes(8192)
 
-    async def test_algo(algo: str, expected_ratio):
-        n_messages = 1000
-        metrics_before = await get_metrics(manager, servers)
-        await asyncio.gather(*[cql.run_async(write_stmt, parameters=[msg, pk]) for pk in range(n_messages)])
-        metrics_after = await get_metrics(manager, servers)
+        async def test_algo(algo: str, expected_ratio):
+            n_messages = 1000
+            metrics_before = await get_metrics(manager, servers)
+            await asyncio.gather(*[cql.run_async(write_stmt, parameters=[msg, pk]) for pk in range(n_messages)])
+            metrics_after = await get_metrics(manager, servers)
 
-        volume = len(msg) * n_messages * (replication_factor - 1)
-        uncompressed = uncompressed_sent(metrics_after, algo) - uncompressed_sent(metrics_before, algo)
-        compressed = compressed_sent(metrics_after, algo) - compressed_sent(metrics_before, algo)
-        assert approximately_equal(uncompressed, volume, 0.8)
-        assert compressed < expected_ratio * uncompressed
+            volume = len(msg) * n_messages * (replication_factor - 1)
+            uncompressed = uncompressed_sent(metrics_after, algo) - uncompressed_sent(metrics_before, algo)
+            compressed = compressed_sent(metrics_after, algo) - compressed_sent(metrics_before, algo)
+            assert approximately_equal(uncompressed, volume, 0.8)
+            assert compressed < expected_ratio * uncompressed
 
-    await with_retries(functools.partial(test_algo, "lz4", 0.04), timeout=600)
+        await with_retries(functools.partial(test_algo, "lz4", 0.04), timeout=600)
