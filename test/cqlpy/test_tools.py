@@ -1657,7 +1657,7 @@ def test_scylla_sstable_query_bad_command_line(cql, scylla_path, scylla_data_dir
     """Check that not-allowed command line param combinations are refused."""
     nodetool.flush_keyspace(cql, "system")
 
-    with nodetool.no_autocompaction_context(cql, "system"):
+    with nodetool.no_autocompaction_context(cql, "system.local"):
         sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
 
         common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--query-file", "whatever.cql"]
@@ -1674,7 +1674,7 @@ def test_scylla_sstable_query_bad_command_line(cql, scylla_path, scylla_data_dir
 
 def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
     """Check that not-allowed command line param combinations are refused."""
-    with nodetool.no_autocompaction_context(cql, "system"):
+    with nodetool.no_autocompaction_context(cql, "system.local"):
         sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
 
         common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--query"]
@@ -1702,7 +1702,7 @@ def test_scylla_sstable_query_temp_dir(cql, scylla_path, scylla_data_dir):
     its temp-dir on exit. So we test with a negative test: give an impossible
     path and check that creating the temp-dir fails.
     """
-    with nodetool.no_autocompaction_context(cql, "system"):
+    with nodetool.no_autocompaction_context(cql, "system.local"):
         sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
 
         with tempfile.NamedTemporaryFile("r") as f:
