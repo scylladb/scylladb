@@ -1515,8 +1515,27 @@ future<> storage_service::await_tablets_rebuilt(raft::server_id replaced_id) {
     slogger.info("Tablet replicas from the replaced node have been rebuilt");
 }
 
+<<<<<<< HEAD
 future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<service::storage_proxy>& proxy,
+||||||| parent of 0fc196991a (storage_service: add start_sys_dist_ks)
+raft::server* storage_service::get_group_server_if_raft_topolgy_enabled() {
+    return raft_topology_change_enabled() ? &_group0->group0_server() : nullptr;
+}
+
+future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
+=======
+raft::server* storage_service::get_group_server_if_raft_topolgy_enabled() {
+    return raft_topology_change_enabled() ? &_group0->group0_server() : nullptr;
+}
+
+future<> storage_service::start_sys_dist_ks() const {
+    slogger.info("starting system distributed keyspace shards");
+    return _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+}
+
+future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
+>>>>>>> 0fc196991a (storage_service: add start_sys_dist_ks)
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
         std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
@@ -1850,8 +1869,15 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
 
         // Need to start system_distributed_keyspace before bootstrap because bootstrapping
         // process may access those tables.
+<<<<<<< HEAD
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+||||||| parent of 0fc196991a (storage_service: add start_sys_dist_ks)
+        supervisor::notify("starting system distributed keyspace");
+        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+=======
+        co_await start_sys_dist_ks();
+>>>>>>> 0fc196991a (storage_service: add start_sys_dist_ks)
 
         if (_sys_ks.local().bootstrap_complete()) {
             if (_topology_state_machine._topology.left_nodes.contains(raft_server->id())) {
@@ -1977,13 +2003,26 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
             slogger.info("Replacing a node with token(s): {}", bootstrap_tokens);
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
+<<<<<<< HEAD
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+||||||| parent of 0fc196991a (storage_service: add start_sys_dist_ks)
+        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+=======
+        co_await start_sys_dist_ks();
+>>>>>>> 0fc196991a (storage_service: add start_sys_dist_ks)
         co_await _view_builder.local().mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
     } else {
+<<<<<<< HEAD
         supervisor::notify("starting system distributed keyspace");
         co_await sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+||||||| parent of 0fc196991a (storage_service: add start_sys_dist_ks)
+        supervisor::notify("starting system distributed keyspace");
+        co_await _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
+=======
+        co_await start_sys_dist_ks();
+>>>>>>> 0fc196991a (storage_service: add start_sys_dist_ks)
         bootstrap_tokens = co_await _sys_ks.local().get_saved_tokens();
         if (bootstrap_tokens.empty()) {
             bootstrap_tokens = boot_strapper::get_bootstrap_tokens(get_token_metadata_ptr(), _db.local().get_config(), dht::check_token_endpoint::no);

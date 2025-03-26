@@ -407,8 +407,17 @@ private:
     bool should_bootstrap();
     bool is_replacing();
     bool is_first_node();
+<<<<<<< HEAD
     future<> join_topology(sharded<db::system_distributed_keyspace>& sys_dist_ks,
             sharded<service::storage_proxy>& proxy,
+||||||| parent of 0fc196991a (storage_service: add start_sys_dist_ks)
+    raft::server* get_group_server_if_raft_topolgy_enabled();
+    future<> join_topology(sharded<service::storage_proxy>& proxy,
+=======
+    raft::server* get_group_server_if_raft_topolgy_enabled();
+    future<> start_sys_dist_ks() const;
+    future<> join_topology(sharded<service::storage_proxy>& proxy,
+>>>>>>> 0fc196991a (storage_service: add start_sys_dist_ks)
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
             std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
