@@ -147,8 +147,16 @@ def table_with_counters(cql, keyspace):
 
 
 def get_sstables_for_table(data_dir, keyspace, table):
-    return glob.glob(os.path.join(data_dir, keyspace, table + '-*', '*-Data.db'))
+    def sstable_has_no_temporary_toc(sst):
+        path, basename = os.path.split(sst)
+        basename_components = basename.split("-")
 
+        toc_basename = "-".join(basename_components[:-1] + ["TOC.txt"])
+        temporary_toc_basename = "-".join(basename_components[:-1] + ["TOC.txt.tmp"])
+
+        return os.path.exists(os.path.join(path, toc_basename)) and not os.path.exists(os.path.join(path, temporary_toc_basename))
+
+    return list(filter(sstable_has_no_temporary_toc, glob.glob(os.path.join(data_dir, keyspace, table + '-*', '*-Data.db'))))
 
 @contextlib.contextmanager
 def scylla_sstable(table_factory, cql, ks, data_dir, s3_server=None, copy_to_s3=False, everywhere=False):
