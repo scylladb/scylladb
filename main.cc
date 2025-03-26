@@ -172,8 +172,8 @@ public:
         _broadcasts_to_abort_sources_done.get();
         _abort_sources.stop().get();
     }
-    void ready() {
-        _ready = true;
+    void ready(bool state = true) {
+        _ready = state;
         check();
     }
     void check() {
@@ -2119,9 +2119,14 @@ sharded<locator::shared_token_metadata> token_metadata;
                     });
             }).get();
 
+            checkpoint(stop_signal, "join cluster");
+            // Allow abort during join_cluster since bootstrap or replace
+            // can take a long time.
+            stop_signal.ready(true);
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ss.local().join_cluster(proxy, service::start_hint_manager::yes, generation_number);
             }).get();
+            stop_signal.ready(false);
 
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
