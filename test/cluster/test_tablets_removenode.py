@@ -116,7 +116,7 @@ async def test_replace(manager: ManagerClient):
     finish_writes = await start_writes(cql, ks3, "test2")
 
     logger.info('Replacing a node')
-    await manager.server_stop(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
     servers.append(await manager.server_add(replace_cfg))
     servers = servers[1:]
