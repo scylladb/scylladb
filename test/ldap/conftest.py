@@ -17,4 +17,4 @@ def pytest_collect_file(file_path: PosixPath, parent: Collector):
     These tests can use BoostFacade since they're Boost tests located in different directory.
     """
     if file_path.suffix == '.cc':
-        return collect_items(file_path, parent, facade=BoostTestFacade(parent.config))
+        return collect_items(file_path, parent, facade=BoostTestFacade(parent.config, gather_metrics=parent.config.getoption('gather_metrics')))

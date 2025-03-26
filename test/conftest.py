@@ -40,6 +40,7 @@ def pytest_addoption(parser):
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
                      help="Specific byte limit for failure injection (random by default)")
+    parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False, help='Switch on gathering cgroup metrics')
 
     # Following option is to use with bare pytest command.
     #
@@ -47,7 +48,7 @@ def pytest_addoption(parser):
     # to run a test.py-compatible pytest session.
     #
     # TODO: remove this when we'll completely switch to bare pytest runner.
-    parser.addoption('--test-py-init', action='store_true', default=False,
+    parser.addoption('--test-py-init', action='store_false',
                      help='Run pytest session in test.py-compatible mode.  I.e., start all required services, etc.')
 
 
