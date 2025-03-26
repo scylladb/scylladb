@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+from random import randint
+
 import colorama
 import glob
 import itertools
@@ -33,12 +35,10 @@ import treelib
 
 from scripts import coverage
 from test.pylib import coverage_utils
-from test.pylib.cpp.ldap.prepare_instance import try_something_backoff, can_connect
 from test.pylib.suite.base import Test, TestSuite, all_modes, init_testsuite_globals, output_is_a_tty, palette, path_to
 from test.pylib.suite.boost import BoostTest
-from test.pylib.suite.ldap import LdapTest
 from test.pylib.resource_gather import setup_cgroup, run_resource_watcher
-from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja, prepare_dirs, start_s3_mock_services
+from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja, prepare_dirs, start_3rd_party_services
 
 if TYPE_CHECKING:
     from typing import List
@@ -193,7 +193,7 @@ def parse_cmd_line() -> argparse.Namespace:
                              "CLUSTER_POOL_SIZE can be used to achieve the same")
     parser.add_argument('--manual-execution', action='store_true', default=False,
                         help='Let me manually run the test executable at the moment this script would run it')
-    parser.add_argument('--byte-limit', action="store", default=None, type=int,
+    parser.add_argument('--byte-limit', action="store", default=randint(0, 2000), type=int,
                         help="Specific byte limit for failure injection (random by default)")
     scylla_additional_options = parser.add_argument_group('Additional options for Scylla tests')
     scylla_additional_options.add_argument('--x-log2-compaction-groups', action="store", default="0", type=int,
@@ -311,7 +311,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 console.print_progress(result)
         return failed
 
-    await start_s3_mock_services(minio_tempdir_base=options.tmpdir)
+    await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxyproxy_byte_limit=options.byte_limit)
 
     console.print_start_blurb()
     max_failures = options.max_failures
@@ -557,28 +557,16 @@ async def main() -> int:
 
     setup_signal_handlers(asyncio.get_running_loop(), signaled)
 
-    tp_server = None
     try:
-        if [t for t in TestSuite.all_tests() if isinstance(t, LdapTest)]:
-            tp_server = subprocess.Popen('toxiproxy-server', stderr=subprocess.DEVNULL)
-            def can_connect_to_toxiproxy():
-                return can_connect(('127.0.0.1', 8474))
-            if not try_something_backoff(can_connect_to_toxiproxy):
-                raise Exception('Could not connect to toxiproxy')
-
-        try:
-            logging.info('running all tests')
-            await run_all_tests(signaled, options)
-            logging.info('after running all tests')
-            stop_event.set()
-            async with asyncio.timeout(5):
-                await resource_watcher
-        except Exception as e:
-            print(palette.fail(e))
-            raise
-    finally:
-        if tp_server is not None:
-            tp_server.terminate()
+        logging.info('running all tests')
+        await run_all_tests(signaled, options)
+        logging.info('after running all tests')
+        stop_event.set()
+        async with asyncio.timeout(5):
+            await resource_watcher
+    except Exception as e:
+        print(palette.fail(e))
+        raise
 
     if signaled.is_set():
         return -signaled.signo      # type: ignore

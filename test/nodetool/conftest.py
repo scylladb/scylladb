@@ -9,11 +9,13 @@ import random
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import NamedTuple
 
 import pytest
 import requests.exceptions
 
+from test import TOP_SRC_DIR, BUILD_DIR
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
 
@@ -87,11 +89,6 @@ def rest_api_mock_server(request, server_address):
         server_process.wait()
 
 
-def _path_from_top_srcdir(*p):
-    top_srcdir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    return os.path.join(top_srcdir, *p)
-
-
 @pytest.fixture(scope="session")
 def jmx(request, rest_api_mock_server):
     if request.config.getoption("nodetool") == "scylla":
@@ -100,7 +97,7 @@ def jmx(request, rest_api_mock_server):
 
     jmx_path = request.config.getoption("jmx_path")
     if jmx_path is None:
-        jmx_path = _path_from_top_srcdir("tools", "jmx", "scripts", "scylla-jmx")
+        jmx_path = TOP_SRC_DIR / "tools" / "jmx" / "scripts" / "scylla-jmx"
     else:
         jmx_path = os.path.abspath(jmx_path)
 
@@ -160,11 +157,11 @@ all_modes = {'debug': 'Debug',
              'coverage': 'Coverage'}
 
 
-def _path_to_scylla(mode):
-    build_dir = _path_from_top_srcdir("build")
-    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
-        return os.path.join(build_dir, all_modes[mode], "scylla")
-    return os.path.join(build_dir, mode, "scylla")
+def _path_to_scylla(mode) -> Path:
+    ninja  = BUILD_DIR / 'build.ninja'
+    if ninja.exists():
+        return BUILD_DIR / all_modes[mode] / "scylla"
+    return BUILD_DIR / mode / "scylla"
 
 
 @pytest.fixture(scope="session")
@@ -176,7 +173,7 @@ def nodetool_path(request, build_mode):
     if path is not None:
         return os.path.abspath(path)
 
-    return _path_from_top_srcdir("java", "bin", "nodetool")
+    return TOP_SRC_DIR / "java" / "bin" / "nodetool"
 
 
 @pytest.fixture(scope="function")
@@ -212,7 +209,7 @@ def nodetool(request, jmx, nodetool_path, rest_api_mock_server):
                 jmx_ip, jmx_port = jmx
                 cmd = [nodetool_path, "-h", jmx_ip, "-p", str(jmx_port), method]
                 cmd += list(args)
-            suppressions_path = _path_from_top_srcdir("ubsan-suppressions.supp")
+            suppressions_path = TOP_SRC_DIR / "ubsan-suppressions.supp"
             env = {'UBSAN_OPTIONS': f'halt_on_error=1:abort_on_error=1:suppressions={suppressions_path}',
                    'ASAN_OPTIONS': f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'}
             res = subprocess.run(cmd, capture_output=True, text=True, env=env)
