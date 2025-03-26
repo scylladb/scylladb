@@ -383,8 +383,8 @@ locator::repair_scheduler_config deserialize_repair_scheduler_config(cql3::untyp
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
     tablet_logger.trace("Saving tablet metadata: {}", tm);
     std::vector<mutation> muts;
-    muts.reserve(tm.all_tables().size());
-    for (auto&& [id, tablets] : tm.all_tables()) {
+    muts.reserve(tm.all_tables_raw().size());
+    for (auto&& [id, tablets] : tm.all_tables_raw()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         auto s = db.find_schema(id);
         muts.emplace_back(
