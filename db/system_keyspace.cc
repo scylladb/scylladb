@@ -103,7 +103,8 @@ namespace {
             system_keyspace::ROLE_ATTRIBUTES,
             system_keyspace::ROLE_PERMISSIONS,
             system_keyspace::v3::CDC_LOCAL,
-            system_keyspace::DICTS
+            system_keyspace::DICTS,
+            system_keyspace::v3::BUILT_VIEWS,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -129,6 +130,7 @@ namespace {
                 system_keyspace::ROLE_ATTRIBUTES,
                 system_keyspace::ROLE_PERMISSIONS,
                 system_keyspace::DICTS,
+                system_keyspace::v3::BUILT_VIEWS,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;
@@ -2583,6 +2585,7 @@ future<> system_keyspace::remove_view_build_progress(sstring ks_name, sstring vi
 }
 
 future<> system_keyspace::mark_view_as_built(sstring ks_name, sstring view_name) {
+    SCYLLA_ASSERT(!_db.find_keyspace(ks_name).uses_tablets());
     return execute_cql(
             format("INSERT INTO system.{} (keyspace_name, view_name) VALUES (?, ?)", v3::BUILT_VIEWS),
             std::move(ks_name),
@@ -2590,20 +2593,66 @@ future<> system_keyspace::mark_view_as_built(sstring ks_name, sstring view_name)
 }
 
 future<> system_keyspace::remove_built_view(sstring ks_name, sstring view_name) {
+    SCYLLA_ASSERT(!_db.find_keyspace(ks_name).uses_tablets());
     return execute_cql(
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", v3::BUILT_VIEWS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
-future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_views() {
-    return execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        return *cql_result
-                | std::views::transform([] (const cql3::untyped_result_set::row& row) {
+future<mutation> system_keyspace::make_mark_view_as_built_mutation(api::timestamp_type ts, sstring ks_name, sstring view_name) {
+    static const sstring stmt = format("INSERT INTO {}.{}(keyspace_name, view_name) VALUES (?, ?)", NAME, v3::BUILT_VIEWS);
+    SCYLLA_ASSERT(_db.find_keyspace(ks_name).uses_tablets());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {ks_name, view_name});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_remove_built_view_mutation(api::timestamp_type ts, sstring ks_name, sstring view_name) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, v3::BUILT_VIEWS);
+    SCYLLA_ASSERT(_db.find_keyspace(ks_name).uses_tablets());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {ks_name, view_name});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::vector<mutation>> system_keyspace::get_built_views_mutations() {
+    auto schema = _db.find_schema(NAME, v3::BUILT_VIEWS);
+    auto rs = co_await query_mutations(_db.container(), NAME, v3::BUILT_VIEWS);
+    SCYLLA_ASSERT(rs);
+
+    std::vector<mutation> muts;
+    auto& ps = rs->partitions();
+    for (auto& p: ps) {
+        auto mut = p.mut().unfreeze(schema);
+        auto ks_name = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*schema, 0)));
+        if (_db.find_keyspace(ks_name).uses_tablets()) {
+            muts.emplace_back(std::move(mut));
+        }
+    }
+    co_return muts;
+}
+
+future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_views(view_type view_type) {
+    return execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([this, view_type] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        auto result = *cql_result | std::views::transform([] (const cql3::untyped_result_set::row& row) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
             auto cf_name = row.get_as<sstring>("view_name");
             return std::pair(std::move(ks_name), std::move(cf_name));
-        }) | std::ranges::to<std::vector<view_name>>();
+        });
+        
+        if (view_type != system_keyspace::view_type::all) {
+            return result | std::views::filter([this, view_type] (const system_keyspace::view_name& view) {
+                return _db.find_keyspace(view.first).uses_tablets() == (view_type == system_keyspace::view_type::tablet_based);
+            }) | std::ranges::to<std::vector<view_name>>();
+        }
+        return result | std::ranges::to<std::vector<view_name>>();
     });
 }
 

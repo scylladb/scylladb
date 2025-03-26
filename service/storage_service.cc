@@ -7327,6 +7327,13 @@ void storage_service::init_messaging_service() {
                 mutations.emplace_back(*view_builder_version_mut);
             }
 
+            if (ss._feature_service.view_building_coordinator) {
+                auto built_views_muts = co_await ss._sys_ks.local().get_built_views_mutations();
+                for (auto&& mut: built_views_muts) {
+                    mutations.emplace_back(std::move(mut));
+                }
+            }
+
             co_return raft_snapshot{
                 .mutations = std::move(mutations),
             };

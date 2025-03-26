@@ -109,6 +109,10 @@ struct local_cache;
 using system_keyspace_view_name = std::pair<sstring, sstring>;
 class system_keyspace_view_build_progress;
 
+enum class system_keyspace_view_type {
+    vnode_based, tablet_based, all
+};
+
 struct replay_position;
 typedef std::vector<db::replay_position> replay_positions;
 
@@ -269,6 +273,7 @@ public:
 
     using view_name = system_keyspace_view_name;
     using view_build_progress = system_keyspace_view_build_progress;
+    using view_type = system_keyspace_view_type;
 
     static schema_ptr hints();
     static schema_ptr batchlog();
@@ -542,7 +547,11 @@ public:
     future<> remove_view_build_progress_across_all_shards(sstring ks_name, sstring view_name);
     future<> mark_view_as_built(sstring ks_name, sstring view_name);
     future<> remove_built_view(sstring ks_name, sstring view_name);
-    future<std::vector<view_name>> load_built_views();
+    future<mutation> make_mark_view_as_built_mutation(api::timestamp_type ts, sstring ks_name, sstring view_name);
+    future<mutation> make_remove_built_view_mutation(api::timestamp_type ts, sstring ks_name, sstring view_name);
+    // Returns mutations for all tablet-based keyspaces
+    future<std::vector<mutation>> get_built_views_mutations();
+    future<std::vector<view_name>> load_built_views(view_type view_type);
     future<std::vector<view_build_progress>> load_view_build_progress();
 
     future<service::view_building_coordinator_tasks> get_view_building_coordinator_tasks();
