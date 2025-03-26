@@ -1569,13 +1569,13 @@ private:
                 _context = std::move(reversed_context.the_context);
                 _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
             } else {
-                _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity);
+                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity);
             }
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity);
+            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity);
         }
 
         _monitor.on_read_started(_context->reader_position());
@@ -1814,7 +1814,7 @@ private:
             _checksum = co_await _sst->read_checksum();
             co_await _sst->read_digest();
         }
-        _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, _integrity);
+        _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, _integrity);
         _monitor.on_read_started(_context->reader_position());
     }
 public:
@@ -2106,7 +2106,7 @@ future<uint64_t> validate(
         sstables::read_monitor& monitor) {
     auto schema = sstable->get_schema();
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
-    auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::yes);
+    auto context = co_await data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::yes);
 
     std::optional<sstables::index_reader> idx_reader;
     idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);

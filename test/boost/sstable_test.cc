@@ -669,7 +669,10 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
 
         auto make_is = [&] {
             f = open_file_dma(file_path, open_flags::ro).get();
-            return make_compressed_file_m_format_input_stream(f, &c, 0, uncompressed_size, opts, semaphore.make_permit(), std::nullopt);
+            auto stream_creator = [f](uint64_t pos, uint64_t len, file_input_stream_options options)->future<input_stream<char>> {
+                co_return input_stream<char>(make_file_data_source(std::move(f), pos, len, std::move(options)));
+            };
+            return make_compressed_file_m_format_input_stream(stream_creator, &c, 0, uncompressed_size, opts, semaphore.make_permit(), std::nullopt);
         };
 
         auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {
