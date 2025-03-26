@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from importlib import import_module
 from typing import TYPE_CHECKING
+import socket
 
 import colorama
 import yaml

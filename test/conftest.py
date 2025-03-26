@@ -40,6 +40,7 @@ def pytest_addoption(parser):
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
                      help="Specific byte limit for failure injection (random by default)")
+    parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False, help='Switch on gathering cgroup metrics')
 
     # Following option is to use with bare pytest command.
     #
@@ -47,7 +48,7 @@ def pytest_addoption(parser):
     # to run a test.py-compatible pytest session.
     #
     # TODO: remove this when we'll completely switch to bare pytest runner.
-    parser.addoption('--test-py-init', action='store_true', default=False,
+    parser.addoption('--test-py-init', action='store_false',
                      help='Run pytest session in test.py-compatible mode.  I.e., start all required services, etc.')
 
 
@@ -112,8 +113,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Run stuff just once for the pytest session even running under xdist.
     if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
         temp_dir = Path(session.config.getoption("--tmpdir")).absolute()
-        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes())
-        start_3rd_party_services(tempdir_base=temp_dir, toxyproxy_byte_limit=session.config.getoption('byte_limit'))
+        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes(), gather_metrics=session.config.getoption("--gather-metrics"))
+        start_3rd_party_services(tempdir_base=temp_dir, toxiproxy_byte_limit=session.config.getoption('byte_limit'))
 
 
 def pytest_sessionfinish() -> None:

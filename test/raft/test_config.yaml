@@ -1,3 +1,2 @@
-type: boost
 extra_scylla_cmdline_options:
   - '--reactor-backend linux-aio'
