@@ -22,9 +22,9 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
             std::vector<fd::endpoint_state> res;
             res.reserve(g.num_endpoints());
-            g.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& eps) {
+            g.for_each_endpoint_state([&] (const locator::host_id& addr, const gms::endpoint_state& eps) {
                 fd::endpoint_state val;
-                val.addrs = fmt::to_string(addr);
+                val.addrs = fmt::to_string(eps.get_ip());
                 val.is_alive = g.is_alive(eps.get_host_id());
                 val.generation = eps.get_heart_beat_state().get_generation().value();
                 val.version = eps.get_heart_beat_state().get_heart_beat_version().value();
@@ -65,8 +65,8 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
             std::map<sstring, sstring> nodes_status;
-            g.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state& es) {
-                nodes_status.emplace(fmt::to_string(node), g.is_alive(es.get_host_id()) ? "UP" : "DOWN");
+            g.for_each_endpoint_state([&] (const locator::host_id& node, const gms::endpoint_state& es) {
+                nodes_status.emplace(fmt::to_string(es.get_ip()), g.is_alive(es.get_host_id()) ? "UP" : "DOWN");
             });
             return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
         });
@@ -81,7 +81,7 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_endpoint_state.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [req = std::move(req)] (gms::gossiper& g) {
-            auto state = g.get_endpoint_state_ptr(gms::inet_address(req->get_path_param("addr")));
+            auto state = g.get_endpoint_state_ptr(g.get_host_id(gms::inet_address(req->get_path_param("addr"))));
             if (!state) {
                 return make_ready_future<json::json_return_type>(format("unknown endpoint {}", req->get_path_param("addr")));
             }

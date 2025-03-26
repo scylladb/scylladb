@@ -75,9 +75,9 @@ public:
             std::vector<frozen_mutation> muts;
             muts.reserve(gossiper.num_endpoints());
 
-            gossiper.for_each_endpoint_state([&] (const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
+            gossiper.for_each_endpoint_state([&] (const locator::host_id& endpoint, const gms::endpoint_state& eps) {
                 static thread_local auto s = build_schema();
-                mutation m(s, partition_key::from_single_value(*s, data_value(endpoint).serialize_nonnull()));
+                mutation m(s, partition_key::from_single_value(*s, data_value(eps.get_ip()).serialize_nonnull()));
                 row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
 
                 auto hostid = eps.get_host_id();
@@ -99,8 +99,8 @@ public:
                     set_cell(cr, "dc", dc);
                 }
 
-                if (ownership.contains(endpoint)) {
-                    set_cell(cr, "owns", ownership[endpoint]);
+                if (ownership.contains(eps.get_ip())) {
+                    set_cell(cr, "owns", ownership[eps.get_ip()]);
                 }
 
                 set_cell(cr, "tokens", int32_t(tm.get_tokens(hostid).size()));

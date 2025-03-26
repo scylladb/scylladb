@@ -39,12 +39,12 @@
 
 extern logging::logger cdc_log;
 
-static int get_shard_count(const gms::inet_address& endpoint, const gms::gossiper& g) {
+static int get_shard_count(const locator::host_id& endpoint, const gms::gossiper& g) {
     auto ep_state = g.get_application_state_ptr(endpoint, gms::application_state::SHARD_COUNT);
     return ep_state ? std::stoi(ep_state->value()) : -1;
 }
 
-static unsigned get_sharding_ignore_msb(const gms::inet_address& endpoint, const gms::gossiper& g) {
+static unsigned get_sharding_ignore_msb(const locator::host_id& endpoint, const gms::gossiper& g) {
     auto ep_state = g.get_application_state_ptr(endpoint, gms::application_state::IGNORE_MSB_BITS);
     return ep_state ? std::stoi(ep_state->value()) : 0;
 }
@@ -198,7 +198,7 @@ static std::vector<stream_id> create_stream_ids(
 }
 
 bool should_propose_first_generation(const locator::host_id& my_host_id, const gms::gossiper& g) {
-    return g.for_each_endpoint_state_until([&] (const gms::inet_address&, const gms::endpoint_state& eps) {
+    return g.for_each_endpoint_state_until([&] (const locator::host_id&, const gms::endpoint_state& eps) {
         return stop_iteration(my_host_id < eps.get_host_id());
     }) == stop_iteration::no;
 }
@@ -402,9 +402,8 @@ future<cdc::generation_id> generation_service::legacy_make_new_generation(const 
                 throw std::runtime_error(
                         format("Can't find endpoint for token {}", end));
             }
-            const auto ep = _gossiper.get_address_map().get(*endpoint);
-            auto sc = get_shard_count(ep, _gossiper);
-            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(ep, _gossiper)};
+            auto sc = get_shard_count(*endpoint, _gossiper);
+            return {sc > 0 ? sc : 1, get_sharding_ignore_msb(*endpoint, _gossiper)};
         }
     };
 
@@ -463,7 +462,7 @@ future<cdc::generation_id> generation_service::legacy_make_new_generation(const 
  * but if the cluster already supports CDC, then every newly joining node will propose a new CDC generation,
  * which means it will gossip the generation's timestamp.
  */
-static std::optional<cdc::generation_id> get_generation_id_for(const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
+static std::optional<cdc::generation_id> get_generation_id_for(const locator::host_id& endpoint, const gms::endpoint_state& eps) {
     const auto* gen_id_ptr = eps.get_application_state_ptr(gms::application_state::CDC_GENERATION_ID);
     if (!gen_id_ptr) {
         return std::nullopt;
@@ -867,7 +866,7 @@ future<> generation_service::check_and_repair_cdc_streams() {
     }
 
     std::optional<cdc::generation_id> latest = _gen_id;
-    _gossiper.for_each_endpoint_state([&] (const gms::inet_address& addr, const gms::endpoint_state& state) {
+    _gossiper.for_each_endpoint_state([&] (const locator::host_id& addr, const gms::endpoint_state& state) {
         if (_gossiper.is_left(addr)) {
             cdc_log.info("check_and_repair_cdc_streams ignored node {} because it is in LEFT state", addr);
             return;
@@ -1066,7 +1065,7 @@ future<> generation_service::legacy_scan_cdc_generations() {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     std::optional<cdc::generation_id> latest;
-    _gossiper.for_each_endpoint_state([&] (const gms::inet_address& node, const gms::endpoint_state& eps) {
+    _gossiper.for_each_endpoint_state([&] (const locator::host_id& node, const gms::endpoint_state& eps) {
         auto gen_id = get_generation_id_for(node, eps);
         if (!latest || (gen_id && get_ts(*gen_id) > get_ts(*latest))) {
             latest = gen_id;

@@ -122,7 +122,7 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
             details._host = gossiper.get_address_map().get(endpoint);
             details._datacenter = topology.get_datacenter(endpoint);
             details._rack = topology.get_rack(endpoint);
-            tr._rpc_endpoints.push_back(gossiper.get_rpc_address(details._host));
+            tr._rpc_endpoints.push_back(gossiper.get_rpc_address(endpoint));
             tr._endpoints.push_back(fmt::to_string(details._host));
             tr._endpoint_details.push_back(details);
         }

@@ -775,7 +775,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_return;
                 });
                 std::string reason = ::format("Ban the orphan nodes in group0. Orphan nodes HostId/IP:");
-                _gossiper.for_each_endpoint_state([&](const gms::inet_address& addr, const gms::endpoint_state& eps) -> void {
+                _gossiper.for_each_endpoint_state([&](const locator::host_id& addr, const gms::endpoint_state& eps) -> void {
                     // Since generation is in seconds unit, converting current time to seconds eases comparison computations.
                     auto current_timestamp =
                             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
@@ -797,7 +797,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .set("request_id", dummy_value)
                                 .set("cleanup_status", cleanup_status::clean)
                                 .set("node_state", node_state::left);
-                        reason.append(::format(" {}/{},", host_id, addr));
+                        reason.append(::format(" {}/{},", host_id, eps.get_ip()));
                         updates.push_back({builder.build()});
                     }
                 });

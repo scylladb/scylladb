@@ -237,7 +237,7 @@ bool migration_manager::have_schema_agreement() {
     auto our_version = _storage_proxy.get_db().local().get_version();
     bool match = false;
     static thread_local logger::rate_limit rate_limit{std::chrono::seconds{5}};
-    _gossiper.for_each_endpoint_state_until([&, my_address = _messaging.broadcast_address()] (const gms::inet_address& endpoint, const gms::endpoint_state& eps) {
+    _gossiper.for_each_endpoint_state_until([&, my_address = _gossiper.my_host_id()] (const locator::host_id& endpoint, const gms::endpoint_state& eps) {
         if (endpoint == my_address || !_gossiper.is_alive(eps.get_host_id())) {
             return stop_iteration::no;
         }

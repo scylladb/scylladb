@@ -228,9 +228,8 @@ protected:
         // If the rack does not exist, we return an empty list - not an error.
         sstring query_rack = req->get_query_param("rack");
         for (auto& id : local_dc_nodes) {
-            auto ip = _gossiper.get_address_map().get(id);
             if (!query_rack.empty()) {
-                auto rack = _gossiper.get_application_state_value(ip, gms::application_state::RACK);
+                auto rack = _gossiper.get_application_state_value(id, gms::application_state::RACK);
                 if (rack != query_rack) {
                     continue;
                 }
@@ -238,10 +237,10 @@ protected:
             // Note that it's not enough for the node to be is_alive() - a
             // node joining the cluster is also "alive" but not responsive to
             // requests. We alive *and* normal. See #19694, #21538.
-            if (_gossiper.is_alive(id) && _gossiper.is_normal(ip)) {
+            if (_gossiper.is_alive(id) && _gossiper.is_normal(id)) {
                 // Use the gossiped broadcast_rpc_address if available instead
                 // of the internal IP address "ip". See discussion in #18711.
-                rjson::push_back(results, rjson::from_string(_gossiper.get_rpc_address(ip)));
+                rjson::push_back(results, rjson::from_string(_gossiper.get_rpc_address(id)));
             }
         }
         rep->set_status(reply::status_type::ok);
