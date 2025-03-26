@@ -2517,20 +2517,7 @@ max_purgeable_fn table::get_max_purgeable_fn_for_cache_underlying_reader() const
         auto max_purgeable_timestamp = api::max_timestamp;
 
         sg.for_each_compaction_group([&dk, is_shadowable, &max_purgeable_timestamp] (const compaction_group_ptr& cg) {
-            const auto& mt = cg->memtables()->active_memtable();
-            // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
-            api::timestamp_type memtable_min_timestamp = is_shadowable ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
-            if (memtable_min_timestamp > cg->max_seen_timestamp()) {
-                // All the entries in the memtable are newer than the entries in the
-                // SSTable within this compaction group. So, no need to check further.
-                return;
-            }
-
-            // If a memtable with a minimum timestamp lower than the current maximum
-            // purgeable timestamp has the given key, the tombstone should not be purged.
-            if (memtable_min_timestamp < max_purgeable_timestamp && mt.contains_partition(dk)) {
-                max_purgeable_timestamp = memtable_min_timestamp;
-            }
+            max_purgeable_timestamp = std::min(cg->memtables()->min_live_timestamp(dk, is_shadowable, cg->max_seen_timestamp()), max_purgeable_timestamp);
         });
 
         return max_purgeable_timestamp;
