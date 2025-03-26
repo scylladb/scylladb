@@ -8,6 +8,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
+from test.pylib.tablets import get_tablet_replicas
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.cluster.conftest import skip_mode
@@ -22,25 +23,6 @@ import time
 
 
 logger = logging.getLogger(__name__)
-
-# This convenience function takes the name of a table or a view, and a token,
-# and returns the list of host_id,shard pairs holding tablets for this token
-# and view.
-# You also need to specify a specific server to use for the requests, to
-# ensure that if you send tablet-migration commands to one server, you also
-# read the replicas information from the same server (it takes time for this
-# information to propagate to all servers).
-async def get_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_or_view_name: str, token: int):
-    host = (await wait_for_cql_and_get_hosts(manager.cql, [server], time.time() + 60))[0]
-    await read_barrier(manager.api, server.ip_addr)
-
-    rows = await manager.cql.run_async(f"SELECT last_token, replicas FROM system.tablets where "
-                                       f"keyspace_name = '{keyspace_name}' and "
-                                       f"table_name = '{table_or_view_name}'"
-                                       " ALLOW FILTERING", host=host)
-    for row in rows:
-        if row.last_token >= token:
-            return row.replicas
 
 async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False):
     host = manager.cql.cluster.metadata.get_host(server.ip_addr)
