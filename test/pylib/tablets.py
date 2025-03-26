@@ -13,6 +13,12 @@ class TabletReplicas(NamedTuple):
     last_token: int
     replicas: list[tuple[HostID, int]]
 
+async def get_base_table(manager: ManagerClient, table_id):
+    rows = await manager.get_cql().run_async(f"SELECT base_table FROM system.tablets where table_id = {table_id}")
+    if len(rows) > 0 and rows[0].base_table:
+        return rows[0].base_table
+    return table_id
+
 async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> list[TabletReplicas]:
     """
     Retrieves the tablet distribution for a given table.
@@ -27,10 +33,8 @@ async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, ke
     # reflects the finalized tablet movement.
     await read_barrier(manager.api, server.ip_addr)
 
-    if is_view:
-        table_id = await manager.get_view_id(keyspace_name, table_name)
-    else:
-        table_id = await manager.get_table_id(keyspace_name, table_name)
+    table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
+    table_id = await get_base_table(manager, table_id)
     rows = await manager.get_cql().run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
     return [TabletReplicas(
@@ -76,7 +80,8 @@ async def get_tablet_info(manager: ManagerClient, server: ServerInfo, keyspace_n
     # reflects the finalized tablet movement.
     await read_barrier(manager.api, server.ip_addr)
 
-    table_id = await manager.get_table_id(keyspace_name, table_name)
+    table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
+    table_id = await get_base_table(manager, table_id)
 
     rows = await manager.get_cql().run_async(f"SELECT * FROM system.tablets where table_id = {table_id}", host=host)
     for row in rows:
