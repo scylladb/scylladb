@@ -1315,7 +1315,8 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
     }
 }
 
-future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) {
+future<> gossiper::replicate(endpoint_state es, permit_id pid) {
+    auto ep = es.get_ip();
     verify_permit(ep, pid);
 
     // First pass: replicate the new endpoint_state on all shards.
@@ -1362,7 +1363,7 @@ future<> gossiper::advertise_token_removed(inet_address endpoint, locator::host_
     eps.add_application_state(application_state::STATUS, versioned_value::removed_nonlocal(host_id, expire_time.time_since_epoch().count()));
     logger.info("Completing removal of {}", endpoint);
     add_expire_time_for_endpoint(host_id, expire_time);
-    co_await replicate(endpoint, std::move(eps), pid);
+    co_await replicate(std::move(eps), pid);
     // ensure at least one gossip round occurs before returning
     co_await sleep_abortable(INTERVAL * 2, _abort_source);
 }
@@ -1820,7 +1821,7 @@ future<> gossiper::handle_major_state_change(endpoint_state eps, permit_id pid, 
         }
     }
     logger.trace("Adding endpoint state for {}, status = {}", ep, get_gossip_status(eps));
-    co_await replicate(ep, eps, pid);
+    co_await replicate(eps, pid);
 
     if (shadow_round) {
         co_return;
@@ -1933,7 +1934,7 @@ future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_s
     // Exceptions during replication will cause abort because node's state
     // would be inconsistent across shards. Changes listeners depend on state
     // being replicated to all shards.
-    co_await replicate(addr, std::move(local_state), pid);
+    co_await replicate(std::move(local_state), pid);
 
     if (shadow_round) {
         co_return;
@@ -2061,7 +2062,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         local_state.add_application_state(entry.first, entry.second);
     }
 
-    co_await replicate(get_broadcast_address(), local_state, permit.id());
+    co_await replicate(local_state, permit.id());
 
     logger.info("Gossip started with local state: {}", local_state);
     _enabled = true;
@@ -2230,7 +2231,7 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
         ep_state.add_application_state(gms::application_state::RACK, gms::versioned_value::datacenter(st.opt_dc_rack->rack));
     }
     auto generation = ep_state.get_heart_beat_state().get_generation();
-    co_await replicate(ep, std::move(ep_state), permit.id());
+    co_await replicate(std::move(ep_state), permit.id());
     _unreachable_endpoints[host_id] = now();
     logger.trace("Adding saved endpoint {} {}", ep, generation);
 }
@@ -2284,7 +2285,7 @@ future<> gossiper::add_local_application_state(application_state_map states) {
             // after all application states were modified as a batch.
             // We guarantee that the on_change notifications
             // will be called in the order given by `states` anyhow.
-            co_await gossiper.replicate(ep_addr, std::move(local_state), permit.id());
+            co_await gossiper.replicate(std::move(local_state), permit.id());
 
             // fire "on change" notifications:
             // now we might defer again, so this could be reordered. But we've
@@ -2505,7 +2506,7 @@ future<> gossiper::mark_as_shutdown(const inet_address& endpoint, permit_id pid)
         auto ep_state = *es;
         ep_state.add_application_state(application_state::STATUS, versioned_value::shutdown(true));
         ep_state.get_heart_beat_state().force_highest_possible_version_unsafe();
-        co_await replicate(endpoint, std::move(ep_state), pid);
+        co_await replicate(std::move(ep_state), pid);
         co_await mark_dead(endpoint, get_endpoint_state_ptr(endpoint), pid);
     }
 }
