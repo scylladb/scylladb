@@ -3129,8 +3129,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             open_sessions.insert(session);
         }
 
-        for (auto&& [table_id, tmap]: tmptr->tablets().all_tables()) {
-            for (auto&& [tid, trinfo]: tmap->transitions()) {
+        for (auto&& [table, tables] : tmptr->tablets().all_table_groups()) {
+            const auto& tmap = tmptr->tablets().get_tablet_map(table);
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
                 if (trinfo.session_id) {
                     auto id = session_id(trinfo.session_id);
                     open_sessions.insert(id);
