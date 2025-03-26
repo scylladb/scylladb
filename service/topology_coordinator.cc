@@ -1127,6 +1127,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
+        SCYLLA_ASSERT(get_token_metadata_ptr()->tablets().is_base_table(mig.tablet.table));
+
         const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
         if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
@@ -1147,6 +1149,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     void generate_repair_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
+        SCYLLA_ASSERT(get_token_metadata_ptr()->tablets().is_base_table(gid.table));
         auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
         auto last_token = tmap.get_last_token(gid.tablet);
         if (tmap.get_tablet_transition_info(gid.tablet)) {
@@ -1172,6 +1175,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     void generate_resize_update(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
             // FIXME: indent.
+            SCYLLA_ASSERT(get_token_metadata_ptr()->tablets().is_base_table(table_id));
             auto s = _db.find_schema(table_id);
             const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
