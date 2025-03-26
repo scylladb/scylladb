@@ -108,7 +108,7 @@ public:
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
         });
 
-        ser::gossip_rpc_verbs::register_gossip_shutdown(&ms, [] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
+        ser::gossip_rpc_verbs::register_gossip_shutdown(&ms, [] (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number_opt) {
             test_logger.info("Server got shutdown msg = {}", from);
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
         });
