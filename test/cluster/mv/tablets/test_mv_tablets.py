@@ -8,7 +8,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.pylib.tablets import get_tablet_replicas
+from test.pylib.tablets import get_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.cluster.conftest import skip_mode
@@ -23,21 +23,6 @@ import time
 
 
 logger = logging.getLogger(__name__)
-
-async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False):
-    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
-
-    # read_barrier is needed to ensure that local tablet metadata on the queried node
-    # reflects the finalized tablet movement.
-    await read_barrier(manager.api, server.ip_addr)
-
-    if is_view:
-        table_id = await manager.get_view_id(keyspace_name, table_name)
-    else:
-        table_id = await manager.get_table_id(keyspace_name, table_name)
-    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
-                                       f"table_id = {table_id}", host=host)
-    return rows[0].tablet_count
 
 # This convenience function assumes a table has RF=1 and only a single tablet,
 # and moves it to one specific node "server" - and pins it there (disabling
@@ -340,7 +325,7 @@ async def test_mv_tablet_split(manager: ManagerClient):
 
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
-        tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv', True)
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv')
         assert tablet_count == 1
 
         s1_log = await manager.server_open_log(servers[0].server_id)
@@ -349,5 +334,5 @@ async def test_mv_tablet_split(manager: ManagerClient):
         await s1_log.wait_for(f"Detected tablet split for table {ks}.tv", from_mark=s1_mark)
         await check()
 
-        tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv', True)
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv')
         assert tablet_count > 1

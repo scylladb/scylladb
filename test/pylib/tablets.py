@@ -66,3 +66,15 @@ async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspac
     replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token)
     return replicas[0]
 
+async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
+    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.api, server.ip_addr)
+
+    table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
+    table_id = await get_base_table(manager, table_id)
+    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
+                                       f"table_id = {table_id}", host=host)
+    return rows[0].tablet_count
