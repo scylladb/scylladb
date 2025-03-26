@@ -1586,6 +1586,15 @@ locator::host_id gossiper::get_host_id(inet_address endpoint) const {
     return host_id;
 }
 
+std::optional<locator::host_id> gossiper::try_get_host_id(inet_address endpoint) const {
+    std::optional<locator::host_id> host_id;
+    try {
+        host_id = get_host_id(endpoint);
+    } catch (std::runtime_error&) {}
+    return host_id;
+}
+
+
 std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
     std::set<gms::inet_address> nodes;
     for (const auto& [node, eps] : _endpoint_state_map) {
