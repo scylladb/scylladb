@@ -2263,7 +2263,7 @@ future<> view_builder::start_in_background(service::migration_manager& mm, utils
         // Wait for schema agreement even if we're a seed node.
         co_await mm.wait_for_schema_agreement(_db, db::timeout_clock::time_point::max(), &_as);
 
-        auto built = co_await _sys_ks.load_built_views();
+        auto built = co_await _sys_ks.load_built_views(db::system_keyspace_view_type::vnode_based);
         auto in_progress = co_await _sys_ks.load_view_build_progress();
         setup_shard_build_step(vbi, std::move(built), std::move(in_progress));
         // All shards need to arrive at the same decisions on whether or not to
