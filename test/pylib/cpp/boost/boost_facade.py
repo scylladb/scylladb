@@ -25,18 +25,30 @@
 #
 from __future__ import annotations
 
+import collections
 import io
+import logging
 import os
 import subprocess
 from collections.abc import Sequence
+from functools import cache
 from pathlib import Path
 from xml.etree import ElementTree
+from xml.etree.ElementTree import ParseError
 
-from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
+import allure
+from pytest import Config
+
+from test import TOP_SRC_DIR, BUILD_DIR, COMBINED_TESTS
+from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
+from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
+from test.pylib.cpp.util import make_test_object
+from test.pylib.resource_gather import get_resource_gather
 
 TIMEOUT_DEBUG = 60 * 5 # seconds
 TIMEOUT = 60 * 2 # seconds
-COMBINED_TESTS = Path('build', 'dev', 'test', 'boost', 'combined_tests')
+logger = logging.getLogger(__name__)
+
 
 class BoostTestFacade(CppTestFacade):
     """
@@ -47,6 +59,7 @@ class BoostTestFacade(CppTestFacade):
         self,
         executable: Path,
         no_parallel: bool,
+        mode: str
     ) -> tuple[bool, list[str]]:
         """
         Return a boolean value indicating whether the tests combined or not and the list of tests
@@ -55,7 +68,7 @@ class BoostTestFacade(CppTestFacade):
             return False, [os.path.basename(os.path.splitext(executable)[0])]
         else:
             if not os.path.isfile(executable):
-                return True, self.combined_suites[executable.stem]
+                return True, self.combined_suites[mode][executable.stem]
             args = [executable, '--list_content']
             try:
                 output = subprocess.check_output(
@@ -85,7 +98,11 @@ class BoostTestFacade(CppTestFacade):
         mode: str,
         file_name: Path,
         test_args:Sequence[str] = (),
+        env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
+        test = make_test_object(test_name, file_name.parent.name, mode, original_name, log_dir=self.temp_dir)
+        resource_gather = get_resource_gather(self.gather_metrics, test=test)
+        resource_gather.make_cgroup()
         def read_file(name: Path) -> str:
             try:
                 with io.open(name) as f:
@@ -94,13 +111,13 @@ class BoostTestFacade(CppTestFacade):
                 return ''
 
         timeout = TIMEOUT_DEBUG if mode=='debug' else TIMEOUT
-        root_log_dir = self.temp_dir / mode / 'pytest'
+        root_log_dir = self.temp_dir / mode
         log_xml = root_log_dir / f"{test_name}.log"
         stdout_file_path = root_log_dir/ f"{test_name}_stdout.log"
-        stderr_file_path = root_log_dir / f"{test_name}_stderr.log"
         report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
                  '--output_format=XML',
+                 '--report_level=no',
                  f"--report_sink={report_xml}",
                  f"--log_sink={log_xml}",
                  '--catch_system_errors=no',
@@ -114,50 +131,60 @@ class BoostTestFacade(CppTestFacade):
         # Tests are written in the way that everything after '--' passes to the test itself rather than to the test framework
         args.append('--')
         args.extend(test_args)
-        os.chdir(self.temp_dir.parent)
-        p, stderr, stdout = run_process(args, timeout)
+        os.chdir(TOP_SRC_DIR)
+
+        p, out = resource_gather.run_process(args, timeout, env)
 
         with open(stdout_file_path, 'w') as fd:
-            fd.write(stdout)
-        with open(stderr_file_path, 'w') as fd:
-            fd.write(stderr)
+            fd.write(out)
         log = read_file(log_xml)
         report = read_file(report_xml)
 
-        results = self._parse_log(log=log)
+        metrics = resource_gather.get_test_metrics()
+        test_passed = p.returncode == 0
+        resource_gather.write_metrics_to_db(metrics, success=test_passed)
+        resource_gather.remove_cgroup()
 
-        if p.returncode != 0:
+        try:
+            results = self._parse_log(log=log)
+        except ParseError:
+            logger.warning('Error parsing the log_sink output. Can be empty or invalid')
+            results = None
+
+        if not test_passed:
+            allure.attach(out, name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
                 'for test {test_id} failed (return_code={return_code}):\n'
                 'output file:{stdout}\n'
-                'std error file:{stderr}\n'
                 'log:{log}\n'
                 'report:{report}\n'
                 'command to repeat:{command}'
             )
             failure = CppTestFailure(
                 file_name.name,
-                line_num=results[0].line_num,
+                line_num=results[0].line_num if results is not None else 'N/A',
                 contents=msg.format(
                     working_dir=os.getcwd(),
                     executable=executable,
                     test_id=test_name,
                     stdout=stdout_file_path.absolute(),
-                    stderr=stderr_file_path.absolute(),
                     log=log,
                     report=report,
                     command=' '.join(p.args),
                     return_code=p.returncode,
                 ),
             )
-            return [failure], stdout
+            return [failure], out
+
+        report_xml.unlink(missing_ok=True)
+        log_xml.unlink(missing_ok=True)
 
         if results:
-            return results, stdout
+            return results, out
 
-        return None, stdout
+        return None, out
 
     def _parse_log(self, log: str) -> list[CppTestFailure]:
         """
@@ -178,9 +205,34 @@ class BoostTestFacade(CppTestFacade):
         result = []
         for elem in parsed_elements:
             last_checkpoint = elem.find('LastCheckpoint')
-            if last_checkpoint:
+            if last_checkpoint is not None:
                 elem = last_checkpoint
             file_name = elem.attrib['file']
             line_num = int(elem.attrib['line'])
             result.append(CppTestFailure(file_name, line_num, elem.text or ''))
         return result
+
+@cache
+def get_combined_tests(config: Config):
+    suites = collections.defaultdict()
+    modes = get_modes_to_run(config)
+    for mode in modes:
+        suites[mode] = collections.defaultdict()
+        executable = BUILD_DIR / mode / COMBINED_TESTS
+
+        args = [executable, '--list_content']
+
+        output = subprocess.check_output(
+            args,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+        )
+        current_suite = ''
+        for line in output.splitlines():
+            if not line.startswith('    '):
+                current_suite = line.strip().rstrip('*')
+                suites[mode][current_suite] = []
+            else:
+                case_name = line.strip().rstrip('*')
+                suites[mode][current_suite].append(case_name)
+    return suites

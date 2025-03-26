@@ -17,4 +17,3 @@ def pytest_collect_file(file_path: PosixPath, parent: Collector):
     """
     if file_path.suffix == '.cc' and file_path.stem.endswith('test'):
         return collect_items(file_path, parent, facade=BoostTestFacade(parent.config))
-
