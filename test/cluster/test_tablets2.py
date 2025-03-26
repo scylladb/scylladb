@@ -10,7 +10,7 @@ from test.pylib.internal_types import HostID, ServerInfo, ServerNum
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
-from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, TabletReplicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
 from test.cluster.conftest import skip_mode
 from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
 from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
@@ -870,18 +870,6 @@ async def test_tablet_resharding(manager: ManagerClient):
     await manager.server_start(
         server.server_id,
         expected_error="Detected a tablet with invalid replica shard, reducing shard count with tablet-enabled tables is not yet supported. Replace the node instead.")
-
-async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
-    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
-
-    # read_barrier is needed to ensure that local tablet metadata on the queried node
-    # reflects the finalized tablet movement.
-    await read_barrier(manager.api, server.ip_addr)
-
-    table_id = await manager.get_table_id(keyspace_name, table_name)
-    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
-                                       f"table_id = {table_id}", host=host)
-    return rows[0].tablet_count
 
 @pytest.mark.parametrize("injection_error", ["foreach_compaction_group_wait", "major_compaction_wait"])
 @pytest.mark.asyncio
