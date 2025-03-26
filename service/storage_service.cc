@@ -6476,6 +6476,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        table = get_token_metadata().tablets().get_base_table(table);
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         std::vector<canonical_mutation> updates;
 
@@ -6551,6 +6552,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        table = get_token_metadata().tablets().get_base_table(table);
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         std::vector<canonical_mutation> updates;
 
