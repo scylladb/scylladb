@@ -448,9 +448,9 @@ public:
 
     // Calls func for each endpoint_state.
     // Called function must not yield
-    void for_each_endpoint_state(std::function<void(const locator::host_id&, const endpoint_state&)> func) const {
-        for_each_endpoint_state_until([func = std::move(func)] (const locator::host_id& node, const endpoint_state& eps) {
-            func(node, eps);
+    void for_each_endpoint_state(std::function<void(const endpoint_state&)> func) const {
+        for_each_endpoint_state_until([func = std::move(func)] (const endpoint_state& eps) {
+            func(eps);
             return stop_iteration::no;
         });
     }
@@ -458,7 +458,7 @@ public:
     // Calls func for each endpoint_state until it returns stop_iteration::yes
     // Returns stop_iteration::yes iff `func` returns stop_iteration::yes.
     // Called function must not yield
-    stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const locator::host_id&, const endpoint_state&)>) const;
+    stop_iteration for_each_endpoint_state_until(std::function<stop_iteration(const endpoint_state&)>) const;
 
     locator::host_id get_host_id(inet_address endpoint) const;
     std::optional<locator::host_id> try_get_host_id(inet_address endpoint) const;

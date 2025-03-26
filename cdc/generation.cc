@@ -198,7 +198,7 @@ static std::vector<stream_id> create_stream_ids(
 }
 
 bool should_propose_first_generation(const locator::host_id& my_host_id, const gms::gossiper& g) {
-    return g.for_each_endpoint_state_until([&] (const locator::host_id&, const gms::endpoint_state& eps) {
+    return g.for_each_endpoint_state_until([&] (const gms::endpoint_state& eps) {
         return stop_iteration(my_host_id < eps.get_host_id());
     }) == stop_iteration::no;
 }
@@ -866,7 +866,8 @@ future<> generation_service::check_and_repair_cdc_streams() {
     }
 
     std::optional<cdc::generation_id> latest = _gen_id;
-    _gossiper.for_each_endpoint_state([&] (const locator::host_id& addr, const gms::endpoint_state& state) {
+    _gossiper.for_each_endpoint_state([&] (const gms::endpoint_state& state) {
+        auto addr = state.get_host_id();
         if (_gossiper.is_left(addr)) {
             cdc_log.info("check_and_repair_cdc_streams ignored node {} because it is in LEFT state", addr);
             return;
@@ -1065,8 +1066,8 @@ future<> generation_service::legacy_scan_cdc_generations() {
     assert_shard_zero(__PRETTY_FUNCTION__);
 
     std::optional<cdc::generation_id> latest;
-    _gossiper.for_each_endpoint_state([&] (const locator::host_id& node, const gms::endpoint_state& eps) {
-        auto gen_id = get_generation_id_for(node, eps);
+    _gossiper.for_each_endpoint_state([&] (const gms::endpoint_state& eps) {
+        auto gen_id = get_generation_id_for(eps.get_host_id(), eps);
         if (!latest || (gen_id && get_ts(*gen_id) > get_ts(*latest))) {
             latest = gen_id;
         }

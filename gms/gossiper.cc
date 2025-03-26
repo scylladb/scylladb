@@ -1531,9 +1531,9 @@ std::vector<locator::host_id> gossiper::get_endpoints() const {
     return _endpoint_state_map | std::views::keys | std::ranges::to<std::vector>();
 }
 
-stop_iteration gossiper::for_each_endpoint_state_until(std::function<stop_iteration(const locator::host_id&, const endpoint_state&)> func) const {
+stop_iteration gossiper::for_each_endpoint_state_until(std::function<stop_iteration(const endpoint_state&)> func) const {
     for (const auto& [node, eps] : _endpoint_state_map) {
-        if (func(node, *eps) == stop_iteration::yes) {
+        if (func(*eps) == stop_iteration::yes) {
             return stop_iteration::yes;
         }
     }

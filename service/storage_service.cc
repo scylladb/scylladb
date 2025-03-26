@@ -2067,8 +2067,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     })(*this, proxy);
 
     std::unordered_set<locator::host_id> ids;
-    _gossiper.for_each_endpoint_state([this, &ids] (const locator::host_id& addr, const gms::endpoint_state& ep) {
-        if (_gossiper.is_normal(addr)) {
+    _gossiper.for_each_endpoint_state([this, &ids] (const gms::endpoint_state& ep) {
+        if (_gossiper.is_normal(ep.get_host_id())) {
             ids.insert(ep.get_host_id());
         }
     });

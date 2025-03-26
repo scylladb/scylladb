@@ -75,8 +75,9 @@ public:
             std::vector<frozen_mutation> muts;
             muts.reserve(gossiper.num_endpoints());
 
-            gossiper.for_each_endpoint_state([&] (const locator::host_id& endpoint, const gms::endpoint_state& eps) {
+            gossiper.for_each_endpoint_state([&] (const gms::endpoint_state& eps) {
                 static thread_local auto s = build_schema();
+                auto endpoint = eps.get_host_id();
                 mutation m(s, partition_key::from_single_value(*s, data_value(eps.get_ip()).serialize_nonnull()));
                 row& cr = m.partition().clustered_row(*schema(), clustering_key::make_empty()).cells();
 
