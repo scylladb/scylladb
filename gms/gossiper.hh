@@ -536,7 +536,7 @@ private:
     future<> apply_state_locally_in_shadow_round(std::unordered_map<inet_address, endpoint_state> map);
 
     // Must be called under lock_endpoint.
-    future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id, bool shadow_round);
+    future<> apply_new_states(endpoint_state local_state, const endpoint_state& remote_state, permit_id, bool shadow_round);
 
     // notify that an application state has changed
     // Must be called under lock_endpoint.

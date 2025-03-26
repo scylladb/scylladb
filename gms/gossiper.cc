@@ -613,7 +613,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             auto remote_max_version = get_max_endpoint_state_version(remote_state);
             if (remote_max_version > local_max_version) {
                 // apply states, but do not notify since there is no major change
-                co_await apply_new_states(node, std::move(local_state), remote_state, permit.id(), shadow_round);
+                co_await apply_new_states(std::move(local_state), remote_state, permit.id(), shadow_round);
             } else {
                 logger.debug("Ignoring remote version {} <= {} for {}", remote_max_version, local_max_version, node);
             }
@@ -1884,9 +1884,10 @@ bool gossiper::is_silent_shutdown_state(const endpoint_state& ep_state) const{
     return std::ranges::any_of(SILENT_SHUTDOWN_STATES, [state = get_gossip_status(ep_state)](const auto& deadstate) { return state == deadstate; });
 }
 
-future<> gossiper::apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id pid, bool shadow_round) {
+future<> gossiper::apply_new_states(endpoint_state local_state, const endpoint_state& remote_state, permit_id pid, bool shadow_round) {
     // don't SCYLLA_ASSERT here, since if the node restarts the version will go back to zero
     //int oldVersion = local_state.get_heart_beat_state().get_heart_beat_version();
+    auto addr = local_state.get_ip();
 
     verify_permit(addr, pid);
 
