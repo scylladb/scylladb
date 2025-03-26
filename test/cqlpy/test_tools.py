@@ -1645,13 +1645,11 @@ def test_scylla_sstable_query_advanced_queries(cql, test_keyspace, scylla_path, 
     cql.execute(f"DROP TABLE {test_keyspace}.{table}")
 
 
-def test_scylla_sstable_query_bad_command_line(cql, scylla_path, scylla_data_dir):
+def test_scylla_sstable_query_bad_command_line(cql, test_keyspace, scylla_path, scylla_data_dir):
     """Check that not-allowed command line param combinations are refused."""
     nodetool.flush_keyspace(cql, "system")
 
-    with nodetool.no_autocompaction_context(cql, "system"):
-        sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
-
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--query-file", "whatever.cql"]
 
         def check(bad_params):
@@ -1664,11 +1662,9 @@ def test_scylla_sstable_query_bad_command_line(cql, scylla_path, scylla_data_dir
         check(["--query", "SELECT * FROM system.local"])
 
 
-def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
+def test_scylla_sstable_query_validation(cql, test_keyspace, scylla_path, scylla_data_dir):
     """Check that not-allowed command line param combinations are refused."""
-    with nodetool.no_autocompaction_context(cql, "system"):
-        sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
-
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--query"]
 
         def check(bad_query, expected_error):
@@ -1687,16 +1683,14 @@ def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
         check("INSERT INTO scylla_sstable.local (key, bootstrapped) VALUES ('local', 'COMPLETED')", "query must be a select query")
 
 
-def test_scylla_sstable_query_temp_dir(cql, scylla_path, scylla_data_dir):
+def test_scylla_sstable_query_temp_dir(cql, test_keyspace, scylla_path, scylla_data_dir):
     """Check that TEMPDIR environment variable is respected.
 
     This is very hard to test with a positive test, because cql_test_env removes
     its temp-dir on exit. So we test with a negative test: give an impossible
     path and check that creating the temp-dir fails.
     """
-    with nodetool.no_autocompaction_context(cql, "system"):
-        sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
-
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         with tempfile.NamedTemporaryFile("r") as f:
             args = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local"]
             res = subprocess.run(args + sstables, text=True, capture_output=True, env={'TEMPDIR': f.name})
