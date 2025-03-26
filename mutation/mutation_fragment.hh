@@ -262,10 +262,11 @@ public:
     };
 private:
     struct data {
-        data(reader_permit permit) :  _memory(permit.consume_memory()) { }
+        data(reader_permit permit, kind _kind) :  _memory(permit.consume_memory()), _kind(_kind) { }
         ~data() { }
 
         reader_permit::resource_units _memory;
+        kind _kind;
         union {
             static_row _static_row;
             clustering_row _clustering_row;
@@ -275,7 +276,6 @@ private:
         };
     };
 private:
-    kind _kind;
     std::unique_ptr<data> _data;
 
     mutation_fragment() = default;
@@ -290,8 +290,7 @@ public:
 
     template<typename... Args>
     mutation_fragment(clustering_row_tag_t, const schema& s, reader_permit permit, Args&&... args)
-        : _kind(kind::clustering_row)
-        , _data(std::make_unique<data>(std::move(permit)))
+        : _data(std::make_unique<data>(std::move(permit), kind::clustering_row))
     {
         new (&_data->_clustering_row) clustering_row(std::forward<Args>(args)...);
         reset_memory(s);
@@ -304,8 +303,8 @@ public:
     mutation_fragment(const schema& s, reader_permit permit, partition_end&& r);
 
     mutation_fragment(const schema& s, reader_permit permit, const mutation_fragment& o)
-        : _kind(o._kind), _data(std::make_unique<data>(std::move(permit))) {
-        switch (_kind) {
+        : _data(std::make_unique<data>(std::move(permit), o._data->_kind)) {
+        switch (_data->_kind) {
             case kind::static_row:
                 new (&_data->_static_row) static_row(s, o._data->_static_row);
                 break;
@@ -355,13 +354,13 @@ public:
     // Requirements: has_key() == true
     const clustering_key_prefix& key() const;
 
-    kind mutation_fragment_kind() const { return _kind; }
+    kind mutation_fragment_kind() const { return _data->_kind; }
 
-    bool is_static_row() const { return _kind == kind::static_row; }
-    bool is_clustering_row() const { return _kind == kind::clustering_row; }
-    bool is_range_tombstone() const { return _kind == kind::range_tombstone; }
-    bool is_partition_start() const { return _kind == kind::partition_start; }
-    bool is_end_of_partition() const { return _kind == kind::partition_end; }
+    bool is_static_row() const { return _data->_kind == kind::static_row; }
+    bool is_clustering_row() const { return _data->_kind == kind::clustering_row; }
+    bool is_range_tombstone() const { return _data->_kind == kind::range_tombstone; }
+    bool is_partition_start() const { return _data->_kind == kind::partition_start; }
+    bool is_end_of_partition() const { return _data->_kind == kind::partition_end; }
 
     void mutate_as_static_row(const schema& s, std::invocable<static_row&> auto&& fn) {
         fn(_data->_static_row);
@@ -399,7 +398,7 @@ public:
     requires MutationFragmentConsumer<Consumer, decltype(std::declval<Consumer>().consume(std::declval<range_tombstone>()))>
     decltype(auto) consume(Consumer& consumer) && {
         _data->_memory.reset_to_zero();
-        switch (_kind) {
+        switch (_data->_kind) {
         case kind::static_row:
             return consumer.consume(std::move(_data->_static_row));
         case kind::clustering_row:
@@ -417,7 +416,7 @@ public:
     template<typename Visitor>
     requires MutationFragmentVisitor<Visitor, decltype(std::declval<Visitor>()(std::declval<static_row&>()))>
     decltype(auto) visit(Visitor&& visitor) const {
-        switch (_kind) {
+        switch (_data->_kind) {
         case kind::static_row:
             return visitor(as_static_row());
         case kind::clustering_row:
@@ -441,10 +440,10 @@ public:
     }
 
     bool equal(const schema& s, const mutation_fragment& other) const {
-        if (other._kind != _kind) {
+        if (other._data->_kind != _data->_kind) {
             return false;
         }
-        switch (_kind) {
+        switch (_data->_kind) {
         case kind::static_row:
             return as_static_row().equal(s, other.as_static_row());
         case kind::clustering_row:
@@ -465,7 +464,7 @@ public:
     // Fragments which have the same position() but are not mergeable
     // can be emitted one after the other in the stream.
     bool mergeable_with(const mutation_fragment& mf) const {
-        return _kind == mf._kind && _kind != kind::range_tombstone;
+        return _data->_kind == mf._data->_kind && _data->_kind != kind::range_tombstone;
     }
 
     class printer {
