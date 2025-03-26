@@ -1618,7 +1618,7 @@ def test_scylla_sstable_query_advanced_queries(cql, test_keyspace, scylla_path, 
     No attempt is made to cover all CQL featues.
     """
     table = util.unique_name()
-    schema = f"CREATE TABLE {test_keyspace}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+    schema = f"CREATE TABLE {test_keyspace}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
 
     cql.execute(schema)
 
