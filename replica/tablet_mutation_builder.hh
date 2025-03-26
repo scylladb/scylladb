@@ -50,6 +50,8 @@ public:
     tablet_mutation_builder& del_resize_task_info(const gms::feature_service& features);
     tablet_mutation_builder& set_base_table(table_id base_table);
     tablet_mutation_builder& del_base_table();
+    tablet_mutation_builder& set_join_base_table(table_id base_table);
+    tablet_mutation_builder& del_join_base_table();
 
     mutation build() {
         return std::move(_m);

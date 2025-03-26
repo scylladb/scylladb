@@ -445,6 +445,7 @@ private:
     tablet_task_info _resize_task_info;
     repair_scheduler_config _repair_scheduler_config;
     std::optional<table_id> _base_table;
+    std::optional<table_id> _join_base_table;
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
@@ -573,6 +574,7 @@ public:
     const locator::repair_scheduler_config& repair_scheduler_config() const;
 
     std::optional<table_id> base_table() const;
+    std::optional<table_id> join_base_table() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
@@ -580,6 +582,7 @@ public:
     void set_resize_task_info(tablet_task_info);
     void set_repair_scheduler_config(locator::repair_scheduler_config config);
     void set_base_table(table_id base_table);
+    void set_join_base_table(table_id base_table);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 

@@ -472,6 +472,10 @@ void tablet_map::set_base_table(table_id base_table) {
     _base_table = base_table;
 }
 
+void tablet_map::set_join_base_table(table_id base_table) {
+    _join_base_table = base_table;
+}
+
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
     _transitions.erase(id);
@@ -659,6 +663,10 @@ const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() co
 
 std::optional<table_id> tablet_map::base_table() const {
     return _base_table;
+}
+
+std::optional<table_id> tablet_map::join_base_table() const {
+    return _join_base_table;
 }
 
 static auto to_resize_type(sstring decision) {

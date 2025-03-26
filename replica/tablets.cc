@@ -78,6 +78,7 @@ schema_ptr make_tablets_schema() {
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
+            .with_column("join_base_table", uuid_type, column_kind::static_column)
             .with_hash_version()
             .build();
 }
@@ -130,6 +131,9 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
     m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
+    if (tablets.join_base_table()) {
+        m.set_static_cell("join_base_table", data_value(tablets.join_base_table()->uuid()), ts);
+    }
     if (base_table) {
         m.set_static_cell("base_table", data_value(base_table->uuid()), ts);
         co_return std::move(m);
@@ -310,6 +314,19 @@ tablet_mutation_builder::set_base_table(table_id base_table) {
 tablet_mutation_builder&
 tablet_mutation_builder::del_base_table() {
     auto col = _s->get_column_definition("base_table");
+    _m.set_static_cell(*col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_join_base_table(table_id base_table) {
+    _m.set_static_cell("join_base_table", data_value(base_table.uuid()), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_join_base_table() {
+    auto col = _s->get_column_definition("join_base_table");
     _m.set_static_cell(*col, atomic_cell::make_dead(_ts, gc_clock::now()));
     return *this;
 }
@@ -614,6 +631,11 @@ struct tablet_metadata_builder {
             if (row.has("base_table")) {
                 auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
                 current->map.set_base_table(base_table);
+            }
+
+            if (row.has("join_base_table")) {
+                auto base_table = table_id(row.get_as<utils::UUID>("join_base_table"));
+                current->map.set_join_base_table(base_table);
             }
 
             // Resize decision fields are static columns, so set them only once per table.

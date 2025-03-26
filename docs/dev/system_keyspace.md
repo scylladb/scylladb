@@ -201,6 +201,7 @@ CREATE TABLE system.tablets (
     table_id uuid,
     last_token bigint,
     base_table uuid STATIC,
+    join_base_table uuid STATIC,
     keyspace_name text STATIC,
     repair_scheduler_config frozen<repair_scheduler_config> STATIC,
     resize_seq_number bigint STATIC,
@@ -244,6 +245,9 @@ Only tables which use tablet-based replication strategy have an entry here.
 
 `base_table` is optionally set with the table_id of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together a a group.
  When base_table is set then the rest of the tablet map is empty, and the tablet map of base_table should be read instead.
+
+`join_base_table` is set when co-located tablets are allocated while the base has a transition. When it's set the tablets are not ready for use yet.
+ When the base transitions are completed then join_base_table is deleted and base_table is set.
 
 `resize_type` is the resize decision type that spans all tablets of a given table, which can be one of: `merge`, `split` or `none`.
 
