@@ -6578,6 +6578,11 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // Currently tablet repair works only on base tables.
+        if (!get_token_metadata().tablets().is_base_table(table)) {
+            throw std::runtime_error("Can't set repair request on a co-located table");
+        }
+
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         std::vector<canonical_mutation> updates;
 
@@ -6652,6 +6657,11 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     slogger.info("Deleting tablet repair request by API request table_id={} tablet_task_id={}", table, tablet_task_id);
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
+
+        // Currently tablet repair requests can be set only on base tables.
+        if (!get_token_metadata().tablets().is_base_table(table)) {
+            throw std::runtime_error("Can't set repair request on a co-located table");
+        }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         std::vector<canonical_mutation> updates;
