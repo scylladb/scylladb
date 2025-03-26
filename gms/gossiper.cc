@@ -606,7 +606,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
         } else if (remote_generation > local_generation) {
             logger.trace("Updating heartbeat state generation to {} from {} for {} (notify={})", remote_generation, local_generation, node, !shadow_round);
             // major state change will handle the update by inserting the remote state directly
-            co_await handle_major_state_change(node, std::move(remote_state), permit.id(), shadow_round);
+            co_await handle_major_state_change(std::move(remote_state), permit.id(), shadow_round);
         } else if (remote_generation == local_generation) {
             // find maximum state
             auto local_max_version = get_max_endpoint_state_version(local_state);
@@ -625,7 +625,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
         }
     } else {
         logger.debug("Applying remote_state for node {} ({} node)", node, !shadow_round ? "old" : "new");
-        co_await handle_major_state_change(node, std::move(remote_state), permit.id(), shadow_round);
+        co_await handle_major_state_change(std::move(remote_state), permit.id(), shadow_round);
     }
 }
 
@@ -1418,7 +1418,7 @@ future<> gossiper::assassinate_endpoint(sstring address) {
         std::unordered_set<dht::token> tokens_set(tokens.begin(), tokens.end());
         auto expire_time = gossiper.compute_expire_time();
         ep_state.add_application_state(application_state::STATUS, versioned_value::left(tokens_set, expire_time.time_since_epoch().count()));
-        co_await gossiper.handle_major_state_change(endpoint, std::move(ep_state), permit.id(), true);
+        co_await gossiper.handle_major_state_change(std::move(ep_state), permit.id(), true);
         co_await sleep_abortable(INTERVAL * 4, gossiper._abort_source);
         logger.warn("Finished assassinating {}", endpoint);
     });
@@ -1806,7 +1806,8 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state_ptr state, permit
     co_await do_on_dead_notifications(addr, std::move(state), pid);
 }
 
-future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps, permit_id pid, bool shadow_round) {
+future<> gossiper::handle_major_state_change(endpoint_state eps, permit_id pid, bool shadow_round) {
+    auto ep = eps.get_ip();
     verify_permit(ep, pid);
 
     endpoint_state_ptr eps_old = get_endpoint_state_ptr(ep);

@@ -508,7 +508,7 @@ private:
      *
      * Must be called under lock_endpoint.
      */
-    future<> handle_major_state_change(inet_address ep, endpoint_state eps, permit_id, bool shadow_round);
+    future<> handle_major_state_change(endpoint_state eps, permit_id, bool shadow_round);
 
     future<> wait_alive_helper(noncopyable_function<std::vector<locator::host_id>()> get_nodes, std::chrono::milliseconds timeout);
 public:
