@@ -95,35 +95,35 @@ void mutation_fragment::destroy_data() noexcept
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, static_row&& r)
-    : _kind(kind::static_row), _data(std::make_unique<data>(std::move(permit)))
+    : _data(std::make_unique<data>(std::move(permit), kind::static_row))
 {
     new (&_data->_static_row) static_row(std::move(r));
     reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, clustering_row&& r)
-    : _kind(kind::clustering_row), _data(std::make_unique<data>(std::move(permit)))
+    : _data(std::make_unique<data>(std::move(permit), kind::clustering_row))
 {
     new (&_data->_clustering_row) clustering_row(std::move(r));
     reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, range_tombstone_change&& r)
-    : _kind(kind::range_tombstone_change), _data(std::make_unique<data>(std::move(permit)))
+    : _data(std::make_unique<data>(std::move(permit), kind::range_tombstone_change))
 {
     new (&_data->_range_tombstone_chg) range_tombstone_change(std::move(r));
     reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, partition_start&& r)
-        : _kind(kind::partition_start), _data(std::make_unique<data>(std::move(permit)))
+        : _data(std::make_unique<data>(std::move(permit), kind::partition_start))
 {
     new (&_data->_partition_start) partition_start(std::move(r));
     reset_memory(s);
 }
 
 mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit, partition_end&& r)
-        : _kind(kind::partition_end), _data(std::make_unique<data>(std::move(permit)))
+        : _data(std::make_unique<data>(std::move(permit), kind::partition_end))
 {
     new (&_data->_partition_end) partition_end(std::move(r));
     reset_memory(s);
@@ -131,7 +131,7 @@ mutation_fragment_v2::mutation_fragment_v2(const schema& s, reader_permit permit
 
 void mutation_fragment_v2::destroy_data() noexcept
 {
-    switch (_kind) {
+    switch (_data->_kind) {
     case kind::static_row:
         _data->_static_row.~static_row();
         break;
@@ -265,7 +265,7 @@ const clustering_key_prefix& mutation_fragment_v2::key() const
 void mutation_fragment_v2::apply(const schema& s, mutation_fragment_v2&& mf)
 {
     SCYLLA_ASSERT(mergeable_with(mf));
-    switch (_kind) {
+    switch (_data->_kind) {
     case mutation_fragment_v2::kind::partition_start:
         _data->_partition_start.partition_tombstone().apply(mf._data->_partition_start.partition_tombstone());
         mf._data->_partition_start.~partition_start();
@@ -303,7 +303,7 @@ auto fmt::formatter<mutation_fragment_v2::printer>::format(const mutation_fragme
         -> decltype(ctx.out()) {
     auto& mf = p._mutation_fragment;
     auto out = ctx.out();
-    out = fmt::format_to(out, "{{mutation_fragment: {} {} ", mf._kind, mf.position());
+    out = fmt::format_to(out, "{{mutation_fragment: {} {} ", mf._data->_kind, mf.position());
     out = mf.visit(make_visitor(
         [&] (const clustering_row& cr) { return fmt::format_to(out, "{}", clustering_row::printer(p._schema, cr)); },
         [&] (const static_row& sr) { return fmt::format_to(out, "{}", static_row::printer(p._schema, sr)); },
