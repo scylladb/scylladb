@@ -496,7 +496,7 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     const auto& application_states_wanted = request.application_states;
     for (const auto& [node, state] : _endpoint_state_map) {
         const heart_beat_state& hbs = state->get_heart_beat_state();
-        auto state_wanted = endpoint_state(hbs);
+        auto state_wanted = endpoint_state(hbs, state->get_ip());
         auto& apps = state->get_application_state_map();
         for (const auto& app : apps) {
             if (application_states_wanted.count(app.first) > 0) {
@@ -631,6 +631,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
 
 future<> gossiper::apply_state_locally_in_shadow_round(std::unordered_map<inet_address, endpoint_state> map) {
     for (auto& [node, remote_state] : map) {
+        remote_state.set_ip(node);
         co_await do_apply_state_locally(node, std::move(remote_state), true);
     }
 }
@@ -647,7 +648,9 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
         if (ep == get_broadcast_address()) {
             return make_ready_future<>();
         }
-        locator::host_id hid = map[ep].get_host_id();
+        auto it = map.find(ep);
+        it->second.set_ip(ep);
+        locator::host_id hid = it->second.get_host_id();
         if (hid == locator::host_id::create_null_id()) {
             // If there is no host id in the new state there should be one locally
             hid = get_host_id(ep);
@@ -667,8 +670,8 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
                 return make_ready_future<>();
             }
         }
-        return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, &ep, &map] () mutable {
-            return do_apply_state_locally(ep, std::move(map[ep]), false);
+        return seastar::with_semaphore(_apply_state_locally_semaphore, 1, [this, ep, state = std::move(it->second)] () mutable {
+            return do_apply_state_locally(ep, std::move(state), false);
         });
     });
 
@@ -1517,7 +1520,7 @@ endpoint_state& gossiper::my_endpoint_state() {
     auto ep = get_broadcast_address();
     auto it = _endpoint_state_map.find(ep);
     if (it == _endpoint_state_map.end()) {
-        it = _endpoint_state_map.emplace(ep, make_endpoint_state_ptr({})).first;
+        it = _endpoint_state_map.emplace(ep, make_endpoint_state_ptr({ep})).first;
     }
     return const_cast<endpoint_state&>(*it->second);
 }
@@ -1609,7 +1612,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_a
             */
         auto local_hb_version = eps.get_heart_beat_state().get_heart_beat_version();
         if (local_hb_version > version) {
-            reqd_endpoint_state.emplace(eps.get_heart_beat_state());
+            reqd_endpoint_state.emplace(eps.get_heart_beat_state(), eps.get_ip());
             logger.trace("local heartbeat version {} greater than {} for {}", local_hb_version, version, for_endpoint);
         }
         /* Accumulate all application states whose versions are greater than "version" variable */
@@ -1617,7 +1620,7 @@ std::optional<endpoint_state> gossiper::get_state_for_version_bigger_than(inet_a
             auto& value = entry.second;
             if (value.version() > version) {
                 if (!reqd_endpoint_state) {
-                    reqd_endpoint_state.emplace(eps.get_heart_beat_state());
+                    reqd_endpoint_state.emplace(eps.get_heart_beat_state(), eps.get_ip());
                 }
                 auto& key = entry.first;
                 logger.trace("Adding state of {}, {}: {}" , for_endpoint, key, value.value());
@@ -1972,7 +1975,7 @@ void gossiper::send_all(gossip_digest& g_digest,
     logger.trace("send_all(): ep={}, version > {}", ep, max_remote_version);
     auto local_ep_state_ptr = get_state_for_version_bigger_than(ep, max_remote_version);
     if (local_ep_state_ptr) {
-        delta_ep_state_map[ep] = *local_ep_state_ptr;
+        delta_ep_state_map.emplace(ep, *local_ep_state_ptr);
     }
 }
 
@@ -2189,7 +2192,7 @@ future<> gossiper::add_saved_endpoint(locator::host_id host_id, gms::loaded_endp
     auto permit = co_await lock_endpoint(ep, pid);
 
     //preserve any previously known, in-memory data about the endpoint (such as DC, RACK, and so on)
-    auto ep_state = endpoint_state();
+    auto ep_state = endpoint_state(ep);
     auto es = get_endpoint_state_ptr(ep);
     if (es) {
         if (es->get_heart_beat_state().get_generation()) {

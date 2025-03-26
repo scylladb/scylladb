@@ -32,31 +32,35 @@ private:
     application_state_map _application_state;
     /* fields below do not get serialized */
     clk::time_point _update_timestamp;
-
+    inet_address _ip;
 public:
     bool operator==(const endpoint_state& other) const {
         return _heart_beat_state  == other._heart_beat_state &&
                _application_state == other._application_state &&
-               _update_timestamp  == other._update_timestamp;
+               _update_timestamp  == other._update_timestamp &&
+               _ip == other._ip;
     }
 
-    endpoint_state() noexcept
+    endpoint_state(inet_address ip) noexcept
         : _heart_beat_state()
         , _update_timestamp(clk::now())
+        , _ip(ip)
     {
     }
 
-    endpoint_state(heart_beat_state initial_hb_state) noexcept
+    endpoint_state(heart_beat_state initial_hb_state, inet_address ip) noexcept
         : _heart_beat_state(initial_hb_state)
         , _update_timestamp(clk::now())
+        , _ip(ip)
     {
     }
 
     endpoint_state(heart_beat_state&& initial_hb_state,
-            const application_state_map& application_state)
+            const application_state_map& application_state, inet_address ip = inet_address{})
         : _heart_beat_state(std::move(initial_hb_state))
         , _application_state(application_state)
         , _update_timestamp(clk::now())
+        , _ip(ip)
     {
     }
 
@@ -133,6 +137,13 @@ public:
     // or a null host_id if the application state is not found.
     locator::host_id get_host_id() const noexcept;
 
+    inet_address get_ip() const noexcept {
+        return _ip;
+    }
+
+    void set_ip(inet_address ip) noexcept {
+        _ip = ip;
+    }
     std::optional<locator::endpoint_dc_rack> get_dc_rack() const;
 
     // Return the value of the TOKENS application state
