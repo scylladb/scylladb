@@ -910,7 +910,20 @@ lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr s, const
     return tablet_sstable_set::make(std::move(s), sgm, tmap);
 }
 
+future<std::optional<table_id>> read_base_table(cql3::query_processor& qp, table_id tid) {
+    auto rs = co_await qp.execute_internal("select * from system.tablets where table_id = ?",
+            {tid.uuid()}, cql3::query_processor::cache_internal::no);
+    if (rs->empty() || !rs->front().has("base_table")) {
+        co_return std::nullopt;
+    }
+
+    co_return table_id(rs->front().get_as<utils::UUID>("base_table"));
+}
+
 future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token) {
+    if (auto base_table = co_await read_base_table(qp, tid)) {
+        tid = *base_table;
+    }
     auto rs = co_await qp.execute_internal("select stage from system.tablets where table_id = ? and last_token = ?",
             {tid.uuid(), dht::token::to_int64(last_token)}, cql3::query_processor::cache_internal::no);
     if (rs->empty() || !rs->one().has("stage")) {
