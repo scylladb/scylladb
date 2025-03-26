@@ -27,6 +27,7 @@ extern logging::logger sstlog;
 // data and no compression
 template <ChecksumUtils ChecksumType, bool check_digest>
 class checksummed_file_data_source_impl : public data_source_impl {
+    std::function<future<input_stream<char>>()> _stream_creator;
     std::optional<input_stream<char>> _input_stream;
     const checksum& _checksum;
     [[no_unique_address]] digest_members<check_digest> _digests;
@@ -38,7 +39,7 @@ class checksummed_file_data_source_impl : public data_source_impl {
     uint64_t _beg_pos;
     uint64_t _end_pos;
 public:
-    checksummed_file_data_source_impl(file f, uint64_t file_len,
+    checksummed_file_data_source_impl(stream_creator_fn stream_creator, uint64_t file_len,
                 const checksum& checksum, uint64_t pos, size_t len,
                 file_input_stream_options options,
                 std::optional<uint32_t> digest,
@@ -87,7 +88,9 @@ public:
         }
         auto start = align_down(_beg_pos, chunk_size);
         auto end = std::min(_file_len, align_up(_end_pos, chunk_size));
-        _input_stream = make_file_input_stream(std::move(f), start, end - start, std::move(options));
+        _stream_creator = [stream_creator, start, length = end - start, options] mutable {
+            return stream_creator(start, length, std::move(options));
+        };
         _underlying_pos = start;
     }
 
@@ -95,6 +98,10 @@ public:
         uint64_t chunk_size = _checksum.chunk_size;
         if (_pos >= _end_pos) {
             co_return temporary_buffer<char>();
+        }
+
+        if (!_input_stream) {
+            _input_stream = co_await _stream_creator();
         }
         // Read the next chunk. We need to skip part of the first
         // chunk, but then continue to read from beginning of chunks.
@@ -170,6 +177,9 @@ public:
         auto underlying_n = align_down(_pos, chunk_size) - _underlying_pos;
         _beg_pos = _pos;
         _underlying_pos += underlying_n;
+        if (!_input_stream) {
+            _input_stream = co_await _stream_creator();
+        }
         co_await _input_stream->skip(underlying_n);
         co_return temporary_buffer<char>();
     }
@@ -178,45 +188,45 @@ public:
 template <ChecksumUtils ChecksumType, bool check_digest>
 class checksummed_file_data_source : public data_source {
 public:
-    checksummed_file_data_source(file f, uint64_t file_len, const checksum& checksum,
+    checksummed_file_data_source(stream_creator_fn stream_creator, uint64_t file_len, const checksum& checksum,
             uint64_t offset, size_t len, file_input_stream_options options,
             std::optional<uint32_t> digest, integrity_error_handler error_handler)
         : data_source(std::make_unique<checksummed_file_data_source_impl<ChecksumType, check_digest>>(
-                std::move(f), file_len, checksum, offset, len, std::move(options), digest,
+                std::move(stream_creator), file_len, checksum, offset, len, std::move(options), digest,
                 error_handler))
     {}
 };
 
 template <ChecksumUtils ChecksumType>
 inline input_stream<char> make_checksummed_file_input_stream(
-        file f, uint64_t file_len, const checksum& checksum, uint64_t offset,
+        stream_creator_fn stream_creator, uint64_t file_len, const checksum& checksum, uint64_t offset,
         size_t len, file_input_stream_options options, std::optional<uint32_t> digest,
         integrity_error_handler error_handler)
 {
     if (digest) {
         return input_stream<char>(checksummed_file_data_source<ChecksumType, true>(
-            std::move(f), file_len, checksum, offset, len, std::move(options), digest,
+            std::move(stream_creator), file_len, checksum, offset, len, std::move(options), digest,
             error_handler));
     }
     return input_stream<char>(checksummed_file_data_source<ChecksumType, false>(
-        std::move(f), file_len, checksum, offset, len, std::move(options), digest, error_handler));
+        std::move(stream_creator), file_len, checksum, offset, len, std::move(options), digest, error_handler));
 }
 
 input_stream<char> make_checksummed_file_k_l_format_input_stream(
-        file f, uint64_t file_len, const checksum& checksum, uint64_t offset,
+        stream_creator_fn stream_creator, uint64_t file_len, const checksum& checksum, uint64_t offset,
         size_t len, file_input_stream_options options, std::optional<uint32_t> digest,
         integrity_error_handler error_handler)
 {
-    return make_checksummed_file_input_stream<adler32_utils>(std::move(f), file_len,
+    return make_checksummed_file_input_stream<adler32_utils>(std::move(stream_creator), file_len,
             checksum, offset, len, std::move(options), digest, error_handler);
 }
 
 input_stream<char> make_checksummed_file_m_format_input_stream(
-        file f, uint64_t file_len, const checksum& checksum, uint64_t offset,
+        stream_creator_fn stream_creator, uint64_t file_len, const checksum& checksum, uint64_t offset,
         size_t len, file_input_stream_options options, std::optional<uint32_t> digest,
         integrity_error_handler error_handler)
 {
-    return make_checksummed_file_input_stream<crc32_utils>(std::move(f), file_len,
+    return make_checksummed_file_input_stream<crc32_utils>(std::move(stream_creator), file_len,
             checksum, offset, len, std::move(options), digest, error_handler);
 }
 

@@ -2475,13 +2475,15 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     if (integrity == integrity_check::yes) {
         digest = get_digest();
     }
-
+    auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
+        co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
+    };
     if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
-            co_return make_compressed_file_m_format_input_stream(f, &_components->compression,
+            co_return make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
                pos, len, std::move(options), permit, digest);
         } else {
-            co_return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
+            co_return make_compressed_file_k_l_format_input_stream(stream_creator, &_components->compression,
                 pos, len, std::move(options), permit, digest);
         }
     }
@@ -2489,14 +2491,14 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         auto checksum = get_checksum();
         auto file_len = data_size();
         if (_version >= sstable_version_types::mc) {
-             co_return make_checksummed_file_m_format_input_stream(f, file_len,
+             co_return make_checksummed_file_m_format_input_stream(stream_creator, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         } else {
-            co_return make_checksummed_file_k_l_format_input_stream(f, file_len,
+            co_return make_checksummed_file_k_l_format_input_stream(stream_creator, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         }
     }
-    co_return make_file_input_stream(f, pos, len, std::move(options));
+    co_return co_await stream_creator(pos, len, std::move(options));
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
