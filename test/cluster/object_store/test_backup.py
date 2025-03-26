@@ -495,3 +495,27 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
             scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
         logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')
         assert streamed_to == scope_nodes
+
+
+@pytest.mark.asyncio
+async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_server):
+    '''Check that restore task fails well when given a non-existing sstable'''
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_config_file': str(s3_server.config_file),
+           'experimental_features': ['keyspace-storage-options'],
+           'task_ttl_in_seconds': 300
+           }
+    cmd = ['--logger-log-level', 'snapshots=trace:task_manager=trace']
+    server = await manager.server_add(config=cfg, cmdline=cmd)
+    cql = manager.get_cql()
+    print('Create keyspace')
+    ks, cf = create_ks_and_cf(cql)
+
+    # The name must be parseable by sstable layer, yet such file shouldn't exist
+    sstable_name = 'me-3gou_0fvw_4r94g2h8nw60b8ly4c-big-TOC.txt'
+    tid = await manager.api.restore(server.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, 'no_such_prefix', [sstable_name])
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    print(f'Status: {status}')
+    assert 'state' in status and status['state'] == 'failed'
+    assert 'error' in status and 'Not Found' in status['error']
