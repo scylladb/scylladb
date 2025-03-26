@@ -1344,12 +1344,12 @@ private:
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
-            _context = data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
+            _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, integrity_check::no);
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no);
+            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, integrity_check::no);
         }
 
         _monitor.on_read_started(_context->reader_position());
@@ -1546,6 +1546,7 @@ class sstable_full_scan_reader : public mp_row_consumer_reader_k_l {
     Consumer _consumer;
     std::unique_ptr<DataConsumeRowsContext> _context;
     read_monitor& _monitor;
+    integrity_check _integrity_check;
 public:
     sstable_full_scan_reader(shared_sstable sst, schema_ptr schema,
              reader_permit permit,
@@ -1554,9 +1555,8 @@ public:
              integrity_check integrity)
         : mp_row_consumer_reader_k_l(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
-        , _context(data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, integrity))
-        , _monitor(mon) {
-        _monitor.on_read_started(_context->reader_position());
+        , _monitor(mon)
+        , _integrity_check(integrity) {
     }
 public:
     void on_out_of_clustering_range() override {
@@ -1572,14 +1572,18 @@ public:
         on_internal_error(sstlog, "sstable_full_scan_reader: doesn't support next_partition()");
     }
     virtual future<> fill_buffer() override {
+        if (!_context) {
+            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, _integrity_check);
+            _monitor.on_read_started(_context->reader_position());
+        }
         if (_end_of_stream) {
-            return make_ready_future<>();
+            co_return;
         }
         if (_context->eof()) {
             _end_of_stream = true;
-            return make_ready_future<>();
+            co_return;
         }
-        return _context->consume_input();
+        co_return co_await _context->consume_input();
     }
     virtual future<> close() noexcept override {
         if (!_context) {

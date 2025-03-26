@@ -361,17 +361,19 @@ public:
     friend class sstable;
 };
 
+using stream_creator_fn = std::function<future<input_stream<char>>(uint64_t, uint64_t, file_input_stream_options)>;
+
 // Note: compression_metadata is passed by reference; The caller is
 // responsible for keeping the compression_metadata alive as long as there
 // are open streams on it. This should happen naturally on a higher level -
 // as long as we have *sstables* work in progress, we need to keep the whole
 // sstable alive, and the compression metadata is only a part of it.
-input_stream<char> make_compressed_file_k_l_format_input_stream(file f,
+input_stream<char> make_compressed_file_k_l_format_input_stream(stream_creator_fn stream_creator,
                 sstables::compression* cm, uint64_t offset, size_t len,
                 class file_input_stream_options options, reader_permit permit,
                 std::optional<uint32_t> digest);
 
-input_stream<char> make_compressed_file_m_format_input_stream(file f,
+input_stream<char> make_compressed_file_m_format_input_stream(stream_creator_fn stream_creator,
                 sstables::compression* cm, uint64_t offset, size_t len,
                 class file_input_stream_options options, reader_permit permit,
                 std::optional<uint32_t> digest);

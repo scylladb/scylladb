@@ -29,6 +29,14 @@
 seastar::file create_file_for_sink(seastar::data_sink);
 
 /**
+ * Creates a read-only file wrapping a data_source.
+ *
+ * The resulting file object can do sequential
+ * reads only.
+ */
+seastar::file create_file_for_source(file f, seastar::data_source source);
+
+/**
  * Creates a file that can only do flush() and close().
  * Do not write to it.
  */
