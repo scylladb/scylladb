@@ -5355,6 +5355,7 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
     while (!_async_gate.is_closed() && !_group0_as.abort_requested()) {
         bool sleep = false;
         try {
+            co_await utils::get_local_injector().inject("split_monitor_wait_before_read_barrier", utils::wait_for_message(120s));
             // Ensures that latest changes to tablet metadata, in group0, are visible
             auto guard = co_await _group0->client().start_operation(_group0_as);
             auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
@@ -5384,7 +5385,14 @@ future<> storage_service::process_tablet_split_candidate(table_id table) noexcep
         } catch (raft::request_aborted& ex) {
             slogger.warn("Failed to complete splitting of table {} due to {}", table, ex);
             break;
+        } catch (seastar::rpc::remote_verb_error& ex) {
+            // Might happen if read barrier is performed after node left the cluster, and coordinator
+            // doesn't accept the request from a node that is outside of the configuration.
+            slogger.warn("Failed to complete splitting of table {} due to {}, retrying after {} seconds",
+                        table, ex, split_retry.sleep_time());
+            sleep = true;
         } catch (...) {
+            utils::get_local_injector().inject("split_monitor_wait_before_read_barrier", [] { throw std::runtime_error("handled incorrectly"); });
             slogger.error("Failed to complete splitting of table {} due to {}, retrying after {} seconds",
                           table, std::current_exception(), split_retry.sleep_time());
             sleep = true;
