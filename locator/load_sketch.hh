@@ -123,7 +123,7 @@ public:
             auto& tmap = _tm->tablets().get_tablet_map(*only_table);
             co_await populate_table(tmap, host, only_dc);
         } else {
-            for (auto&& [table, tmap]: _tm->tablets().all_tables()) {
+            for (const auto& [table, tmap] : _tm->tablets().all_tables_with_children()) {
                 co_await populate_table(*tmap, host, only_dc);
             }
         }

@@ -1460,7 +1460,7 @@ void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
 static
 size_t get_tablet_count(const tablet_metadata& tm) {
     size_t count = 0;
-    for (auto& [table, tmap] : tm.all_tables()) {
+    for (const auto& [table, tmap] : tm.all_tables_with_children()) {
         count += std::accumulate(tmap->tablets().begin(), tmap->tablets().end(), size_t(0),
              [] (size_t accumulator, const locator::tablet_info& info) {
                  return accumulator + info.replicas.size();
@@ -1502,7 +1502,7 @@ void do_rebalance_tablets(cql_test_env& e,
 
         if (auto_split && load_stats) {
             auto& tm = *stm.get();
-            for (auto& [table, tmap]: tm.tablets().all_tables()) {
+            for (const auto& [table, tmap]: tm.tablets().all_tables_with_children()) {
                 if (std::holds_alternative<resize_decision::split>(tmap->resize_decision().way)) {
                     testlog.debug("set_split_ready_seq_number({}, {})", table, tmap->resize_decision().sequence_number);
                     load_stats->set_split_ready_seq_number(table, tmap->resize_decision().sequence_number);
@@ -1570,8 +1570,8 @@ void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_met
 static
 void execute_transitions(shared_token_metadata& stm) {
     stm.mutate_token_metadata([&] (token_metadata& tm) {
-        for (auto&& [tablet, tmap_] : tm.tablets().all_tables()) {
-            tm.tablets().mutate_tablet_map(tablet, [&] (tablet_map& tmap) {
+        for (auto&& [table, tables] : tm.tablets().all_table_groups()) {
+            tm.tablets().mutate_tablet_map(table, [&] (tablet_map& tmap) {
                 for (auto&& [tablet, trinfo]: tmap.transitions()) {
                     auto ti = tmap.get_tablet_info(tablet);
                     ti.replicas = trinfo.next;
@@ -1667,7 +1667,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
 // Run in seastar thread.
 void check_no_rack_overload(const token_metadata& tm) {
     auto& topo = tm.get_topology();
-    for (auto&& [table, tmap_p] : tm.tablets().all_tables()) {
+    for (const auto& [table, tmap_p] : tm.tablets().all_tables_with_children()) {
         const tablet_map& tmap = *tmap_p;
         tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
             std::unordered_map<sstring, std::unordered_set<sstring>> racks_by_dc;
@@ -2495,7 +2495,7 @@ SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
 
 static
 void check_tablet_invariants(const tablet_metadata& tmeta) {
-    for (auto&& [table, tmap] : tmeta.all_tables()) {
+    for (const auto& [table, tmap] : tmeta.all_tables_with_children()) {
         tmap->for_each_tablet([&](auto tid, const tablet_info& tinfo) -> future<> {
             std::unordered_set<host_id> hosts;
             // Uniqueness of hosts
