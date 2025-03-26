@@ -253,7 +253,7 @@ concept MutationFragmentVisitor =
 
 class mutation_fragment {
 public:
-    enum class kind {
+    enum class kind : std::uint8_t {
         static_row,
         clustering_row,
         range_tombstone,
