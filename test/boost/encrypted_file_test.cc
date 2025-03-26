@@ -26,24 +26,44 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/exception_utils.hh"
+#include "utils/io-wrappers.hh"
 
 using namespace encryption;
 
 static tmpdir dir;
 
-static future<std::tuple<file, ::shared_ptr<symmetric_key>>> make_file(const sstring& name, open_flags mode, ::shared_ptr<symmetric_key> k = nullptr) {
-    file f = co_await open_file_dma(sstring(dir.path() / std::string(name)), mode);
+static std::tuple<std::string, ::shared_ptr<symmetric_key>> make_filename(const std::string& name, ::shared_ptr<symmetric_key> k = nullptr) {
+    auto dst = std::string(dir.path() / std::string(name));
     if (k == nullptr) {
         key_info info{"AES/CBC", 256};
         k = ::make_shared<symmetric_key>(info);
     }
+    return std::make_tuple(dst, k);
+}
+
+static future<std::tuple<file, ::shared_ptr<symmetric_key>>> make_file(const std::string& name, open_flags mode, ::shared_ptr<symmetric_key> k_in = nullptr) {
+    auto [dst, k] = make_filename(name, std::move(k_in));
+    file f = co_await open_file_dma(dst, mode);
     co_return std::tuple(file(make_encrypted_file(f, k)), k);
 }
 
-static temporary_buffer<uint8_t> generate_random(size_t n, size_t align) {
-    auto tmp = temporary_buffer<uint8_t>::aligned(align, align_up(n, align));
-    auto data = tests::random::get_sstring(n);
-    std::copy(data.begin(), data.end(), tmp.get_write());
+template<typename T = char>
+static void fill_random(temporary_buffer<T>& buf) {
+    auto data = tests::random::get_sstring(buf.size());
+    std::copy(data.begin(), data.end(), buf.get_write());
+}
+
+template<typename T = char>
+static temporary_buffer<T> generate_random(size_t n) {
+    temporary_buffer<T> tmp(n);
+    fill_random(tmp);
+    return tmp;
+}
+
+template<typename T = char>
+static temporary_buffer<T> generate_random(size_t n, size_t align) {
+    auto tmp = temporary_buffer<T>::aligned(align, align_up(n, align));
+    fill_random(tmp);
     return tmp;
 }
 
@@ -382,3 +402,87 @@ SEASTAR_TEST_CASE(test_read_from_padding) {
         co_await file.close();
     }
 }
+
+namespace seastar {
+std::ostream& operator<<(std::ostream& os, const temporary_buffer<char>& buf) {
+    return os << "temporary_buffer[size=" << buf.size() << ", data=" << std::string_view(buf.get(), buf.size()) << "]";
+}
+}
+
+static future<> test_random_data_sink(std::vector<size_t> sizes) {
+    auto name = "test_rand_sink";
+    std::vector<temporary_buffer<char>> bufs, srcs;
+
+    auto [dst, k] = make_filename(name);
+    uint64_t total = 0;
+    std::exception_ptr ex = nullptr;
+
+    data_sink sink(make_encrypted_sink(create_memory_sink(bufs), k));
+
+    try {
+        for (size_t s : sizes) {
+            auto buf = generate_random<char>(s);
+            co_await sink.put(buf.clone()); // deep copy. encrypted sink uses "owned" data
+            total += buf.size();
+            srcs.emplace_back(std::move(buf));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await sink.close();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+
+    {
+        auto os = co_await make_file_output_stream(co_await open_file_dma(dst, open_flags::wo|open_flags::create));
+        for (auto& buf : bufs) {
+            co_await os.write(buf.get(), buf.size());
+        }
+        co_await os.flush();
+        co_await os.close();
+    }
+
+    file f = make_encrypted_file(co_await open_file_dma(dst, open_flags::ro), k);
+
+    try {
+        auto file_size = co_await f.size();
+
+        BOOST_REQUIRE_EQUAL(file_size, total);
+
+        auto in = make_file_input_stream(std::move(f));
+
+        for (auto& src : srcs) {
+            auto tmp = co_await in.read_exactly(src.size());
+            BOOST_REQUIRE_EQUAL(tmp, src);
+        }
+        co_await in.close();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    if (f) {
+        co_await f.close();
+    }
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
+
+SEASTAR_TEST_CASE(test_encrypted_sink_data_small) {
+    return test_random_data_sink({ 13 });
+}
+
+SEASTAR_TEST_CASE(test_encrypted_sink_data_smallish) {
+    return test_random_data_sink({ 4*1024, 4*1024, 1467 });
+}
+
+SEASTAR_TEST_CASE(test_encrypted_sink_data_medium) {
+    return test_random_data_sink({ 4*1024, 4*1024, 2*1024, 1457, 234, 999 });
+}
+
+SEASTAR_TEST_CASE(test_encrypted_sink_data_large) {
+    return test_random_data_sink({ 4096, 4096, 4096, 4096, 8192, 1232, 32, 4096, 134 });
+}
+
