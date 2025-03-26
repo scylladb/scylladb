@@ -823,6 +823,21 @@ public:
         });
         co_return sink;
     }
+
+    future<data_source> wrap_source(const sstables::sstable& sst, sstables::component_type type, data_source source) override {
+        switch (type) {
+        case sstables::component_type::Scylla:
+        case sstables::component_type::TemporaryTOC:
+        case sstables::component_type::TOC:
+            co_return source;
+        default:
+            break;
+        }
+        co_await wrap_writeonly(sst, type, [&source](shared_ptr<symmetric_key> k) {
+            source = data_source(make_encrypted_source(std::move(source), std::move(k)));
+        });
+        co_return source;
+    }
 };
 
 std::string encryption_provider(const sstables::sstable& sst) {
