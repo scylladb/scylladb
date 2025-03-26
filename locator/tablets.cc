@@ -896,7 +896,7 @@ bool tablet_metadata::has_replica_on(host_id host) const {
 
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host) {
     bool valid = true;
-    for (const auto& [table_id, tmap] : tm.all_tables()) {
+    for (const auto& [table, tmap] : tm.all_tables_ungrouped()) {
         co_await tmap->for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) -> future<> {
             for (const auto& replica : tinfo.replicas) {
                 if (replica.host == this_host) {
