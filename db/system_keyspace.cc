@@ -2683,6 +2683,23 @@ future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_
     });
 }
 
+static future<std::optional<mutation>> get_scylla_local_mutation(replica::database& db, std::string_view key) {
+    auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    partition_key pk = partition_key::from_singular(*s, key);
+    dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
+
+    auto rs = co_await replica::query_mutations(db.container(), s, pr, s->full_slice(), db::no_timeout);
+    SCYLLA_ASSERT(rs);
+    auto& ps = rs->partitions();
+    for (auto& p: ps) {
+        auto mut = p.mut().unfreeze(s);
+        co_return std::move(mut);
+    }
+
+    co_return std::nullopt;
+}
+
 static dht::token_range make_token_range(int64_t& start_token, int64_t& end_token) {
     dht::token start = dht::minimum_token();
     dht::token end = dht::maximum_token();
@@ -2979,23 +2996,6 @@ future<mutation> system_keyspace::get_group0_history(distributed<replica::databa
 
     slogger.warn("get_group0_history: '{}' partition not found", GROUP0_HISTORY_KEY);
     co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
-}
-
-static future<std::optional<mutation>> get_scylla_local_mutation(replica::database& db, std::string_view key) {
-    auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
-
-    partition_key pk = partition_key::from_singular(*s, key);
-    dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
-
-    auto rs = co_await replica::query_mutations(db.container(), s, pr, s->full_slice(), db::no_timeout);
-    SCYLLA_ASSERT(rs);
-    auto& ps = rs->partitions();
-    for (auto& p: ps) {
-        auto mut = p.mut().unfreeze(s);
-        co_return std::move(mut);
-    }
-
-    co_return std::nullopt;
 }
 
 future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
