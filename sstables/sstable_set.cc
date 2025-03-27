@@ -92,8 +92,8 @@ uint64_t sstable_run::data_size() const {
     return std::ranges::fold_left(_all | std::views::transform(std::mem_fn(&sstable::data_size)), uint64_t(0), std::plus{});
 }
 
-double sstable_run::estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
-    auto estimate_sum = std::ranges::fold_left(_all | std::views::transform(std::bind(&sstable::estimate_droppable_tombstone_ratio, std::placeholders::_1, compaction_time, gc_state, s)), double(0), std::plus{});
+double sstable_run::estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, tombstone_gc_before_getter gc_before_getter, const schema_ptr& s) const {
+    auto estimate_sum = std::ranges::fold_left(_all | std::views::transform(std::bind(&sstable::estimate_droppable_tombstone_ratio, std::placeholders::_1, compaction_time, gc_before_getter, s)), double(0), std::plus{});
     return _all.size() ? estimate_sum / _all.size() : double(0);
 }
 

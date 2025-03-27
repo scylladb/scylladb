@@ -370,8 +370,8 @@ public:
                                      tracing::trace_state_ptr trace_state = nullptr,
                                      streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                      mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
-                                     const tombstone_gc_state* gc_state = nullptr) {
-        if (auto reader_opt = make_reader_opt(s, permit, range, slice, gc_state, std::move(trace_state), fwd, fwd_mr)) {
+                                     std::optional<tombstone_gc_before_getter> gc_before_getter = {}) {
+        if (auto reader_opt = make_reader_opt(s, permit, range, slice, std::move(gc_before_getter), std::move(trace_state), fwd, fwd_mr)) {
             return std::move(*reader_opt);
         }
         [[unlikely]] return make_empty_flat_reader_v2(std::move(s), std::move(permit));
@@ -382,7 +382,7 @@ public:
                                      reader_permit permit,
                                      const dht::partition_range&,
                                      const query::partition_slice&,
-                                     const tombstone_gc_state*,
+                                     std::optional<tombstone_gc_before_getter>,
                                      tracing::trace_state_ptr trace_state = nullptr,
                                      streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                      mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no);
@@ -390,10 +390,10 @@ public:
     mutation_reader make_reader(schema_ptr s,
                                     reader_permit permit,
                                     const dht::partition_range& range = query::full_partition_range,
-                                    const tombstone_gc_state* gc_state = nullptr) {
+                                    std::optional<tombstone_gc_before_getter> gc_before_getter = {}) {
         auto& full_slice = s->full_slice();
         return make_reader(std::move(s), std::move(permit), range, full_slice, nullptr,
-                streamed_mutation::forwarding::no, mutation_reader::forwarding::no, gc_state);
+                streamed_mutation::forwarding::no, mutation_reader::forwarding::no, std::move(gc_before_getter));
     }
 
     // Only reads what is in the cache, doesn't populate.
