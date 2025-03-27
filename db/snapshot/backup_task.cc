@@ -170,12 +170,15 @@ future<> backup_task_impl::uploads_worker() {
 }
 
 future<> backup_task_impl::backup_file(sstring name, upload_permit permit) {
-    return upload_component(name).handle_exception([this] (std::exception_ptr e) {
+    try {
+        co_await upload_component(name);
+    } catch (...) {
+        snap_log.debug("backup_file {} failed: {}", name, std::current_exception());
         // keep the first exception
         if (!_ex) {
-            _ex = std::move(e);
+            _ex = std::current_exception();
         }
-    }).finally([permit = std::move(permit)] {});
+    }
 }
 
 future<> backup_task_impl::run() {
