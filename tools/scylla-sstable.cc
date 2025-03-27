@@ -355,11 +355,11 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         auto ed = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
 
         if (s3::is_s3_fqn(sst_path)) {
-            if (sst_man.config().object_storage_config().empty()) {
+            if (sst_man.config().object_storage_endpoints().empty()) {
                 throw std::invalid_argument("Unable to open SSTable in S3: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
                                             "valid AWS object storage configuration.");
             }
-            auto endpoint = sst_man.config().object_storage_config().begin()->first;
+            auto endpoint = sst_man.config().object_storage_endpoints().front().endpoint;
             options = data_dictionary::make_s3_options(endpoint, sst_path);
         } else {
             sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
@@ -3521,8 +3521,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             }).get();
             dbcfg.setup_directories();
             sst_log.debug("Successfully read scylla.yaml from {} location of {}", scylla_yaml_path_source, scylla_yaml_path);
-            read_object_storage_config(dbcfg).get();
-            sst_log.debug("Successfully read object storage settings");
         } else {
             dbcfg.experimental_features.set(db::experimental_features_t::all());
             sst_log.debug("Failed to read scylla.yaml from {} location of {}, some functionality may be unavailable", scylla_yaml_path_source, scylla_yaml_path);

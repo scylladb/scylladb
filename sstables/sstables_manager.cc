@@ -8,6 +8,7 @@
 
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <unordered_map>
 #include "utils/log.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstables_registry.hh"
@@ -56,8 +57,8 @@ storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
-    for (auto [ep, ecfg] : cfg.object_storage_config()) {
-        _s3_endpoints.emplace(std::make_pair(std::move(ep), make_lw_shared<s3::endpoint_config>(std::move(ecfg))));
+    for (auto& e : cfg.object_storage_endpoints()) {
+        _s3_endpoints.emplace(std::make_pair(std::move(e.endpoint), make_lw_shared<s3::endpoint_config>(std::move(e.config))));
     }
 }
 
@@ -74,16 +75,26 @@ future<> storage_manager::stop() {
 }
 
 future<> storage_manager::update_config(const db::config& cfg) {
-    for (auto [ep, ecfg] : cfg.object_storage_config()) {
-        auto s3_cfg = make_lw_shared<s3::endpoint_config>(std::move(ecfg));
-        auto [it, added] = _s3_endpoints.try_emplace(ep, std::move(s3_cfg));
-        if (!added) {
+    // Updates S3 client configurations if the endpoint is already known and
+    // removes the entries that are not present in the new configuration.
+    // Even though we remove obsolete S3 clients from this map, each IO
+    // holds a shared_ptr to the client, so the clients will be kept alive for
+    // as long as needed. 
+    std::unordered_map<sstring, s3_endpoint> updates;
+    for (auto& e : cfg.object_storage_endpoints()) {
+        auto s3_cfg = make_lw_shared<s3::endpoint_config>(std::move(e.config));
+        auto existing = _s3_endpoints.find(e.endpoint);
+        if (existing != _s3_endpoints.end()) {
+            auto [it, _] = updates.emplace(e.endpoint, std::move(existing->second));
             if (it->second.client != nullptr) {
                 co_await it->second.client->update_config(s3_cfg);
             }
             it->second.cfg = std::move(s3_cfg);
+            continue;
         }
+        updates.emplace(e.endpoint, s3_endpoint(std::move(s3_cfg)));
     }
+    _s3_endpoints = std::move(updates);
 }
 
 shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
@@ -111,7 +122,7 @@ storage_manager::config_updater::config_updater(const db::config& cfg, storage_m
             co_await sstm.update_config(cfg);
         });
     })
-    , observer(cfg.object_storage_config.observe(action.make_observer()))
+    , observer(cfg.object_storage_endpoints.observe(action.make_observer()))
 {}
 
 locator::host_id sstables_manager::get_local_host_id() const {
