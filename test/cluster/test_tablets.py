@@ -5,6 +5,7 @@
 #
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from test.cluster.test_tablets2 import safe_rolling_restart
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.repair import create_table_insert_data_for_repair
@@ -934,3 +935,41 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     # ensure all migrations complete
     logger.info("Waiting for migrations to complete")
     await log.wait_for("Tablet load balancer did not make any plan", migration_mark)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ManagerClient):
+    injection = "repair_writer_impl_create_writer_wait"
+    cmdline = [
+        '--logger-log-level', 'repair=debug',
+    ]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline)
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    async def insert_with_down(down_server):
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k + 1});") for k in range(10)])
+
+    cql = await safe_rolling_restart(manager, [servers[0]], with_down=insert_with_down)
+
+    all_replicas = await get_all_tablet_replicas(manager, servers[1], ks, "test")
+    all_replicas.sort(key=lambda x: x.last_token)
+    assert len(all_replicas) >= 3
+    repair_replicas = all_replicas[1]
+    migration_replicas = all_replicas[0]
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    async def repair_task():
+        [await manager.api.enable_injection(s.ip_addr, injection, one_shot=True) for s in servers]
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", repair_replicas.last_token)
+
+    async def migration_task():
+        done, pending = await asyncio.wait([asyncio.create_task(log.wait_for(f'repair_writer: keyspace={ks}', from_mark=mark)) for log, mark in zip(logs, marks)], return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", migration_replicas.replicas[0][0], migration_replicas.replicas[0][1], migration_replicas.replicas[0][0], 0 if migration_replicas.replicas[0][1] != 0 else 1, migration_replicas.last_token)
+        [await manager.api.message_injection(s.ip_addr, injection) for s in servers]
+        [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
+
+    await asyncio.gather(repair_task(), migration_task())
