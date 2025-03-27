@@ -40,7 +40,7 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
     , _prefix(std::move(prefix))
     , _snapshot_dir(std::move(snapshot_dir))
     , _remove_on_uploaded(move_files) {
-    _status.progress_units = "bytes ('total' may grow along the way)";
+    _status.progress_units = "bytes";
 }
 
 std::string backup_task_impl::type() const {
@@ -56,10 +56,9 @@ tasks::is_abortable backup_task_impl::is_abortable() const noexcept {
 }
 
 future<tasks::task_manager::task::progress> backup_task_impl::get_progress() const {
-    co_return tasks::task_manager::task::progress {
-        .completed = _progress.uploaded,
-        .total = _progress.total,
-    };
+    auto ret = _total_progress;
+    ret.completed = _progress.uploaded;
+    co_return ret;
 }
 
 tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
@@ -142,9 +141,15 @@ future<> backup_task_impl::process_snapshot_dir() {
     auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
 
     try {
+        size_t total = 0;
         while (auto component_ent = co_await snapshot_dir_lister.get()) {
-            _files.push_back(component_ent->name);
+            const auto& name = component_ent->name;
+            auto file_path = _snapshot_dir / name;
+            auto st = co_await file_stat(file_path.native());
+            total += st.size;
+            _files.emplace_back(name);
         }
+        _total_progress.total = total;
     } catch (...) {
         _ex = std::current_exception();
     }
