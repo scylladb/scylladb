@@ -7502,6 +7502,10 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.view_building_coordinator) {
                     additional_tables.push_back(db::system_keyspace::view_building_tasks()->id());
                 }
+                if (ss._feature_service.cdc_with_tablets) {
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
