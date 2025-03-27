@@ -18,7 +18,8 @@ target_sources(scylla_encryption
     local_file_provider.cc
     replicated_key_provider.cc
     symmetric_key.cc
-    system_key.cc)
+    system_key.cc
+    utils.cc)
 target_include_directories(scylla_encryption
   PUBLIC
     ${CMAKE_SOURCE_DIR})
