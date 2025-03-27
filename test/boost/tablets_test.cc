@@ -1431,17 +1431,54 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
     }
 }
 
+struct migration_cost_desc {
+    int min_duration = 0; // measured in apply_plan() call count
+    int max_duration = 0;
+};
+
+using migration_cost_per_table = std::unordered_map<table_id, migration_cost_desc>;
+
+static const migration_cost_per_table default_migration_cost;
+
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-void apply_plan(token_metadata& tm, const migration_plan& plan) {
+void apply_plan(token_metadata& tm, const migration_plan& plan,
+                const migration_cost_per_table& migration_cost,
+                std::unordered_map<global_tablet_id, int>& migration_progress) {
     for (auto&& mig : plan.migrations()) {
         tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             testlog.trace("Replacing tablet {} replica from {} to {}", mig.tablet.tablet, mig.src, mig.dst);
-            tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
-            tmap.set_tablet(mig.tablet.tablet, tinfo);
+            if (!migration_cost.contains(mig.tablet.table)) {
+                tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
+                tmap.set_tablet(mig.tablet.tablet, tinfo);
+            } else {
+                auto& cost_desc = migration_cost.at(mig.tablet.table);
+                migration_progress[mig.tablet] = tests::random::get_int<int>(cost_desc.min_duration, cost_desc.max_duration);
+                tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
+            }
         });
     }
+
+    std::unordered_set<global_tablet_id> finished_migrations;
+    for (auto& [gid, steps_left] : migration_progress) {
+        if (--migration_progress[gid] <= 0) {
+            tm.tablets().mutate_tablet_map(gid.table, [&] (tablet_map& tmap) {
+                auto tinfo = tmap.get_tablet_info(gid.tablet);
+                auto* trinfo = tmap.get_tablet_transition_info(gid.tablet);
+                assert(trinfo);
+                tinfo.replicas = trinfo->next;
+                tmap.set_tablet(gid.tablet, tinfo);
+                tmap.clear_tablet_transition_info(gid.tablet);
+                finished_migrations.insert(gid);
+            });
+        }
+    }
+
+    for (auto gid : finished_migrations) {
+        migration_progress.erase(gid);
+    }
+
     apply_resize_plan(tm, plan);
 }
 
@@ -1478,7 +1515,9 @@ void do_rebalance_tablets(cql_test_env& e,
                           shared_load_stats* load_stats = nullptr,
                           std::unordered_set<host_id> skiplist = {},
                           std::function<bool(const migration_plan&)> stop = nullptr,
-                          bool auto_split = false)
+                          bool auto_split = false,
+                          bool auto_merge = true,
+                          const migration_cost_per_table& migration_cost = default_migration_cost)
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -1487,18 +1526,27 @@ void do_rebalance_tablets(cql_test_env& e,
     // The x10 factor is arbitrary, it's there to account for more complex schedules than direct migration.
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
+    std::unordered_map<global_tablet_id, int> migration_progress;
+
     for (size_t i = 0; i < max_iterations; ++i) {
         auto plan = talloc.balance_tablets(stm.get(), load_stats ? load_stats->get() : nullptr, skiplist).get();
-        if (plan.empty()) {
-            return;
-        }
-        if (stop && stop(plan)) {
-            return;
-        }
+
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan(tm, plan);
+            apply_plan(tm, plan, migration_cost, migration_progress);
             return make_ready_future<>();
         }).get();
+
+        if (migration_progress.empty()) {
+            if (plan.empty()) {
+                return;
+            }
+            if (!auto_merge && plan.migrations().empty()) {
+                return;
+            }
+            if (stop && stop(plan)) {
+                return;
+            }
+        }
 
         if (auto_split && load_stats) {
             auto& tm = *stm.get();
@@ -1510,7 +1558,9 @@ void do_rebalance_tablets(cql_test_env& e,
             }
         }
 
-        handle_resize_finalize(e, guard, plan).get();
+        if (auto_merge) {
+            handle_resize_finalize(e, guard, plan).get();
+        }
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
 }
@@ -1523,7 +1573,9 @@ void rebalance_tablets(cql_test_env& e,
                        shared_load_stats* load_stats = nullptr,
                        std::unordered_set<host_id> skiplist = {},
                        std::function<bool(const migration_plan&)> stop = nullptr,
-                       bool auto_split = true) {
+                       bool auto_split = true,
+                       bool auto_merge = true,
+                       const migration_cost_per_table& migration_cost = default_migration_cost) {
     abort_source as;
     testlog.debug("rebalance_tablets(): start");
 
@@ -1539,7 +1591,7 @@ void rebalance_tablets(cql_test_env& e,
         load_stats = &local_stats;
     }
 
-    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split);
+    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split, auto_merge, migration_cost);
     testlog.debug("rebalance_tablets(): rebalanced");
 
     // We should not introduce inconsistency between on-disk state and in-memory state
