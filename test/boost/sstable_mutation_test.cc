@@ -1101,7 +1101,7 @@ SEASTAR_TEST_CASE(test_writing_combined_stream_with_tombstones_at_the_same_posit
         auto mt2 = make_memtable(s, {m2});
         auto combined_permit = env.make_reader_permit();
         auto mr = make_combined_reader(s, combined_permit,
-            mt1->make_flat_reader(s, combined_permit), mt2->make_flat_reader(s, combined_permit));
+            mt1->make_mutation_reader(s, combined_permit), mt2->make_mutation_reader(s, combined_permit));
         auto sst = make_sstable_easy(env, std::move(mr), env.manager().configure_writer(), version);
 
         assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()))
@@ -1275,7 +1275,7 @@ SEASTAR_TEST_CASE(test_large_index_pages_do_not_cause_large_allocations) {
 
     auto pr = dht::partition_range::make_singular(small_keys[0]);
 
-    mutation expected = *with_closeable(mt->make_flat_reader(s, env.make_reader_permit(), pr), [] (auto& mt_reader) {
+    mutation expected = *with_closeable(mt->make_mutation_reader(s, env.make_reader_permit(), pr), [] (auto& mt_reader) {
         return read_mutation_from_mutation_reader(mt_reader);
     }).get();
 
@@ -1336,7 +1336,7 @@ SEASTAR_TEST_CASE(test_reading_serialization_header) {
         // carries over that wouldn't normally be read from disk.
         auto sst = env.make_sstable(s);
         gen.emplace(sst->generation());
-        sst->write_components(mt->make_flat_reader(s, env.make_reader_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
+        sst->write_components(mt->make_mutation_reader(s, env.make_reader_permit()), 2, s, env.manager().configure_writer(), mt->get_encoding_stats()).get();
     }
 
     auto sst = env.reusable_sst(s, *gen).get();
