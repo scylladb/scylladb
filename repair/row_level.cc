@@ -532,6 +532,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     t.stream_in_progress()).then([w] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
+        return utils::get_local_injector().inject("repair_writer_impl_create_writer_wait", utils::wait_for_message(200s));
     }).handle_exception([w, keepalive = std::move(sharder.keepalive)] (std::exception_ptr ep) {
         rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
                 w->schema()->ks_name(), w->schema()->cf_name(), ep);
