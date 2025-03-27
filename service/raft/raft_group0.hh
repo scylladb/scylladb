@@ -380,8 +380,18 @@ private:
 
     // Modify the given server voter status in Raft group 0 configuration.
     // Retries on raft::commit_status_unknown.
+<<<<<<< HEAD
     future<> modify_raft_voter_status(
             const std::unordered_set<raft::server_id>&, can_vote, abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
+||||||| parent of 3b9765dac8 (raft_group0: modify_raft_voter_status: do not add new members)
+    future<> modify_raft_voter_status(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
+            abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
+=======
+    //
+    // Does not affect non-members. This behavior is only guaranteed if no concurrent membership changes are happening.
+    future<> modify_raft_voter_status(const std::unordered_set<raft::server_id>& voters_add, const std::unordered_set<raft::server_id>& voters_del,
+            abort_source& as, std::optional<raft_timeout> timeout = std::nullopt);
+>>>>>>> 3b9765dac8 (raft_group0: modify_raft_voter_status: do not add new members)
 
     // Returns true if raft is enabled
     future<bool> use_raft();

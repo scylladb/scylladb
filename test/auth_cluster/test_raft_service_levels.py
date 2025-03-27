@@ -105,7 +105,14 @@ async def test_service_levels_upgrade(request, manager: ManagerClient):
 
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
+<<<<<<< HEAD:test/auth_cluster/test_raft_service_levels.py
     servers = await manager.servers_add(3)
+||||||| parent of ca5c223505 (test: mark tests with the gossip-based recovery procedure):test/cluster/auth_cluster/test_raft_service_levels.py
+    servers = await manager.servers_add(3, config=auth_config)
+=======
+    # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
+    servers = await manager.servers_add(3, config=auth_config)
+>>>>>>> ca5c223505 (test: mark tests with the gossip-based recovery procedure):test/cluster/auth_cluster/test_raft_service_levels.py
 
     logging.info("Waiting until driver connects to every server")
     cql = manager.get_cql()

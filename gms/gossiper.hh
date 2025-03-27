@@ -69,6 +69,7 @@ struct gossip_config {
     uint32_t skip_wait_for_gossip_to_settle = -1;
     utils::updateable_value<uint32_t> failure_detector_timeout_ms;
     utils::updateable_value<int32_t> force_gossip_generation;
+    utils::updateable_value<sstring> recovery_leader;
 };
 
 struct loaded_endpoint_state {

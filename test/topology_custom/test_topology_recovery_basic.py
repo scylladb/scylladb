@@ -23,6 +23,8 @@ from test.topology.conftest import cluster_con
 @pytest.mark.asyncio
 @log_run_time
 async def test_topology_recovery_basic(request, build_mode: str, manager: ManagerClient):
+    # FIXME: move this test to the Raft-based recovery procedure or remove it if unneeded.
+
     # Increase ring delay to ensure nodes learn about CDC generations before they start operating.
     ring_delay = 15000 if build_mode == 'debug' else 5000
     normal_cfg = {'ring_delay_ms': ring_delay}
