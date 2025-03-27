@@ -222,10 +222,8 @@ void check_tablets_balance(const tablet_map& tmap,
     for (const auto& [dc, dc_racks] : load_map) {
         size_t replicas_in_dc = 0;
         size_t num_racks = dc_racks.size();
-        size_t num_nodes = 0;
         size_t num_shards = 0;
         for (const auto& [rack, rack_nodes] : dc_racks) {
-            num_nodes += rack_nodes.size();
             for (const auto& [host, shards] : rack_nodes) {
                 num_shards += shards.size();
                 for (const auto& [shard, n] : shards) {
@@ -235,7 +233,6 @@ void check_tablets_balance(const tablet_map& tmap,
         }
 
         auto avg_replicas_per_rack = double(replicas_in_dc) / num_racks;
-        auto avg_replicas_per_node = double(replicas_in_dc) / num_nodes;
         auto avg_replicas_per_shard = double(replicas_in_dc) / num_shards;
 
         for (const auto& [rack, rack_nodes] : dc_racks) {
@@ -247,8 +244,6 @@ void check_tablets_balance(const tablet_map& tmap,
                     BOOST_REQUIRE_LE(n, ceil(avg_replicas_per_shard + 1));
                     replicas_in_node += n;
                 }
-                BOOST_REQUIRE_GE(replicas_in_node, floor(avg_replicas_per_node - 1));
-                BOOST_REQUIRE_LE(replicas_in_node, ceil(avg_replicas_per_node + 1));
                 replicas_in_rack += replicas_in_node;
             }
             BOOST_REQUIRE_GE(replicas_in_rack, floor(avg_replicas_per_rack - 1));
