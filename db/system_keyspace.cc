@@ -101,6 +101,9 @@ namespace {
             system_keyspace::COMMITLOG_CLEANUPS,
             system_keyspace::SERVICE_LEVELS_V2,
             system_keyspace::VIEW_BUILD_STATUS_V2,
+            system_keyspace::CDC_STREAMS_STATE,
+            system_keyspace::CDC_STREAMS_HISTORY,
+            system_keyspace::CDC_PENDING_STREAMS,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -126,6 +129,9 @@ namespace {
                 system_keyspace::TABLETS,
                 system_keyspace::SERVICE_LEVELS_V2,
                 system_keyspace::VIEW_BUILD_STATUS_V2,
+                system_keyspace::CDC_STREAMS_STATE,
+                system_keyspace::CDC_STREAMS_HISTORY,
+                system_keyspace::CDC_PENDING_STREAMS,
                 // auth tables
                 system_keyspace::ROLES,
                 system_keyspace::ROLE_MEMBERS,
@@ -341,6 +347,48 @@ schema_ptr system_keyspace::cdc_generations_v3() {
              * range when the generation was first created. Together with the set of streams above it fully
              * describes the mapping for this particular range. */
             .with_column("ignore_msb", byte_type)
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::cdc_streams_state() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_STREAMS_STATE);
+        return schema_builder(NAME, CDC_STREAMS_STATE, {id})
+            .with_column("table_id", uuid_type, column_kind::partition_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
+            .with_column("timestamp", timestamp_type, column_kind::static_column)
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::cdc_streams_history() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_STREAMS_HISTORY);
+        return schema_builder(NAME, CDC_STREAMS_HISTORY, {id})
+            .with_column("table_id", uuid_type, column_kind::partition_key)
+            .with_column("timestamp", timestamp_type, column_kind::clustering_key)
+            .with_column("stream_state", byte_type, column_kind::clustering_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::cdc_pending_streams() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_PENDING_STREAMS);
+        return schema_builder(NAME, CDC_PENDING_STREAMS, {id})
+            .with_column("table_id", uuid_type, column_kind::partition_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
             .with_hash_version()
             .build();
     }();
@@ -2487,7 +2535,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_tasks(),
+                    dicts(), view_building_tasks(), cdc_streams_state(), cdc_streams_history(), cdc_pending_streams()
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
