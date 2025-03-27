@@ -7305,6 +7305,11 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.compression_dicts) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
+                if (ss._feature_service.cdc_with_tablets) {
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_pending_streams()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
