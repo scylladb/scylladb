@@ -2790,6 +2790,129 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_with_one_merged) {
+    // 3 racks, RF=3.
+    // We start with one large instance per rack and 1 table (table1).
+    // Then add a small instance to each rack.
+    // Wait for load to be balanced and then create another table (table2).
+    // This will trigger merge of the old table due to per-shard tablet count goal.
+    // The new table will not be merged, it will use smaller tablet count from the beginning.
+    //
+    // The problem arises when small instances are overloaded with table2 tablets
+    // due to initial allocation not respecting per-shard utilization.
+    // If co-locating migrations of table1 are done concurrently with
+    // load-balancing migrations of table2, table1 balance will be broken because
+    // co-locating migrations break the balance - even-numbered tablets don't have
+    // an even replica load distribution, only all tablets do.
+    // And because small instances are overloaded with table2 tablets during merge,
+    // table2 tablets will be used to compensate for the global imbalance made by
+    // merge, and table1 balance will not be fixed. If table2 was evenly balanced,
+    // then the problem wouldn't happen because co-locating migrations of table1
+    // which break the table1 balance will also break the global balance, and
+    // regular load-balancing will fix global balance by fixing table1 balance.
+    //
+    // We want per-table utilization to be balanced, because table1 may contain most of the data on disk,
+    // since it's older. If we break table1 balance, actual per-shard utilization will not be balanced
+    //
+    // It was observed that if the bug is present, the table1 imbalance is significant, utilization of small
+    // instances is half the utilization of large instances.
+
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_per_shard_goal(100);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        std::vector<host_id> hosts;
+
+        uint64_t i4i_2xlarge_cap = 1'875'000'000'000;
+        uint64_t i4i_large_cap = 468'000'000'000;
+
+        auto add_i4i_2xlarge = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 7, rack);
+            load_stats.set_capacity(h, i4i_2xlarge_cap);
+            hosts.push_back(h);
+        };
+
+        auto add_i4i_large = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 2, rack);
+            load_stats.set_capacity(h, i4i_large_cap);
+            hosts.push_back(h);
+        };
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        add_i4i_2xlarge(rack1);
+        add_i4i_2xlarge(rack2);
+        add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 1024);
+        auto table1 = add_table(e, ks_name).get();
+
+        load_stats.set_size(table1, 0.9 * i4i_2xlarge_cap);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Initial cluster ready");
+
+        add_i4i_large(rack1);
+        add_i4i_large(rack2);
+        add_i4i_large(rack3);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity");
+
+        auto ks2_name = add_keyspace(e, {{topo.dc(), 3}}, 1024);
+        auto table2 = add_table(e, ks2_name).get();
+
+        // Use asymmetric cost of migration where old table, which is undergoing a merge,
+        // will have heavier cost of co-locating migrations.
+        // Randomization of cost is also important so that table2 migrations scheduled in
+        // one plan don't finish all at once.
+        // This creates a migration schedule where table1 migrations are executed
+        // concurrently with table2 migrations. The former will break the balance
+        // of table1.
+        migration_cost_per_table migration_cost = {
+            {table1, {40, 60}},
+            {table2, {1, 4}},
+        };
+
+        rebalance_tablets(e, &load_stats, {}, nullptr, false, false, migration_cost);
+        testlog.info("Added second table");
+
+        {
+            load_sketch load(stm.get());
+            load.populate(std::nullopt, table1).get();
+
+            // Check that utilization difference is < 4%
+            min_max_tracker<double> node_utilization;
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                testlog.info("table1: {}: {}", h, u);
+                node_utilization.update(*u);
+            }
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.04);
+        }
+
+        {
+            load_sketch load(stm.get());
+            load.populate(std::nullopt, table2).get();
+
+            // Check that utilization difference is < 4%
+            min_max_tracker<double> node_utilization;
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                testlog.info("table2: {}: {}", h, u);
+                node_utilization.update(*u);
+            }
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.04);
+        }
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     do_with_cql_env_thread([] (auto& e) {
         auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
