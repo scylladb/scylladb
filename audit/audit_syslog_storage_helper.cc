@@ -55,20 +55,25 @@ static std::string json_escape(std::string_view str) {
 }
 
 future<> audit_syslog_storage_helper::syslog_send_helper(const sstring& msg) {
-    co_await _sender.send(_syslog_address, net::packet{msg.data(), msg.size()}).handle_exception([syslog_address=_syslog_address](auto&& exception_ptr) {
+    try {
+        auto lock = co_await get_units(_semaphore, 1, std::chrono::hours(1));
+        co_await _sender.send(_syslog_address, net::packet{msg.data(), msg.size()});
+    }
+    catch (const std::exception& e) {
         auto error_msg = seastar::format(
             "Syslog audit backend failed (sending a message to {} resulted in {}).",
-            syslog_address,
-            exception_ptr
+            _syslog_address,
+            e
         );
         logger.error("{}", error_msg);
         throw audit_exception(std::move(error_msg));
-    });
+    }
 }
 
 audit_syslog_storage_helper::audit_syslog_storage_helper(cql3::query_processor& qp, service::migration_manager&) :
     _syslog_address(syslog_address_helper(qp.db().get_config())),
-    _sender(make_unbound_datagram_channel(AF_UNIX)) {
+    _sender(make_unbound_datagram_channel(AF_UNIX)),
+    _semaphore(1) {
 }
 
 audit_syslog_storage_helper::~audit_syslog_storage_helper() {
