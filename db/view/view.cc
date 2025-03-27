@@ -1039,9 +1039,15 @@ void view_updates::update_entry(data_dictionary::database db, const partition_ke
         return;
     }
 
+    const auto kind = update.column_kind();
+    auto diff = update.cells().difference(*_base, kind, existing.cells());
+    // We can skip if the diff is empty.
+    if (diff.empty()) {
+        return;
+    }
+
     auto view_rows = get_view_rows(base_key, update, std::nullopt, {});
 
-    const auto kind = update.column_kind();
     for (const auto& [r, action] : view_rows) {
         if (auto rm = std::get_if<row_marker>(&action)) {
             r->apply(*rm);
@@ -1050,7 +1056,6 @@ void view_updates::update_entry(data_dictionary::database db, const partition_ke
         }
         r->apply(update.tomb());
 
-        auto diff = update.cells().difference(*_base, kind, existing.cells());
         add_cells_to_view(*_base, *_view, kind, std::move(diff), r->cells());
     }
     _op_count += view_rows.size();
