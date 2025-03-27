@@ -20,7 +20,6 @@ from copy import deepcopy
 from decimal import Decimal
 from enum import Enum
 from itertools import chain
-from pprint import pformat
 from typing import TYPE_CHECKING
 
 import boto3
@@ -162,7 +161,6 @@ class StoppableThread:
         logger.debug(f"{self.target_name} is stopped!")
 
 
-@pytest.mark.dtest_full
 class BaseAlternator(Tester):
     _nodes_url_list = None
     keyspace_name_template = "alternator_{}"
@@ -333,17 +331,6 @@ class BaseAlternator(Tester):
         logger.debug(f"Table's schema and configuration are: {response}")
         return table
 
-    def delete_table_items(self, table_name: str, node: ScyllaNode, items: list[dict[str, str]], schema: tuple | dict = schemas.HASH_SCHEMA) -> None:
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        table = dynamodb_api.resource.Table(name=table_name)
-        table_keys = [key["AttributeName"] for key in schema[0][1]]
-        with table.batch_writer() as batch:
-            for item in items:
-                batch.delete_item(Key={key: item[key] for key in table_keys})
-        logger.debug(f"Executing flush on node '{node.name}'")
-        node.flush()
-        logger.info(f"All items of table '{table_name}' successfully removed..")
-
     def delete_table(self, table_name: str, node: ScyllaNode) -> None:
         node_ks_path = self.get_table_folder(table_name=table_name, node=node)
         dynamodb_api = self.get_dynamodb_api(node=node)
@@ -423,26 +410,6 @@ class BaseAlternator(Tester):
                     raise error
         return table
 
-    def update_items(
-        self,
-        table_name: str,
-        node: ScyllaNode,
-        items: list[dict] | None = None,
-        primary_key: str | None = None,
-        action: str = "PUT",
-    ) -> None:
-        items = items or self.create_items(num_of_items=NUM_OF_ITEMS)
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        primary_key = primary_key or self._table_primary_key
-
-        logger.debug(f"Updating '{len(items)}' items from table '{table_name}'..")
-        table = dynamodb_api.resource.Table(name=table_name)
-        for update_item in items:
-            if "AttributeUpdates" in update_item:
-                table.update_item(**update_item)
-            else:
-                table.update_item(**dict(Key={primary_key: update_item[primary_key]}, AttributeUpdates={key: dict(Value=value, Action=action) for key, value in update_item.items() if key != primary_key}))
-
     def scan_table(self, table_name: str, node: ScyllaNode, threads_num: int | None = None, consistent_read: bool = True, **kwargs) -> list[dict[str, AttributeValueTypeDef]]:
         scan_result, is_parallel_scan = [], threads_num and threads_num > 0
         dynamodb_api = self.get_dynamodb_api(node=node)
@@ -483,17 +450,6 @@ class BaseAlternator(Tester):
             if not table_conf == nodes_table_conf[idx + 1]:
                 return False
         return True
-
-    def is_table_exists(self, table_name: str, node: ScyllaNode) -> bool:
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        is_table_exists = True
-
-        try:
-            dynamodb_api.client.describe_table(TableName=table_name)
-        except dynamodb_api.client.exceptions.ResourceNotFoundException:
-            is_table_exists = False
-        logger.debug(f"The table '{table_name}'{'' if is_table_exists else 'not'} exists in node {node.name}..")
-        return is_table_exists
 
     @staticmethod
     def get_table_folder(table_name: str, node: ScyllaNode) -> str:
@@ -653,79 +609,6 @@ class BaseAlternator(Tester):
 
         self.batch_write_actions(table_name=table_name, node=node, new_items=items, ignore_errors=ignore_errors, verbose=verbose)
 
-    def update_table_nested_items(  # noqa: PLR0913
-        self,
-        table_name: str,
-        node: ScyllaNode,
-        num_of_items: int = NUM_OF_ITEMS,
-        consistent_read: bool = True,
-        nested_attributes_levels: int = 1,
-        start_index: int = 0,
-    ):
-        """
-        :param table_name: table to update its items' nested attributes.
-        :param node: node to run queries against.
-        :param num_of_items: number of items to update.
-        :param consistent_read: Is read query consistent or not.
-        :param nested_attributes_levels: levels of nesting attributes per item.
-        :param start_index: the item-index to start updating from.
-
-        1) Read a random item in range.
-        2) update a random nested-level for this item.
-        3) Read the item again and verify it has the expected data with updated nested attribute.
-        """
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        table: Table = dynamodb_api.resource.Table(name=table_name)
-        item_idx = random.randint(start_index, start_index + num_of_items)
-        item = table.get_item(ConsistentRead=consistent_read, Key={self._table_primary_key: f"test{item_idx}"})
-        if "Item" not in item:
-            logger.debug(f"Item test{item_idx} not found!")
-            return
-        item = item["Item"]
-        updated_level = random.randint(1, nested_attributes_levels)
-        level_path = ".".join([f"level{nested_attributes_levels - level}" for level in range(updated_level)])
-        # Example nested attribute path to update: 'x.level10.level9.level8.level7.level6.level5.level4.level3.level2.a'
-        nested_attribute_path = ".".join(["x", level_path, "a"])
-        updated_value = random_string(length=DEFAULT_STRING_LENGTH)
-        table.update_item(Key={self._table_primary_key: f"test{item_idx}"}, UpdateExpression=f"SET {nested_attribute_path} = :val1", ExpressionAttributeValues={":val1": updated_value})
-        updated_item_query_result = table.get_item(ConsistentRead=consistent_read, Key={self._table_primary_key: f"test{item_idx}"})["Item"]
-        expected_sub_item = self._update_item_nested_attribute(sub_item=item["x"], nested_attributes_levels=nested_attributes_levels, updated_level=updated_level, updated_value=updated_value, item_idx=item_idx)
-        expected_item = {self._table_primary_key: f"test{item_idx}", "x": expected_sub_item}
-        assert updated_item_query_result == expected_item, f"Found item: {updated_item_query_result} is different than expected value of: {expected_item}"
-
-    def _update_item_nested_attribute(
-        self,
-        sub_item: dict,
-        nested_attributes_levels,
-        updated_level,
-        updated_value,
-        item_idx,
-    ) -> dict:
-        """
-        This function gets an original sub-item and the nested attribute to update in it.
-        It then goes over the item nested levels until finds and updated the requested attribute.
-        It then returns the updated sub-item.
-        example:
-        original sub-item:
-        {'a': '1846', 'level3': {'a': '1846', 'level2': {'a': '1846', 'level1': {'hello': 'world1846'}}}}
-        updated sub-item:
-        {'a': '1846', 'level3': {'a': 'ZEA4X', 'level2': {'a': '1846', 'level1': {'hello': 'world1846'}}}}
-
-        :param sub_item: The 'portion' of the item with nested attributes to be updated.
-        :param nested_attributes_levels: how many nested levels in items.
-        :param updated_level: the requested nested level to update.
-        :param updated_value: the value to update nested attribute with.
-        :param item_idx: item index.
-        :return: the updated sub-item.
-        """
-        if updated_level == 1:
-            sub_level_key = f"level{nested_attributes_levels}"
-            sub_item[sub_level_key].update({"a": updated_value})
-            return sub_item
-        next_level_num = nested_attributes_levels - 1
-        next_level = f"level{nested_attributes_levels}"
-        return {"a": sub_item["a"], next_level: self._update_item_nested_attribute(sub_item=sub_item[next_level], nested_attributes_levels=next_level_num, updated_level=updated_level - 1, updated_value=updated_value, item_idx=item_idx)}
-
     def update_table_delete_set_elements(  # noqa: PLR0913
         self,
         table_name: str,
@@ -779,101 +662,6 @@ class BaseAlternator(Tester):
         self.create_table(table_name=table_name, node=node, **kwargs)
         new_items = self.create_items(num_of_items=num_of_items)
         return self.batch_write_actions(table_name=table_name, node=node, new_items=new_items)
-
-    def run_scan_stress(
-        self,
-        table_name: str,
-        node: ScyllaNode,
-        items: list[dict[str, str]] | None = None,
-        threads_num: int | None = None,
-        is_compare_scan_result: bool = True,
-    ) -> StoppableThread:
-        items = items or self.create_items(num_of_items=NUM_OF_ITEMS)
-
-        def full_scan():
-            self.scan_table(table_name=table_name, node=node, threads_num=threads_num)
-            logger.debug("Verifying the scan result..")
-            if not is_compare_scan_result:
-                return
-            self.compare_table_items_data(table_name=table_name, expected_items=items, node=node)
-
-        logger.debug("Creating Alternator scan stress..")
-        scan_thread = StoppableThread(target=full_scan)
-        self.clear_resources_methods.append(lambda: scan_thread.stop())
-        return scan_thread
-
-    def run_delete_insert_update_item_stress(self, table_name: str, node: ScyllaNode):
-        primary_key, total_items = "insert_stress_{}", 0
-
-        def insert_item():
-            nonlocal total_items
-            sub_items_size = total_items // 3
-            items = self.create_items(primary_key=primary_key, num_of_items=total_items)
-            update_items = items[sub_items_size : sub_items_size * 2]
-            if total_items % 2 == 0:
-                delete_items = items[:sub_items_size]
-                new_items = items[2 * sub_items_size :]
-            else:
-                delete_items = items[2 * sub_items_size :]
-                new_items = items[:sub_items_size]
-            if total_items % 25 == 0:
-                logger.debug(f"Updating '{len(update_items)}' existing items, creating '{len(new_items)}' new items and removing '{len(delete_items)}' items from table '{table_name}'..")
-
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                executor.submit(self.batch_write_actions, **dict(table_name=table_name, node=node, primary_key=primary_key, new_items=new_items))
-                executor.submit(self.batch_write_actions, **dict(table_name=table_name, node=node, primary_key=primary_key, delete_items=delete_items))
-                executor.submit(self.update_items, **dict(table_name=table_name, node=node, items=update_items, primary_key=primary_key))
-            total_items += 1
-
-        logger.debug("Creating Alternator scan stress..")
-        insert_update_thread = StoppableThread(target=insert_item)
-        self.clear_resources_methods.append(lambda: insert_update_thread.stop())
-        return insert_update_thread
-
-    def get_item(self, node: ScyllaNode, item_key: dict[str, AttributeValueTypeDef], table_name: str = TABLE_NAME, consistent_read: bool = False):
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        table: Table = dynamodb_api.resource.Table(name=table_name)
-        logger.debug(f'Getting item "{pformat(item_key)}" with ConsistentRead = "{consistent_read}"')
-        response = table.get_item(Key=item_key, ConsistentRead=consistent_read)
-        if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-            raise RuntimeError(f'The "get_item" of "{pformat(item_key)} is failed (full response is "{pformat(response)}")"')
-        return response["Item"]
-
-    def put_item(self, node: ScyllaNode, item: dict[str, AttributeValueTypeDef], table_name: str = TABLE_NAME):
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        table: Table = dynamodb_api.resource.Table(name=table_name)
-        logger.debug(f'Adding new item "{pformat(item)}" ')
-        response = table.put_item(Item=item)
-        if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-            raise RuntimeError(f'The "put_item" of "{pformat(item)} is failed (full response is "{pformat(response)}")"')
-
-    def update_item(self, node: ScyllaNode, item_key: dict[str, AttributeValueTypeDef], table_name: str = TABLE_NAME):
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        table: Table = dynamodb_api.resource.Table(name=table_name)
-        logger.debug(f'Updating item "{pformat(item_key)}"')
-        response = table.update_item(Key=item_key)
-        if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-            raise RuntimeError(f'The "update_item" of "{pformat(item_key)} is failed (full response is "{pformat(response)}")"')
-
-    def delete_item(self, node: ScyllaNode, item_key: dict[str, AttributeValueTypeDef], table_name: str = TABLE_NAME):
-        dynamodb_api = self.get_dynamodb_api(node=node)
-        table: Table = dynamodb_api.resource.Table(name=table_name)
-        logger.debug(f'Deleting item "{pformat(item_key)}"')
-        response = table.delete_item(Key=item_key)
-        if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-            raise RuntimeError(f'The "delete_item" of "{pformat(item_key)} is failed (full response is "{pformat(response)}")"')
-
-    def get_all_traces_events(self):
-        result = []
-        table_name_prefix = ".scylla.alternator.system_traces."
-        node = self.cluster.nodelist()[0]
-        table: Table = self.get_dynamodb_api(node=node).resource.Table(name=f"{table_name_prefix}events")
-
-        traces = self.scan_table(table_name=f"{table_name_prefix}sessions", node=node)
-        for trace in sorted(traces, key=lambda _trace: _trace["started_at"]):
-            session_id = trace["session_id"]
-            result.append(full_query(table=table, consistent_read=True, KeyConditionExpression="session_id = :s", ExpressionAttributeValues={":s": session_id}))
-        return result
 
 
 def random_string(length: int, chars=string.ascii_uppercase + string.digits):
