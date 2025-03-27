@@ -43,7 +43,7 @@ static auto syslog_address_helper(const db::config& cfg)
 }
 
 future<> audit_syslog_storage_helper::syslog_send_helper(const sstring& msg) {
-    return _sender.send(_syslog_address, net::packet{msg.data(), msg.size()}).handle_exception([syslog_address=_syslog_address](auto&& exception_ptr) {
+    co_await _sender.send(_syslog_address, net::packet{msg.data(), msg.size()}).handle_exception([syslog_address=_syslog_address](auto&& exception_ptr) {
         auto error_msg = seastar::format(
             "Syslog audit backend failed (sending a message to {} resulted in {}).",
             syslog_address,
@@ -71,10 +71,10 @@ audit_syslog_storage_helper::~audit_syslog_storage_helper() {
  */
 future<> audit_syslog_storage_helper::start(const db::config& cfg) {
     if (this_shard_id() != 0) {
-        return make_ready_future();
+        co_return;
     }
 
-    return syslog_send_helper("Initializing syslog audit backend.");
+    co_await syslog_send_helper("Initializing syslog audit backend.");
 }
 
 future<> audit_syslog_storage_helper::stop() {
@@ -104,7 +104,7 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
                                     audit_info->table(),
                                     username);
 
-    return syslog_send_helper(msg);
+    co_await syslog_send_helper(msg);
 }
 
 future<> audit_syslog_storage_helper::write_login(const sstring& username,
