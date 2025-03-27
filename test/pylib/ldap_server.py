@@ -106,7 +106,7 @@ def make_saslauthd_conf(ip, port, instance_path):
     return saslauthd_conf_path
 
 
-def start_ldap(host: Host, port: int, instance_root: Path, toxyproxy_byte_limit: int):
+def start_ldap(host: Host, port: int, instance_root: Path, toxiproxy_byte_limit: int):
     tp_port = 8474
 
     tp_log_file = open(instance_root.parent / 'toxiproxy_server.log', 'x')
@@ -121,7 +121,7 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxyproxy_byte_limit:
 
     if not try_something_backoff(can_connect_to_toxiproxy):
         raise Exception('Could not connect to toxiproxy')
-    
+
     instance_path = instance_root / str(port)
     slapd_pid_file = instance_path / 'slapd.pid'
     saslauthd_socket_path = TemporaryDirectory()
@@ -141,7 +141,7 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxyproxy_byte_limit:
              f'{host}:{port}'], stderr=subprocess.STDOUT)
         subprocess.check_output(
             ['toxiproxy-cli', '-h', f'{host}:{tp_port}', 't', 'a', proxy_name, '-t', 'limit_data', '-n', 'limiter', '-a',
-             f'bytes={toxyproxy_byte_limit}'], stderr=subprocess.STDOUT)
+             f'bytes={toxiproxy_byte_limit}'], stderr=subprocess.STDOUT)
         # Change the data folder in the default config.
         replace_expression = f"s/olcDbDirectory:.*/olcDbDirectory: {str(instance_path).replace('/', r'\/')}/g"
         subprocess.check_output(
@@ -159,7 +159,7 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxyproxy_byte_limit:
         subprocess.check_output(cmd, input='\n\n'.join(DEFAULT_ENTRIES).encode('ascii'), stderr=subprocess.STDOUT)
     except CalledProcessError as e:
         logging.critical("toxiproxy-cli failed: %s: s%", e, e.stdout)
-        raise 
+        raise
     # Set up the server.
     SLAPD_URLS = f'ldap://:{port}/ ldaps://:{port + 1}/'
 
@@ -172,7 +172,8 @@ def start_ldap(host: Host, port: int, instance_root: Path, toxyproxy_byte_limit:
 
     slapd_proc = subprocess.Popen(['prlimit', '-n1024', 'slapd', '-F', instance_path, '-h', SLAPD_URLS, '-d', '0'])
     saslauthd_conf_path = make_saslauthd_conf(host, port, instance_path)
-    test_env = {"SEASTAR_LDAP_PORT": str(port), "SEASTAR_LDAP_HOST": str(host), "SASLAUTHD_MUX_PATH": os.path.join(saslauthd_socket_path.name, "mux")}
+    test_env = {"SEASTAR_LDAP_PORT": str(port), "SEASTAR_LDAP_HOST": str(host),
+                "SASLAUTHD_MUX_PATH": os.path.join(saslauthd_socket_path.name, "mux")}
     for key, value in test_env.items():
         os.environ[key] = value
 
