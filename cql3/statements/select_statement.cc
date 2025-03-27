@@ -776,7 +776,6 @@ indexed_table_select_statement::do_execute_base_query(
         }
         next_iteration_size = std::min<size_t>({next_iteration_size, keys.size() - already_done, max_base_table_query_concurrency});
         auto key_it_end = key_it + next_iteration_size;
-        auto command = ::make_lw_shared<query::read_command>(*cmd);
 
         query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions);
         coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> rresult = co_await utils::result_map_reduce(key_it, key_it_end, coroutine::lambda([&] (auto& key)
