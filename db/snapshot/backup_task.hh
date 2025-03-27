@@ -28,7 +28,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     sstring _prefix;
     std::filesystem::path _snapshot_dir;
     bool _remove_on_uploaded;
-    s3::upload_progress _progress = {};
+    s3::upload_progress _progress;
 
     std::exception_ptr _ex;
     std::vector<sstring> _files;
