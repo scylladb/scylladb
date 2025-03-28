@@ -28,6 +28,16 @@ struct prepared_cache_entry_size {
 };
 
 typedef bytes cql_prepared_id_type;
+struct cql_metadata_id_type {
+    explicit cql_metadata_id_type(const bytes&& metadata_id) : _metadata_id(std::move(metadata_id)) {}
+    bytes _metadata_id;
+
+    bool operator==(const cql_metadata_id_type& other) const = default;
+    friend std::ostream& operator<<(std::ostream& os, const cql_metadata_id_type& metadata_id){
+        fmt::print(os, "{}", metadata_id._metadata_id);
+        return os;
+    }
+};
 
 /// \brief The key of the prepared statements cache
 ///
