@@ -433,6 +433,10 @@ possible_lhs_values(const column_definition* cdef,
                             if (cdef) {
                                 return [] (const query_options&) -> value_set { return unbounded_value_set; };
                             }
+
+                            if (!(oper.op == oper_t::EQ || is_slice(oper.op))) {
+                                return nullptr;
+                            }
                           return [oper] (const query_options& options) -> value_set {
                             auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                             if (!val) {
@@ -455,7 +459,7 @@ possible_lhs_values(const column_definition* cdef,
                             } else if (oper.op == oper_t::LTE) {
                                 return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
                             }
-                            throw std::logic_error(format("get_token_interval invalid operator {}", oper.op));
+                            throw std::logic_error(format("get_token_interval unexpected operator {}", oper.op));
                           };
                         },
                         [&] (const binary_operator&) -> solve_for_t {
