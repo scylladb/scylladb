@@ -40,6 +40,8 @@ class group0_voter_handler {
     const gms::gossiper& _gossiper;
     const gms::feature_service& _feature_service;
 
+    semaphore _voter_lock = semaphore(1);
+
     group0_voter_calculator _calculator;
 
     // Updates the voter handler based on topology changes (node additions or removals).
