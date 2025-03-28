@@ -1,7 +1,26 @@
 # Reader concurrency semaphore
 
-The role of the reader concurrency semaphore is to keep resource consumption of reads under a given limit.
-The semaphore manages two kinds of resources: memory and "count". The former is a kind of "don't go crazy" limit on the maximum number of concurrent reads.
+The reader concurrency semaphore receives read requests into the tail of a queue. When
+conditions are suitable, it dequeues requests and issues them for execution.
+
+The reader concurrency semaphore has several goals when choosing to a issue a request:
+ - keeping concurrency sufficiently high so that CPU and I/O can be saturated
+ - keeping concurrency sufficiently low so that transient memory use is not too high
+ - keeping concurrency sufficiently low so that a sufficient number of requests are
+   kept queued (not executing), where they can be canceled without having spent any
+   resources, should there be need to
+
+The first goal (saturating CPU and I/O) is satisfied by issuing as many requests as we can
+without contradicting the other goals.
+
+The goal of keeping concurrency low so that queued requests can be canceled without spending
+resources is accomplished by measuring the number of executing requests that actively demand
+CPU and not issuing more requests for execution if that number if greater than a small constant
+(by default 2). It is better to let a request complete using the CPU than to issue a new one that
+will compete with it. A corresponding I/O condition is not implemented.
+
+To limit transient memory use, the semaphore manages two kinds of resources: memory and "count".
+The former is a kind of "don't go crazy" limit on the maximum number of concurrent reads.
 This memory limit is expressed as a certain percentage of the shard's memory and it is defined in the code, not user configurable.
 There is a separate reader concurrency semaphore for each scheduling group:
 * `statement` (user reads) - 100 count and 2% of shard memory (queue size: 2% memory / 1KB)
