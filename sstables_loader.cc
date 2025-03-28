@@ -81,10 +81,12 @@ public:
         llog.trace("send_meta_data: send mf to node={}, size={}", _node, size);
         co_return co_await _sink(fmf, streaming::stream_mutation_fragments_cmd::mutation_fragment_data);
     }
-    future<> finish(bool failed) {
+    future<> finish(bool failed, bool aborted = false) {
         std::exception_ptr eptr;
         try {
-            if (failed) {
+            if (aborted) {
+                co_await _sink(frozen_mutation_fragment(bytes_ostream()), streaming::stream_mutation_fragments_cmd::abort);
+            } else if (failed) {
                 co_await _sink(frozen_mutation_fragment(bytes_ostream()), streaming::stream_mutation_fragments_cmd::error);
             } else {
                 co_await _sink(frozen_mutation_fragment(bytes_ostream()), streaming::stream_mutation_fragments_cmd::end_of_stream);
@@ -464,8 +466,17 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
     }
     co_await reader.close();
     try {
-        co_await coroutine::parallel_for_each(metas.begin(), metas.end(), [failed] (std::pair<const locator::host_id, send_meta_data>& pair) {
+        co_await coroutine::parallel_for_each(metas.begin(), metas.end(), [failed, eptr] (std::pair<const locator::host_id, send_meta_data>& pair) {
             auto& meta = pair.second;
+            if (eptr) {
+                try {
+                    std::rethrow_exception(eptr);
+                } catch (const abort_requested_exception&) {
+                    return meta.finish(failed, true);
+                } catch (...) {
+                    // just fall through
+                }
+            }
             return meta.finish(failed);
         });
     } catch (...) {
