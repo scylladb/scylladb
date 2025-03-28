@@ -146,6 +146,11 @@ class ManagerClient():
             # await self._wait_for_cluster()
             await self.driver_connect()  # Connect driver to new cluster
 
+
+    async def check_backtraces(self) -> Path:
+        backtrace_file = await self.client.get_json("/cluster/check_backtraces")
+        return Path(backtrace_file)
+
     async def after_test(self, test_case_name: str, success: bool) -> None:
         """Tell harness this test finished"""
         self.test_finished_event.set()

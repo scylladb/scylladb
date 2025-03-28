@@ -6,11 +6,15 @@
 # This file configures pytest for all tests in this directory, and also
 # defines common test fixtures for all of them to use
 import pathlib
+import shutil
 import ssl
 import platform
 import urllib.parse
 from functools import partial
 from typing import List, Optional, Dict
+
+import allure
+
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient, IPAddress
@@ -170,7 +174,6 @@ async def manager_internal(event_loop, request):
     manager_int = partial(ManagerClient, request.config.getoption('manager_api'), port, use_ssl, auth_provider, cluster_con)
     yield manager_int
 
-
 @pytest.fixture(scope="function")
 async def manager(request, manager_internal, record_property, build_mode):
     """Per test fixture to notify Manager client object when tests begin so it can
@@ -195,11 +198,17 @@ async def manager(request, manager_internal, record_property, build_mode):
     # test failure.
     report = request.node.stash[PHASE_REPORT_KEY]
     failed = report.when == "call" and report.failed
+    backtrace_file = await manager_client.check_backtraces()
+
+    if backtrace_file.stat().st_size > 0:
+        failed = True
     if failed:
+        allure.attach.file(backtrace_file, name='backtraces', attachment_type=allure.attachment_type.TEXT)
         # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
         # all related logs in one dir.
         # Then add property to the XML report with the path to the directory, so it can be visible in Jenkins
         failed_test_dir_path = tmp_dir / build_mode / "failed_test" / f"{test_case_name}"
+        shutil.copy(backtrace_file, failed_test_dir_path)
         failed_test_dir_path.mkdir(parents=True, exist_ok=True)
         await manager_client.gather_related_logs(
             failed_test_dir_path,
@@ -215,9 +224,11 @@ async def manager(request, manager_internal, record_property, build_mode):
             record_property("TEST_LOGS", f"<a href={full_url}>failed_test_logs</a>")
 
     cluster_status = await manager_client.after_test(test_case_name, not failed)
+
     await manager_client.stop()  # Stop client session and close driver after each test
     if cluster_status["server_broken"]:
         pytest.fail(f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken, server_broken_reason: {cluster_status["message"]}")
+
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # Since connection is managed by manager just return that object
