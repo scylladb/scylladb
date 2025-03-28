@@ -30,7 +30,12 @@ logger = logging.getLogger(__name__)
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_mv_tablets_empty_ip(manager: ManagerClient):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
-    servers = await manager.servers_add(4, config = cfg)
+    servers = await manager.servers_add(4, config = cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"}
+    ])
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
@@ -62,11 +67,13 @@ async def test_mv_tablets_empty_ip(manager: ManagerClient):
         tasks = [asyncio.create_task(do_writes(i)) for i in range(concurrency)]
 
         logger.info("Stopping the last node")
-        await manager.server_stop_gracefully(servers[-1].server_id)
-        replace_cfg = ReplaceConfig(replaced_id = servers[-1].server_id, reuse_ip_addr = False, use_host_id = True)
+        replaced_node = servers[-1]
+        await manager.server_stop_gracefully(replaced_node.server_id)
+        replace_cfg = ReplaceConfig(replaced_id = replaced_node.server_id, reuse_ip_addr = False, use_host_id = True)
 
         logger.info("Replacing the last node")
-        await manager.server_add(replace_cfg=replace_cfg, config = cfg)
+        await manager.server_add(replace_cfg=replace_cfg, config = cfg,
+                                 property_file={"dc": replaced_node.datacenter, "rack": replaced_node.rack})
 
         logger.info("Stopping writes")
         stop_event.set()
