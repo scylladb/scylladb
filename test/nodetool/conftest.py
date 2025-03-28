@@ -15,7 +15,7 @@ from typing import NamedTuple
 import pytest
 import requests.exceptions
 
-from test import TOP_SRC_DIR, BUILD_DIR
+from test import TOP_SRC_DIR, path_to
 from test.nodetool.rest_api_mock import set_expected_requests, expected_request, get_expected_requests, \
     get_unexpected_requests, expected_requests_manager
 
@@ -99,9 +99,9 @@ def jmx(request, rest_api_mock_server):
     if jmx_path is None:
         jmx_path = TOP_SRC_DIR / "tools" / "jmx" / "scripts" / "scylla-jmx"
     else:
-        jmx_path = os.path.abspath(jmx_path)
+        jmx_path = Path(jmx_path).absolute()
 
-    workdir = os.path.join(os.path.dirname(jmx_path), "..")
+    workdir = jmx_path.parent.parent
     ip, api_port = rest_api_mock_server
     expected_requests = [
             expected_request(
@@ -150,30 +150,16 @@ def jmx(request, rest_api_mock_server):
     jmx_process.wait()
 
 
-all_modes = {'debug': 'Debug',
-             'release': 'RelWithDebInfo',
-             'dev': 'Dev',
-             'sanitize': 'Sanitize',
-             'coverage': 'Coverage'}
-
-
-def _path_to_scylla(mode) -> Path:
-    ninja  = BUILD_DIR / 'build.ninja'
-    if ninja.exists():
-        return BUILD_DIR / all_modes[mode] / "scylla"
-    return BUILD_DIR / mode / "scylla"
-
-
 @pytest.fixture(scope="session")
 def nodetool_path(request, build_mode):
     if request.config.getoption("nodetool") == "scylla":
-        return _path_to_scylla(build_mode)
+        return path_to(build_mode, "scylla")
 
     path = request.config.getoption("nodetool_path")
     if path is not None:
         return os.path.abspath(path)
 
-    return TOP_SRC_DIR / "java" / "bin" / "nodetool"
+    return str(TOP_SRC_DIR / "java" / "bin" / "nodetool")
 
 
 @pytest.fixture(scope="function")

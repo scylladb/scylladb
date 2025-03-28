@@ -14,34 +14,34 @@ import logging
 import os
 import pathlib
 import re
-import shlex
+import shutil
 import sys
 import time
-import traceback
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from importlib import import_module
 from typing import TYPE_CHECKING
 
 import colorama
+import universalasync
 import yaml
 
+from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, TEST_DIR, TEST_RUNNER
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
+from test.pylib.ldap_server import start_ldap
+from test.pylib.minio_server import MinioServer
 from test.pylib.resource_gather import get_resource_gather
+from test.pylib.s3_proxy import S3ProxyServer
+from test.pylib.s3_server_mock import MockS3Server
+from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-    from typing import Any, Dict, List
+    from typing import Any, List
 
 
-all_modes = {'debug': 'Debug',
-             'release': 'RelWithDebInfo',
-             'dev': 'Dev',
-             'sanitize': 'Sanitize',
-             'coverage': 'Coverage'}
-debug_modes = {'debug', 'sanitize'}
-
+SUITE_CONFIG_FILENAME = "suite.yaml"
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -75,28 +75,24 @@ class palette:
         return palette.ansi_escape.sub('', text)
 
 
-def path_to(mode, *components):
-    """Resolve path to built executable"""
-    build_dir = 'build'
-    if os.path.exists(os.path.join(build_dir, 'build.ninja')):
-        *dir_components, basename = components
-        return os.path.join(build_dir, *dir_components, all_modes[mode], basename)
-    return os.path.join(build_dir, mode, *components)
-
-
 class TestSuite(ABC):
     """A test suite is a folder with tests of the same type.
     E.g. it can be unit tests, boost tests, or CQL tests."""
 
     # All existing test suites, one suite per path/mode.
-    suites: Dict[str, 'TestSuite'] = dict()
+
+    suites: dict[str, TestSuite] = {}
+
     artifacts: ArtifactRegistry
     hosts: HostRegistry
+
     FLAKY_RETRIES = 5
+
     _next_id = collections.defaultdict(int) # (test_key -> id)
 
     def __init__(self, path: str, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         self.suite_path = pathlib.Path(path)
+        self.log_dir = pathlib.Path(options.tmpdir) / mode
         self.name = str(self.suite_path.name)
         self.cfg = cfg
         self.options = options
@@ -116,7 +112,7 @@ class TestSuite(ABC):
         self.flaky_tests = set(self.cfg.get("flaky", []))
         # If this mode is one of the debug modes, and there are
         # tests disabled in a debug mode, add these tests to the skip list.
-        if mode in debug_modes:
+        if mode in DEBUG_MODES:
             self.disabled_tests.update(self.cfg.get("skip_in_debug_modes", []))
         # If a test is listed in run_in_<mode>, it should only be enabled in
         # this mode. Tests not listed in any run_in_<mode> directive should
@@ -125,7 +121,7 @@ class TestSuite(ABC):
         # This of course may create ambiguity with skip_* settings,
         # since the priority of the two is undefined, but oh well.
         run_in_m = set(self.cfg.get("run_in_" + mode, []))
-        for a in all_modes:
+        for a in ALL_MODES:
             if a == mode:
                 continue
             skip_in_m = set(self.cfg.get("run_in_" + a, []))
@@ -138,7 +134,9 @@ class TestSuite(ABC):
             # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
             # thousands of tests it can easily reach 10 of GBs)
             # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
-            self.base_env["LLVM_PROFILE_FILE"] = os.path.join(options.tmpdir,self.mode, "coverage", self.name, "%m.profraw")
+            self.base_env["LLVM_PROFILE_FILE"] = str(self.log_dir / "coverage" / self.name / "%m.profraw")
+
+
     # Generate a unique ID for `--repeat`ed tests
     # We want these tests to have different XML IDs so test result
     # processors (Jenkins) don't merge results for different iterations of
@@ -202,7 +200,7 @@ class TestSuite(ABC):
         pass
 
     @abstractmethod
-    async def add_test(self, shortname: str, casename: str) -> None:
+    async def add_test(self, shortname: str, casename: str | None) -> None:
         pass
 
     async def run(self, test: 'Test', options: argparse.Namespace):
@@ -308,10 +306,12 @@ class Test:
         self.shortname = shortname
         self.mode = suite.mode
         self.suite = suite
-        self.allure_dir = pathlib.Path(suite.options.tmpdir) / self.mode / 'allure'
+        self.allure_dir = self.suite.log_dir / 'allure'
         # Unique file name, which is also readable by human, as filename prefix
-        self.uname = "{}.{}.{}".format(self.suite.name, self.shortname.replace("/","."), self.id)
-        self.log_filename = pathlib.Path(suite.options.tmpdir) / self.mode / (self.uname + ".log")
+        self.uname = f"{self.suite.name}.{self.shortname.replace('/', '_')}.{self.id}"
+        if xdist_worker_id := get_xdist_worker_id():
+            self.uname = f"{xdist_worker_id}.{self.uname}"
+        self.log_filename = self.suite.log_dir / f"{self.uname}.log"
         self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
@@ -403,7 +403,6 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
     """Run test program, return True if success else False"""
 
     with test.log_filename.open("wb") as log:
-        cleanup_fn = None
         def report_error(error, failure_injection_desc = None):
             msg = "=== TEST.PY SUMMARY START ===\n"
             msg += "{}\n".format(error)
@@ -413,12 +412,12 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             log.write(msg.encode(encoding="UTF-8"))
 
         process = None
-        stdout = None
+
         logging.info("Starting test %s: %s %s", test.uname, test.path, " ".join(test.args))
         UBSAN_OPTIONS = [
             "halt_on_error=1",
             "abort_on_error=1",
-            f"suppressions={os.getcwd()}/ubsan-suppressions.supp",
+            f"suppressions={TOP_SRC_DIR / 'ubsan-suppressions.supp'}",
             os.getenv("UBSAN_OPTIONS"),
         ]
         ASAN_OPTIONS = [
@@ -428,7 +427,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             os.getenv("ASAN_OPTIONS"),
         ]
         try:
-            resource_gather = get_resource_gather(options.gather_metrics, test, options.tmpdir)
+            resource_gather = get_resource_gather(is_switched_on=options.gather_metrics, test=test)
             resource_gather.make_cgroup()
             log.write("=== TEST.PY STARTING TEST {} ===\n".format(test.uname).encode(encoding="UTF-8"))
             log.write("export UBSAN_OPTIONS='{}'\n".format(
@@ -450,16 +449,18 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             test_running_event = asyncio.Event()
             test_resource_watcher = resource_gather.cgroup_monitor(test_event=test_running_event)
 
-            test_env = dict(os.environ,
-                            UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
-                            ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
-                            # TMPDIR env variable is used by any seastar/scylla
-                            # test for directory to store test temporary data.
-                            TMPDIR=os.path.join(options.tmpdir, test.mode),
-                            SCYLLA_TEST_ENV='yes',
-                            SCYLLA_TEST_RUNNER="test.py",
-                            **env,
-                            )
+            test_env = dict(
+                os.environ,
+                UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
+                ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
+
+                # TMPDIR env variable is used by any seastar/scylla test for directory to store test temporary data.
+                TMPDIR=str(test.suite.log_dir),
+
+                SCYLLA_TEST_ENV="yes",
+                SCYLLA_TEST_RUNNER="test.py",
+                **env,
+            )
             process = await asyncio.create_subprocess_exec(
                 path, *args,
                 stderr=log,
@@ -508,7 +509,81 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 report_error("Test was cancelled: the parent process is exiting")
         except Exception as e:
             report_error("Failed to run the test:\n{e}".format(e=e))
-        finally:
-            if cleanup_fn is not None:
-                cleanup_fn()
     return False
+
+
+def prepare_dir(dirname: pathlib.Path, pattern: str) -> None:
+    # Ensure the dir exists.
+    dirname.mkdir(parents=True, exist_ok=True)
+
+    # Remove old artifacts.
+    for p in dirname.rglob(pattern):
+        p.unlink()
+
+
+def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str]) -> None:
+    prepare_dir(tempdir_base, "*.log")
+    shutil.rmtree(tempdir_base / "ldap_instances", ignore_errors=True)
+    prepare_dir(tempdir_base / "ldap_instances", "*")
+    for mode in modes:
+        prepare_dir(tempdir_base / mode, "*.log")
+        prepare_dir(tempdir_base / mode, "*.reject")
+        prepare_dir(tempdir_base / mode / "xml", "*.xml")
+        shutil.rmtree(tempdir_base / mode / "failed_test", ignore_errors=True)
+        prepare_dir(tempdir_base / mode / "failed_test", "*")
+        prepare_dir(tempdir_base / mode / "allure", "*.xml")
+        if TEST_RUNNER != "pytest":
+            shutil.rmtree(tempdir_base / mode / "pytest", ignore_errors=True)
+            prepare_dir(tempdir_base / mode / "pytest", "*")
+
+
+@universalasync.async_to_sync_wraps
+async def start_3rd_party_services(tempdir_base: pathlib.Path, toxyproxy_byte_limit: int):
+    hosts = HostRegistry()
+
+    finalize = start_ldap(
+        host=await hosts.lease_host(),
+        port=5000,
+        instance_root=tempdir_base / 'ldap_instances',
+        toxyproxy_byte_limit=toxyproxy_byte_limit)
+    async def make_async_finalize():
+        finalize()
+
+    TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
+    ms = MinioServer(
+        tempdir_base=str(tempdir_base),
+        address="127.0.0.1",
+        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
+    )
+    await ms.start()
+    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
+    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
+
+    mock_s3_server = MockS3Server(
+        host=await hosts.lease_host(),
+        port=2012,
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
+    )
+    await mock_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
+
+    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
+    proxy_s3_server = S3ProxyServer(
+        host=await hosts.lease_host(),
+        port=9002,
+        minio_uri=minio_uri,
+        max_retries=3,
+        seed=int(time.time()),
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
+    )
+    await proxy_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+
+
+def find_suite_config(path: pathlib.Path) -> pathlib.Path:
+    for directory in (path.joinpath("_") if path.is_dir() else path).absolute().relative_to(TEST_DIR).parents:
+        suite_config = TEST_DIR / directory / SUITE_CONFIG_FILENAME
+        if suite_config.exists():
+            return suite_config
+    raise FileNotFoundError(f"Unable to find a suite config file ({SUITE_CONFIG_FILENAME}) related to {path}")
