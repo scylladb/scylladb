@@ -291,6 +291,10 @@ public:
 
 future<> group0_voter_handler::update_nodes(
         const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as) {
+
+    // Make sure we are not interrupted while we are calculating and modifying the voters
+    const auto lock = co_await get_units(_voter_lock, 1, as);
+
     if (!_feature_service.group0_limited_voters) {
         // The previous implementation only handled voter removals.
         // Thus, we only handle the removed nodes here if the feature is not active.
