@@ -607,22 +607,14 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
     });
 }
 
-future<> take_snapshot(sharded<replica::database>& db, bool skip_flush = false, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test") {
+future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name = "cf", sstring snapshot_name = "test", bool skip_flush = false) {
     try {
-        co_await replica::database::snapshot_table_on_all_shards(db, ks_name, cf_name, snapshot_name, skip_flush);
+        co_await replica::database::snapshot_table_on_all_shards(e.db(), ks_name, cf_name, snapshot_name, skip_flush);
     } catch (...) {
         testlog.error("Could not take snapshot for {}.{} snapshot_name={} skip_flush={}: {}",
                 ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
         throw;
     }
-}
-
-future<> take_snapshot(cql_test_env& e, bool skip_flush = false) {
-    return take_snapshot(e.db(), skip_flush);
-}
-
-future<> take_snapshot(cql_test_env& e, sstring ks_name, sstring cf_name, sstring snapshot_name = "test") {
-    return take_snapshot(e.db(), false /* skip_flush */, std::move(ks_name), std::move(cf_name), std::move(snapshot_name));
 }
 
 // Helper to get directory a table keeps its data in.
@@ -676,7 +668,7 @@ SEASTAR_TEST_CASE(index_snapshot_works) {
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
-        take_snapshot(e, true /* skip_flush */).get();
+        take_snapshot(e, "ks", "cf", "test", true /* skip_flush */).get();
 
         std::set<sstring> expected = {
             "manifest.json",
@@ -1482,7 +1474,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         }
         BOOST_REQUIRE(found);
 
-        co_await take_snapshot(db, true /* skip_flush */);
+        co_await take_snapshot(e, "ks", "cf", "test", true /* skip_flush */);
 
         testlog.debug("Expected: {}", expected);
 
