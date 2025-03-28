@@ -427,7 +427,7 @@ possible_lhs_values(const column_definition* cdef,
                         },
                         [&] (const function_call& token_fun_call) -> solve_for_t {
                             if (!is_partition_token_for_schema(token_fun_call, *table_schema_opt)) {
-                                on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
+                                return nullptr;
                             }
 
                             if (cdef) {
