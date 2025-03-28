@@ -703,7 +703,7 @@ bool has_eq_restriction_on_column(const column_definition& column, const express
     return eq_restriction_search_res != nullptr;
 }
 
-std::vector<expression> extract_single_column_restrictions_for_column(const expression& expr,
+std::vector<expression> extract_single_column_restrictions_for_column(std::span<const expression> exprs,
                                                                       const column_definition& column) {
     struct visitor {
         std::vector<expression> restrictions;
@@ -761,7 +761,9 @@ std::vector<expression> extract_single_column_restrictions_for_column(const expr
         .current_binary_operator = nullptr,
     };
 
-    expr::visit(v, expr);
+    for (auto& e : exprs) {
+        expr::visit(v, e);
+    }
 
     return std::move(v.restrictions);
 }
@@ -820,7 +822,7 @@ single_column_restrictions_map get_single_column_restrictions_map(const expressi
     std::vector<const column_definition*> sorted_defs = get_sorted_column_defs(e);
     for (const column_definition* cdef : sorted_defs) {
         expression col_restrictions = conjunction {
-            .children = extract_single_column_restrictions_for_column(e, *cdef)
+            .children = extract_single_column_restrictions_for_column(std::span(&e, 1), *cdef)
         };
         result.emplace(cdef, std::move(col_restrictions));
     }
@@ -904,7 +906,7 @@ void with_current_binary_operator(
 
 /// Every token, or if no tokens, an EQ/IN of every single PK column.
 static partition_range_restrictions extract_partition_range(
-        const expr::expression& where_clause, schema_ptr schema) {
+        std::span<const expr::expression> where_clause, schema_ptr schema) {
     using namespace expr;
     struct extract_partition_range_visitor {
         schema_ptr table_schema;
@@ -1011,7 +1013,10 @@ static partition_range_restrictions extract_partition_range(
         .table_schema = schema
     };
 
-    expr::visit(v, where_clause);
+    for (auto& e : where_clause) {
+        expr::visit(v, e);
+    }
+
     if (v.tokens) {
         return token_range_restrictions{
             .token_restrictions = predicate{
@@ -1035,7 +1040,7 @@ static partition_range_restrictions extract_partition_range(
 /// boundaries of any clustering slice that can possibly meet where_clause.  This vector can be calculated before
 /// binding expression markers, since LHS and operator are always known.
 static std::vector<predicate> extract_clustering_prefix_restrictions(
-        const expr::expression& where_clause, schema_ptr schema) {
+        std::span<const expr::expression> where_clause, schema_ptr schema) {
     using namespace expr;
 
     /// Collects all clustering-column restrictions from an expression.  Presumes the expression only uses
@@ -1169,7 +1174,9 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
         .table_schema = schema
     };
 
-    expr::visit(v, where_clause);
+    for (auto& e : where_clause) {
+        expr::visit(v, e);
+    }
 
     if (!v.multi.empty()) {
         return std::move(v.multi);
@@ -1368,10 +1375,10 @@ statement_restrictions::statement_restrictions(private_tag,
         }
 
         if (prepared_restriction.op != expr::oper_t::IS_NOT) {
-            _where = _where.has_value() ? make_conjunction(std::move(*_where), prepared_restriction) : prepared_restriction;
+            _where.push_back(prepared_restriction);
         }
     }
-    if (_where.has_value()) {
+    if (!_where.empty()) {
         if (!has_token_restrictions()) {
             _single_column_partition_key_restrictions = get_single_column_restrictions_map(_partition_key_restrictions);
         }
@@ -1379,8 +1386,8 @@ statement_restrictions::statement_restrictions(private_tag,
             _single_column_clustering_key_restrictions = get_single_column_restrictions_map(_clustering_columns_restrictions);
         }
         _single_column_nonprimary_key_restrictions = get_single_column_restrictions_map(_nonprimary_key_restrictions);
-        _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(*_where, _schema);
-        _partition_range_restrictions = extract_partition_range(*_where, _schema);
+        _clustering_prefix_restrictions = extract_clustering_prefix_restrictions(_where, _schema);
+        _partition_range_restrictions = extract_partition_range(_where, _schema);
     }
     _has_multi_column = find_binop(_clustering_columns_restrictions, is_multi_column);
     if (_check_indexes) {
@@ -1650,7 +1657,7 @@ std::pair<std::optional<secondary_index::index>, expr::expression> statement_res
         expr::for_each_expression<expr::column_value>(restriction, [&](const expr::column_value& cval) {
             auto& cdef = cval.col;
             expr::expression col_restrictions = expr::conjunction {
-                .children = extract_single_column_restrictions_for_column(restriction, *cdef)
+                .children = extract_single_column_restrictions_for_column(std::span(&restriction, 1), *cdef)
             };
             for (const auto& index : sim.list_indexes()) {
                 if (cdef->name_as_text() == index.target_column() &&
@@ -1672,11 +1679,8 @@ statement_restrictions::find_idx(const secondary_index::secondary_index_manager&
 }
 
 bool statement_restrictions::has_eq_restriction_on_column(const column_definition& column) const {
-    if (!_where.has_value()) {
-        return false;
-    }
-
-    return restrictions::has_eq_restriction_on_column(column, *_where);
+    return std::ranges::any_of(_where,
+            std::bind_front(restrictions::has_eq_restriction_on_column, std::ref(column)));
 }
 
 std::vector<const column_definition*> statement_restrictions::get_column_defs_for_filtering(data_dictionary::database db) const {
@@ -2963,7 +2967,7 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
 
     // Find index column restrictions in the WHERE clause
     std::vector<expr::expression> idx_col_restrictions =
-        extract_single_column_restrictions_for_column(*_where, indexed_column_base_schema);
+        extract_single_column_restrictions_for_column(_where, indexed_column_base_schema);
     expr::expression idx_col_restriction_expr = expr::expression(expr::conjunction{std::move(idx_col_restrictions)});
 
     // Translate the restriction to use column from the index schema and add it
@@ -3113,7 +3117,7 @@ statement_restrictions::value_for_index_partition_key(const query_options& optio
 }
 
 sstring statement_restrictions::to_string() const {
-    return _where ? expr::to_string(*_where) : "";
+    return !_where.empty() ? expr::to_string(expr::conjunction{.children = _where}) : "";
 }
 
 static void validate_primary_key_restrictions(const query_options& options, std::ranges::range auto&& restrictions) {

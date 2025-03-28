@@ -161,7 +161,7 @@ private:
     bool _has_queriable_regular_index = false, _has_queriable_pk_index = false, _has_queriable_ck_index = false;
     bool _has_multi_column; ///< True iff _clustering_columns_restrictions has a multi-column restriction.
 
-    std::optional<expr::expression> _where; ///< The entire WHERE clause.
+    std::vector<expr::expression> _where; ///< The entire WHERE clause (factorized).
 
     /// Parts of _where defining the clustering slice.
     ///
@@ -525,7 +525,7 @@ shared_ptr<const statement_restrictions> make_trivial_statement_restrictions(
 // Does not include token() restrictions.
 // Does not include boolean constant restrictions.
 // For example "WHERE c = 1 AND (a, c) = (2, 1) AND token(p) < 2 AND FALSE" will return {"c = 1"}.
-std::vector<expr::expression> extract_single_column_restrictions_for_column(const expr::expression&, const column_definition&);
+std::vector<expr::expression> extract_single_column_restrictions_for_column(std::span<const expr::expression>, const column_definition&);
 
 
 // Checks whether this expression is empty - doesn't restrict anything
