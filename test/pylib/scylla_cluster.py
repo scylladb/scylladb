@@ -20,8 +20,7 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn, \
-    Awaitable
+from typing import Any, Optional, Dict, List, Set, Callable, AsyncIterator, NamedTuple, Union, NoReturn
 import uuid
 from io import BufferedWriter
 from test.pylib.host_registry import Host, HostRegistry
@@ -1420,6 +1419,7 @@ class ScyllaClusterManager:
         add_put('/cluster/remove-node/{initiator}', self._cluster_remove_node)
         add_put('/cluster/decommission-node/{server_id}', self._cluster_decommission_node)
         add_put('/cluster/rebuild-node/{server_id}', self._cluster_rebuild_node)
+        add_get('/cluster/check_backtraces', self._extract_cluster_backtraces)
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
         add_put('/cluster/server/{server_id}/update_cmdline', self._server_update_cmdline)
@@ -1472,7 +1472,34 @@ class ScyllaClusterManager:
         cluster_str = await self._before_test(request.match_info['test_case_name'])
         return cluster_str
 
-    async def _after_test(self, _request) -> dict[str, bool]:
+    async def _extract_cluster_backtraces(self, _request) -> str:
+        """Extract all backtraces from the node in the cluster"""
+        backtrace_pattern = r'(?:Reactor stalled.*?Backtrace:|Backtrace:)(.*?)(?=\n\w+\s|\Z)'
+        backtrace_file_path = pathlib.Path(self.base_dir, f'{self.current_test_case_full_name}.backtrace.txt')
+
+        cluster_backtraces = {}
+        for server in itertools.chain(self.cluster.running.values(), self.cluster.stopped.values()):
+            node_backtraces = []
+            matches = re.findall(backtrace_pattern, server.read_log(), re.DOTALL | re.MULTILINE)
+
+            for match in matches:
+                cleaned_lines = [line.strip() for line in match.split('\n') if line.strip()]
+
+                if cleaned_lines:
+                    backtrace_str = "Backtrace: " + "\n".join(cleaned_lines)
+                    node_backtraces.append(backtrace_str)
+            if len(node_backtraces) > 0:
+                cluster_backtraces[f'scylla-{server.server_id}'] = node_backtraces
+
+        with open(backtrace_file_path, 'w') as f:
+            for key, value in cluster_backtraces.items():
+                f.write(f"Backtraces for {key}\n")
+                for backtrace in value:
+                    f.write(backtrace + "\n\n")
+
+        return str(backtrace_file_path)
+
+    async def _after_test(self, _request) -> dict[str, str | dict[str, dict[str, list[str]]] | bool] | None:
         assert self.cluster is not None
         assert self.current_test_case_full_name
         self.logger.info(self.repr_tasks_history())
@@ -1506,7 +1533,10 @@ class ScyllaClusterManager:
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
 
-        return {"cluster_str":cluster_str, "server_broken":self.server_broken_event.is_set(), "message": self.server_broken_reason }
+        return {
+            "cluster_str":cluster_str,
+            "server_broken":self.server_broken_event.is_set(),
+            "message": self.server_broken_reason}
 
     def break_manager(self, reason, test):
         # make ScyllaClusterManager not operatable from client side
