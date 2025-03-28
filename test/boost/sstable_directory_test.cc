@@ -177,7 +177,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
 
         with_sstable_directory(env, [] (sharded<sstables::sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
-            auto max_generation_seen = highest_generation_seen(sstdir).get();
+            auto max_generation_seen = replica::highest_generation_seen(sstdir).get();
             // No generation found on empty directory.
             BOOST_REQUIRE(!max_generation_seen);
         });
@@ -528,7 +528,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get();
+        auto max_generation_seen = replica::highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -579,7 +579,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get();
+        auto max_generation_seen = replica::highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -632,7 +632,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get();
+        auto max_generation_seen = replica::highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
@@ -682,7 +682,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         verify_that_all_sstables_are_local(sstdir, 0).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto max_generation_seen = highest_generation_seen(sstdir).get();
+        auto max_generation_seen = replica::highest_generation_seen(sstdir).get();
         sharded_gen.start(max_generation_seen.as_int()).get();
         auto stop_generator = deferred_stop(sharded_gen);
 
