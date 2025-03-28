@@ -53,7 +53,8 @@ const sstring& cf_statement::keyspace() const
 
 const sstring& cf_statement::column_family() const
 {
-    return _cf_name->get_column_family();
+    thread_local static sstring empty = "";
+    return bool(_cf_name) ? _cf_name->get_column_family() : empty;
 }
 
 }
