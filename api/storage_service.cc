@@ -1610,7 +1610,7 @@ rest_add_tablet_replica(http_context& ctx, sharded<service::storage_service>& ss
         auto token = dht::token::from_int64(validate_int(req->get_query_param("token")));
         auto ks = req->get_query_param("ks");
         auto table = req->get_query_param("table");
-        auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
+        auto table_id = validate_table(ctx.db.local(), ks, table);
         auto force_str = req->get_query_param("force");
         auto force = service::loosen_constraints(force_str == "" ? false : validate_bool(force_str));
 
@@ -1629,7 +1629,7 @@ rest_del_tablet_replica(http_context& ctx, sharded<service::storage_service>& ss
         auto token = dht::token::from_int64(validate_int(req->get_query_param("token")));
         auto ks = req->get_query_param("ks");
         auto table = req->get_query_param("table");
-        auto table_id = ctx.db.local().find_column_family(ks, table).schema()->id();
+        auto table_id = validate_table(ctx.db.local(), ks, table);
         auto force_str = req->get_query_param("force");
         auto force = service::loosen_constraints(force_str == "" ? false : validate_bool(force_str));
 
