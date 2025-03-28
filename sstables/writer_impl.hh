@@ -38,6 +38,7 @@ struct sstable_writer::writer_impl {
         if (!cfg.correct_pi_block_width) {
             _features.disable(CorrectLastPiBlockWidth);
         }
+        sst.set_features(_features);
     }
 
     virtual void consume_new_partition(const dht::decorated_key& dk) = 0;
