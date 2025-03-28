@@ -249,8 +249,12 @@ public:
     void init_messaging_service();
     future<> uninit_messaging_service();
 
+    using wake_up_load_balancer = bool_class<class wake_up_load_balancer_tag>;
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
-    future<> load_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+    future<> commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr, const wake_up_load_balancer wake_up = wake_up_load_balancer::yes);
+    future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint, const wake_up_load_balancer wake_up);
+
     void start_tablet_split_monitor();
 private:
     using acquire_merge_lock = bool_class<class acquire_merge_lock_tag>;
@@ -520,7 +524,6 @@ public:
     virtual void on_update_function(const sstring& ks_name, const sstring& function_name) override {}
     virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {}
-    virtual void on_update_tablet_metadata(const locator::tablet_metadata_change_hint&) override;
 
     virtual void on_drop_keyspace(const sstring& ks_name) override { keyspace_changed(ks_name).get(); }
     virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {}

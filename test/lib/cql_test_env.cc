@@ -860,7 +860,7 @@ private:
             // gropu0 client exists only on shard 0
             service::raft_group0_client group0_client(_group0_registry.local(), _sys_ks.local(), _token_metadata.local(), maintenance_mode_enabled::no);
 
-            _mm.start(std::ref(_mnotifier), std::ref(_feature_service), std::ref(_ms), std::ref(_proxy), std::ref(_gossiper), std::ref(group0_client), std::ref(_sys_ks)).get();
+            _mm.start(std::ref(_mnotifier), std::ref(_feature_service), std::ref(_ms), std::ref(_proxy), std::ref(_ss), std::ref(_gossiper), std::ref(group0_client), std::ref(_sys_ks)).get();
             auto stop_mm = defer_verbose_shutdown("migration manager", [this] { _mm.stop().get(); });
 
             _tablet_allocator.start(service::tablet_allocator::config{}, std::ref(_mnotifier), std::ref(_db)).get();

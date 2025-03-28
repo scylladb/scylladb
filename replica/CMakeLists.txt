@@ -9,7 +9,8 @@ target_sources(replica
     memtable.cc
     exceptions.cc
     dirty_memory_manager.cc
-    mutation_dump.cc)
+    mutation_dump.cc
+    schema_describe_helper.cc)
 target_include_directories(replica
   PUBLIC
     ${CMAKE_SOURCE_DIR})
