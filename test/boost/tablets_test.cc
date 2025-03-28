@@ -1431,17 +1431,54 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
     }
 }
 
+struct migration_cost_desc {
+    int min_duration = 0; // measured in apply_plan() call count
+    int max_duration = 0;
+};
+
+using migration_cost_per_table = std::unordered_map<table_id, migration_cost_desc>;
+
+static const migration_cost_per_table default_migration_cost;
+
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-void apply_plan(token_metadata& tm, const migration_plan& plan) {
+void apply_plan(token_metadata& tm, const migration_plan& plan,
+                const migration_cost_per_table& migration_cost,
+                std::unordered_map<global_tablet_id, int>& migration_progress) {
     for (auto&& mig : plan.migrations()) {
         tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             testlog.trace("Replacing tablet {} replica from {} to {}", mig.tablet.tablet, mig.src, mig.dst);
-            tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
-            tmap.set_tablet(mig.tablet.tablet, tinfo);
+            if (!migration_cost.contains(mig.tablet.table)) {
+                tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
+                tmap.set_tablet(mig.tablet.tablet, tinfo);
+            } else {
+                auto& cost_desc = migration_cost.at(mig.tablet.table);
+                migration_progress[mig.tablet] = tests::random::get_int<int>(cost_desc.min_duration, cost_desc.max_duration);
+                tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
+            }
         });
     }
+
+    std::unordered_set<global_tablet_id> finished_migrations;
+    for (auto& [gid, steps_left] : migration_progress) {
+        if (--migration_progress[gid] <= 0) {
+            tm.tablets().mutate_tablet_map(gid.table, [&] (tablet_map& tmap) {
+                auto tinfo = tmap.get_tablet_info(gid.tablet);
+                auto* trinfo = tmap.get_tablet_transition_info(gid.tablet);
+                assert(trinfo);
+                tinfo.replicas = trinfo->next;
+                tmap.set_tablet(gid.tablet, tinfo);
+                tmap.clear_tablet_transition_info(gid.tablet);
+                finished_migrations.insert(gid);
+            });
+        }
+    }
+
+    for (auto gid : finished_migrations) {
+        migration_progress.erase(gid);
+    }
+
     apply_resize_plan(tm, plan);
 }
 
@@ -1478,7 +1515,9 @@ void do_rebalance_tablets(cql_test_env& e,
                           shared_load_stats* load_stats = nullptr,
                           std::unordered_set<host_id> skiplist = {},
                           std::function<bool(const migration_plan&)> stop = nullptr,
-                          bool auto_split = false)
+                          bool auto_split = false,
+                          bool auto_merge = true,
+                          const migration_cost_per_table& migration_cost = default_migration_cost)
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -1487,18 +1526,27 @@ void do_rebalance_tablets(cql_test_env& e,
     // The x10 factor is arbitrary, it's there to account for more complex schedules than direct migration.
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
+    std::unordered_map<global_tablet_id, int> migration_progress;
+
     for (size_t i = 0; i < max_iterations; ++i) {
         auto plan = talloc.balance_tablets(stm.get(), load_stats ? load_stats->get() : nullptr, skiplist).get();
-        if (plan.empty()) {
-            return;
-        }
-        if (stop && stop(plan)) {
-            return;
-        }
+
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan(tm, plan);
+            apply_plan(tm, plan, migration_cost, migration_progress);
             return make_ready_future<>();
         }).get();
+
+        if (migration_progress.empty()) {
+            if (plan.empty()) {
+                return;
+            }
+            if (!auto_merge && plan.migrations().empty()) {
+                return;
+            }
+            if (stop && stop(plan)) {
+                return;
+            }
+        }
 
         if (auto_split && load_stats) {
             auto& tm = *stm.get();
@@ -1510,7 +1558,9 @@ void do_rebalance_tablets(cql_test_env& e,
             }
         }
 
-        handle_resize_finalize(e, guard, plan).get();
+        if (auto_merge) {
+            handle_resize_finalize(e, guard, plan).get();
+        }
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
 }
@@ -1523,7 +1573,9 @@ void rebalance_tablets(cql_test_env& e,
                        shared_load_stats* load_stats = nullptr,
                        std::unordered_set<host_id> skiplist = {},
                        std::function<bool(const migration_plan&)> stop = nullptr,
-                       bool auto_split = true) {
+                       bool auto_split = true,
+                       bool auto_merge = true,
+                       const migration_cost_per_table& migration_cost = default_migration_cost) {
     abort_source as;
     testlog.debug("rebalance_tablets(): start");
 
@@ -1539,7 +1591,7 @@ void rebalance_tablets(cql_test_env& e,
         load_stats = &local_stats;
     }
 
-    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split);
+    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split, auto_merge, migration_cost);
     testlog.debug("rebalance_tablets(): rebalanced");
 
     // We should not introduce inconsistency between on-disk state and in-memory state
@@ -2736,6 +2788,129 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
             BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.01);
         }
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_with_one_merged) {
+    // 3 racks, RF=3.
+    // We start with one large instance per rack and 1 table (table1).
+    // Then add a small instance to each rack.
+    // Wait for load to be balanced and then create another table (table2).
+    // This will trigger merge of the old table due to per-shard tablet count goal.
+    // The new table will not be merged, it will use smaller tablet count from the beginning.
+    //
+    // The problem arises when small instances are overloaded with table2 tablets
+    // due to initial allocation not respecting per-shard utilization.
+    // If co-locating migrations of table1 are done concurrently with
+    // load-balancing migrations of table2, table1 balance will be broken because
+    // co-locating migrations break the balance - even-numbered tablets don't have
+    // an even replica load distribution, only all tablets do.
+    // And because small instances are overloaded with table2 tablets during merge,
+    // table2 tablets will be used to compensate for the global imbalance made by
+    // merge, and table1 balance will not be fixed. If table2 was evenly balanced,
+    // then the problem wouldn't happen because co-locating migrations of table1
+    // which break the table1 balance will also break the global balance, and
+    // regular load-balancing will fix global balance by fixing table1 balance.
+    //
+    // We want per-table utilization to be balanced, because table1 may contain most of the data on disk,
+    // since it's older. If we break table1 balance, actual per-shard utilization will not be balanced
+    //
+    // It was observed that if the bug is present, the table1 imbalance is significant, utilization of small
+    // instances is half the utilization of large instances.
+
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_per_shard_goal(100);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        std::vector<host_id> hosts;
+
+        uint64_t i4i_2xlarge_cap = 1'875'000'000'000;
+        uint64_t i4i_large_cap = 468'000'000'000;
+
+        auto add_i4i_2xlarge = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 7, rack);
+            load_stats.set_capacity(h, i4i_2xlarge_cap);
+            hosts.push_back(h);
+        };
+
+        auto add_i4i_large = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 2, rack);
+            load_stats.set_capacity(h, i4i_large_cap);
+            hosts.push_back(h);
+        };
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        add_i4i_2xlarge(rack1);
+        add_i4i_2xlarge(rack2);
+        add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 1024);
+        auto table1 = add_table(e, ks_name).get();
+
+        load_stats.set_size(table1, 0.9 * i4i_2xlarge_cap);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Initial cluster ready");
+
+        add_i4i_large(rack1);
+        add_i4i_large(rack2);
+        add_i4i_large(rack3);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity");
+
+        auto ks2_name = add_keyspace(e, {{topo.dc(), 3}}, 1024);
+        auto table2 = add_table(e, ks2_name).get();
+
+        // Use asymmetric cost of migration where old table, which is undergoing a merge,
+        // will have heavier cost of co-locating migrations.
+        // Randomization of cost is also important so that table2 migrations scheduled in
+        // one plan don't finish all at once.
+        // This creates a migration schedule where table1 migrations are executed
+        // concurrently with table2 migrations. The former will break the balance
+        // of table1.
+        migration_cost_per_table migration_cost = {
+            {table1, {40, 60}},
+            {table2, {1, 4}},
+        };
+
+        rebalance_tablets(e, &load_stats, {}, nullptr, false, false, migration_cost);
+        testlog.info("Added second table");
+
+        {
+            load_sketch load(stm.get());
+            load.populate(std::nullopt, table1).get();
+
+            // Check that utilization difference is < 4%
+            min_max_tracker<double> node_utilization;
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                testlog.info("table1: {}: {}", h, u);
+                node_utilization.update(*u);
+            }
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.04);
+        }
+
+        {
+            load_sketch load(stm.get());
+            load.populate(std::nullopt, table2).get();
+
+            // Check that utilization difference is < 4%
+            min_max_tracker<double> node_utilization;
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                testlog.info("table2: {}: {}", h, u);
+                node_utilization.update(*u);
+            }
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.04);
+        }
+    }, cfg).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
