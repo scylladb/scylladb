@@ -3,6 +3,7 @@ pool_size: 4
 dirties_cluster:
   - test_native_transport
 extra_scylla_cmdline_options:
+  - '--rf-rack-valid-keyspaces=1'
   - '--experimental-features=udf'
   - '--experimental-features=keyspace-storage-options'
   - '--experimental-features=views-with-tablets'
