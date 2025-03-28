@@ -121,7 +121,7 @@ def test_log_table_operations(cql, test_keyspace, logfile):
 def test_log_alter_keyspace_operation(cql, this_dc, logfile):
     ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}};"
     with new_test_keyspace(cql, ksdef) as keyspace:
-        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 0}}")
         wait_for_log(logfile, r'Update Keyspace.*name=%s.*tablets={\"initial\":\d+' % keyspace)
 
 
