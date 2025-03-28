@@ -220,11 +220,24 @@ future<> manager::stop() {
 
     set_stopping();
 
-    return _migrating_done.finally([this] {
+    const auto& node = *_proxy.get_token_metadata_ptr()->get_topology().this_node();
+    const bool leaving = node.is_leaving() || node.left();
+
+    return _migrating_done.finally([this, leaving] {
+        // We want to stop the manager as soon as possible if it's not leaving the cluster.
+        // Because of that, we need to cancel all ongoing drains (since that can take quite a bit of time),
+        // but we also need to ensure that no new drains will be started in the meantime.
+        if (!leaving) {
+            for (auto& [_, ep_man] : _ep_managers) {
+                ep_man.cancel_draining();
+            }
+        }
         return _draining_eps_gate.close();
+        // At this point, all endpoint managers that were being previously drained have been deleted from the map.
+        // In other words, the next lambda is safe to run, i.e. we won't call `hint_endpoint_manager::stop()` twice.
     }).finally([this] {
         return parallel_for_each(_ep_managers | std::views::values, [] (hint_endpoint_manager& ep_man) {
-            return ep_man.stop();
+            return ep_man.stop(drain::no);
         }).finally([this] {
             _ep_managers.clear();
             _hint_directory_manager.clear();
@@ -667,7 +680,7 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
         co_return;
     }
 
-    manager_logger.trace("on_leave_cluster: {} is removed/decommissioned", host_id);
+    manager_logger.trace("Draining starts for {}", host_id);
 
     const auto holder = seastar::gate::holder{_draining_eps_gate};
     // As long as we hold on to this lock, no migration of hinted handoff to host IDs
@@ -677,9 +690,24 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
 
     // After an endpoint has been drained, we remove its directory with all of its contents.
     auto drain_ep_manager = [] (hint_endpoint_manager& ep_man) -> future<> {
-        return ep_man.stop(drain::yes).finally([&] {
-            return ep_man.with_file_update_mutex([&ep_man] {
-                return remove_file(ep_man.hints_dir().native());
+        // Prevent a drain if the endpoint manager was marked to cancel it.
+        if (ep_man.canceled_draining()) {
+            return make_ready_future();
+        }
+        return ep_man.stop(drain::yes).finally([&ep_man] {
+            // If draining was canceled, we can't remove the hint directory yet
+            // because there might still be some hints that we should send.
+            // We'll do that when the node starts again.
+            // Note that canceling draining can ONLY occur when the node is simply stopping.
+            // That cannot happen when decommissioning the node.
+            if (ep_man.canceled_draining()) {
+                return make_ready_future();
+            }
+
+            return ep_man.with_file_update_mutex([&ep_man] -> future<> {
+                return remove_file(ep_man.hints_dir().native()).then([&ep_man] {
+                    manager_logger.debug("Removed hint directory for {}", ep_man.end_point_key());
+                });
             });
         });
     };
@@ -984,6 +1012,20 @@ future<> manager::perform_migration() {
     //         We won't modify the contents of the hint directory anymore.
     co_await initialize_endpoint_managers();
     manager_logger.info("Migration of hinted handoff to host ID has finished successfully");
+}
+
+// Technical note: This function obviously doesn't need to be a coroutine. However, it's better to impose
+//                 this constraint early on with possible future refactors in mind. It should be easier
+//                 to modify the function this way.
+future<> manager::drain_left_nodes() {
+    for (const auto& [host_id, ep_man] : _ep_managers) {
+        if (!_proxy.get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
+            // It's safe to discard this future. It's awaited in `manager::stop()`.
+            (void) drain_for(host_id, {});
+        }
+    }
+
+    co_return;
 }
 
 } // namespace db::hints
