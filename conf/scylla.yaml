@@ -840,3 +840,10 @@ enable_tablets: true
 
 # Enforce RF-rack-valid keyspaces.
 rf_rack_valid_keyspaces: false
+
+#
+# Alternator options
+#
+# Maximum number of items in single BatchWriteItem command. Default is 100.
+# Note: DynamoDB has a hard-coded limit of 25.
+# alternator_max_items_in_batch_write: 100
