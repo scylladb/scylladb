@@ -77,7 +77,10 @@ def _format_bytes(v, human_readable):
         return f"{v} bytes"
 
     # Not general, but good enough for this test
-    return "{:.2f} KiB".format(v / 1024)
+    for power, name in [(3, "GiB"), (2, "MiB"), (1, "KiB")]:
+        dividend = 1024 ** power
+        if v >= dividend:
+            return "{:.2f} {}".format(v / dividend, name)
 
 
 def _check_output(
@@ -240,7 +243,7 @@ def test_netstats(nodetool, flag):
                                 "file_name": "me-3ge2_0ly2_3e65c2erzwxcn7tws3-big-Data.db",
                                 "direction": direction.IN.value,
                                 "current_bytes": 134,
-                                "total_bytes": 9603,
+                                "total_bytes": 96387798789,
                             },
                         },
                         {
