@@ -235,18 +235,23 @@ tablet_transition_info migration_to_transition_info(const tablet_info& ti, const
     };
 }
 
+no_such_tablet_map::no_such_tablet_map(const table_id& id)
+        : runtime_error{fmt::format("Tablet map not found for table {}", id)}
+{
+}
+
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
         return *_tablets.at(id);
     } catch (const std::out_of_range&) {
-        throw_with_backtrace<std::runtime_error>(format("Tablet map not found for table {}", id));
+        throw_with_backtrace<no_such_tablet_map>(id);
     }
 }
 
 void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
-        throw std::runtime_error(format("Tablet map not found for table {}", id));
+        throw no_such_tablet_map(id);
     }
     auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
     func(*tablet_map_copy);
@@ -256,7 +261,7 @@ void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(t
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
-        throw std::runtime_error(format("Tablet map not found for table {}", id));
+        throw no_such_tablet_map(id);
     }
     auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
     co_await func(*tablet_map_copy);
