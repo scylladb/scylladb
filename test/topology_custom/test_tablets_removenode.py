@@ -14,6 +14,7 @@ import logging
 
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import start_writes
+from test.topology.util import get_topology_coordinator
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,39 @@ async def create_keyspace(cql, name, initial_tablets, rf):
 async def run_async_cl_all(cql, query: str):
     stmt = SimpleStatement(query, consistency_level = ConsistencyLevel.ALL)
     return await cql.run_async(stmt)
+
+
+@pytest.mark.asyncio
+async def test_removenode_with_coordinator_restart(manager: ManagerClient):
+    """
+    Verifies that removenode can proceed when the coordinator is restarted
+    with some normal nodes down, so cannot obtain table stats for them.
+    Tablet draining should still be able to make progress
+    as long as all non-excluded nodes are up. This verifies that capacity
+    is obtained per node and not in all-or-nothing fashion.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = ['--logger-log-level', 'load_balancer=debug']
+
+    servers = await manager.servers_add(3, cmdline=cmdline)
+    cql = manager.get_cql()
+
+    ks1 = "test"
+    await create_keyspace(cql, ks1, 3, rf=1)
+    await cql.run_async(f"CREATE TABLE {ks1}.test (pk int PRIMARY KEY, c int);")
+
+    logger.info('Stopping a node to be removed')
+    await manager.server_stop(servers[2].server_id)
+
+    logger.info('Restarting leader')
+    raft_leader_host_id = await get_topology_coordinator(manager)
+    for s in servers:
+        if raft_leader_host_id == await manager.get_host_id(s.server_id):
+            await manager.server_restart(s.server_id)
+            break
+
+    logger.info('Removing a node')
+    await manager.remove_node(servers[1].server_id, servers[2].server_id)
 
 
 @pytest.mark.asyncio

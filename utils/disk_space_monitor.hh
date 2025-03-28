@@ -9,6 +9,7 @@
 #pragma once
 
 #include <filesystem>
+#include <any>
 
 #include <boost/signals2/connection.hpp>
 #include <boost/signals2/signal_type.hpp>
@@ -18,6 +19,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/util/optimized_optional.hh>
+#include <seastar/core/condition-variable.hh>
 
 #include "seastarx.hh"
 #include "utils/updateable_value.hh"
@@ -32,6 +34,7 @@ public:
     using signal_type = boost::signals2::signal_type<void (), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
     using signal_callback_type = std::function<future<>(const disk_space_monitor&)>;
     using signal_connection_type = boost::signals2::scoped_connection;
+    using space_source_fn = std::function<future<std::filesystem::space_info>()>;
 
     struct config {
         scheduling_group sched_group;
@@ -39,17 +42,21 @@ public:
         updateable_value<int> high_polling_interval;
         // Use high_polling_interval above this threshold
         updateable_value<float> polling_interval_threshold;
+        updateable_value<uint64_t> capacity_override; // 0 means no override.
     };
 
 private:
     abort_source _as;
     optimized_optional<abort_source::subscription> _as_sub;
     future<> _poller_fut = make_ready_future();
+    condition_variable _poll_cv;
     utils::phased_barrier _signal_barrier;
     signal_type _signal_source;
     std::filesystem::space_info _space_info;
     std::filesystem::path _data_dir;
     config _cfg;
+    space_source_fn _space_source;
+    std::any _capacity_observer;
 
 public:
     disk_space_monitor(abort_source& as, std::filesystem::path data_dir, config cfg);
@@ -72,6 +79,13 @@ public:
     }
 
     signal_connection_type listen(signal_callback_type callback);
+
+    // Replaces default way of obtaining file system usage information.
+    void set_space_source(space_source_fn space_source) {
+        _space_source = std::move(space_source);
+    }
+
+    void trigger_poll() noexcept;
 
 private:
     future<> poll();

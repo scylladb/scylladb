@@ -104,6 +104,10 @@ namespace tasks {
 class task_manager;
 }
 
+namespace utils {
+class disk_space_monitor;
+}
+
 namespace service {
 
 class storage_service;
@@ -237,7 +241,8 @@ public:
         topology_state_machine& topology_state_machine,
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
-        std::function<future<void>()> compression_dictionary_updated_callback);
+        std::function<future<void>()> compression_dictionary_updated_callback,
+        utils::disk_space_monitor* disk_space_minitor);
     ~storage_service();
 
     node_ops::task_manager_module& get_node_ops_module() noexcept;
@@ -997,6 +1002,8 @@ private:
     abort_source _group0_as;
 
     std::function<future<void>()> _compression_dictionary_updated_callback;
+
+    utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;

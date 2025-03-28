@@ -356,14 +356,26 @@ struct table_load_stats {
     }
 };
 
+// Deprecated, use load_stats instead.
+struct load_stats_v1 {
+    std::unordered_map<table_id, table_load_stats> tables;
+};
+
 struct load_stats {
     std::unordered_map<table_id, table_load_stats> tables;
+
+    // Capacity in bytes for data file storage.
+    std::unordered_map<host_id, uint64_t> capacity;
+
+    static load_stats from_v1(load_stats_v1&&);
 
     load_stats& operator+=(const load_stats& s);
     friend load_stats operator+(load_stats a, const load_stats& b) {
         return a += b;
     }
 };
+
+using load_stats_v2 = load_stats;
 
 struct repair_scheduler_config {
     bool auto_repair_enabled = false;

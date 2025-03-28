@@ -236,6 +236,19 @@ public:
         }
         return minmax;
     }
+
+    // Returns nullopt if capacity is not known.
+    std::optional<double> get_allocated_utilization(host_id node, const locator::load_stats& stats, uint64_t target_tablet_size) const {
+        if (!_nodes.contains(node)) {
+            return std::nullopt;
+        }
+        auto& n = _nodes.at(node);
+        if (!stats.capacity.contains(node)) {
+            return std::nullopt;
+        }
+        auto capacity = stats.capacity.at(node);
+        return capacity > 0 ? double(n.load() * target_tablet_size) / capacity : 0;
+    }
 };
 
 } // namespace locator
