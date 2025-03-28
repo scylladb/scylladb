@@ -1312,6 +1312,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Use separate schema commit log unconditionally rater than after restart following discovery of cluster-wide support for it.")
     , task_ttl_seconds(this, "task_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 0, "Time for which information about finished task started internally stays in memory.")
     , user_task_ttl_seconds(this, "user_task_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 3600, "Time for which information about finished task started by user stays in memory.")
+    , repair_history_ttl_seconds(this, "repair_history_ttl_in_seconds", liveness::LiveUpdate, value_status::Used, 24*60*60*360, "Time for repair history table ttl.")
     , nodeops_watchdog_timeout_seconds(this, "nodeops_watchdog_timeout_seconds", liveness::LiveUpdate, value_status::Used, 120, "Time in seconds after which node operations abort when not hearing from the coordinator.")
     , nodeops_heartbeat_interval_seconds(this, "nodeops_heartbeat_interval_seconds", liveness::LiveUpdate, value_status::Used, 10, "Period of heartbeat ticks in node operations.")
     , cache_index_pages(this, "cache_index_pages", liveness::LiveUpdate, value_status::Used, true,
