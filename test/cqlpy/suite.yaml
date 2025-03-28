@@ -2,6 +2,8 @@ type: Python
 pool_size: 4
 dirties_cluster:
   - test_native_transport
+extra_scylla_config_options:
+  rf_rack_valid_keyspaces: True
 extra_scylla_cmdline_options:
   - '--experimental-features=udf'
   - '--experimental-features=keyspace-storage-options'
