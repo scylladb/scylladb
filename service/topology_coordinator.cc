@@ -1178,9 +1178,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
-        for (const tablet_migration_info& mig : plan.migrations()) {
-            co_await coroutine::maybe_yield();
-            generate_migration_update(out, guard, mig);
+        if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
+            // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
+            for (const tablet_migration_info& mig : plan.migrations()) {
+                co_await coroutine::maybe_yield();
+                generate_migration_update(out, guard, mig);
+            }
         }
 
         auto sched_time = db_clock::now();
