@@ -216,11 +216,40 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
                 await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS({ks}.test) WHERE pk={k}", host=host[0])
 
 
+# ALTER KEYSPACE cannot change the replication factor by more than 1 at a time.
+# That provides us with a guarantee that the old and the new QUORUM overlap.
+# In this test, we verify that in a simple scenario with one DC. We explicitly disable
+# enforcing RF-rack-valid keyspaces to be able to perform more flexible alterations.
+@pytest.mark.asyncio
+async def test_singledc_alter_tablets_rf(manager: ManagerClient):
+    await manager.server_add(config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, property_file={"dc": "dc1", "rack": "r1"})
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}") as ks:
+        async def change_rf(rf):
+            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}}}")
+
+        await change_rf(2) # Increasing the RF by 1 should be OK.
+        await change_rf(3) # Increasing the RF by 1 again should also be OK.
+        await change_rf(3) # Setting the same RF shouldn't cause any problems.
+        await change_rf(4) # Increasing the RF by 1 again should still be OK.
+        await change_rf(3) # Decreasing the RF by 1 should be OK.
+
+        with pytest.raises(InvalidRequest):
+            await change_rf(5) # Trying to increase the RF by 2 should fail.
+        with pytest.raises(InvalidRequest):
+            await change_rf(1) # Trying to decrease the RF by 2 should fail.
+        with pytest.raises(InvalidRequest):
+            await change_rf(10) # Trying to increase the RF by more than 2 should fail.
+        with pytest.raises(InvalidRequest):
+            await change_rf(0) # Trying to decrease the RF by more than 2 should fail.
+
+
 # ALTER tablets KS cannot change RF of any DC by more than 1 at a time.
 # In a multi-dc environment, we can create replicas in a DC that didn't have replicas before,
 # but the above requirement should still be honoured, because we'd be changing RF from 0 to N in the new DC.
 # Reproduces https://github.com/scylladb/scylladb/issues/20039#issuecomment-2271365060
-# See also cqlpy/test_tablets.py::test_alter_tablet_keyspace_rf for basic scenarios tested
+# See also `test_singledc_alter_tablets_rf` above for basic scenarios tested
 @pytest.mark.asyncio
 async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}

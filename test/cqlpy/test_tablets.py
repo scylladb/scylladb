@@ -294,32 +294,3 @@ def test_lwt_support_with_tablets(cql, test_keyspace, skip_without_tablets):
             cql.execute(f"DELETE FROM {table} WHERE key = 1 IF EXISTS")
         res = cql.execute(f"SELECT val FROM {table} WHERE key = 1").one()
         assert res.val == 0
-
-
-# We want to ensure that we can only change the RF of any DC by at most 1 at a time
-# if we use tablets. That provides us with the guarantee that the old and the new QUORUM
-# overlap by at least one node.
-def test_alter_tablet_keyspace_rf(cql, this_dc):
-    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }} "
-                                f"AND TABLETS = {{ 'enabled': true, 'initial': 128 }}") as keyspace:
-        def change_opt_rf(rf_opt, new_rf):
-            cql.execute(f"ALTER KEYSPACE {keyspace} "
-                        f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{rf_opt}' : {new_rf} }}")
-
-        def change_dc_rf(new_rf):
-            change_opt_rf(this_dc, new_rf)
-
-        change_dc_rf(2)  # increase RF by 1 should be OK
-        change_dc_rf(3)  # increase RF by 1 again should be OK
-        change_dc_rf(3)  # setting the same RF shouldn't cause problems
-        change_dc_rf(4)  # increase RF by 1 again should be OK
-        change_dc_rf(3)  # decrease RF by 1 should be OK
-
-        with pytest.raises(InvalidRequest):
-            change_dc_rf(5)  # increase RF by 2 should fail
-        with pytest.raises(InvalidRequest):
-            change_dc_rf(1)  # decrease RF by 2 should fail
-        with pytest.raises(InvalidRequest):
-            change_dc_rf(10)  # increase RF by 2+ should fail
-        with pytest.raises(InvalidRequest):
-            change_dc_rf(0)  # decrease RF by 2+ should fail
