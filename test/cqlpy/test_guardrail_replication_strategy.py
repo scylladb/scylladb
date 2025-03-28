@@ -38,7 +38,7 @@ def test_given_default_config_when_creating_ks_should_only_produce_warning_for_s
 
     for key, value in {'NetworkTopologyStrategy': this_dc, 'EverywhereStrategy': 'replication_factor',
                        'LocalStrategy': 'replication_factor'}.items():
-        create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
+        create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
                                                  unexpected_warning='replication_strategy_warn_list', fails_count=0)
 
 
@@ -49,7 +49,7 @@ def test_given_cleared_guardrails_when_creating_ks_should_not_get_warning_nor_er
 
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
-            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
+            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
                                                      unexpected_warning='replication_strategy_warn_list', fails_count=0)
 
 
@@ -59,7 +59,7 @@ def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed
                                                                 'SimpleStrategy,LocalStrategy,NetworkTopologyStrategy,EverywhereStrategy'))
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
-            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
+            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
                                                      expected_warning='replication_strategy_warn_list', fails_count=0)
 
 
@@ -74,7 +74,7 @@ def test_given_non_empty_warn_and_fail_lists_when_creating_ks_should_fail_query_
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
             # note: even though warn list is not empty, no warnings should be generated, because failures come first -
             #  we don't want to issue a warning and also fail the query at the same time
-            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 3 }}",
+            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
                                                      warnings_count=0, fails_count=1)
 
 
