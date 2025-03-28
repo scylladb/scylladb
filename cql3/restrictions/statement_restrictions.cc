@@ -375,13 +375,13 @@ possible_lhs_values(const column_definition* cdef,
                                 return [] (const query_options&) { return unbounded_value_set; };
                             }
 
-                          return [s, oper] (const query_options& options) {
-                            managed_bytes_opt sval = evaluate(s.sub, options).to_managed_bytes_opt();
-                            if (!sval) {
-                                return empty_value_set; // NULL can't be a map key
-                            }
+                          if (oper.op == oper_t::EQ) {
+                            return [s, oper] (const query_options& options) {
+                                managed_bytes_opt sval = evaluate(s.sub, options).to_managed_bytes_opt();
+                                if (!sval) {
+                                    return empty_value_set; // NULL can't be a map key
+                                }
 
-                            if (oper.op == oper_t::EQ) {
                                 managed_bytes_opt rval = evaluate(oper.rhs, options).to_managed_bytes_opt();
                                 if (!rval) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
@@ -389,9 +389,9 @@ possible_lhs_values(const column_definition* cdef,
                                 managed_bytes_opt elements[] = {sval, rval};
                                 managed_bytes val = tuple_type_impl::build_value_fragmented(elements);
                                 return value_set(value_list{val});
-                            }
-                            throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
-                          };
+                            };
+                          }
+                            return nullptr;
                         },
                         [&] (const tuple_constructor& tuple) -> solve_for_t {
                           return [tuple, cdef, oper, type] (const query_options& options) -> value_set {
