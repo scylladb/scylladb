@@ -40,5 +40,7 @@ run_in_dev:
   - test_zero_token_nodes_no_replication
   - test_not_enough_token_owners
   - test_replace_alive_node
+  - error_example_test
+  - alternator_tests
 run_in_debug:
   - test_random_failures
