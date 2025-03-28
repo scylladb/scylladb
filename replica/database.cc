@@ -1874,14 +1874,15 @@ public:
 };
 
 // see above (#9919)
-template<typename T = std::runtime_error>
-static std::exception_ptr wrap_commitlog_add_error(schema_ptr s, const frozen_mutation& m, std::exception_ptr eptr) {
+// Wrap the exception in a nested_exception to add additional error context.
+static std::exception_ptr wrap_commitlog_add_error(const schema_ptr& s, const frozen_mutation& m, std::exception_ptr eptr) {
     // it is tempting to do a full pretty print here, but the mutation is likely
     // humungous if we got an error, so just tell us where and pk...
-    return make_nested_exception_ptr(T(format("Could not write mutation {}:{} ({}) to commitlog"
-        , s->ks_name(), s->cf_name()
-        , m.key()
-    )), std::move(eptr));
+    auto commitlog_error_message = format("Could not write mutation {}:{} ({}) to commitlog", s->ks_name(), s->cf_name(), m.key());
+    if (is_timeout_exception(eptr)) {
+        return make_nested_exception_ptr(wrapped_timed_out_error(std::move(commitlog_error_message)), std::move(eptr));
+    }
+    return make_nested_exception_ptr(utils::internal::default_nested_exception_type(std::move(commitlog_error_message)), std::move(eptr));
 }
 
 future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout) {
@@ -1901,11 +1902,7 @@ future<> database::apply_with_commitlog(column_family& cf, const mutation& m, db
             ex = std::current_exception();
         }
         if (ex) {
-            if (try_catch<timed_out_error>(ex)) {
-                ex = wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), fm, std::move(ex));
-            } else {
-                ex = wrap_commitlog_add_error<>(cf.schema(), fm, std::move(ex));
-            }
+            ex = wrap_commitlog_add_error(cf.schema(), fm, std::move(ex));
             co_await coroutine::exception(std::move(ex));
         }
     }
@@ -2034,10 +2031,8 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
         if (ex) {
             if (is_timeout_exception(ex)) {
                 ++_stats->total_writes_timedout;
-                ex = wrap_commitlog_add_error<wrapped_timed_out_error>(cf.schema(), m, std::move(ex));
-            } else {
-                ex = wrap_commitlog_add_error<>(s, m, std::move(ex));
             }
+            ex = wrap_commitlog_add_error(s, m, std::move(ex));
             co_await coroutine::exception(std::move(ex));
         }
     }

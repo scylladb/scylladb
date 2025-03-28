@@ -136,6 +136,73 @@ SEASTAR_TEST_CASE(test_try_catch) {
     return make_ready_future<>();
 }
 
+SEASTAR_TEST_CASE(test_try_catch_nested) {
+    using nested_type = std::logic_error;
+    using nesting_type = utils::internal::default_nested_exception_type;
+
+    // Not nested exception
+    {
+        auto inner = std::make_exception_ptr(nested_type("inner"));
+        auto* inner_exception = try_catch_nested<nested_type>(inner);
+        BOOST_REQUIRE_NE(inner_exception, nullptr);
+        BOOST_REQUIRE_EQUAL(inner_exception->what(), "inner");
+    }
+
+    // Not nested exception, wrong type
+    {
+        auto inner = std::make_exception_ptr(std::string("inner"));
+        auto* inner_exception = try_catch_nested<nested_type>(inner);
+        BOOST_REQUIRE_EQUAL(inner_exception, nullptr);
+    }
+
+    // 1 level
+    {
+        auto inner = std::make_exception_ptr(nested_type("inner"));
+        auto outer = make_nested_exception_ptr(nesting_type("outer"), std::move(inner));
+        auto* exception = try_catch_nested<nested_type>(outer);
+        BOOST_REQUIRE_NE(exception, nullptr);
+        BOOST_REQUIRE_EQUAL(exception->what(), "inner");
+    }
+
+    // 2 levels
+    {
+        auto inner = std::make_exception_ptr(nested_type("inner"));
+        auto outer1 = make_nested_exception_ptr(nesting_type("outer"), std::move(inner));
+        auto outer2 = make_nested_exception_ptr(utils::internal::default_nested_exception_type("outer2"), std::move(outer1));
+        auto* exception = try_catch_nested<nested_type>(outer2);
+        BOOST_REQUIRE_NE(exception, nullptr);
+        BOOST_REQUIRE_EQUAL(exception->what(), "inner");
+    }
+
+    // 3 levels
+    {
+        auto inner = std::make_exception_ptr(nested_type("inner"));
+        auto outer1 = make_nested_exception_ptr(nesting_type("outer"), std::move(inner));
+        auto outer2 = make_nested_exception_ptr(utils::internal::default_nested_exception_type("outer2"), std::move(outer1));
+        auto outer3 = make_nested_exception_ptr(utils::internal::default_nested_exception_type("outer3"), std::move(outer2));
+        auto* exception = try_catch_nested<nested_type>(outer3);
+        BOOST_REQUIRE_EQUAL(exception->what(), "inner");
+    }
+
+    // Negative case, wrong type
+    {
+        auto inner = std::make_exception_ptr(std::string("inner"));
+        auto outer = make_nested_exception_ptr(nesting_type("outer"), std::move(inner));
+        auto* exception = try_catch_nested<nested_type>(outer);
+        BOOST_REQUIRE_EQUAL(exception, nullptr);
+    }
+
+    // Negative case - null nested exception
+    {
+        std::exception_ptr inner;
+        auto outer = std::make_exception_ptr(utils::internal::nested_exception(nesting_type("outer"), std::move(inner)));
+        auto* exception = try_catch_nested<nested_type>(outer);
+        BOOST_REQUIRE_EQUAL(exception, nullptr);
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_make_nested_exception_ptr) {
     auto inner = std::make_exception_ptr(std::runtime_error("inner"));
     auto outer = make_nested_exception_ptr(std::runtime_error("outer"), inner);
