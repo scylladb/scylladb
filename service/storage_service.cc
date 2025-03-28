@@ -7153,6 +7153,10 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.compression_dicts) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
+                if (ss._feature_service.view_building_coordinator) {
+                    additional_tables.push_back(db::system_keyspace::view_building_coordinator_tasks()->id());
+                    additional_tables.push_back(db::system_keyspace::view_building_coordinator_staging_sstables()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
@@ -7197,6 +7201,18 @@ void storage_service::init_messaging_service() {
             auto view_builder_version_mut = co_await ss._sys_ks.local().get_view_builder_version_mutation();
             if (view_builder_version_mut) {
                 mutations.emplace_back(*view_builder_version_mut);
+            }
+
+            auto vbc_processing_base_mut = co_await ss._sys_ks.local().get_vbc_processing_base_mutation();
+            if (vbc_processing_base_mut) {
+                mutations.emplace_back(*vbc_processing_base_mut);
+            }
+
+            if (ss._feature_service.view_building_coordinator) {
+                auto built_views_muts = co_await ss._sys_ks.local().get_built_views_mutations();
+                for (auto&& mut: built_views_muts) {
+                    mutations.emplace_back(std::move(mut));
+                }
             }
 
             co_return raft_snapshot{

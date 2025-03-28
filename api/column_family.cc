@@ -957,7 +957,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         auto&& cf_name = std::get<1>(ks_cf);
         // Use of load_built_views() as filtering table should be in sync with
         // built_indexes_virtual_reader filtering with BUILT_VIEWS table
-        return sys_ks.local().load_built_views().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace::view_name>& vb) mutable {
+        return sys_ks.local().load_built_views(db::system_keyspace_view_type::all).then([ks, cf_name, &ctx](const std::vector<db::system_keyspace::view_name>& vb) mutable {
             std::set<sstring> vp;
             for (auto b : vb) {
                 if (b.first == ks) {

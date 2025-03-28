@@ -10,6 +10,7 @@
 #include <boost/range/algorithm.hpp>
 #include <boost/functional/hash.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <fmt/core.h>
 #include <fmt/ranges.h>
 
 #include <seastar/core/coroutine.hh>
@@ -18,12 +19,16 @@
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
+#include "db/view/view_build_status.hh"
+#include "dht/token.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"
+#include "schema/schema.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
 #include "timestamp.hh"
+#include "utils/UUID.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"
@@ -49,8 +54,11 @@
 #include "service/raft/raft_group0_client.hh"
 #include "utils/shared_dict.hh"
 #include "replica/database.hh"
+#include "service/view_building_coordinator.hh"
+#include "view_info.hh"
 
 #include <unordered_map>
+#include <utility>
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -92,12 +100,15 @@ namespace {
             system_keyspace::COMMITLOG_CLEANUPS,
             system_keyspace::SERVICE_LEVELS_V2,
             system_keyspace::VIEW_BUILD_STATUS_V2,
+            system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS,
+            system_keyspace::VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
             system_keyspace::ROLE_PERMISSIONS,
             system_keyspace::v3::CDC_LOCAL,
-            system_keyspace::DICTS
+            system_keyspace::DICTS,
+            system_keyspace::v3::BUILT_VIEWS,
         };
         if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
             props.enable_schema_commitlog();
@@ -116,12 +127,15 @@ namespace {
                 system_keyspace::TABLETS,
                 system_keyspace::SERVICE_LEVELS_V2,
                 system_keyspace::VIEW_BUILD_STATUS_V2,
+                system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS,
+                system_keyspace::VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES,
                 // auth tables
                 system_keyspace::ROLES,
                 system_keyspace::ROLE_MEMBERS,
                 system_keyspace::ROLE_ATTRIBUTES,
                 system_keyspace::ROLE_PERMISSIONS,
                 system_keyspace::DICTS,
+                system_keyspace::v3::BUILT_VIEWS,
             };
             if (ks_name == system_keyspace::NAME && tables.contains(cf_name)) {
                 props.is_group0_table = true;
@@ -1173,6 +1187,36 @@ schema_ptr system_keyspace::view_build_status_v2() {
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
                 .with_column("status", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::view_building_coordinator_tasks() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, VIEW_BUILDING_COORDINATOR_TASKS);
+        return schema_builder(NAME, VIEW_BUILDING_COORDINATOR_TASKS, id)
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("view_name", utf8_type, column_kind::partition_key)
+                .with_column("host_id", uuid_type, column_kind::clustering_key)
+                .with_column("shard", int32_type, column_kind::clustering_key)
+                .with_column("start_token", long_type, column_kind::clustering_key)
+                .with_column("end_token", long_type, column_kind::clustering_key)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::view_building_coordinator_staging_sstables() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+        return schema_builder(NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES, id)
+                .with_column("host_id", uuid_type, column_kind::partition_key)
+                .with_column("shard", int32_type, column_kind::clustering_key)
+                .with_column("start_token", long_type, column_kind::clustering_key)
+                .with_column("end_token", long_type, column_kind::clustering_key)
                 .with_hash_version()
                 .build();
     }();
@@ -2315,7 +2359,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(),
+                    dicts(), view_building_coordinator_tasks(), view_building_coordinator_staging_sstables(),
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
@@ -2358,6 +2402,15 @@ void system_keyspace::mark_writable() {
         _db.find_column_family(table).mark_ready_for_writes(_db.commitlog_for(table));
     }
 }
+
+static service::query_state& internal_system_query_state() {
+    using namespace std::chrono_literals;
+    const auto t = 10s;
+    static timeout_config tc{ t, t, t, t, t, t, t };
+    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
+    static thread_local service::query_state qs(cs, empty_service_permit());
+    return qs;
+};
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
 system_keyspace::query_mutations(distributed<replica::database>& db, schema_ptr schema) {
@@ -2552,6 +2605,7 @@ future<> system_keyspace::remove_view_build_progress(sstring ks_name, sstring vi
 }
 
 future<> system_keyspace::mark_view_as_built(sstring ks_name, sstring view_name) {
+    SCYLLA_ASSERT(!_db.find_keyspace(ks_name).uses_tablets());
     return execute_cql(
             format("INSERT INTO system.{} (keyspace_name, view_name) VALUES (?, ?)", v3::BUILT_VIEWS),
             std::move(ks_name),
@@ -2559,20 +2613,66 @@ future<> system_keyspace::mark_view_as_built(sstring ks_name, sstring view_name)
 }
 
 future<> system_keyspace::remove_built_view(sstring ks_name, sstring view_name) {
+    SCYLLA_ASSERT(!_db.find_keyspace(ks_name).uses_tablets());
     return execute_cql(
             format("DELETE FROM system.{} WHERE keyspace_name = ? AND view_name = ?", v3::BUILT_VIEWS),
             std::move(ks_name),
             std::move(view_name)).discard_result();
 }
 
-future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_views() {
-    return execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([] (::shared_ptr<cql3::untyped_result_set> cql_result) {
-        return *cql_result
-                | std::views::transform([] (const cql3::untyped_result_set::row& row) {
+future<mutation> system_keyspace::make_mark_view_as_built_mutation(api::timestamp_type ts, sstring ks_name, sstring view_name) {
+    static const sstring stmt = format("INSERT INTO {}.{}(keyspace_name, view_name) VALUES (?, ?)", NAME, v3::BUILT_VIEWS);
+    SCYLLA_ASSERT(_db.find_keyspace(ks_name).uses_tablets());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {ks_name, view_name});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_remove_built_view_mutation(api::timestamp_type ts, sstring ks_name, sstring view_name) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, v3::BUILT_VIEWS);
+    SCYLLA_ASSERT(_db.find_keyspace(ks_name).uses_tablets());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {ks_name, view_name});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::vector<mutation>> system_keyspace::get_built_views_mutations() {
+    auto schema = _db.find_schema(NAME, v3::BUILT_VIEWS);
+    auto rs = co_await query_mutations(_db.container(), NAME, v3::BUILT_VIEWS);
+    SCYLLA_ASSERT(rs);
+
+    std::vector<mutation> muts;
+    auto& ps = rs->partitions();
+    for (auto& p: ps) {
+        auto mut = p.mut().unfreeze(schema);
+        auto ks_name = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*schema, 0)));
+        if (_db.find_keyspace(ks_name).uses_tablets()) {
+            muts.emplace_back(std::move(mut));
+        }
+    }
+    co_return muts;
+}
+
+future<std::vector<system_keyspace::view_name>> system_keyspace::load_built_views(view_type view_type) {
+    return execute_cql(format("SELECT * FROM system.{}", v3::BUILT_VIEWS)).then([this, view_type] (::shared_ptr<cql3::untyped_result_set> cql_result) {
+        auto result = *cql_result | std::views::transform([] (const cql3::untyped_result_set::row& row) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
             auto cf_name = row.get_as<sstring>("view_name");
             return std::pair(std::move(ks_name), std::move(cf_name));
-        }) | std::ranges::to<std::vector<view_name>>();
+        });
+        
+        if (view_type != system_keyspace::view_type::all) {
+            return result | std::views::filter([this, view_type] (const system_keyspace::view_name& view) {
+                return _db.find_keyspace(view.first).uses_tablets() == (view_type == system_keyspace::view_type::tablet_based);
+            }) | std::ranges::to<std::vector<view_name>>();
+        }
+        return result | std::ranges::to<std::vector<view_name>>();
     });
 }
 
@@ -2603,6 +2703,230 @@ future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_
     });
 }
 
+static future<std::optional<mutation>> get_scylla_local_mutation(replica::database& db, std::string_view key) {
+    auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    partition_key pk = partition_key::from_singular(*s, key);
+    dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
+
+    auto rs = co_await replica::query_mutations(db.container(), s, pr, s->full_slice(), db::no_timeout);
+    SCYLLA_ASSERT(rs);
+    auto& ps = rs->partitions();
+    for (auto& p: ps) {
+        auto mut = p.mut().unfreeze(s);
+        co_return std::move(mut);
+    }
+
+    co_return std::nullopt;
+}
+
+future<system_keyspace::view_build_status_map> system_keyspace::get_view_build_status_map() {
+    static const sstring query = format("SELECT * FROM {}.{}", NAME, VIEW_BUILD_STATUS_V2);
+
+    view_build_status_map map;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto ks_name = row.get_as<sstring>("keyspace_name");
+        auto view_name = row.get_as<sstring>("view_name");
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto status = view::build_status_from_string(row.get_as<sstring>("status"));
+
+        auto view = std::make_pair(std::move(ks_name), std::move(view_name));
+        if (!map.contains(view)) {
+            map[view] = view_build_status_map::mapped_type();
+        }
+        map[view][host_id] = status;
+
+        co_return stop_iteration::no;
+    });
+    co_return map;
+}
+
+future<mutation> system_keyspace::make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status) {
+    static const sstring stmt = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view_name.first, view_name.second, host_id.uuid(), view::build_status_to_sstring(status)});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_view_build_status_update_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status) {
+    static const sstring stmt = format("UPDATE {}.{} SET status = ? WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view::build_status_to_sstring(status), view_name.first, view_name.second, host_id.uuid()});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_remove_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view_name.first, view_name.second});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_remove_view_build_status_on_host_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id) {
+    static const sstring stmt = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ? AND host_id = ?", NAME, VIEW_BUILD_STATUS_V2);
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {view_name.first, view_name.second, host_id.uuid()});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<service::vbc::vbc_tasks> system_keyspace::get_view_building_coordinator_tasks() {
+    using namespace service::vbc;
+    static const sstring query = format("SELECT keyspace_name, view_name, host_id, shard, start_token, end_token FROM system.{}", VIEW_BUILDING_COORDINATOR_TASKS);
+
+    vbc_tasks tasks;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto ks_name = row.get_as<sstring>("keyspace_name");
+        auto view_name = row.get_as<sstring>("view_name");
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto shard = unsigned(row.get_as<int32_t>("shard"));
+        auto start_token = row.get_as<int64_t>("start_token");
+        auto end_token = row.get_as<int64_t>("end_token");
+
+        auto schema = _db.find_schema(ks_name, view_name);
+        auto base_id = schema->view_info()->base_id();
+        
+        auto& base_tasks = tasks[base_id];
+        service::vbc::view_name view_key = {ks_name, view_name};
+        auto& view_tasks = base_tasks[view_key];
+
+        dht::token start = dht::minimum_token();
+        dht::token end = dht::maximum_token();
+        if (start_token != std::numeric_limits<int64_t>::min()) {
+            start = dht::token(start_token);
+        }
+        if (end_token != std::numeric_limits<int64_t>::min()) {
+            end = dht::token(end_token);
+        }
+        auto range = dht::token_range::make({start, false}, {end, true});
+
+        view_building_target target{host_id, shard};
+        view_tasks[target].push_back(range);
+        co_return stop_iteration::no;
+    });
+    co_return tasks;
+}
+
+static future<mutation> make_mutation_for_vbc_stmt(cql3::query_processor& qp, sstring stmt, api::timestamp_type& ts, system_keyspace_view_name& view_name, locator::host_id host_id, shard_id shard, dht::token_range range) {
+    data_value start = range.start() ? data_value(range.start()->value().data()) : std::numeric_limits<int64_t>::min();
+    data_value end = range.end() ? data_value(range.end()->value().data()) : std::numeric_limits<int64_t>::min();
+    std::vector<data_value_or_unset> values {
+        data_value(view_name.first), data_value(view_name.second), 
+        data_value(host_id.uuid()), data_value(int32_t(shard)),
+        start, end
+    };
+
+    auto muts = co_await qp.get_mutations_internal(stmt, internal_system_query_state(), ts, std::move(values));
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_vbc_task_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, shard_id shard, dht::token_range range) {
+    static const sstring stmt = format("INSERT INTO {}.{}(keyspace_name, view_name, host_id, shard, start_token, end_token) VALUES (?, ?, ?, ?, ?, ?)", db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS);
+    return make_mutation_for_vbc_stmt(_qp, stmt, ts, view_name, host_id, shard, std::move(range));
+}
+
+future<mutation> system_keyspace::make_vbc_task_done_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, shard_id shard, dht::token_range range) {
+    static sstring stmt = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ? AND host_id = ? AND shard = ? AND start_token = ? AND end_token = ?", db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS);
+    return make_mutation_for_vbc_stmt(_qp, stmt, ts, view_name, host_id, shard, std::move(range));
+}
+static constexpr auto VBC_PROCESSING_BASE_KEY = "vbc_processing_base";
+
+future<mutation> system_keyspace::make_vbc_processing_base_mutation(api::timestamp_type ts, table_id base_id) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VBC_PROCESSING_BASE_KEY, base_id.to_sstring()});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::optional<mutation>> system_keyspace::get_vbc_processing_base_mutation() {
+    return get_scylla_local_mutation(_db, VBC_PROCESSING_BASE_KEY);
+}
+
+future<std::optional<table_id>> system_keyspace::get_vbc_processing_base() {
+    auto value = co_await get_scylla_local_param(VBC_PROCESSING_BASE_KEY);
+    co_return value.transform([] (sstring uuid) {
+        return table_id(utils::UUID(uuid));
+    });
+}
+
+future<mutation> system_keyspace::make_vbc_delete_processing_base_mutation(api::timestamp_type ts) {
+    static sstring query = format("DELETE FROM {}.{} WHERE key = ?", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VBC_PROCESSING_BASE_KEY});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::vector<mutation>> system_keyspace::make_vbc_remove_view_tasks_mutations(api::timestamp_type ts, system_keyspace_view_name view_name) {
+    static const sstring query = format("DELETE FROM {}.{} WHERE keyspace_name = ? AND view_name = ?", db::system_keyspace::NAME, db::system_keyspace::VIEW_BUILDING_COORDINATOR_TASKS);
+    return _qp.get_mutations_internal(query, internal_system_query_state(), ts, {view_name.first, view_name.second});
+}
+
+future<service::vbc::vbc_target_staging_sstables_map> system_keyspace::get_view_building_coordinator_staging_sstables_targets() {
+    static const sstring query = format("SELECT * FROM {}.{}", NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+
+    service::vbc::vbc_target_staging_sstables_map target_staging_sstables_map;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto shard = unsigned(row.get_as<int32_t>("shard"));
+        auto start_token = row.get_as<int64_t>("start_token");
+        auto end_token = row.get_as<int64_t>("end_token");
+
+        service::vbc::view_building_target target{host_id, shard};
+        auto range = dht::token_range::make({dht::token(start_token), true}, {dht::token(end_token), true});
+        target_staging_sstables_map[target].push_back(range);
+        
+        co_return stop_iteration::no;
+    });
+    co_return target_staging_sstables_map;
+}
+
+future<mutation> system_keyspace::make_vbc_staging_sstable_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range) {
+    static const sstring stmt = format("INSERT INTO {}.{}(host_id, shard, start_token, end_token) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+    
+    // `range` is expected to have both start and end
+    data_value start = data_value(range.start()->value().data());
+    data_value end = data_value(range.end()->value().data());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {data_value(host_id.uuid()), data_value(int32_t(shard)), start, end});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_vbc_staging_sstable_done_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range) {
+    static sstring stmt = format("DELETE FROM {}.{} WHERE host_id = ? AND shard = ? AND start_token = ? AND end_token = ?", NAME, VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES);
+
+    // `range` is expected to have both start and end
+    data_value start = data_value(range.start()->value().data());
+    data_value end = data_value(range.end()->value().data());
+
+    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {data_value(host_id.uuid()), data_value(int32_t(shard)), start, end});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
 
 template <typename... Args>
 future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql_with_timeout(sstring req,
@@ -2833,23 +3157,6 @@ future<mutation> system_keyspace::get_group0_history(distributed<replica::databa
     co_return mutation(s, partition_key::from_singular(*s, GROUP0_HISTORY_KEY));
 }
 
-static future<std::optional<mutation>> get_scylla_local_mutation(replica::database& db, std::string_view key) {
-    auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
-
-    partition_key pk = partition_key::from_singular(*s, key);
-    dht::partition_range pr = dht::partition_range::make_singular(dht::decorate_key(*s, pk));
-
-    auto rs = co_await replica::query_mutations(db.container(), s, pr, s->full_slice(), db::no_timeout);
-    SCYLLA_ASSERT(rs);
-    auto& ps = rs->partitions();
-    for (auto& p: ps) {
-        auto mut = p.mut().unfreeze(s);
-        co_return std::move(mut);
-    }
-
-    co_return std::nullopt;
-}
-
 future<std::optional<mutation>> system_keyspace::get_group0_schema_version() {
     return get_scylla_local_mutation(_db, "group0_schema_version");
 }
@@ -2874,15 +3181,6 @@ future<system_keyspace::auth_version_t> system_keyspace::get_auth_version() {
 future<std::optional<mutation>> system_keyspace::get_auth_version_mutation() {
     return get_scylla_local_mutation(_db, AUTH_VERSION_KEY);
 }
-
-static service::query_state& internal_system_query_state() {
-    using namespace std::chrono_literals;
-    const auto t = 10s;
-    static timeout_config tc{ t, t, t, t, t, t, t };
-    static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
-    static thread_local service::query_state qs(cs, empty_service_permit());
-    return qs;
-};
 
 future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type ts, db::system_keyspace::auth_version_t version) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
