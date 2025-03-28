@@ -289,63 +289,94 @@ require_on_single_column(const predicate& p) {
     on_internal_error(rlogger, "require_on_single_column: predicate is not on a single column");
 }
 
+/// Given an expression and a column definition , builds a function that returns
+/// the set of all column values that would satisfy the expression. The _token_values variant finds
+/// matching values for the partition token function call instead of the column.
+///
+/// An expression restricts possible values of a column or token:
+/// - `A>5` restricts A from below
+/// - `A>5 AND A>6 AND B<10 AND A=12 AND B>0` restricts A to 12 and B to between 0 and 10
+/// - `A IN (1, 3, 5)` restricts A to 1, 3, or 5
+/// - `A IN (1, 3, 5) AND A>3` restricts A to just 5
+/// - `A=1 AND A<=0` restricts A to an empty list; no value is able to satisfy the expression
+/// - `A>=NULL` also restricts A to an empty list; all comparisons to NULL are false
+/// - an expression without A "restricts" A to unbounded range
+//
 // When cdef == nullptr it finds possible token values instead of column values.
 // When finding token values the table_schema_opt argument has to point to a valid schema,
 // but it isn't used when finding values for column.
 // The schema is needed to find out whether a call to token() function represents
 // the partition token.
-static value_set possible_lhs_values(const column_definition* cdef,
+static
+solve_for_t
+possible_lhs_values(const column_definition* cdef,
                                         const expression& expr,
-                                        const schema* table_schema_opt,
-                                        const query_options& options) {
+                                        const schema* table_schema_opt) {
     const auto type = cdef ? &cdef->type->without_reversed() : long_type.get();
     return expr::visit(overloaded_functor{
-            [] (const constant& constant_val) {
+            [] (const constant& constant_val) -> solve_for_t {
                 std::optional<bool> bool_val = get_bool_value(constant_val);
                 if (bool_val.has_value()) {
-                    return *bool_val ? unbounded_value_set : empty_value_set;
+                    return *bool_val
+                            ? solve_for_t([] (const query_options&) { return unbounded_value_set; })
+                            : solve_for_t([] (const query_options&) { return empty_value_set; });
                 }
 
                 on_internal_error(expr_logger,
                     "possible_lhs_values: a constant that is not a bool value cannot serve as a restriction by itself");
             },
-            [&] (const conjunction& conj) {
-                return std::ranges::fold_left(conj.children, unbounded_value_set, [&](value_set&& acc, const expression& child) {
+            [&] (const conjunction& conj) -> solve_for_t {
+                auto children =
+                        conj.children
+                        | std::views::transform([&] (const expression& e) {
+                                return possible_lhs_values(cdef, e, table_schema_opt);
+                            })
+                        | std::ranges::to<std::vector>();
+                return [children, type] (const query_options& options) -> value_set {
+                  return std::ranges::fold_left(children, unbounded_value_set, [&](value_set&& acc, const solve_for_t& child) {
                     return intersection(
-                        std::move(acc), possible_lhs_values(cdef, child, table_schema_opt, options), type);
-                });
+                        std::move(acc), child(options), type);
+                    });
+                };
             },
-            [&] (const binary_operator& oper) -> value_set {
+            [&] (const binary_operator& oper) -> solve_for_t {
                 return expr::visit(overloaded_functor{
-                        [&] (const column_value& col) -> value_set {
+                        [&] (const column_value& col) -> solve_for_t {
                             if (!cdef || cdef != col.col) {
-                                return unbounded_value_set;
+                                return [] (const query_options&) { return unbounded_value_set; };
                             }
                             if (is_compare(oper.op)) {
+                              return [oper] (const query_options& options) {
                                 managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
                                 return oper.op == oper_t::EQ ? value_set(value_list{*val})
                                         : to_range(oper.op, std::move(*val));
+                              };
                             } else if (oper.op == oper_t::IN) {
+                              return [oper, type, cdef] (const query_options& options) {
                                 return get_IN_values(oper.rhs, options, type->as_less_comparator(), cdef->name_as_text());
+                              };
                             } else if (oper.op == oper_t::CONTAINS || oper.op == oper_t::CONTAINS_KEY) {
+                              return [oper] (const query_options& options) {
                                 managed_bytes_opt val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                                 if (!val) {
                                     return empty_value_set; // All NULL comparisons fail; no column values match.
                                 }
                                 return value_set(value_list{*val});
+                              };
                             }
-                            throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
+                            return nullptr;
                         },
-                        [&] (const subscript& s) -> value_set {
+                        [&] (const subscript& s) -> solve_for_t {
                             const column_value& col = get_subscripted_column(s);
 
                             if (!cdef || cdef != col.col) {
-                                return unbounded_value_set;
+                                return [] (const query_options&) { return unbounded_value_set; };
                             }
 
+                          return [s, oper] (const query_options& options) {
                             managed_bytes_opt sval = evaluate(s.sub, options).to_managed_bytes_opt();
                             if (!sval) {
                                 return empty_value_set; // NULL can't be a map key
@@ -361,8 +392,10 @@ static value_set possible_lhs_values(const column_definition* cdef,
                                 return value_set(value_list{val});
                             }
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
+                          };
                         },
-                        [&] (const tuple_constructor& tuple) -> value_set {
+                        [&] (const tuple_constructor& tuple) -> solve_for_t {
+                          return [tuple, cdef, oper, type] (const query_options& options) -> value_set {
                             if (!cdef) {
                                 return unbounded_value_set;
                             }
@@ -391,15 +424,17 @@ static value_set possible_lhs_values(const column_definition* cdef,
                                 return get_IN_values(oper.rhs, column_index_on_lhs, options, type->as_less_comparator());
                             }
                             return unbounded_value_set;
+                          };
                         },
-                        [&] (const function_call& token_fun_call) -> value_set {
+                        [&] (const function_call& token_fun_call) -> solve_for_t {
                             if (!is_partition_token_for_schema(token_fun_call, *table_schema_opt)) {
                                 on_internal_error(expr_logger, "possible_lhs_values: function calls are not supported as the LHS of a binary expression");
                             }
 
                             if (cdef) {
-                                return unbounded_value_set;
+                                return [] (const query_options&) -> value_set { return unbounded_value_set; };
                             }
+                          return [oper] (const query_options& options) -> value_set {
                             auto val = evaluate(oper.rhs, options).to_managed_bytes_opt();
                             if (!val) {
                                 return empty_value_set; // All NULL comparisons fail; no token values match.
@@ -422,82 +457,83 @@ static value_set possible_lhs_values(const column_definition* cdef,
                                 return interval<managed_bytes>::make_ending_with(interval_bound(std::move(adjusted_val), inclusive));
                             }
                             throw std::logic_error(format("get_token_interval invalid operator {}", oper.op));
+                          };
                         },
-                        [&] (const binary_operator&) -> value_set {
+                        [&] (const binary_operator&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: nested binary operators are not supported");
                         },
-                        [&] (const conjunction&) -> value_set {
+                        [&] (const conjunction&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: conjunctions are not supported as the LHS of a binary expression");
                         },
-                        [] (const constant&) -> value_set {
+                        [] (const constant&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: constants are not supported as the LHS of a binary expression");
                         },
-                        [] (const unresolved_identifier&) -> value_set {
+                        [] (const unresolved_identifier&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: unresolved identifiers are not supported as the LHS of a binary expression");
                         },
-                        [] (const column_mutation_attribute&) -> value_set {
+                        [] (const column_mutation_attribute&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: writetime/ttl are not supported as the LHS of a binary expression");
                         },
-                        [] (const cast&) -> value_set {
+                        [] (const cast&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: typecasts are not supported as the LHS of a binary expression");
                         },
-                        [] (const field_selection&) -> value_set {
+                        [] (const field_selection&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: field selections are not supported as the LHS of a binary expression");
                         },
-                        [] (const bind_variable&) -> value_set {
+                        [] (const bind_variable&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: bind variables are not supported as the LHS of a binary expression");
                         },
-                        [] (const untyped_constant&) -> value_set {
+                        [] (const untyped_constant&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: untyped constants are not supported as the LHS of a binary expression");
                         },
-                        [] (const collection_constructor&) -> value_set {
+                        [] (const collection_constructor&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: collection constructors are not supported as the LHS of a binary expression");
                         },
-                        [] (const usertype_constructor&) -> value_set {
+                        [] (const usertype_constructor&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: user type constructors are not supported as the LHS of a binary expression");
                         },
-                        [] (const temporary&) -> value_set {
+                        [] (const temporary&) -> solve_for_t {
                             on_internal_error(expr_logger, "possible_lhs_values: temporaries are not supported as the LHS of a binary expression");
                         },
                     }, oper.lhs);
             },
-            [] (const column_value&) -> value_set {
+            [] (const column_value&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a column cannot serve as a restriction by itself");
             },
-            [] (const subscript&) -> value_set {
+            [] (const subscript&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a subscript cannot serve as a restriction by itself");
             },
-            [] (const unresolved_identifier&) -> value_set {
+            [] (const unresolved_identifier&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: an unresolved identifier cannot serve as a restriction");
             },
-            [] (const column_mutation_attribute&) -> value_set {
+            [] (const column_mutation_attribute&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: the writetime/ttl functions cannot serve as a restriction by itself");
             },
-            [] (const function_call&) -> value_set {
+            [] (const function_call&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a function call cannot serve as a restriction by itself");
             },
-            [] (const cast&) -> value_set {
+            [] (const cast&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a typecast cannot serve as a restriction by itself");
             },
-            [] (const field_selection&) -> value_set {
+            [] (const field_selection&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a field selection cannot serve as a restriction by itself");
             },
-            [] (const bind_variable&) -> value_set {
+            [] (const bind_variable&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a bind variable cannot serve as a restriction by itself");
             },
-            [] (const untyped_constant&) -> value_set {
+            [] (const untyped_constant&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: an untyped constant cannot serve as a restriction by itself");
             },
-            [] (const tuple_constructor&) -> value_set {
+            [] (const tuple_constructor&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: an tuple constructor cannot serve as a restriction by itself");
             },
-            [] (const collection_constructor&) -> value_set {
+            [] (const collection_constructor&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a collection constructor cannot serve as a restriction by itself");
             },
-            [] (const usertype_constructor&) -> value_set {
+            [] (const usertype_constructor&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a user type constructor cannot serve as a restriction by itself");
             },
-            [] (const temporary&) -> value_set {
+            [] (const temporary&) -> solve_for_t {
                 on_internal_error(expr_logger, "possible_lhs_values: a temporary cannot serve as a restriction by itself");
             },
         }, expr);
@@ -842,7 +878,7 @@ static
 std::function<bytes_opt (const query_options&)>
 build_value_for_fn(const column_definition& cdef, const expression& e, const schema& s) {
   auto ac = predicate{
-      .solve_for = std::bind_front(possible_lhs_values, &cdef, e, &s),
+      .solve_for = possible_lhs_values(&cdef, e, &s),
       .filter = e,
       .on = on_column{&cdef},
       .is_singleton = false, // Code below assumes 0 or 1 results.
@@ -946,7 +982,7 @@ static partition_range_restrictions extract_partition_range(
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_partition_key() && (b.op == oper_t::EQ || b.op == oper_t::IN)) {
                     auto a = predicate{
-                        .solve_for = std::bind_front(possible_lhs_values, s->col, b, table_schema.get()),
+                        .solve_for = possible_lhs_values(s->col, b, table_schema.get()),
                         .filter = b,
                         .on = on_column{s->col},
                         .is_singleton = b.op == oper_t::EQ,
@@ -1021,7 +1057,7 @@ static partition_range_restrictions extract_partition_range(
         return token_range_restrictions{
             .token_restrictions = predicate{
                 // It's not really a column, but...
-                .solve_for = std::bind_front(possible_lhs_values, /* col */ nullptr, *v.tokens, schema.get()),
+                .solve_for = possible_lhs_values(/* col */ nullptr, *v.tokens, schema.get()),
                 .filter = *v.tokens,
                 .on = on_partition_key_token{schema.get()},
                 .is_singleton = false, // It could return a single token, but it's not important to track it
@@ -1077,7 +1113,7 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
             }
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 multi.push_back(predicate{
-                    .solve_for = std::bind_front(possible_lhs_values, /* col */ nullptr, b, table_schema.get()),
+                    .solve_for = possible_lhs_values(/* col */ nullptr, b, table_schema.get()),
                     .filter = b,
                     .on = on_clustering_key_prefix{prefix},
                     .is_singleton = false,
@@ -1091,7 +1127,7 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (s->col->is_clustering_key()) {
                     auto a = predicate{
-                        .solve_for = std::bind_front(possible_lhs_values, s->col, b, table_schema.get()),
+                        .solve_for = possible_lhs_values(s->col, b, table_schema.get()),
                         .filter = b,
                         .on  = on_column{s->col},
                         .is_singleton = b.op == oper_t::EQ,
@@ -1110,7 +1146,7 @@ static std::vector<predicate> extract_clustering_prefix_restrictions(
             with_current_binary_operator(*this, [&] (const binary_operator& b) {
                 if (cval.col->is_clustering_key()) {
                     auto a = predicate{
-                        .solve_for = std::bind_front(possible_lhs_values, cval.col, b, table_schema.get()),
+                        .solve_for = possible_lhs_values(cval.col, b, table_schema.get()),
                         .filter = b,
                         .on  = on_column{cval.col},
                         .is_singleton = b.op == oper_t::EQ,
@@ -2869,7 +2905,7 @@ void statement_restrictions::prepare_indexed_global(const schema& idx_tbl_schema
         // Clustering prefix ends after token_restriction, all further restrictions have to be filtered.
         expr::expression token_restriction = replace_partition_token(_partition_key_restrictions, token_column, *_schema);
         _idx_tbl_ck_prefix = std::vector{predicate{
-            .solve_for = std::bind_front(possible_lhs_values, token_column, token_restriction, _schema.get()),
+            .solve_for = possible_lhs_values(token_column, token_restriction, _schema.get()),
             .filter = token_restriction,
             .on = on_column{token_column},
             .is_singleton = false, // FIXME: could be a singleton token. Not very important.
@@ -2973,7 +3009,7 @@ void statement_restrictions::prepare_indexed_local(const schema& idx_tbl_schema)
     // Translate the restriction to use column from the index schema and add it
     expr::expression replaced_idx_restriction = replace_column_def(idx_col_restriction_expr, &indexed_column);
     _idx_tbl_ck_prefix->push_back(predicate{
-        .solve_for = std::bind_front(possible_lhs_values, &indexed_column, replaced_idx_restriction, _schema.get()),
+        .solve_for = possible_lhs_values(&indexed_column, replaced_idx_restriction, _schema.get()),
         .filter = replaced_idx_restriction,
         .on = on_column{&indexed_column},
         .is_singleton = false, // Could be true, but not important.
@@ -2997,7 +3033,7 @@ void statement_restrictions::add_clustering_restrictions_to_idx_ck_prefix(const 
         auto col_in_index = idx_tbl_schema.get_column_definition(col->name());
         auto replaced = replace_column_def(e.filter, col_in_index);
         auto a = predicate{
-            .solve_for = std::bind_front(possible_lhs_values, col_in_index, replaced, &idx_tbl_schema),
+            .solve_for = possible_lhs_values(col_in_index, replaced, &idx_tbl_schema),
             .filter = replaced,
             .on = on_column{col_in_index},
             .is_singleton = false, // FIXME: could be a singleton token. Not very important.
