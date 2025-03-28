@@ -322,8 +322,7 @@ possible_lhs_values(const column_definition* cdef,
                             : solve_for_t([] (const query_options&) { return empty_value_set; });
                 }
 
-                on_internal_error(expr_logger,
-                    "possible_lhs_values: a constant that is not a bool value cannot serve as a restriction by itself");
+                return nullptr;
             },
             [&] (const conjunction& conj) -> solve_for_t {
                 auto children =
@@ -460,81 +459,81 @@ possible_lhs_values(const column_definition* cdef,
                           };
                         },
                         [&] (const binary_operator&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: nested binary operators are not supported");
+                            return nullptr;
                         },
                         [&] (const conjunction&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: conjunctions are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const constant&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: constants are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const unresolved_identifier&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: unresolved identifiers are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const column_mutation_attribute&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: writetime/ttl are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const cast&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: typecasts are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const field_selection&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: field selections are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const bind_variable&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: bind variables are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const untyped_constant&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: untyped constants are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const collection_constructor&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: collection constructors are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const usertype_constructor&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: user type constructors are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                         [] (const temporary&) -> solve_for_t {
-                            on_internal_error(expr_logger, "possible_lhs_values: temporaries are not supported as the LHS of a binary expression");
+                            return nullptr;
                         },
                     }, oper.lhs);
             },
             [] (const column_value&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a column cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const subscript&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a subscript cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const unresolved_identifier&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: an unresolved identifier cannot serve as a restriction");
+                return nullptr;
             },
             [] (const column_mutation_attribute&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: the writetime/ttl functions cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const function_call&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a function call cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const cast&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a typecast cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const field_selection&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a field selection cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const bind_variable&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a bind variable cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const untyped_constant&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: an untyped constant cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const tuple_constructor&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: an tuple constructor cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const collection_constructor&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a collection constructor cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const usertype_constructor&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a user type constructor cannot serve as a restriction by itself");
+                return nullptr;
             },
             [] (const temporary&) -> solve_for_t {
-                on_internal_error(expr_logger, "possible_lhs_values: a temporary cannot serve as a restriction by itself");
+                return nullptr;
             },
         }, expr);
 }
