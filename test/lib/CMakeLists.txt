@@ -7,7 +7,6 @@ target_sources(test-lib
     log.cc
     test_utils.cc
     tmpdir.cc
-    alternator_test_env.cc
     cql_test_env.cc
     expr_test_utils.cc
     test_services.cc
