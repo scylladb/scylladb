@@ -54,6 +54,8 @@ public:
         index_metadata index;
     };
     std::optional<base_schema_with_new_index> build_index_schema(data_dictionary::database db) const;
+
+    virtual bool should_wait_for_topology_not_busy() const override { return true; }
 private:
     void validate_for_local_index(const schema& schema) const;
     void validate_for_frozen_collection(const index_target& target) const;

@@ -348,6 +348,13 @@ Invariants:
    on behalf of previous transitions can still run in the cluster, but they can have no side effects. This is ensured
    by the proper use of the topology guard mechanism (see the "Topology guards" section).
 
+For a group of co-located tablets, the transitions are set on the base tablet map, and each operation is applied on all
+the tablets in the group as a single unit.
+
+If a co-located tablet map is allocated while its base tablet map has any transition, we set the join_base_table
+column of the new tablet map with the base table id. When all the base transitions are complete, the join_base_table
+is deleted and the base_table column is set, and the tablet map becomes ready for use.
+
 # Tablet resize
 
 Each table has its resize metadata stored in group0.

@@ -1078,6 +1078,11 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
         }
         co_return;
     }
+    if (stmt.should_wait_for_topology_not_busy()) {
+        co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
+        co_await remote_.get().ss.wait_for_topology_not_busy();
+        co_return;
+    }
     co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
 }
 

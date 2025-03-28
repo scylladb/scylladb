@@ -60,6 +60,8 @@ public:
 
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) override;
 
+    virtual bool should_wait_for_topology_not_busy() const override { return true; }
+
     // FIXME: continue here. See create_table_statement.hh and CreateViewStatement.java
 private:
     ::shared_ptr<event_t> created_event() const;

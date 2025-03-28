@@ -242,10 +242,43 @@ no_such_tablet_map::no_such_tablet_map(const table_id& id)
 
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
-        return *_tablets.at(id);
+        auto& map = *_tablets.at(id);
+        if (auto base_id = map.base_table()) {
+            return *_tablets.at(*base_id);
+        } else {
+            return map;
+        }
     } catch (const std::out_of_range&) {
         throw_with_backtrace<no_such_tablet_map>(id);
     }
+}
+
+locator::tablet_metadata::table_group_map
+tablet_metadata::all_table_groups() const {
+    table_group_map m;
+    for (auto&& [table, tmap_] : _tablets) {
+        m[get_base_table(table)].insert(table);
+    }
+    return m;
+}
+
+std::unordered_map<table_id, table_id>
+tablet_metadata::all_joining_tables() const {
+    std::unordered_map<table_id, table_id> m;
+    for (auto&& [table, tmap] : _tablets) {
+        if (auto base_table = tmap->join_base_table()) {
+            m[table] = *base_table;
+        }
+    }
+    return m;
+}
+
+table_id tablet_metadata::get_base_table(table_id id) const {
+    return _tablets.at(id)->base_table().value_or(id);
+}
+
+bool tablet_metadata::is_base_table(table_id id) const {
+    return get_base_table(id) == id;
 }
 
 void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
@@ -446,6 +479,14 @@ void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config co
     _repair_scheduler_config = std::move(config);
 }
 
+void tablet_map::set_base_table(table_id base_table) {
+    _base_table = base_table;
+}
+
+void tablet_map::set_join_base_table(table_id base_table) {
+    _join_base_table = base_table;
+}
+
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
     _transitions.erase(id);
@@ -631,6 +672,14 @@ const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() co
     return _repair_scheduler_config;
 }
 
+std::optional<table_id> tablet_map::base_table() const {
+    return _base_table;
+}
+
+std::optional<table_id> tablet_map::join_base_table() const {
+    return _join_base_table;
+}
+
 static auto to_resize_type(sstring decision) {
     static const std::unordered_map<sstring, decltype(resize_decision::way)> string_to_type = {
         {"none", resize_decision::none{}},
@@ -764,7 +813,7 @@ bool tablet_metadata::has_replica_on(host_id host) const {
 
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host) {
     bool valid = true;
-    for (const auto& [table_id, tmap] : tm.all_tables()) {
+    for (const auto& [table, tmap] : tm.all_tables_with_children()) {
         co_await tmap->for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) -> future<> {
             for (const auto& replica : tinfo.replicas) {
                 if (replica.host == this_host) {

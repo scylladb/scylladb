@@ -219,6 +219,9 @@ future<std::vector<mutation>> prepare_new_column_family_announcement(storage_pro
 // This function allows announcing a new keyspace together with its tables at once.
 future<> prepare_new_column_family_announcement(std::vector<mutation>& mutations,
         storage_proxy& sp, const keyspace_metadata& ksm, schema_ptr cfm, api::timestamp_type timestamp);
+// Announce multiple tables in one operation
+future<> prepare_new_column_families_announcement(std::vector<mutation>& mutations,
+        storage_proxy& sp, const keyspace_metadata& ksm, std::vector<schema_ptr> cfms, api::timestamp_type timestamp);
 
 future<std::vector<mutation>> prepare_new_type_announcement(storage_proxy& sp, user_type new_type, api::timestamp_type ts);
 
