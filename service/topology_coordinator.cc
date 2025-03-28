@@ -2176,24 +2176,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     if (node.rs->state == node_state::removing) {
                         co_await _group0.make_nonvoter(node.id, _as);
                     }
-
-                    // If we decommission a node when the number of nodes is even, we make it a non-voter early.
-                    // All majorities containing this node will remain majorities when we make this node a non-voter
-                    // and remove it from the set because the required size of a majority decreases.
-                    //
-                    // FIXME: when a node restarts and notices it's a non-voter, it will become a voter again. If the
-                    // node restarts during a decommission, and we want the decommission to continue (e.g. because it's
-                    // at a finishing non-abortable step), we must ensure that the node doesn't become a voter.
-                    if (node.rs->state == node_state::decommissioning
-                            && raft::configuration::voter_count(_group0.group0_server().get_configuration().current) % 2 == 0) {
-                        if (node.id == _raft.id()) {
-                            rtlogger.info("coordinator is decommissioning and becomes a non-voter; "
-                                         "giving up leadership");
-                            co_await step_down_as_nonvoter();
-                        } else {
-                            co_await _group0.make_nonvoter(node.id, _as);
-                        }
-                    }
                 }
                 if (node.rs->state == node_state::replacing) {
                     // We make a replaced node a non-voter early, just like a removed node.
