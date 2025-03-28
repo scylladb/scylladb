@@ -108,10 +108,6 @@ future<> snapshot_ctl::do_take_column_family_snapshot(sstring ks_name, std::vect
     co_await replica::database::snapshot_tables_on_all_shards(_db, ks_name, std::move(tables), std::move(tag), bool(sf));
 }
 
-future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, sstring cf_name, sstring tag, skip_flush sf) {
-    return take_column_family_snapshot(ks_name, std::vector<sstring>{cf_name}, tag, sf);
-}
-
 future<> snapshot_ctl::clear_snapshot(sstring tag, std::vector<sstring> keyspace_names, sstring cf_name) {
     return run_snapshot_modify_operation([this, tag = std::move(tag), keyspace_names = std::move(keyspace_names), cf_name = std::move(cf_name)] {
         return _db.local().clear_snapshot(tag, keyspace_names, cf_name);
