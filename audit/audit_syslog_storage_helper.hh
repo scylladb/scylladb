@@ -24,6 +24,9 @@ namespace audit {
 class audit_syslog_storage_helper : public storage_helper {
     socket_address _syslog_address;
     net::datagram_channel _sender;
+    seastar::semaphore _semaphore;
+
+    future<> syslog_send_helper(const sstring& msg);
 public:
     explicit audit_syslog_storage_helper(cql3::query_processor&, service::migration_manager&);
     virtual ~audit_syslog_storage_helper();

@@ -33,20 +33,6 @@ namespace audit {
 
 namespace {
 
-future<> syslog_send_helper(net::datagram_channel& sender,
-                            const socket_address& address,
-                            const sstring& msg) {
-    return sender.send(address, net::packet{msg.data(), msg.size()}).handle_exception([address](auto&& exception_ptr) {
-        auto error_msg = seastar::format(
-            "Syslog audit backend failed (sending a message to {} resulted in {}).",
-            address,
-            exception_ptr
-        );
-        logger.error("{}", error_msg);
-        throw audit_exception(std::move(error_msg));
-    });
-}
-
 static auto syslog_address_helper(const db::config& cfg)
 {
     return cfg.audit_unix_socket_path.is_set()
@@ -68,9 +54,26 @@ static std::string json_escape(std::string_view str) {
 
 }
 
+future<> audit_syslog_storage_helper::syslog_send_helper(const sstring& msg) {
+    try {
+        auto lock = co_await get_units(_semaphore, 1, std::chrono::hours(1));
+        co_await _sender.send(_syslog_address, net::packet{msg.data(), msg.size()});
+    }
+    catch (const std::exception& e) {
+        auto error_msg = seastar::format(
+            "Syslog audit backend failed (sending a message to {} resulted in {}).",
+            _syslog_address,
+            e
+        );
+        logger.error("{}", error_msg);
+        throw audit_exception(std::move(error_msg));
+    }
+}
+
 audit_syslog_storage_helper::audit_syslog_storage_helper(cql3::query_processor& qp, service::migration_manager&) :
     _syslog_address(syslog_address_helper(qp.db().get_config())),
-    _sender(make_unbound_datagram_channel(AF_UNIX)) {
+    _sender(make_unbound_datagram_channel(AF_UNIX)),
+    _semaphore(1) {
 }
 
 audit_syslog_storage_helper::~audit_syslog_storage_helper() {
@@ -85,10 +88,10 @@ audit_syslog_storage_helper::~audit_syslog_storage_helper() {
  */
 future<> audit_syslog_storage_helper::start(const db::config& cfg) {
     if (this_shard_id() != 0) {
-        return make_ready_future();
+        co_return;
     }
 
-    return syslog_send_helper(_sender, _syslog_address, "Initializing syslog audit backend.");
+    co_await syslog_send_helper("Initializing syslog audit backend.");
 }
 
 future<> audit_syslog_storage_helper::stop() {
@@ -118,7 +121,7 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
                                     audit_info->table(),
                                     username);
 
-    return syslog_send_helper(_sender, _syslog_address, msg);
+    co_await syslog_send_helper(msg);
 }
 
 future<> audit_syslog_storage_helper::write_login(const sstring& username,
@@ -137,7 +140,7 @@ future<> audit_syslog_storage_helper::write_login(const sstring& username,
                                     client_ip,
                                     username);
 
-    co_await syslog_send_helper(_sender, _syslog_address, msg.c_str());
+    co_await syslog_send_helper(msg.c_str());
 }
 
 using registry = class_registrator<storage_helper, audit_syslog_storage_helper, cql3::query_processor&, service::migration_manager&>;
