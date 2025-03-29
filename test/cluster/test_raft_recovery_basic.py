@@ -22,7 +22,7 @@ async def test_raft_recovery_basic(request, manager: ManagerClient):
     # This test uses the gossip-based recovery procedure.
     cfg = {'enable_user_defined_functions': False,
            'force_gossip_topology_changes': True,
-           'enable_tablets': False}
+           'tablets_mode_for_new_keyspaces': 'disabled'}
     cmd = ['--logger-log-level', 'raft=trace']
 
     servers = [await manager.server_add(config=cfg, cmdline=cmd) for _ in range(3)]

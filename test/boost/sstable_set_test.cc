@@ -179,7 +179,7 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
 SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
     // enable tablets, to get access to tablet_storage_group_manager
     cql_test_config cfg;
-    cfg.db_config->enable_tablets(true);
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
 
     return do_with_cql_env_thread([&](cql_test_env& env) {
         env.execute_cql("CREATE KEYSPACE test_tablet_sstable_set_copy_ctor"

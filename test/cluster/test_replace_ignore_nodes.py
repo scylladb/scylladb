@@ -27,7 +27,7 @@ async def test_replace_ignore_nodes(manager: ManagerClient) -> None:
     """
     cfg = {'enable_user_defined_functions': False,
            'force_gossip_topology_changes': True,
-           'enable_tablets': False}
+           'tablets_mode_for_new_keyspaces': 'disabled'}
     logger.info(f"Booting initial cluster")
     servers = [await manager.server_add(config=cfg) for _ in range(7)]
     s2_id = await manager.get_host_id(servers[2].server_id)

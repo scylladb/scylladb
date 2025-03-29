@@ -19,5 +19,5 @@ extra_scylla_config_options:
     alternator_timeout_in_ms: 30000,
     alternator_ttl_period_in_seconds: 0.5,
     alternator_streams_time_window_s: 0,
-    enable_tablets: True
+    tablets_mode_for_new_keyspaces: enabled
   }

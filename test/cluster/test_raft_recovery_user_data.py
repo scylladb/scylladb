@@ -48,7 +48,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # CQL requests.
     cfg = {
         'endpoint_snitch': 'GossipingPropertyFileSnitch',
-        'enable_tablets': True,
+        'tablets_mode_for_new_keyspaces': 'enabled',
         'failure_detector_timeout_in_ms': 2000,
     }
     property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}

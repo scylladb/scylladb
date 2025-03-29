@@ -27,11 +27,11 @@ async def test_zero_token_nodes_topology_ops(manager: ManagerClient, tablets_ena
     logging.info('Trying to add a zero-token server in the gossip-based topology')
     await manager.server_add(config={'join_ring': False,
                                      'force_gossip_topology_changes': True,
-                                     'enable_tablets': False},
+                                     'tablets_mode_for_new_keyspaces': 'disabled'},
                              expected_error='the raft-based topology is disabled')
 
-    normal_cfg = {'enable_tablets': tablets_enabled}
-    zero_token_cfg = {'enable_tablets': tablets_enabled, 'join_ring': False}
+    normal_cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled'}
+    zero_token_cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled', 'join_ring': False}
 
     logging.info('Adding the first server')
     server_a = await manager.server_add(config=normal_cfg)

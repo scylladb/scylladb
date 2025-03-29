@@ -225,7 +225,7 @@ async def test_batchlog_flush_in_repair_without_cache(manager):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_repair_abort(manager):
-    cfg = {'enable_tablets': True}
+    cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
     await manager.server_add(config=cfg)
     await manager.server_add(config=cfg)
     servers = await manager.running_servers()
@@ -264,7 +264,7 @@ async def test_repair_abort(manager):
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_keyspace_drop_during_data_sync_repair(manager):
     cfg = {
-        'enable_tablets': False,
+        'tablets_mode_for_new_keyspaces': 'disabled',
         'error_injections_at_startup': ['get_keyspace_erms_throw_no_such_keyspace']
     }
     await manager.server_add(config=cfg)
