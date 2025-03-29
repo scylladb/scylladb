@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <seastar/core/file.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/semaphore.hh>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -51,9 +52,17 @@ public:
     requires std::is_invocable_r_v<future<>, Func, typename std::ranges::range_value_t<Container>&>
     future<> parallel_for_each(Container& c, Func func) {
         co_await max_concurrent_for_each(c, _concurrency, [&] (auto& el) -> future<>{
-            auto units = co_await get_units(_sem, 1);
+            auto units = co_await get_units(1);
             co_await func(el);
         });
+    }
+
+    future<semaphore_units<>> get_units(size_t count) noexcept {
+        return seastar::get_units(_sem, count);
+    }
+
+    future<semaphore_units<>> get_units(size_t count, abort_source& abort) noexcept {
+        return seastar::get_units(_sem, count, abort);
     }
 };
 
