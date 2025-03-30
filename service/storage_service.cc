@@ -8067,5 +8067,9 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
     }
 }
 
+const cdc::metadata& storage_service::get_cdc_metadata() const noexcept {
+    return _cdc_gens.local().get_cdc_metadata();
+}
+
 } // namespace service
 
