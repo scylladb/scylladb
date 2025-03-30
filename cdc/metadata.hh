@@ -83,6 +83,10 @@ public:
      */
     stream_id get_stream(api::timestamp_type ts, dht::token tok);
 
+    const std::vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
+
+    stream_id get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
+
     /* Insert the generation given by `gen` with timestamp `ts` to be used by the `get_stream` function,
      * if the generation is not already known or older than the currently known ones.
      *
