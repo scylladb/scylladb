@@ -463,7 +463,7 @@ public:
     locator::host_id get_host_id(inet_address endpoint) const;
     std::optional<locator::host_id> try_get_host_id(inet_address endpoint) const;
 
-    std::set<gms::inet_address> get_nodes_with_host_id(locator::host_id host_id) const;
+    std::optional<gms::inet_address> get_node_ip(locator::host_id host_id) const;
 
     std::optional<endpoint_state> get_state_for_version_bigger_than(locator::host_id for_endpoint, version_type version) const;
 

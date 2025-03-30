@@ -1585,7 +1585,7 @@ std::optional<locator::host_id> gossiper::try_get_host_id(inet_address endpoint)
 }
 
 
-std::set<gms::inet_address> gossiper::get_nodes_with_host_id(locator::host_id host_id) const {
+std::optional<gms::inet_address> gossiper::get_node_ip(locator::host_id host_id) const {
     if (auto it = _endpoint_state_map.find(host_id); it != _endpoint_state_map.end()) {
         return {it->second->get_ip()};
     } else {

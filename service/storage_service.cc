@@ -3397,14 +3397,11 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     // now that we've gossiped at least once, we should be able to find the node we're replacing
     if (replace_host_id) {
-        auto nodes = _gossiper.get_nodes_with_host_id(replace_host_id);
-        if (nodes.empty()) {
+        auto node = _gossiper.get_node_ip(replace_host_id);
+        if (!node) {
             throw std::runtime_error(::format("Replaced node with Host ID {} not found", replace_host_id));
         }
-        if (nodes.size() > 1) {
-            throw std::runtime_error(::format("Found multiple nodes with Host ID {}: {}", replace_host_id, nodes));
-        }
-        replace_address = *nodes.begin();
+        replace_address = *node;
     } else {
         replace_host_id = _gossiper.get_host_id(replace_address);
     }
@@ -3447,13 +3444,11 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
             node_ip_specified = true;
         } else {
             host_id = hoep.id();
-            auto res = _gossiper.get_nodes_with_host_id(host_id);
-            if (res.size() == 0) {
+            auto res = _gossiper.get_node_ip(host_id);
+            if (!res) {
                 throw std::runtime_error(::format("Could not find ignored node with host_id {}", host_id));
-            } else if (res.size() > 1) {
-                throw std::runtime_error(::format("Found multiple nodes to ignore with host_id {}: {}", host_id, res));
             }
-            st.endpoint = *res.begin();
+            st.endpoint = *res;
         }
         auto host_id_opt = _gossiper.try_get_host_id(st.endpoint);
         if (!host_id_opt) {

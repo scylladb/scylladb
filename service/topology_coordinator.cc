@@ -80,8 +80,8 @@ future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, abort_sou
     const auto timeout = std::chrono::seconds{30};
     const auto deadline = lowres_clock::now() + timeout;
     while (true) {
-        auto hids = g.get_nodes_with_host_id(to_host_id(id));
-        if (!hids.empty()) {
+        auto hids = g.get_node_ip(to_host_id(id));
+        if (hids) {
             co_return;
         }
         if (lowres_clock::now() > deadline) {
