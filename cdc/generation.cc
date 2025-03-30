@@ -1336,4 +1336,40 @@ future<mutation> get_open_and_close_streams_mutation(table_id table, const cdc_s
     co_return std::move(m);
 }
 
+future<> generation_service::query_cdc_timestamps(table_id table, noncopyable_function<future<>(db_clock::time_point)> f) {
+    auto& sys_ks = _sys_ks.local();
+
+    auto sd = co_await sys_ks.read_cdc_streams_state(table);
+    if (!sd.contains(table)) {
+        co_return;
+    }
+
+    co_await f(sd.at(table).ts);
+
+    co_await sys_ks.read_cdc_streams_history(table, [&](table_id, db_clock::time_point ts, cdc::cdc_stream_diff) -> future<> {
+        return f(ts);
+    });
+}
+
+future<> generation_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
+    auto& sys_ks = _sys_ks.local();
+
+    auto sd = co_await sys_ks.read_cdc_streams_state(table);
+    if (!sd.contains(table)) {
+        co_return;
+    }
+
+    auto&& base = sd.at(table);
+    co_await f(base.ts, base.streams, cdc::cdc_stream_diff{.closed_streams = {}, .opened_streams = base.streams});
+
+    auto current = std::move(base.streams);
+
+    co_await sys_ks.read_cdc_streams_history(table, [&] (table_id tid, db_clock::time_point ts, cdc::cdc_stream_diff diff) -> future<> {
+        current = co_await cdc::metadata::construct_next_stream_set(
+            current, diff.opened_streams, diff.closed_streams);
+
+        co_await f(ts, current, std::move(diff));
+    });
+}
+
 } // namespace cdc

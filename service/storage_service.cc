@@ -8091,5 +8091,23 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
     }
 }
 
+const cdc::metadata& storage_service::get_cdc_metadata() const noexcept {
+    return _cdc_gens.local().get_cdc_metadata();
+}
+
+future<> storage_service::query_cdc_timestamps(table_id table, noncopyable_function<future<>(db_clock::time_point)> f) {
+    return container().invoke_on(0, [table, f = std::move(f)] (storage_service& ss) mutable -> future<> {
+        auto holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
+        co_await ss._cdc_gens.local().query_cdc_timestamps(table, std::move(f));
+    });
+}
+
+future<> storage_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
+    return container().invoke_on(0, [table, f = std::move(f)] (storage_service& ss) mutable -> future<> {
+        auto holder = co_await ss._group0->client().hold_read_apply_mutex(ss._abort_source);
+        co_await ss._cdc_gens.local().query_cdc_streams(table, std::move(f));
+    });
+}
+
 } // namespace service
 
