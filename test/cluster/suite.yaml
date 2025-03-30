@@ -26,12 +26,11 @@ skip_in_release:
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
-  - test_old_ip_notification_repro
   - test_node_shutdown_waits_for_pending_requests
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing
 run_in_release:
-    - test_gossiper
+  - test_gossiper
 run_in_dev:
   - test_raft_ignore_nodes
   - test_group0_schema_versioning
@@ -41,4 +40,4 @@ run_in_dev:
   - test_not_enough_token_owners
   - test_replace_alive_node
 run_in_debug:
-  - test_random_failures
+  - random_failures/test_random_failures
