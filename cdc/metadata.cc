@@ -53,6 +53,21 @@ cdc::stream_id get_stream(
     return get_stream(*it, tok);
 }
 
+static cdc::stream_id get_stream(
+        const std::vector<cdc::stream_id>& streams,
+        dht::token tok) {
+    if (streams.empty()) {
+        on_internal_error(cdc_log, "get_stream: streams empty");
+    }
+
+    auto it = std::lower_bound(streams.begin(), streams.end(), tok,
+            [] (const cdc::stream_id& sid, dht::token t) { return sid.token() < t; });
+    if (it == streams.end()) {
+        on_internal_error(cdc_log, fmt::format("get_stream: no stream for token {}.", tok));
+    }
+    return *it;
+}
+
 cdc::metadata::container_t::const_iterator cdc::metadata::gen_used_at(api::timestamp_type ts) const {
     auto it = _gens.upper_bound(ts);
     if (it == _gens.begin()) {
@@ -142,6 +157,43 @@ cdc::stream_id cdc::metadata::get_vnode_stream(api::timestamp_type ts, dht::toke
     auto ret = ::get_stream(gen.entries(), tok);
     _last_stream_timestamp = ts;
     return ret;
+}
+
+const std::vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id tid, api::timestamp_type ts) const {
+    auto now = api::new_timestamp();
+    if (ts > now + get_generation_leeway().count()) {
+        throw exceptions::invalid_request_exception(seastar::format(
+                "cdc: attempted to get a stream \"from the future\" ({}; current server time: {})."
+                " With CDC you cannot send writes with timestamps arbitrarily into the future, because we don't"
+                " know what streams will be used at that time.\n"
+                "We *do* allow sending writes into the near future, but our ability to do that is limited."
+                " If you really must use your own timestamps, then make sure your clocks are well-synchronized"
+                "  with the database's clocks.", format_timestamp(ts), format_timestamp(now)));
+    }
+
+    auto table_it = _tablet_streams.find(tid);
+    if (table_it == _tablet_streams.end()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find stream metadata for table {}.", tid));
+    }
+
+    // find the most recent entry of stream sets with timestamp <= write timestamp.
+    // start from the most recent entry, which is the most likely candidate, and go
+    // back until we find matching entry.
+    const auto& table_streams = *table_it->second;
+    auto it = table_streams.crbegin();
+    for (; it != table_streams.crend() && it->first > ts; ++it);
+
+    if (it == table_streams.crend()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find any CDC streams for table {} for timestamp {}.", tid, ts));
+    }
+
+    return it->second.streams;
+}
+
+cdc::stream_id cdc::metadata::get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok) {
+    return ::get_stream(get_tablet_stream_set(tid, ts), tok);
 }
 
 bool cdc::metadata::known_or_obsolete(db_clock::time_point tp) const {

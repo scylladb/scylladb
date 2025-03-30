@@ -1560,6 +1560,8 @@ private:
     row_states_map _clustering_row_states;
     cell_map _static_row_state;
 
+    const bool _uses_tablets;
+
     utils::chunked_vector<mutation> _result_mutations;
     std::optional<log_mutation_builder> _builder;
 
@@ -1575,12 +1577,13 @@ public:
         , _dk(std::move(dk))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
+        , _uses_tablets(ctx._proxy.get_db().local().find_keyspace(_schema->ks_name()).uses_tablets())
     {
     }
 
     // DON'T move the transformer after this
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
-        const auto stream_id = _ctx._cdc_metadata.get_vnode_stream(ts, _dk.token());
+        const auto stream_id = _uses_tablets ? _ctx._cdc_metadata.get_tablet_stream(_log_schema->id(), ts, _dk.token()) : _ctx._cdc_metadata.get_vnode_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
         _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());
