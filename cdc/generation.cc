@@ -1324,4 +1324,50 @@ future<mutation> get_open_and_close_streams_mutation(table_id table, const cdc_s
     co_return std::move(m);
 }
 
+future<> generation_service::query_cdc_timestamps(table_id table, bool ascending, noncopyable_function<future<>(db_clock::time_point)> f) {
+    const auto& all_tables = _cdc_metadata.get_all_tablet_streams();
+    auto table_it = all_tables.find(table);
+    if (table_it == all_tables.end()) {
+        co_return;
+    }
+    const auto table_streams_ptr = co_await table_it->second.copy(); // copy shared ptr to keep alive
+    const auto& table_streams = *table_streams_ptr;
+
+    if (ascending) {
+        for (auto it = table_streams.committed.cbegin(); it != table_streams.committed.cend(); ++it) {
+            co_await f(it->second.ts);
+        }
+    } else {
+        for (auto it = table_streams.committed.crbegin(); it != table_streams.committed.crend(); ++it) {
+            co_await f(it->second.ts);
+        }
+    }
+}
+
+future<> generation_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
+    const auto& all_tables = _cdc_metadata.get_all_tablet_streams();
+    auto table_it = all_tables.find(table);
+    if (table_it == all_tables.end()) {
+        co_return;
+    }
+    const auto table_streams_ptr = co_await table_it->second.copy(); // copy shared ptr to keep alive
+    const auto& table_streams = *table_streams_ptr;
+
+    auto it_prev = table_streams.committed.end();
+    auto it = table_streams.committed.begin();
+    while (it != table_streams.committed.end()) {
+        const auto& entry = it->second;
+
+        if (it_prev != table_streams.committed.end()) {
+            const auto& prev_entry = it_prev->second;
+            auto diff = co_await cdc::metadata::generate_stream_diff(prev_entry.streams, entry.streams);
+            co_await f(entry.ts, entry.streams, std::move(diff));
+        } else {
+            co_await f(entry.ts, entry.streams, cdc::cdc_stream_diff{.closed_streams = {}, .opened_streams = entry.streams});
+        }
+        it_prev = it;
+        ++it;
+    }
+}
+
 } // namespace cdc
