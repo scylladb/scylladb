@@ -8136,5 +8136,17 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
     }
 }
 
+std::vector<table_id> storage_service::get_tables_with_cdc_tablet_streams() const {
+    return _cdc_gens.local().get_cdc_metadata().get_tables_with_cdc_tablet_streams();
+}
+
+future<> storage_service::query_cdc_timestamps(table_id table, bool ascending, noncopyable_function<future<>(db_clock::time_point)> f) {
+    return _cdc_gens.local().query_cdc_timestamps(table, ascending, std::move(f));
+}
+
+future<> storage_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
+    return _cdc_gens.local().query_cdc_streams(table, std::move(f));
+}
+
 } // namespace service
 
