@@ -551,7 +551,6 @@ private:
     /* Send all the data with version greater than max_remote_version */
     void send_all(gossip_digest& g_digest, std::map<inet_address, endpoint_state>& delta_ep_state_map, version_type max_remote_version) const;
 
-public:
     /*
         This method is used to figure the state that the Gossiper has but Gossipee doesn't. The delta digests
         and the delta state are built up.
