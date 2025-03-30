@@ -46,6 +46,9 @@ class metadata final {
     api::timestamp_type _last_stream_timestamp = api::missing_timestamp;
 
     container_t::const_iterator gen_used_at(api::timestamp_type ts) const;
+
+    const std::vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
+
 public:
     /* Is a generation with the given timestamp already known or obsolete? It is obsolete if and only if
      * it is older than the generation operating at `now - get_generation_leeway()`.
@@ -68,6 +71,12 @@ public:
      * `get_generation_leeway()`.
      */
     stream_id get_vnode_stream(api::timestamp_type ts, dht::token tok);
+
+    /* Similar to get_vnode_stream but for tablet-based keyspaces.
+     * In addition to the base partition token and timestamp, the stream also depends on the table id because each table
+     * has its own set of streams.
+     */
+    stream_id get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
 
     /* Insert the generation given by `gen` with timestamp `ts` to be used by the `get_vnode_stream` function,
      * if the generation is not already known or older than the currently known ones.
