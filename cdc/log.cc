@@ -23,6 +23,7 @@
 #include "bytes.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
+#include "gms/feature_service.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_listener.hh"
@@ -181,7 +182,9 @@ public:
             auto logname = log_name(schema.cf_name());
             check_that_cdc_log_table_does_not_exist(db, schema, logname);
             ensure_that_table_has_no_counter_columns(schema);
-            ensure_that_table_uses_vnodes(ksm, schema);
+            if (!db.features().cdc_with_tablets) {
+                ensure_that_table_uses_vnodes(ksm, schema);
+            }
 
             // in seastar thread
             auto log_schema = create_log_schema(schema);
@@ -221,7 +224,9 @@ public:
 
             check_for_attempt_to_create_nested_cdc_log(db, new_schema);
             ensure_that_table_has_no_counter_columns(new_schema);
-            ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
+            if (!db.features().cdc_with_tablets) {
+                ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
+            }
 
             auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
 
@@ -315,7 +320,7 @@ private:
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (rs->uses_tablets()) {
-            throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because keyspace uses tablets. See issue #16317.",
+            throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because the keyspace uses tablets, and not all nodes support the CDC with tablets feature.",
                 schema.ks_name(), schema.cf_name()));
         }
     }
