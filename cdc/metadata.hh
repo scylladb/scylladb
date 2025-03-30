@@ -129,6 +129,13 @@ public:
         return _tablet_streams;
     }
 
+    table_streams_ptr get_table_streams_ptr(table_id tid) const {
+        if (auto it = _tablet_streams.find(tid); it != _tablet_streams.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
+
     static future<std::vector<stream_id>> construct_next_stream_set(
         const std::vector<cdc::stream_id>& prev_stream_set,
         std::vector<cdc::stream_id> opened,
