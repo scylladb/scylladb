@@ -38,6 +38,15 @@ HISTORY_RESPONSE = [
             "bytes_in": 5790,
             "bytes_out": 5944,
             "rows_merged": [{"key": 1, "value": 5}, {"key": 2, "value": 1}],
+        },
+        # "rows_merged" field missing on purpose
+        {
+            "id": "8b857440-0e35-11f0-9fcc-a895cfb212f2",
+            "cf": "functions",
+            "ks": "system_schema",
+            "compacted_at": 1695973859492,
+            "bytes_in": 579,
+            "bytes_out": 594,
         }]
 
 EXPECTED_REQUEST = expected_request("GET", "/compaction_manager/compaction_history", response=HISTORY_RESPONSE)
@@ -47,18 +56,21 @@ def test_text(request, nodetool):
     expected_res_cassandra = \
 """Compaction History:
 id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged
+8b857440-0e35-11f0-9fcc-a895cfb212f2 system_schema functions         {} 579      594   {{}}
 edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {} 5790     5944  {{1: 5, 2: 1}}
 edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {} 11714    11808 {{1: 12}}
-""".format(format_compacted_at(1695973859491), format_compacted_at(1695973859380))
+""".format(format_compacted_at(1695973859492), format_compacted_at(1695973859491), format_compacted_at(1695973859380))
 
     # Scylla aligns number columns to the right except rows_merged column.
     expected_res_scylla = "\n".join([
 "Compaction History:",
 "id                                   keyspace_name columnfamily_name compacted_at            bytes_in bytes_out rows_merged ",
+"8b857440-0e35-11f0-9fcc-a895cfb212f2 system_schema functions         {}      579       594 {{}}          ".format(format_compacted_at(1695973859492)),
 "edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4 system_schema functions         {}     5790      5944 {{1: 5, 2: 1}}".format(format_compacted_at(1695973859491)),
 "edde9300-5e9c-11ee-a8f6-7d85dcfeb8f4 system        peers             {}    11714     11808 {{1: 12}}     ".format(format_compacted_at(1695973859380)),
 ""])
 
+    assert "rows_merged" not in HISTORY_RESPONSE[-1]
     for cmd in [("compactionhistory",), ("compactionhistory", "--format", "text"), ("compactionhistory", "-F", "text")]:
         if request.config.getoption("nodetool") != "scylla" and len(cmd) > 1:
             # The -F text is a scylla-extension, cassandra-nodetool doesn't support it
@@ -76,6 +88,15 @@ def test_json(nodetool):
     expected_res = {
             "CompactionHistory": [
                 {
+                    "id": "8b857440-0e35-11f0-9fcc-a895cfb212f2",
+                    "columnfamily_name": "functions",
+                    "keyspace_name": "system_schema",
+                    "compacted_at": format_compacted_at(1695973859492),
+                    "bytes_in": 579,
+                    "bytes_out": 594,
+                    "rows_merged": [],
+                },
+                {
                     "id": "edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4",
                     "columnfamily_name": "functions",
                     "keyspace_name": "system_schema",
@@ -110,6 +131,7 @@ def test_json(nodetool):
             ]
         }
 
+    assert "rows_merged" not in HISTORY_RESPONSE[-1]
     for cmd in [("compactionhistory", "--format", "json"), ("compactionhistory", "-F", "json")]:
         res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
 
@@ -120,6 +142,15 @@ def test_yaml(nodetool):
     expected_res = {
             "CompactionHistory": [
                 {
+                    "id": "8b857440-0e35-11f0-9fcc-a895cfb212f2",
+                    "columnfamily_name": "functions",
+                    "keyspace_name": "system_schema",
+                    "compacted_at": format_compacted_at(1695973859492),
+                    "bytes_in": 579,
+                    "bytes_out": 594,
+                    "rows_merged": [],
+                },
+                {
                     "id": "edef82f0-5e9c-11ee-a8f6-7d85dcfeb8f4",
                     "columnfamily_name": "functions",
                     "keyspace_name": "system_schema",
@@ -154,6 +185,7 @@ def test_yaml(nodetool):
             ]
         }
 
+    assert "rows_merged" not in HISTORY_RESPONSE[-1]
     for cmd in [("compactionhistory", "--format", "yaml"), ("compactionhistory", "-F", "yaml")]:
         res = nodetool(*cmd, expected_requests=[EXPECTED_REQUEST])
 
