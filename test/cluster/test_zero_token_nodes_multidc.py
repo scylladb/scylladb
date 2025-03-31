@@ -62,9 +62,12 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
     logging.info('Sending requests with different consistency levels')
     for rf in range(normal_nodes_in_dc2 + 1):
         # FIXME: we may add LOCAL_QUORUM to the list below once scylladb/scylladb#20028 is fixed.
+        #
+        # Note that ONE cannot be the first element of the list below. With CL=ONE we don't have a guarantee that the
+        # replicas written to and read from have a non-empty intersection. Hence, a read could miss the written row.
         cls = [
-            ConsistencyLevel.ONE,
             ConsistencyLevel.TWO,
+            ConsistencyLevel.ONE,
             ConsistencyLevel.QUORUM,
             ConsistencyLevel.EACH_QUORUM,
             ConsistencyLevel.ALL
