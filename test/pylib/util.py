@@ -105,8 +105,10 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
         before_retry=try_refresh_nodes,
     )
 
-    # Take only hosts from `ip_set` (there may be more)
-    hosts = [h for h in hosts if h.address in ip_set]
+    # Sort `hosts` into the order which matches `servers`.
+    ip_to_host = {h.address: h for h in hosts}
+    hosts = [ip_to_host[srv.rpc_address] for srv in servers]
+
     await asyncio.gather(*(wait_for_cql(cql, h, deadline) for h in hosts))
 
     return hosts
