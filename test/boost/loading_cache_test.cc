@@ -645,12 +645,12 @@ SEASTAR_TEST_CASE(test_loading_cache_reload_during_eviction) {
         loading_cache_for_test<int, sstring, 0, utils::loading_cache_reload_enabled::yes> loading_cache({1, 100ms, 10ms}, testlog, loader.get());
         auto stop_cache_reload = seastar::defer([&loading_cache] { loading_cache.stop().get(); });
 
-        auto curr_time = lowres_clock::now();
+        auto curr_time = manual_clock::now();
         int i = 0;
 
         // this will cause reloading when values are being actively evicted due to the limited cache size
         do_until(
-            [&] { return lowres_clock::now() - curr_time > 1s; },
+            [&] { return manual_clock::now() - curr_time > 1s; },
             [&] { return loading_cache.get_ptr(i++ % 2).discard_result(); }
         ).get();
 
