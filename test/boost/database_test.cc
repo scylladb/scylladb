@@ -1581,7 +1581,7 @@ SEASTAR_TEST_CASE(drop_table_with_explicit_snapshot) {
 
     co_await do_with_some_data({table_name}, [&] (cql_test_env& e) -> future<> {
         auto snapshot_tag = format("test-{}", db_clock::now().time_since_epoch().count());
-        co_await replica::database::snapshot_table_on_all_shards(e.db(), ks_name, table_name, snapshot_tag, false);
+        co_await take_snapshot(e, ks_name, table_name, snapshot_tag);
         auto cf_dir = table_dir(e.local_db().find_column_family(ks_name, table_name)).native();
 
         // With explicit snapshot and with_snapshot=false
