@@ -734,6 +734,8 @@ arg_parser.add_argument('--use-cmake', action=argparse.BooleanOptionalAction, de
 arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scylla with coverage instrumentation')
 arg_parser.add_argument('--build-dir', action='store', default='build',
                         help='Build directory path')
+arg_parser.add_argument('--compiler-niceness', action='store', dest='cxx_niceness', default=0,
+                        help='C++ compiler niceness value put into build.ninja file for the subsequent compilation.')
 arg_parser.add_argument('-h', '--help', action='store_true', help='show this help message and exit')
 args = arg_parser.parse_args()
 if args.help:
@@ -2190,7 +2192,7 @@ def write_build_file(f,
     f.write(textwrap.dedent('''\
         configure_args = {configure_args}
         builddir = {outdir}
-        cxx = {cxx}
+        cxx = nice -n {cxx_niceness} {cxx}
         cxxflags = -std=gnu++23 {user_cflags} {warnings} {defines}
         ldflags = {linker_flags} {user_ldflags}
         ldflags_build = {linker_flags}
@@ -2266,6 +2268,7 @@ def write_build_file(f,
         ''').format(configure_args=configure_args,
                     outdir=outdir,
                     cxx=args.cxx,
+                    cxx_niceness=cxx_niceness,
                     user_cflags=user_cflags,
                     warnings=warnings,
                     defines=defines,

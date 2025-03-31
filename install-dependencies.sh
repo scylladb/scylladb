@@ -54,6 +54,7 @@ debian_base_packages=(
     slapd
     ldap-utils
     libcpp-jwt-dev
+    coreutils # for nice
 )
 
 fedora_packages=(
@@ -132,6 +133,7 @@ fedora_packages=(
     cyrus-sasl
     fipscheck
     cpp-jwt-devel
+    coreutils # for nice
 )
 
 # lld is not available on s390x, see
