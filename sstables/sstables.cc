@@ -1816,12 +1816,14 @@ sstable::read_scylla_metadata() noexcept {
         if (!has_component(component_type::Scylla)) {
             return make_ready_future<>();
         }
-        return read_simple<component_type::Scylla>(*_components->scylla_metadata);
+        return read_simple<component_type::Scylla>(*_components->scylla_metadata).then([this] {
+            _features = _components->scylla_metadata->get_features();
+        });
     });
 }
 
 void
-sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features, struct run_identifier identifier,
+sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats) {
     auto&& first_key = get_first_decorated_key();
     auto&& last_key = get_last_decorated_key();
@@ -1839,7 +1841,8 @@ sstable::write_scylla_metadata(shard_id shard, sstable_enabled_features features
     }
 
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
-    _components->scylla_metadata->data.set<scylla_metadata_type::Features>(std::move(features));
+    // Note: data.set() wants an rvalue, so we have to make a copy. It's a uint64 anyway.
+    _components->scylla_metadata->data.set<scylla_metadata_type::Features>(sstable_enabled_features(_features));
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
     if (ld_stats) {
         _components->scylla_metadata->data.set<scylla_metadata_type::LargeDataStats>(std::move(*ld_stats));

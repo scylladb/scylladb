@@ -567,6 +567,7 @@ private:
     schema_ptr _schema;
     generation_type _generation{0};
     sstable_state _state;
+    sstable_enabled_features _features = {};
 
     std::unique_ptr<storage> _storage;
 
@@ -657,7 +658,6 @@ private:
     future<> read_scylla_metadata() noexcept;
 
     void write_scylla_metadata(shard_id shard,
-                               sstable_enabled_features features,
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats);
@@ -815,22 +815,27 @@ public:
     void validate_originating_host_id() const;
 
     bool has_correct_promoted_index_entries() const {
-        return _schema->is_compound() || !has_scylla_component() || _components->scylla_metadata->has_feature(sstable_feature::NonCompoundPIEntries);
+        return _schema->is_compound() || !has_scylla_component() || has_feature(sstable_feature::NonCompoundPIEntries);
     }
 
     bool has_correct_non_compound_range_tombstones() const {
-        return _schema->is_compound() || !has_scylla_component() || _components->scylla_metadata->has_feature(sstable_feature::NonCompoundRangeTombstones);
+        return _schema->is_compound() || !has_scylla_component() || has_feature(sstable_feature::NonCompoundRangeTombstones);
     }
 
     bool has_shadowable_tombstones() const {
-        return has_scylla_component() && _components->scylla_metadata->has_feature(sstable_feature::ShadowableTombstones);
+        return has_feature(sstable_feature::ShadowableTombstones);
     }
 
     sstable_enabled_features features() const {
-        if (!has_scylla_component()) {
-            return {};
-        }
-        return _components->scylla_metadata->get_features();
+        return _features;
+    }
+
+    void set_features(sstable_enabled_features sef) {
+        _features = sef;
+    }
+
+    bool has_feature(sstable_feature f) const {
+        return features().is_enabled(f);
     }
 
     const scylla_metadata* get_scylla_metadata() const {

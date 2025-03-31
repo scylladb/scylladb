@@ -620,9 +620,6 @@ struct scylla_metadata {
         }
         return *features;
     }
-    bool has_feature(sstable_feature f) const {
-        return get_features().is_enabled(f);
-    }
     const extension_attributes* get_extension_attributes() const {
         return data.get<scylla_metadata_type::ExtensionAttributes, extension_attributes>();
     }
