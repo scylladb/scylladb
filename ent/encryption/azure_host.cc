@@ -18,6 +18,7 @@
 #include "utils/rjson.hh"
 #include "utils/base64.hh"
 #include "utils/loading_cache.hh"
+#include "utils/azure/identity/exceptions.hh"
 #include "utils/azure/identity/default_credentials.hh"
 #include "utils/azure/identity/service_principal_credentials.hh"
 #include "utils.hh"
@@ -139,6 +140,7 @@ private:
     static std::tuple<std::string, std::string> parse_key(std::string_view);
     future<shared_ptr<tls::certificate_credentials>> make_creds();
     future<rjson::value> send_request(const sstring& host, const sstring& path, const rjson::value& body, shared_ptr<encryption::http_log_filter> filter);
+    future<rjson::value> send_request_with_retry(const sstring& host, const sstring& path, const rjson::value& body, shared_ptr<encryption::http_log_filter> filter);
     future<key_and_id_type> create_key(const attr_cache_key&);
     future<bytes> find_key(const id_cache_key&);
 };
@@ -263,6 +265,30 @@ future<shared_ptr<tls::certificate_credentials>> azure_host::impl::make_creds() 
     co_return creds;
 }
 
+future<rjson::value> azure_host::impl::send_request_with_retry(const sstring& host, const sstring& path, const rjson::value& body, shared_ptr<encryption::http_log_filter> filter) {
+    constexpr int MAX_RETRIES = 3;
+    int retries = 0;
+    for (;;) {
+        try {
+            co_return co_await send_request(host, path, body, filter);
+        } catch (azure::auth_error& e) {
+            std::throw_with_nested(permission_error(fmt::format("{}/{}", host, path)));
+        } catch (vault_error& e) {
+            azlog.debug("[{}] {}/{}: Got unexpected response: {}", _log_prefix, host, path, e.what());
+            if (e.code() == vault_errors::Unauthorized && retries++ < MAX_RETRIES) {
+                azlog.info("[{}] {}/{}: Retrying request. Remaining attempts: {}", _log_prefix, host, path, MAX_RETRIES - retries);
+                continue;
+            }
+            if (e.code() == vault_errors::Unauthorized) {
+                std::throw_with_nested(permission_error(fmt::format("{}/{}", host, path)));
+            }
+            std::throw_with_nested(service_error(fmt::format("{}/{}", host, path)));
+        } catch (...) {
+            std::throw_with_nested(network_error(fmt::format("{}/{}", host, path)));
+        }
+    }
+}
+
 future<rjson::value> azure_host::impl::send_request(const sstring& host, const sstring& path, const rjson::value& body, shared_ptr<encryption::http_log_filter> filter) {
     auto token = co_await _credentials->get_access_token(AKV_TOKEN_RESOURCE_URI);
 
@@ -304,7 +330,7 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
     }();
     rjson::value resp;
     try {
-        resp = co_await send_request(host, path, body, make_shared<vault_log_filter>(vault_log_filter::op_type::wrapkey));
+        resp = co_await send_request_with_retry(host, path, body, make_shared<vault_log_filter>(vault_log_filter::op_type::wrapkey));
     } catch (...) {
         azlog.error("[{}] Failed to wrap key {} with master_key={}: {}", _log_prefix, info, k.master_key, std::current_exception());
         throw;
@@ -348,7 +374,7 @@ future<bytes> azure_host::impl::find_key(const id_cache_key& k) {
     }();
     rjson::value resp;
     try {
-        resp = co_await send_request(host, path, body, make_shared<vault_log_filter>(vault_log_filter::op_type::unwrapkey));
+        resp = co_await send_request_with_retry(host, path, body, make_shared<vault_log_filter>(vault_log_filter::op_type::unwrapkey));
     } catch (...) {
         azlog.error("[{}] Failed to unwrap key {}: {}", _log_prefix, k.id, std::current_exception());
         throw;
