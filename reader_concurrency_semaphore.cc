@@ -482,6 +482,10 @@ public:
         _trace_ptr = std::move(trace_ptr);
     }
 
+    bool aborted() const {
+        return bool(_ex);
+    }
+
     void check_abort() const {
         if (_ex) {
             std::rethrow_exception(_ex);
@@ -1084,6 +1088,11 @@ reader_concurrency_semaphore::~reader_concurrency_semaphore() {
 reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore::register_inactive_read(mutation_reader reader,
         const dht::partition_range* range) noexcept {
     auto& permit = reader.permit();
+    if (permit->aborted()) {
+        permit->release_base_resources();
+        close_reader(std::move(reader));
+        return inactive_read_handle();
+    }
     if (permit->get_state() == reader_permit::state::waiting_for_memory) {
         // Kill all outstanding memory requests, the read is going to be evicted.
         permit->aux_data().pr.set_exception(std::make_exception_ptr(std::bad_alloc{}));
