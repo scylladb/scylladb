@@ -81,9 +81,10 @@ static bool tablet_id_provided(const locator::tablet_task_type& task_type) {
 future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(tasks::task_id task_id) const {
     co_await _ss._migration_manager.local().get_group0_barrier().trigger();
 
+    auto tmptr = _ss.get_token_metadata_ptr();
     auto tables = get_table_ids();
     for (auto table : tables) {
-        auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
+        auto& tmap = tmptr->tablets().get_tablet_map(table);
         if (auto task_type = maybe_get_task_type(tmap.resize_task_info(), task_id); task_type.has_value()) {
             co_return tasks::virtual_task_hint{
                 .table_id = table,
@@ -172,9 +173,10 @@ future<> tablet_virtual_task::abort(tasks::task_id id, tasks::virtual_task_hint 
 
 future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
     std::vector<tasks::task_stats> res;
+    auto tmptr = _ss.get_token_metadata_ptr();
     auto tables = get_table_ids();
     for (auto table : tables) {
-        auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
+        auto& tmap = tmptr->tablets().get_tablet_map(table);
         auto schema = _ss._db.local().get_tables_metadata().get_table(table).schema();
         std::unordered_map<tasks::task_id, tasks::task_stats> user_requests;
         std::unordered_map<tasks::task_id, size_t> sched_num_sum;
@@ -236,7 +238,8 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         .table = schema->cf_name(),
     };
     size_t sched_nr = 0;
-    auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
+    auto tmptr = _ss.get_token_metadata_ptr();
+    auto& tmap = tmptr->tablets().get_tablet_map(table);
     if (is_repair_task(task_type)) {
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
             auto& task_info = info.repair_task_info;
