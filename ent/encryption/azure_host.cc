@@ -19,6 +19,7 @@
 #include "utils/base64.hh"
 #include "utils/loading_cache.hh"
 #include "utils/rest/client.hh"
+#include "utils/azure/identity/exceptions.hh"
 #include "utils/azure/identity/default_credentials.hh"
 #include "utils/azure/identity/service_principal_credentials.hh"
 #include "azure_host.hh"
@@ -141,6 +142,7 @@ private:
     static std::tuple<std::string, std::string, unsigned> parse_vault(std::string_view);
     future<shared_ptr<tls::certificate_credentials>> make_creds();
     future<rjson::value> send_request(const sstring& host, unsigned port, bool use_https, const sstring& path, const rjson::value& body, const rest::http_log_filter& filter);
+    future<rjson::value> send_request_with_retry(const sstring& host, unsigned port, bool use_https, const sstring& path, const rjson::value& body, const rest::http_log_filter& filter);
     future<key_and_id_type> create_key(const attr_cache_key&);
     future<bytes> find_key(const id_cache_key&);
 };
@@ -292,6 +294,78 @@ future<shared_ptr<tls::certificate_credentials>> azure_host::impl::make_creds() 
     co_return creds;
 }
 
+/**
+ * @brief Retries for transient errors.
+ *
+ * Retries are performed for 401, 408, 429, 500, 502, 503, and 504 errors.
+ * 401 _may_ indicate an edge case where the cached token expired during the request. As such, it is retried immediately.
+ * The rest of the error codes are taken from the generic retry policy of the Azure C++ SDK [1] and they follow an exponential backoff strategy.
+ * Three retries are attempted in total.
+ * The latencies between retries are: 100, 200 and 400 milliseconds.
+ *
+ * This retry policy is destined only for short-lived transient errors.
+ * Transient errors that require higher delays should be handled by the upper layers.
+ * Persistent throttling (429) errors are not expected, and they likely indicate a misconfiguration.
+ *
+ * [1] https://github.com/Azure/azure-sdk-for-cpp/blob/126452efd30860263398a152f11f337007f529f4/sdk/core/azure-core/inc/azure/core/http/policies/policy.hpp#L133
+ */
+future<rjson::value> azure_host::impl::send_request_with_retry(const sstring& host, unsigned port, bool use_https, const sstring& path, const rjson::value& body, const rest::http_log_filter& filter) {
+    constexpr int MAX_RETRIES = 3;
+    constexpr std::chrono::milliseconds DELTA_BACKOFF {100};
+    std::chrono::milliseconds backoff;
+
+    int retries = 0;
+    while (true) {
+        try {
+            co_return co_await send_request(host, port, use_https, path, body, filter);
+        } catch (azure::auth_error& e) {
+            std::throw_with_nested(permission_error(fmt::format("{}/{}", host, path)));
+        } catch (vault_error& e) {
+            auto status = e.status();
+
+            if (retries >= MAX_RETRIES) {
+                if (status == http::reply::status_type::unauthorized) {
+                    std::throw_with_nested(permission_error(fmt::format("{}/{}", host, path)));
+                } else {
+                    std::throw_with_nested(service_error(fmt::format("{}/{}", host, path)));
+                }
+            }
+
+            // Always retry if the request is unauthorized, to catch races where
+            // the token expired while making the request. This is not optimal,
+            // as an unauthorized response may have a non-retryable cause, but
+            // there is no way to tell from the error code, and the error message
+            // is not meant for decision making.
+            if (status == http::reply::status_type::unauthorized) {
+                azlog.debug("[{}] {}/{}: Request failed with status {}. Reason: {}. Retrying...",
+                        _log_prefix, host, path, static_cast<int>(status), e.what());
+                retries++;
+                continue;
+            }
+
+            bool should_retry =
+                    status == http::reply::status_type::request_timeout ||
+                    status == http::reply::status_type::too_many_requests ||
+                    status == http::reply::status_type::internal_server_error ||
+                    status == http::reply::status_type::bad_gateway ||
+                    status == http::reply::status_type::service_unavailable ||
+                    status == http::reply::status_type::gateway_timeout;
+
+            if (!should_retry) {
+                std::throw_with_nested(service_error(fmt::format("{}/{}", host, path)));
+            }
+
+            backoff = DELTA_BACKOFF * (1 << retries);
+            azlog.debug("[{}] {}/{}: Request failed with status {}. Reason: {}. Retrying in {} ms...",
+                    _log_prefix, host, path, static_cast<int>(status), e.what(), backoff.count());
+            retries++;
+        } catch (...) {
+            std::throw_with_nested(network_error(fmt::format("{}/{}", host, path)));
+        }
+        co_await seastar::sleep(backoff);
+    }
+}
+
 future<rjson::value> azure_host::impl::send_request(const sstring& host, unsigned port, bool use_https, const sstring& path, const rjson::value& body, const rest::http_log_filter& filter) {
     auto token = co_await _credentials->get_access_token(AKV_TOKEN_RESOURCE_URI);
 
@@ -346,7 +420,7 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
     }();
     rjson::value resp;
     try {
-        resp = co_await send_request(host, port, scheme == "https", path, body, filter);
+        resp = co_await send_request_with_retry(host, port, scheme == "https", path, body, filter);
     } catch (...) {
         azlog.error("[{}] Failed to wrap key {} with master_key={}: {}", _log_prefix, info, k.master_key, std::current_exception());
         throw;
@@ -398,7 +472,7 @@ future<bytes> azure_host::impl::find_key(const id_cache_key& k) {
     }();
     rjson::value resp;
     try {
-        resp = co_await send_request(host, port, scheme == "https", path, body, filter);
+        resp = co_await send_request_with_retry(host, port, scheme == "https", path, body, filter);
     } catch (...) {
         azlog.error("[{}] Failed to unwrap key {}: {}", _log_prefix, k.id, std::current_exception());
         throw;
