@@ -9,6 +9,7 @@ ScyllaDB Configuration Procedures
    How to Change Compaction Strategy <change-compaction>
    How to do a Rolling Restart <rolling-restart>
    Advanced Internode (RPC) Compression <advanced-internode-compression>
+   Shared-dictionary compression for SSTables <sstable-dictionary-compression>
 
 Procedures to change ScyllaDB Configuration settings.
 
@@ -20,3 +21,4 @@ Procedures to change ScyllaDB Configuration settings.
 
 * :doc:`Advanced Internode (RPC) Compression </operating-scylla/procedures/config-change/advanced-internode-compression>`
 
+* :doc:`Shared-dictionary compression for SSTables </operating-scylla/procedures/config-change/sstable-dictionary-compression>`
