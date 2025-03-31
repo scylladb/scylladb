@@ -252,11 +252,9 @@ future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snap
         }
     }
 
-    if (!req_param<bool>(*req, "disable_snapshot", false)) {
+    if (!req_param<bool>(*req, "disable_snapshot", false) && !info.column_families.empty()) {
         auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-        co_await coroutine::parallel_for_each(info.column_families, [&snap_ctl, keyspace = info.keyspace, tag](sstring cf) {
-            return snap_ctl.local().take_column_family_snapshot(keyspace, cf, tag, db::snapshot_ctl::skip_flush::no);
-        });
+        co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, tag, db::snapshot_ctl::skip_flush::no);
     }
 
     info.opts = {
