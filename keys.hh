@@ -782,7 +782,7 @@ auto format_pk(const WithSchemaWrapper& pk, FormatContext& ctx) {
         if (utils::utf8::validate((const uint8_t *) key.data(), key.size())) {
             out = fmt::format_to(out, "{}", key);
         } else {
-            out = fmt::format_to(out, "{}", "<non-utf8-key>");
+            out = fmt::format_to(out, "{}", fmt_hex{to_bytes_view(sstring_view(key))});
         }
     }
     return out;
