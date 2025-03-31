@@ -872,7 +872,7 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
 }
 
 future<entry_descriptor> sstable::clone(generation_type new_generation) const {
-    co_await _storage->snapshot(*this, _storage->prefix(), storage::absolute_path::yes, new_generation);
+    co_await _storage->snapshot(*this, "", storage::absolute_path::no, new_generation);
     co_return entry_descriptor(new_generation, _version, _format, component_type::TOC, _state);
 }
 
