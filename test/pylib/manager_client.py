@@ -41,7 +41,7 @@ class ManagerClient():
     # pylint: disable=too-many-public-methods
 
     def __init__(self, sock_path: str, port: int, use_ssl: bool, auth_provider: Any|None,
-                 con_gen: Callable[[List[IPAddress], int, bool, Any], CassandraSession]) \
+                 con_gen: Callable[[List[IPAddress], int, bool, Any], CassandraCluster]) \
                          -> None:
         self.test_log_fh: Optional[logging.FileHandler] = None
         self.port = port

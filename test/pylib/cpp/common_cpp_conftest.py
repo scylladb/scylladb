@@ -12,22 +12,13 @@ from pathlib import Path, PosixPath
 import yaml
 from pytest import Collector
 
+from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR
 from test.pylib.cpp.boost.boost_facade import COMBINED_TESTS
 from test.pylib.cpp.facade import CppTestFacade
 from test.pylib.cpp.item import CppFile
 from test.pylib.util import get_modes_to_run
 
-ALL_MODES = {
-    'debug': 'Debug',
-    'release': 'RelWithDebInfo',
-    'dev': 'Dev',
-    'sanitize': 'Sanitize',
-    'coverage': 'Coverage',
-}
-DEBUG_MODES = {
-    'debug': 'Debug',
-    'sanitize': 'Sanitize',
-}
+
 DEFAULT_ARGS = [
     '--overprovisioned',
     '--unsafe-bypass-fsync 1',
@@ -79,8 +70,6 @@ def read_suite_config(directory: Path) -> dict[str, str]:
             raise RuntimeError('Failed to load tests: suite.yaml is empty')
         return cfg
 
-def get_root_path(session) -> Path:
-    return Path(session.config.rootpath).parent
 
 def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade) -> object:
     """
@@ -110,9 +99,9 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
 
 
 @cache
-def get_combined_tests(session):
+def get_combined_tests():
     suites = collections.defaultdict()
-    executable = get_root_path(session) / COMBINED_TESTS
+    executable = TOP_SRC_DIR / COMBINED_TESTS
     args = [executable, '--list_content']
 
     output = subprocess.check_output(

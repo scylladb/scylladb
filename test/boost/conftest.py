@@ -19,4 +19,4 @@ def pytest_collect_file(file_path: PosixPath, parent: Collector):
     # One of the files in the directory has additional extensions .inc. It's not a test and will not have a binary for
     # execution, so it should be excluded from collecting
     if file_path.suffix == '.cc' and '.inc' not in file_path.suffixes and file_path.stem != COMBINED_TESTS.stem:
-        return collect_items(file_path, parent, facade=BoostTestFacade(parent.config, get_combined_tests(parent.session)))
+        return collect_items(file_path, parent, facade=BoostTestFacade(parent.config, get_combined_tests()))

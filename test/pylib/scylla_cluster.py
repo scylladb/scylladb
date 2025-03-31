@@ -24,10 +24,12 @@ from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterato
     Awaitable
 import uuid
 from io import BufferedWriter
+
+from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely
+from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from functools import partial
 import aiohttp
@@ -264,7 +266,7 @@ class ScyllaServer:
     host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
-    def __init__(self, mode: str, exe: str, vardir: str,
+    def __init__(self, mode: str, exe: str, vardir: str | pathlib.Path,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
@@ -274,8 +276,11 @@ class ScyllaServer:
                  server_encryption: str) -> None:
         # pylint: disable=too-many-arguments
         self.server_id = ServerNum(ScyllaServer.newid())
+        xdist_worker_id = get_xdist_worker_id()
         # this variable needed to make a cleanup after server is not needed anymore
-        self.maintenance_socket_dir = tempfile.TemporaryDirectory(prefix=f"scylladb-{self.server_id}-test.py-")
+        self.maintenance_socket_dir = tempfile.TemporaryDirectory(
+            prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-"
+        )
         self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
         self.exe = pathlib.Path(exe).resolve()
         self.vardir = pathlib.Path(vardir)
@@ -290,15 +295,15 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
-        shortname = f"scylla-{self.server_id}"
+        shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
         self.workdir = self.vardir / shortname
-        self.log_filename = (self.vardir / shortname).with_suffix(".log")
+        self.log_filename = self.workdir.with_suffix(".log")
         self.config_filename = self.workdir / "conf/scylla.yaml"
         self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
         self.certificate_filename = self.workdir / "conf/scylla.crt"
         self.keyfile_filename = self.workdir / "conf/scylla.key"
         self.truststore_filename = self.workdir / "conf/scyllacadb.pem"
-        self.resourcesdir = pathlib.Path.cwd() / "test/pylib/resources"
+        self.resourcesdir = TEST_DIR / "pylib/resources"
         self.resources_certificate_file = self.resourcesdir / "scylla.crt"
         self.resources_keyfile_file = self.resourcesdir / "scylla.key"
 
@@ -590,7 +595,7 @@ class ScyllaServer:
         # remove from env to make sure user's SCYLLA_HOME has no impact
         env.pop('SCYLLA_HOME', None)
         env.update(self.append_env)
-        env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={os.getcwd()}/ubsan-suppressions.supp'
+        env['UBSAN_OPTIONS'] = f'halt_on_error=1:abort_on_error=1:suppressions={TOP_SRC_DIR / "ubsan-suppressions.supp"}'
         env['ASAN_OPTIONS'] = f'disable_coredump=0:abort_on_error=1:detect_stack_use_after_return=1'
 
         self.cmd = await asyncio.create_subprocess_exec(
@@ -1263,6 +1268,7 @@ class ScyllaCluster:
         server = self.servers[server_id]
         return server.get_sstables_disk_usage(keyspace, table)
 
+
 class ScyllaClusterManager:
     """Manages a Scylla cluster for running test cases
        Provides an async API for tests to request changes in the Cluster.
@@ -1273,7 +1279,11 @@ class ScyllaClusterManager:
     site: aiohttp.web.UnixSite
     is_after_test_ok: bool
 
-    def __init__(self, test_uname: str, clusters: Pool[ScyllaCluster], base_dir: str) -> None:
+    def __init__(self,
+                 test_uname: str,
+                 clusters: Pool[ScyllaCluster],
+                 base_dir: str,
+                 sock_path: str | None = None) -> None:
         self.test_uname: str = test_uname
         self.base_dir: str = base_dir
         logger = logging.getLogger(self.test_uname)
@@ -1291,8 +1301,12 @@ class ScyllaClusterManager:
         # NOTE: need to make a safe temp dir as tempfile can't make a safe temp sock name
         # Put the socket in /tmp, not base_dir, to avoid going over the length
         # limit of UNIX-domain socket addresses (issue #12622).
-        self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir="/tmp")
-        self.sock_path: str = f"{self.manager_dir}/api"
+        if sock_path is None:
+            self.manager_dir: str = tempfile.mkdtemp(prefix="manager-", dir="/tmp")
+            self.sock_path: str = f"{self.manager_dir}/api"
+        else:
+            self.manager_dir = os.path.dirname(sock_path)
+            self.sock_path = sock_path
         app = aiohttp.web.Application()
         self._setup_routes(app)
         self.runner = aiohttp.web.AppRunner(app)
