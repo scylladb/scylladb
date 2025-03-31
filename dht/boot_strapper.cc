@@ -55,7 +55,7 @@ future<> boot_strapper::bootstrap(streaming::stream_reason reason, gms::gossiper
             // The keyspace may be dropped in the meantime.
             dht::token_range_vector ranges = co_await strategy.get_pending_address_ranges(_token_metadata_ptr, _tokens, _address, _dr);
             blogger.debug("Will stream keyspace={}, ranges={}", keyspace_name, ranges);
-            co_await streamer->add_ranges(keyspace_name, erm, std::move(ranges), gossiper, reason == streaming::stream_reason::replace);
+            co_await streamer->add_ranges(keyspace_name, erm, std::move(ranges), gossiper, reason);
         }
         _abort_source.check();
         co_await streamer->stream_async();
