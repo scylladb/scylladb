@@ -67,6 +67,19 @@ future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
 }
 
 /**
+ * A helper function to sum values on an a distributed object that
+ * has a get_stats method.
+ *
+ */
+template<class T, class F, class V>
+future<json::json_return_type>  sum_stats(distributed<T>& d, V F::*f) {
+    return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, 0,
+            std::plus<V>()).then([](V val) {
+        return make_ready_future<json::json_return_type>(val);
+    });
+}
+
+/**
  * A partial Specialization of sum_stats for the storage proxy
  * case where the get stats function doesn't return a
  * stats object with fields but a per scheduling group
@@ -81,6 +94,31 @@ future<json::json_return_type>  sum_stats_storage_proxy(distributed<proxy>& d, V
     });
 }
 
+template<class T, class F>
+future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
+
+    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).hist;}, utils::ihistogram(),
+            std::plus<utils::ihistogram>()).then([](const utils::ihistogram& val) {
+        return make_ready_future<json::json_return_type>(to_json(val));
+    });
+}
+
+template<class T, class F>
+future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
+
+    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
+            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
+        return make_ready_future<json::json_return_type>(timer_to_json(val));
+    });
+}
+
+template<class T, class F>
+future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_summary_and_histogram F::*f) {
+    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
+            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
+        return make_ready_future<json::json_return_type>(timer_to_json(val));
+    });
+}
 
 static future<utils::rate_moving_average>  sum_timed_rate(distributed<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
