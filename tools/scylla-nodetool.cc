@@ -664,9 +664,11 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
         const auto& history_entry_json_object = history_entry_json.GetObject();
 
         std::map<int32_t, int64_t> rows_merged;
-        for (const auto& rows_merged_json : history_entry_json_object["rows_merged"].GetArray()) {
-            const auto& rows_merged_json_object = rows_merged_json.GetObject();
-            rows_merged.emplace(rows_merged_json_object["key"].GetInt64(), rows_merged_json_object["value"].GetInt64());
+        if (history_entry_json_object.HasMember("rows_merged")) {
+            for (const auto& rows_merged_json : history_entry_json_object["rows_merged"].GetArray()) {
+                const auto& rows_merged_json_object = rows_merged_json.GetObject();
+                rows_merged.emplace(rows_merged_json_object["key"].GetInt(), rows_merged_json_object["value"].GetInt64());
+            }
         }
 
         history.emplace_back(history_entry{
