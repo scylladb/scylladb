@@ -269,9 +269,9 @@ network_topology_strategy::calculate_natural_endpoints(
 }
 
 void network_topology_strategy::validate_options(const gms::feature_service& fs) const {
-    if(_config_options.empty()) {
-        throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
-    }
+    // #22688 / #20039 - we want to remove dc:s once rf=0, and we
+    // also want to allow fully setting rf=0 in _all_ dc:s (hello data loss)
+    // so empty options here are in fact ok. Removed check for it
     validate_tablet_options(*this, fs, _config_options);
     auto tablet_opts = recognized_tablet_options();
     for (auto& c : _config_options) {
@@ -376,7 +376,10 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
         ++nodes_per_dc[node.dc_rack().dc];
     }
 
-    for (const auto& [dc, dc_rf] : _dc_rep_factor) {
+    // #22688 - take all dcs in topology into account when determining migration.
+    // Any change should still have been pre-checked to never exceed rf factor one.
+    for (const auto& dc : tm->get_topology().get_datacenters()) {
+        auto dc_rf = get_replication_factor(dc);
         auto dc_node_count = nodes_per_dc[dc];
         if (dc_rf == dc_node_count) {
             continue;
