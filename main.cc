@@ -91,11 +91,7 @@
 
 #include "redis/controller.hh"
 #include "cdc/log.hh"
-#include "cdc/cdc_extension.hh"
 #include "cdc/generation_service.hh"
-#include "tombstone_gc_extension.hh"
-#include "db/tags/extension.hh"
-#include "db/paxos_grace_seconds_extension.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include "service/storage_proxy.hh"
 #include "service/mapreduce_service.hh"
@@ -103,7 +99,6 @@
 #include "alternator/ttl.hh"
 #include "tools/entry_point.hh"
 #include "test/perf/entry_point.hh"
-#include "db/per_partition_rate_limit_extension.hh"
 #include "lang/manager.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/virtual_tables.hh"
@@ -635,14 +630,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     app_template app(std::move(app_cfg));
 
     auto ext = std::make_shared<db::extensions>();
-    ext->add_schema_extension<db::tags_extension>(db::tags_extension::NAME);
-    ext->add_schema_extension<cdc::cdc_extension>(cdc::cdc_extension::NAME);
-    ext->add_schema_extension<db::paxos_grace_seconds_extension>(db::paxos_grace_seconds_extension::NAME);
-    ext->add_schema_extension<tombstone_gc_extension>(tombstone_gc_extension::NAME);
-    ext->add_schema_extension<db::per_partition_rate_limit_extension>(db::per_partition_rate_limit_extension::NAME);
-
     auto cfg = make_lw_shared<db::config>(ext);
     auto init = app.get_options_description().add_options();
+
+    cfg->add_all_default_extensions();
 
     init("version", bpo::bool_switch(), "print version number and exit");
     init("build-id", bpo::bool_switch(), "print build-id and exit");
