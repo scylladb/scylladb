@@ -50,6 +50,7 @@ using view_building_tasks = std::map<view_building_target, dht::token_range_vect
 using base_building_tasks = std::map<table_id, view_building_tasks>;
 using view_building_coordinator_tasks = std::map<table_id, base_building_tasks>;
 using view_build_status_map = std::map<table_id, std::map<locator::host_id, db::view::build_status>>;
+using view_building_staging_sstables_map = std::map<view_building_target, dht::token_range_vector>;
 
 class view_building_coordinator : public migration_listener::only_view_notifications {
     struct vbc_state {

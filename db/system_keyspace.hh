@@ -198,6 +198,7 @@ public:
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
     static constexpr auto VIEW_BUILDING_COORDINATOR_TASKS = "view_building_coordinator_tasks";
+    static constexpr auto VIEW_BUILDING_COORDINATOR_STAGING_SSTABLES = "view_building_coordinator_staging_sstables";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -295,6 +296,7 @@ public:
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
     static schema_ptr view_building_coordinator_tasks();
+    static schema_ptr view_building_coordinator_staging_sstables();
 
     // auth
     static schema_ptr roles();
@@ -570,6 +572,10 @@ public:
     future<std::optional<mutation>> get_vbc_processing_base_mutation();
     future<mutation> make_vbc_delete_processing_base_mutation(api::timestamp_type ts);
     future<std::optional<table_id>> get_vbc_processing_base();
+
+    future<service::view_building_staging_sstables_map> get_view_building_coordinator_staging_sstables_targets();
+    future<mutation> make_vbc_staging_sstable_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range);
+    future<mutation> make_vbc_staging_sstable_done_mutation(api::timestamp_type ts, locator::host_id host_id, shard_id shard, dht::token_range range);
 
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,

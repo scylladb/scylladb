@@ -7280,6 +7280,7 @@ void storage_service::init_messaging_service() {
                 }
                 if (ss._feature_service.view_building_coordinator) {
                     additional_tables.push_back(db::system_keyspace::view_building_coordinator_tasks()->id());
+                    additional_tables.push_back(db::system_keyspace::view_building_coordinator_staging_sstables()->id());
                 }
             }
 
