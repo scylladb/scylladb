@@ -198,21 +198,24 @@ Holds information about all tablets in the cluster.
 Schema:
 ~~~
 CREATE TABLE system.tablets (
-    keyspace_name text,
     table_id uuid,
     last_token bigint,
+    keyspace_name text STATIC,
+    repair_scheduler_config frozen<repair_scheduler_config> STATIC,
+    resize_seq_number bigint STATIC,
+    resize_task_info frozen<tablet_task_info> STATIC,
+    resize_type text STATIC,
+    table_name text STATIC,
+    tablet_count int STATIC,
+    migration_task_info frozen<tablet_task_info>,
     new_replicas frozen<list<frozen<tuple<uuid, int>>>>,
-    replicas frozen<list<frozen<tuple<uuid, int>>>>,
-    stage text,
-    transition text,
-    table_name text static,
-    tablet_count int static,
-    resize_type text static,
-    resize_seq_number bigint static,
-    repair_scheduler_config frozen<repair_scheduler_config> static,
     repair_task_info frozen<tablet_task_info>,
     repair_time timestamp,
-    PRIMARY KEY ((keyspace_name, table_id), last_token)
+    replicas frozen<list<frozen<tuple<uuid, int>>>>,
+    session uuid,
+    stage text,
+    transition text,
+    PRIMARY KEY (table_id, last_token)
 )
 
 CREATE TYPE system.repair_scheduler_config (
@@ -231,7 +234,7 @@ CREATE TYPE system.tablet_task_info (
 )
 ~~~
 
-Each partition (keyspace_name, table_id) represents a tablet map of a given table.
+Each partition (table_id) represents a tablet map of a given table.
 
 Only tables which use tablet-based replication strategy have an entry here.
 
