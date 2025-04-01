@@ -10,6 +10,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/abort_source.hh>
 
+#include "data_dictionary/data_dictionary.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "service/raft/group0_state_id_handler.hh"
@@ -122,5 +123,10 @@ public:
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override;
     future<> abort() override;
 };
+
+bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db);
+
+// Used to write data to topology and other tables except schema tables.
+future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms);
 
 } // end of namespace service
