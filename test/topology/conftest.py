@@ -277,3 +277,9 @@ def pytest_collection_modifyitems(items, config):
 async def prepare_3_nodes_cluster(request, manager):
     if request.node.get_closest_marker("prepare_3_nodes_cluster"):
         await manager.servers_add(3)
+
+
+@pytest.fixture(scope="function", autouse=True)
+async def prepare_3_racks_cluster(request, manager):
+    if request.node.get_closest_marker("prepare_3_racks_cluster"):
+        await manager.servers_add(3, auto_rack_dc="dc1")

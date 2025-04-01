@@ -1016,7 +1016,7 @@ class ScyllaCluster:
     async def add_servers(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
-                          property_file: Optional[dict[str, Any]] = None,
+                          property_file: Union[list[dict[str, Any]], dict[str, Any], None] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
                           server_encryption: str = "none",
@@ -1024,8 +1024,17 @@ class ScyllaCluster:
         """Add multiple servers to the cluster concurrently"""
         assert servers_num > 0, f"add_servers: cannot add {servers_num} servers"
 
-        return await gather_safely(*(self.add_server(None, cmdline, config, property_file, start, seeds, server_encryption, expected_error)
-                                      for _ in range(servers_num)))
+        def get_property_file(i) -> Optional[dict[str, Any]]:
+            if property_file is None:
+                return None
+            elif type(property_file) is dict:
+                return property_file
+            else:
+                assert type(property_file) is list and len(property_file) == servers_num
+                return property_file[i]
+
+        return await gather_safely(*(self.add_server(None, cmdline, config, get_property_file(i), start, seeds, server_encryption, expected_error)
+                                      for i in range(servers_num)))
 
     def endpoint(self) -> str:
         """Get a server id (IP) from running servers"""

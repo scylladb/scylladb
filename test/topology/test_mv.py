@@ -19,7 +19,7 @@ from test.topology.util import new_test_keyspace, new_test_table, new_materializ
 ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 } AND TABLETS = {'enabled': false }"
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio

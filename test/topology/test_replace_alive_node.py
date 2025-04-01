@@ -8,7 +8,7 @@ from test.pylib.manager_client import ManagerClient
 import asyncio
 import pytest
 
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
@@ -24,4 +24,5 @@ async def test_replacing_alive_node_fails(manager: ManagerClient) -> None:
         replace_cfg = ReplaceConfig(replaced_id = srv.server_id, reuse_ip_addr = False,
                                     use_host_id = False, wait_replaced_dead = False)
         await manager.server_add(replace_cfg=replace_cfg,
+                                 property_file=srv.property_file(),
                                  expected_error="the topology coordinator rejected request to join the cluster")

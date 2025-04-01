@@ -29,6 +29,9 @@ class ServerInfo(NamedTuple):
     def as_dict(self) -> dict[str, object]:
         return {"server_id": self.server_id, "ip_addr": self.ip_addr, "rpc_address": self.rpc_address, "datacenter": self.datacenter, "rack": self.rack}
 
+    def property_file(self) -> dict[str, str]:
+        return {"dc": self.datacenter, "rack": self.rack}
+
 
 class ServerUpState(Enum):
     PROCESS_STARTED = auto()

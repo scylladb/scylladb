@@ -10,7 +10,7 @@ from test.pylib.random_tables import Column, UUIDType, IntType
 
 
 logger = logging.getLogger('schema-test')
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 

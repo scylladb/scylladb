@@ -12,7 +12,7 @@ import pathlib
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import List, Optional, Callable, Any, Awaitable, Dict, Tuple
+from typing import List, Optional, Callable, Any, Awaitable, Dict, Tuple, Union
 from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
@@ -297,7 +297,7 @@ class ManagerClient():
                                 replace_cfg: Optional[ReplaceConfig],
                                 cmdline: Optional[List[str]],
                                 config: Optional[dict[str, Any]],
-                                property_file: Optional[dict[str, Any]],
+                                property_file: Union[List[dict[str, Any]], dict[str, Any], None],
                                 start: bool,
                                 seeds: Optional[List[IPAddress]],
                                 expected_error: Optional[str],
@@ -379,17 +379,22 @@ class ManagerClient():
     async def servers_add(self, servers_num: int = 1,
                           cmdline: Optional[List[str]] = None,
                           config: Optional[dict[str, Any]] = None,
-                          property_file: Optional[dict[str, Any]] = None,
+                          property_file: Union[List[dict[str, Any]], dict[str, Any], None] = None,
                           start: bool = True,
                           seeds: Optional[List[IPAddress]] = None,
                           driver_connect_opts: dict[str, Any] = {},
                           expected_error: Optional[str] = None,
-                          server_encryption: str = "none") -> List[ServerInfo]:
+                          server_encryption: str = "none",
+                          auto_rack_dc: Optional[str] = None) -> List[ServerInfo]:
         """Add new servers concurrently.
         This function can be called only if the cluster uses consistent topology changes, which support
         concurrent bootstraps. If your test does not fulfill this condition and you want to add multiple
         servers, you should use multiple server_add calls."""
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
+        assert not (property_file and auto_rack_dc), f"Either property_file or auto_rack_dc can be provided, but not both"
+
+        if auto_rack_dc:
+            property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
         try:
             data = self._create_server_add_data(None, cmdline, config, property_file, start, seeds, expected_error, server_encryption, None)
