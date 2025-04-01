@@ -34,14 +34,14 @@ async def test_mv_tombstone_gc_setting(manager):
     be here and not in the single-node cqlpy.
     """
     cql = manager.cql
-    async with new_test_keyspace(cql, ksdef) as keyspace:
-        async with new_test_table(cql, keyspace, "p int primary key, x int") as table:
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, "p int primary key, x int") as table:
             # Adding "WITH tombstone_gc = ..." In the CREATE MATERIALIZED VIEW:
-            async with new_materialized_view(cql, table, "*", "p, x", "p is not null and x is not null", "WITH tombstone_gc = {'mode': 'repair'}") as mv:
+            async with new_materialized_view(manager, table, "*", "p, x", "p is not null and x is not null", "WITH tombstone_gc = {'mode': 'repair'}") as mv:
                 s = list(cql.execute(f"DESC {mv}"))[0].create_statement
                 assert "'mode': 'repair'" in s
             # Adding "WITH tombstone_gc = ..." In the ALTER MATERIALIZED VIEW:
-            async with new_materialized_view(cql, table, "*", "p, x", "p is not null and x is not null") as mv:
+            async with new_materialized_view(manager, table, "*", "p, x", "p is not null and x is not null") as mv:
                 s = list(cql.execute(f"DESC {mv}"))[0].create_statement
                 assert not "'mode': 'repair'" in s
                 await cql.run_async("ALTER MATERIALIZED VIEW " + mv + " WITH tombstone_gc = {'mode': 'repair'}")
@@ -57,11 +57,11 @@ async def test_mv_tombstone_gc_not_inherited(manager):
     demonstrates the existing behavior.
     """
     cql = manager.cql
-    async with new_test_keyspace(cql, ksdef) as keyspace:
-        async with new_test_table(cql, keyspace, "p int primary key, x int", "WITH tombstone_gc = {'mode': 'repair'}") as table:
+    async with new_test_keyspace(manager, ksdef) as keyspace:
+        async with new_test_table(manager, keyspace, "p int primary key, x int", "WITH tombstone_gc = {'mode': 'repair'}") as table:
             s = list(cql.execute(f"DESC {table}"))[0].create_statement
             assert "'mode': 'repair'" in s
-            async with new_materialized_view(cql, table, "*", "p, x", "p is not null and x is not null") as mv:
+            async with new_materialized_view(manager, table, "*", "p, x", "p is not null and x is not null") as mv:
                 s = list(cql.execute(f"DESC {mv}"))[0].create_statement
                 # Base's setting is NOT inherited to the view:
                 assert not "'mode': 'repair'" in s

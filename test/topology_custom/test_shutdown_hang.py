@@ -14,7 +14,7 @@ from cassandra.cluster import ConsistencyLevel # type: ignore
 from cassandra.protocol import WriteTimeout # type: ignore
 
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import wait_for_token_ring_and_group0_consistency
+from test.topology.util import wait_for_token_ring_and_group0_consistency, new_test_keyspace, reconnect_driver
 from test.topology.conftest import skip_mode
 
 
@@ -34,38 +34,42 @@ async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
     cql = manager.get_cql()
 
     logger.info("Create keyspace and table")
-    await cql.run_async("create keyspace ks with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}")
-    await cql.run_async("create table ks.t (pk int primary key)")
+    async with new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
-    logger.info(f"Stop {s2}")
-    await manager.server_stop(s2.server_id)
+        logger.info(f"Stop {s2}")
+        await manager.server_stop(s2.server_id)
 
-    logger.info("Write data with small timeout")
-    # We're using a small timeout for the insert so it's not unexpected that it would fail on slow
-    # CI machines. To avoid flakiness we disable the test in debug mode (as well as release since
-    # it requires an error injection - so it will run only in dev mode) and we retry the write 10 times.
-    passed = False
-    for _ in range(10):
-        try:
-            await cql.run_async(SimpleStatement("insert into ks.t (pk) values (0) using timeout 500ms",
-                                                consistency_level=ConsistencyLevel.ONE))
-        except WriteTimeout:
-            logger.info("write timeout, retrying")
-        else:
-            passed = True
-            break
+        logger.info("Write data with small timeout")
+        # We're using a small timeout for the insert so it's not unexpected that it would fail on slow
+        # CI machines. To avoid flakiness we disable the test in debug mode (as well as release since
+        # it requires an error injection - so it will run only in dev mode) and we retry the write 10 times.
+        passed = False
+        for _ in range(10):
+            try:
+                await cql.run_async(SimpleStatement(f"insert into {ks}.t (pk) values (0) using timeout 500ms",
+                                                    consistency_level=ConsistencyLevel.ONE))
+            except WriteTimeout:
+                logger.info("write timeout, retrying")
+            else:
+                passed = True
+                break
 
-    if not passed:
-        pytest.fail("Write timed out on each attempt")
+        if not passed:
+            pytest.fail("Write timed out on each attempt")
 
-    # The write succeeded but a background task was left to finish the write to the other node
-    # (which is dead but the first node didn't mark it as dead yet).
-    # The background task will timeout shortly because of 'using timeout' in the statement.
-    # This will cause a hint to get created.
-    # The hints manager starts sending the hint soon after (hint flushing happens every
-    # ~1 second with the error injection).
-    logger.info("Sleep")
-    await asyncio.sleep(2)
+        # The write succeeded but a background task was left to finish the write to the other node
+        # (which is dead but the first node didn't mark it as dead yet).
+        # The background task will timeout shortly because of 'using timeout' in the statement.
+        # This will cause a hint to get created.
+        # The hints manager starts sending the hint soon after (hint flushing happens every
+        # ~1 second with the error injection).
+        logger.info("Sleep")
+        await asyncio.sleep(2)
 
-    logger.info(f"Stop {s1} gracefully")
-    await manager.server_stop_gracefully(s1.server_id)
+        logger.info(f"Stop {s1} gracefully")
+        await manager.server_stop_gracefully(s1.server_id)
+
+        # For dropping the keyspace
+        await asyncio.gather(*[manager.server_start(s.server_id) for s in [s1, s2]])
+        await reconnect_driver(manager)
