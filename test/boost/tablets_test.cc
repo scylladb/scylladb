@@ -1475,9 +1475,10 @@ void check_tablet_invariants(const tablet_metadata& tmeta);
 static
 void do_rebalance_tablets(cql_test_env& e,
                           group0_guard& guard,
-                          locator::load_stats_ptr load_stats = {},
+                          shared_load_stats* load_stats = nullptr,
                           std::unordered_set<host_id> skiplist = {},
-                          std::function<bool(const migration_plan&)> stop = nullptr)
+                          std::function<bool(const migration_plan&)> stop = nullptr,
+                          bool auto_split = false)
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -1487,7 +1488,7 @@ void do_rebalance_tablets(cql_test_env& e,
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats ? load_stats->get() : nullptr, skiplist).get();
         if (plan.empty()) {
             return;
         }
@@ -1498,6 +1499,17 @@ void do_rebalance_tablets(cql_test_env& e,
             apply_plan(tm, plan);
             return make_ready_future<>();
         }).get();
+
+        if (auto_split && load_stats) {
+            auto& tm = *stm.get();
+            for (auto& [table, tmap]: tm.tablets().all_tables()) {
+                if (std::holds_alternative<resize_decision::split>(tmap->resize_decision().way)) {
+                    testlog.debug("set_split_ready_seq_number({}, {})", table, tmap->resize_decision().sequence_number);
+                    load_stats->set_split_ready_seq_number(table, tmap->resize_decision().sequence_number);
+                }
+            }
+        }
+
         handle_resize_finalize(e, guard, plan).get();
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");
@@ -1508,16 +1520,26 @@ void do_rebalance_tablets(cql_test_env& e,
 // only reflects it in the metadata.
 // Run in a seastar thread.
 void rebalance_tablets(cql_test_env& e,
-                       load_stats_ptr load_stats = nullptr,
+                       shared_load_stats* load_stats = nullptr,
                        std::unordered_set<host_id> skiplist = {},
-                       std::function<bool(const migration_plan&)> stop = nullptr) {
+                       std::function<bool(const migration_plan&)> stop = nullptr,
+                       bool auto_split = true) {
     abort_source as;
     testlog.debug("rebalance_tablets(): start");
 
     auto guard = e.get_raft_group0_client().start_operation(as).get();
     testlog.debug("rebalance_tablets(): took group0 guard");
 
-    do_rebalance_tablets(e, guard, std::move(load_stats), std::move(skiplist), std::move(stop));
+    shared_load_stats local_stats;
+    if (!load_stats) {
+        // Provide default capacity for each node.
+        e.shared_token_metadata().local().get()->get_topology().for_each_node([&] (const auto& node) {
+            local_stats.set_capacity(node.host_id(), default_target_tablet_size * node.get_shard_count());
+        });
+        load_stats = &local_stats;
+    }
+
+    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split);
     testlog.debug("rebalance_tablets(): rebalanced");
 
     // We should not introduce inconsistency between on-disk state and in-memory state
@@ -1531,9 +1553,9 @@ void rebalance_tablets(cql_test_env& e,
 }
 
 static
-void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_metadata& stm) {
+void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_metadata& stm, shared_load_stats& stats) {
     while (true) {
-        auto plan = talloc.balance_tablets(stm.get()).get();
+        auto plan = talloc.balance_tablets(stm.get(), stats.get()).get();
         if (plan.empty()) {
             break;
         }
@@ -1709,9 +1731,9 @@ SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
         e.execute_cql(fmt::format("alter keyspace {} with tablets = {{'enabled': true, 'initial': 1}}", ks_name)).get();
 
         auto& stm = e.shared_token_metadata().local();
-        locator::load_stats load_stats;
-        load_stats.tables[table1] = {};
-        rebalance_tablets(e, make_lw_shared(std::move(load_stats)), {}, [&] (const migration_plan& plan) {
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_size(table1, 0);
+        rebalance_tablets(e, &load_stats, {}, [&] (const migration_plan& plan) {
             check_no_rack_overload(*stm.get());
             return false;
         });
@@ -1783,7 +1805,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
         BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
     }
 
-    rebalance_tablets(e, {}, {host3});
+    rebalance_tablets(e, &topo.get_shared_load_stats(), {host3});
 
     {
         load_sketch load(stm.get());
@@ -2143,7 +2165,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     auto guard = e.get_raft_group0_client().start_operation(as).get();
     auto& stm = e.shared_token_metadata().local();
 
-    rebalance_tablets_as_in_progress(e.get_tablet_allocator().local(), stm);
+    rebalance_tablets_as_in_progress(e.get_tablet_allocator().local(), stm, topo.get_shared_load_stats());
     execute_transitions(stm);
 
     {
@@ -2189,17 +2211,17 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
         co_return;
     });
 
-    rebalance_tablets(e);
+    rebalance_tablets(e, &topo.get_shared_load_stats());
 
     auto& stm = e.shared_token_metadata().local();
-    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get()).get().empty());
+    BOOST_REQUIRE(e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get().empty());
 
     utils::get_local_injector().enable("tablet_allocator_shuffle");
     auto disable_injection = seastar::defer([&] {
         utils::get_local_injector().disable("tablet_allocator_shuffle");
     });
 
-    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get()).get().empty());
+    BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get().empty());
   }).get();
 }
 #endif
@@ -2276,7 +2298,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_asymmetric_node_capacity) {
             return !plan.has_nodes_to_drain();
         };
 
-        rebalance_tablets(e, {}, {}, until_nodes_drained);
+        rebalance_tablets(e, &topo.get_shared_load_stats(), {}, until_nodes_drained);
 
         auto& stm = e.shared_token_metadata().local();
 
@@ -2322,7 +2344,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         });
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
         }
 
@@ -2333,7 +2355,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
             BOOST_REQUIRE(plan.empty());
         }
 
@@ -2343,7 +2365,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
             BOOST_REQUIRE(plan.empty());
         }
 
@@ -2354,7 +2376,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
         }
 
@@ -2364,7 +2386,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         }).get();
 
         {
-            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
+            auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
             BOOST_REQUIRE(!plan.empty());
         }
   }).get();
@@ -2396,7 +2418,7 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
             co_return;
         });
 
-        migration_plan plan = e.get_tablet_allocator().local().balance_tablets(stm.get()).get();
+        migration_plan plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
         BOOST_REQUIRE(plan.has_nodes_to_drain());
         for (auto&& mig : plan.migrations()) {
             BOOST_REQUIRE(mig.kind != tablet_transition_kind::intranode_migration);
@@ -2426,7 +2448,7 @@ SEASTAR_THREAD_TEST_CASE(test_plan_fails_when_removing_last_replica) {
         });
 
         std::unordered_set<host_id> skiplist = {host1};
-        BOOST_REQUIRE_THROW(rebalance_tablets(e, {}, skiplist), std::runtime_error);
+        BOOST_REQUIRE_THROW(rebalance_tablets(e, &topo.get_shared_load_stats(), skiplist), std::runtime_error);
     }).get();
 }
 
@@ -2464,7 +2486,7 @@ SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
 
         auto& stm = e.shared_token_metadata().local();
         std::unordered_set<host_id> skiplist = {host2};
-        rebalance_tablets(e, {}, skiplist);
+        rebalance_tablets(e, &topo.get_shared_load_stats(), skiplist);
 
         {
             load_sketch load(stm.get());
@@ -2610,6 +2632,119 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
   }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
+    // 3 racks, RF=3. 1 table with 90% space.
+    // We start with 1 i4i_2xlarge per rack, then add i4i_large to each rack.
+    // We want utilization to be balanced.
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        std::vector<host_id> hosts;
+
+        uint64_t i4i_2xlarge_cap = 1'875'000'000'000;
+        uint64_t i4i_large_cap = 468'000'000'000;
+
+        auto add_i4i_2xlarge = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 7, rack);
+            load_stats.set_capacity(h, i4i_2xlarge_cap);
+            hosts.push_back(h);
+        };
+
+        auto add_i4i_large = [&] (endpoint_dc_rack rack) {
+            auto h = topo.add_node(node_state::normal, 2, rack);
+            load_stats.set_capacity(h, i4i_large_cap);
+            hosts.push_back(h);
+        };
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        add_i4i_2xlarge(rack1);
+        add_i4i_2xlarge(rack2);
+        add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}});
+        auto table1 = add_table(e, ks_name).get();
+
+        load_stats.set_size(table1, 0.9 * i4i_2xlarge_cap);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Initial cluster ready");
+
+        std::unordered_map<host_id, double> initial_utilization;
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                initial_utilization[h] = *u;
+            }
+        }
+
+        add_i4i_large(rack1);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity in rack1");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            auto u0 = *load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size);
+            BOOST_REQUIRE_LT(u0, initial_utilization[hosts[0]]);
+            initial_utilization[hosts[0]] = u0;
+            // rack2 and rack3 are not changed, to keep racks not overloaded (RF=rack_count)
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[1]]);
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[2]]);
+        }
+
+        add_i4i_large(rack2);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity in rack2");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[0]]);
+            auto u1 = *load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size);
+            BOOST_REQUIRE_LT(u1, initial_utilization[hosts[1]]);
+            initial_utilization[hosts[1]] = u1;
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[2]]);
+        }
+
+        add_i4i_large(rack3);
+        rebalance_tablets(e, &load_stats);
+        testlog.info("Expanded capacity in rack3");
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[0]]);
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size),
+                             initial_utilization[hosts[1]]);
+            auto u2 = *load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size);
+            BOOST_REQUIRE_LT(u2, initial_utilization[hosts[2]]);
+            initial_utilization[hosts[2]] = u2;
+
+            // Check that utilization difference is < 1%
+            min_max_tracker<double> node_utilization;
+            for (auto h: hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                BOOST_REQUIRE(u);
+                node_utilization.update(*u);
+            }
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.01);
+        }
+    }).get();
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);
@@ -2727,8 +2862,9 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
     auto tablet_count = [&] {
         return stm.get()->tablets().get_tablet_map(table1).tablet_count();
     };
-    auto do_rebalance_tablets = [&] (locator::load_stats load_stats) {
-        rebalance_tablets(e, make_lw_shared(std::move(load_stats)));
+    shared_load_stats& load_stats = topo.get_shared_load_stats();
+    auto do_rebalance_tablets = [&] () {
+        rebalance_tablets(e, &load_stats);
     };
 
     const uint64_t target_tablet_size = service::default_target_tablet_size;
@@ -2737,15 +2873,11 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
     };
 
     while (tablet_count() > 1) {
-        locator::load_stats load_stats = {
-            .tables = {
-                { table1, table_load_stats{ .size_in_bytes = merge_threshold() - 1 }},
-            }
-        };
+        load_stats.set_size(table1, merge_threshold() - 1);
 
         auto old_tablet_count = tablet_count();
         check_tablet_invariants(stm.get()->tablets());
-        do_rebalance_tablets(std::move(load_stats));
+        do_rebalance_tablets();
         check_tablet_invariants(stm.get()->tablets());
         BOOST_REQUIRE_LT(tablet_count(), old_tablet_count);
     }
@@ -2930,8 +3062,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
             return stm.get()->tablets().get_tablet_map(table1).resize_decision();
         };
 
-        auto do_rebalance_tablets = [&] (locator::load_stats load_stats) {
-            rebalance_tablets(e, make_lw_shared(std::move(load_stats)));
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        auto do_rebalance_tablets = [&] () {
+            rebalance_tablets(e, &load_stats, {}, nullptr, false); // no auto-split
         };
 
         const uint64_t max_tablet_size = service::default_target_tablet_size * 2;
@@ -2942,15 +3075,13 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
         const auto initial_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
 
+        load_stats.set_split_ready_seq_number(table1, initial_ready_seq_number);
+
         // avg size moved above target size, so merge is cancelled
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.75), .split_ready_seq_number = initial_ready_seq_number }},
-                }
-            };
+            load_stats.set_size(table1, to_size_in_bytes(0.75));
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
         }
@@ -2960,13 +3091,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
         // avg size hits split threshold, and balancer emits split request
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(1.1), .split_ready_seq_number = initial_ready_seq_number }},
-                }
-            };
+            load_stats.set_size(table1, to_size_in_bytes(1.1));
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::split>(resize_decision().way));
             BOOST_REQUIRE_GT(resize_decision().sequence_number, 0);
@@ -2975,13 +3102,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         // replicas set their split status as ready, and load balancer finalizes split generating a new
         // tablet map, twice as large as the previous one.
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(1.1), .split_ready_seq_number = resize_decision().sequence_number }},
-                }
-            };
+            load_stats.set_split_ready_seq_number(table1, resize_decision().sequence_number);
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
 
             BOOST_REQUIRE_EQUAL(tablet_count(), initial_tablets * 2);
             BOOST_REQUIRE(std::holds_alternative<locator::resize_decision::none>(resize_decision().way));
@@ -2989,13 +3112,10 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
 
         // Check that balancer detects table size dropped to 0 and reduces tablet count down to 1 through merges.
         {
-            locator::load_stats load_stats = {
-                .tables = {
-                    { table1, table_load_stats{ .size_in_bytes = to_size_in_bytes(0.0), .split_ready_seq_number = initial_ready_seq_number }},
-                }
-            };
+            load_stats.set_size(table1, to_size_in_bytes(0.0));
+            load_stats.set_split_ready_seq_number(table1, initial_ready_seq_number);
 
-            do_rebalance_tablets(std::move(load_stats));
+            do_rebalance_tablets();
             BOOST_REQUIRE_EQUAL(tablet_count(), 1);
         }
 

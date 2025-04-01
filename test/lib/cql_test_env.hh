@@ -49,6 +49,10 @@ namespace cql3 {
     class query_processor;
 }
 
+namespace utils {
+class disk_space_monitor;
+}
+
 namespace service {
 
 class client_state;
@@ -193,7 +197,12 @@ public:
 
     data_dictionary::database data_dictionary();
 
+    // Call only on shard0.
+    virtual utils::disk_space_monitor& disk_space_monitor() = 0;
+
     virtual sharded<qos::service_level_controller>& service_level_controller_service() = 0;
+
+    virtual db::config& db_config() = 0;
 };
 
 future<> do_with_cql_env(std::function<future<>(cql_test_env&)> func, cql_test_config = {}, std::optional<cql_test_init_configurables> = {});
