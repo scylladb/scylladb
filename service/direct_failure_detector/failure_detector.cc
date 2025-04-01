@@ -20,7 +20,7 @@
 
 #include "utils/log.hh"
 
-#include "direct_failure_detector/failure_detector.hh"
+#include "service/direct_failure_detector/failure_detector.hh"
 
 namespace direct_failure_detector {
 
