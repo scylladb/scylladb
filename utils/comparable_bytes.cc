@@ -27,6 +27,14 @@ static constexpr uint8_t NEGATIVE_DECIMAL_HEADER_MASK = 0x00;
 static constexpr uint8_t DECIMAL_EXPONENT_LENGTH_HEADER_MASK = 0x40;
 static constexpr uint8_t DECIMAL_LAST_BYTE = 0x00;
 
+// Escape value. Used, among other things, to mark the end of subcomponents (so that shorter
+// compares before anything longer). Actual zeros in input need to be escaped if this is in use.
+static constexpr uint8_t ESCAPE = 0x00;
+// Zeros are encoded as a sequence of ESCAPE, 0 or more of ESCAPED_0_CONT, ESCAPED_0_DONE
+// so zeroed spaces only grow by 1 byte
+static constexpr uint8_t ESCAPED_0_CONT = 0xFE;
+static constexpr uint8_t ESCAPED_0_DONE = 0xFF;
+
 // Encode/Decode the given signed fixed-length integer into byte comparable format.
 // To encode, invert the sign bit so that negative numbers are ordered before the positive ones.
 template <std::signed_integral T>
@@ -527,11 +535,53 @@ struct to_comparable_bytes_visitor {
         out.write<uint8_t>(DECIMAL_LAST_BYTE);
     }
 
-    // TODO: Handle other types
-
+    // Encode variable length natively byte-comparable data types.
+    // Zeros in the source are escaped as ESCAPE followed by one or more ESCAPED_0_CONT and ending with ESCAPED_0_DONE.
+    // The encoding terminates in an escaped state (either with ESCAPE or ESCAPED_0_CONT).
+    // If the source ends in a zero, we use ESCAPED_0_CONT to ensure that the encoding remains smaller than
+    // the same source with an additional zero at the end.
+    //
+    // E.g. "A\0\0B" translates to 4100FEFF4200
+    //      "A\0B\0"               4100FF4200FE
+    //      "A\0"                  4100FE
+    //      "AB"                   414200
+    //
+    // In a single-byte source, the bytes could be passed unchanged, but this would prevent combining components.
+    // This translation preserves order, and since the encoding for 0 is higher than the separator,
+    // it also ensures that shorter components are treated as smaller.
+    //
+    // The encoding is not prefix-free since, for example, the encoding of "A" (4100) is a prefix of the encoding of "A\0" (4100FE).
+    // However, the byte following the prefix is guaranteed to be FE or FF, making the encoding weakly prefix-free.
+    // Additionally, any such prefix sequence will compare as smaller than the value it prefixes,
+    // because any permitted separator byte will be smaller than the byte following the prefix.
     void operator()(const abstract_type& type) {
-        // Unimplemented
-        on_internal_error(cblogger, fmt::format("byte comparable format not supported for type {}", type.name()));
+        if (!type.is_byte_order_equal()) {
+            on_internal_error(cblogger, fmt::format("byte comparable format not supported for type {}", type.name()));
+        }
+
+        bool escaped = false;
+        while (!serialized_bytes_view.empty()) {
+            uint8_t curr_byte = read_simple<uint8_t>(serialized_bytes_view);
+            if (escaped) {
+                if (curr_byte == ESCAPE) {
+                    // continue escape sequence
+                    out.write<uint8_t>(ESCAPED_0_CONT);
+                    continue;
+                }
+                // mark end of escape sequence and write the curr byte
+                escaped = false;
+                out.write<uint8_t>(ESCAPED_0_DONE);
+                out.write<uint8_t>(curr_byte);
+            } else {
+                if (curr_byte == ESCAPE) {
+                    escaped = true;
+                }
+                out.write<uint8_t>(curr_byte);
+            }
+        }
+
+        // terminate the sequence in an escaped state
+        out.write<uint8_t>(escaped ? ESCAPED_0_CONT : ESCAPE);
     }
 };
 
@@ -718,11 +768,47 @@ struct from_comparable_bytes_visitor {
         out.write(data_value(std::move(unscaled_value)).serialize_nonnull());
     }
 
-    // TODO: Handle other types
-
+    // Decode variable length natively byte-comparable data types into the original unescaped form
     void operator()(const abstract_type& type) {
-        // Unimplemented
-        on_internal_error(cblogger, fmt::format("byte comparable format not supported for type {}", type.name()));
+        if (!type.is_byte_order_equal()) {
+            on_internal_error(cblogger, fmt::format("byte comparable format not supported for type {}", type.name()));
+        }
+
+        bool escaped = false;
+        while (!comparable_bytes_view.empty()) {
+            if (escaped) {
+                // The decoder is now in an escaped state. Do not consume the next byte
+                // yet as the encoding ends in an escaped state (ESCAPE or ESCAPED_0_CONT),
+                // and the next byte may not belong to the current value.
+                const auto peeked_byte = uint8_t(comparable_bytes_view[0]);
+                if (peeked_byte < ESCAPED_0_CONT) {
+                    // The next byte is neither ESCAPED_0_CONT(0xFE) nor ESCAPED_0_DONE(0xFF).
+                    // This happens iff the byte-comparable is part of a multi-component sequence,
+                    // and we have reached the end of the current encoded component.
+                    // The peeked byte is a separator (between components) or
+                    // a terminator (end of sequence) and should not be consumed here.
+                    return;
+                }
+
+                // peeked_byte represents another \0 in the original format.
+                out.write<uint8_t>(ESCAPE);
+                comparable_bytes_view.remove_prefix(1);
+                if (peeked_byte == ESCAPED_0_DONE) {
+                    // this marks the end of 1 or more consecutive 0x00 value bytes.
+                    escaped = false;
+                }
+            } else {
+                // we can consume this byte no matter what it is
+                uint8_t curr_byte = read_simple<uint8_t>(comparable_bytes_view);
+                if (curr_byte > ESCAPE) {
+                    // any byte that is not \0 - write it as it is
+                    out.write<uint8_t>(curr_byte);
+                } else {
+                    // start of an escape sequence
+                    escaped = true;
+                }
+            }
+        }
     }
 };
 

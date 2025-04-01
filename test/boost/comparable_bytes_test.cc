@@ -8,6 +8,8 @@
 
 #include "test/lib/scylla_test_case.hh"
 
+#include <seastar/net/inet_address.hh>
+#include <seastar/net/ipv4_address.hh>
 #include <seastar/util/lazy.hh>
 
 #include "bytes_ostream.hh"
@@ -357,4 +359,122 @@ BOOST_AUTO_TEST_CASE(test_decimal) {
     };
 
     byte_comparable_test(big_decimal_test_data_generator());
+}
+
+BOOST_AUTO_TEST_CASE(test_blob) {
+    struct bytes_test_data_generator : test_data_generator {
+        bytes_test_data_generator() {
+            std::random_device rd;
+            const auto seed = rd();
+            testlog.info("bytes_test_data_generator seed : {}", seed);
+            std::mt19937 gen(seed);
+            std::uniform_int_distribution<uint8_t> dist;
+
+            auto random_bytes = [&dist, &gen] (size_t length) {
+                std::vector<int8_t> data(length);
+                for (auto& byte : data) {
+                    byte = dist(gen);
+                }
+                return bytes(reinterpret_cast<const int8_t*>(data.data()), length);
+            };
+
+            _test_data.reserve(4000);
+            for (int i = 0; i < 1000; i++) {
+                for (int length : {1, 10, 100, 1000}) {
+                    _test_data.emplace_back(random_bytes(length));
+                }
+            }
+        }
+    };
+
+    byte_comparable_test(bytes_test_data_generator());
+}
+
+struct string_test_data_generator : test_data_generator {
+    string_test_data_generator(std::function<data_value(std::string&&)> create_data_value_func) {
+        const std::string charset = "0123456789"
+                                    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                    "abcdefghijklmnopqrstuvwxyz";
+
+        std::random_device rd;
+        const auto seed = rd();
+        testlog.info("string_test_data_generator seed : {}", seed);
+        std::mt19937 gen(seed);
+        std::uniform_int_distribution<size_t> dist(0, charset.size() - 1);
+
+        auto random_text = [&dist, &gen, &charset] (size_t length) {
+            std::string generated_text;
+            generated_text.reserve(length);
+            for (size_t i = 0; i < length; ++i) {
+                generated_text += charset[dist(gen)];
+            }
+            return generated_text;
+        };
+
+        _test_data.reserve(4000);
+        for (int i = 0; i < 1000; i++) {
+            for (int length : {1, 10, 100, 1000}) {
+                _test_data.push_back(create_data_value_func(random_text(length)));
+            }
+        }
+    }
+};
+
+BOOST_AUTO_TEST_CASE(test_ascii) {
+    byte_comparable_test(string_test_data_generator([] (std::string&& str) {
+        return data_value(ascii_native_type(str));
+    }));
+}
+
+BOOST_AUTO_TEST_CASE(test_text) {
+    byte_comparable_test(string_test_data_generator([] (std::string&& str) {
+        return data_value(str);
+    }));
+}
+
+BOOST_AUTO_TEST_CASE(test_duration) {
+    struct duration_test_data_generator : test_data_generator {
+        duration_test_data_generator() {
+            std::random_device rd;
+            const auto seed = rd();
+            testlog.info("duration_test_data_generator seed : {}", seed);
+            std::mt19937 gen(seed);
+            std::uniform_int_distribution<int32_t> month_dist(0, 12);
+            std::uniform_int_distribution<int32_t> day_dist(0, 28);
+            constexpr int64_t max_ns_in_a_day = 24L * 60 * 60 * 1000 * 1000 * 1000;
+            std::uniform_int_distribution<int64_t> ns_dist(0, max_ns_in_a_day);
+
+            for (int i = 0; i < 1000; i++) {
+                _test_data.emplace_back(cql_duration(months_counter{month_dist(gen)}, days_counter{day_dist(gen)}, nanoseconds_counter{ns_dist(gen)}));
+            }
+        }
+    };
+
+    byte_comparable_test(duration_test_data_generator());
+}
+
+BOOST_AUTO_TEST_CASE(test_inet) {
+    struct inet_address_test_data_generator : integer_test_data_generator<uint32_t> {
+        inet_address_test_data_generator() : integer_test_data_generator<uint32_t>([] (uint32_t value) {
+            return data_value(seastar::net::ipv4_address(value));
+        }) {
+            // Include few more addresses
+            for (const std::string& addr : {
+                // IPv4
+                "127.0.0.1",
+                "10.0.0.1",
+                "172.16.1.1",
+                "192.168.2.2",
+                "224.3.3.3",
+                // IPv6
+                "0000:0000:0000:0000:0000:0000:0000:0000",
+                "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+                "fe80:1:23:456:7890:1:23:456",
+                }) {
+                _test_data.emplace_back(seastar::net::inet_address(addr));
+            }
+        }
+    };
+
+    byte_comparable_test(inet_address_test_data_generator());
 }
