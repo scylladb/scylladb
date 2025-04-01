@@ -355,7 +355,7 @@ database::view_update_read_concurrency_sem() {
 }
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-        compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, const abort_source& abort, utils::cross_shard_barrier barrier)
+        compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
@@ -417,8 +417,8 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
               _cfg.compaction_rows_count_warning_threshold,
               _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, abort, dbcfg.streaming_scheduling_group, &sstm))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, abort, dbcfg.streaming_scheduling_group))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, dbcfg.streaming_scheduling_group, &sstm))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, dbcfg.streaming_scheduling_group))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -3190,4 +3190,176 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     }
 }
 
+utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
+    static thread_local std::minstd_rand rng{std::random_device{}()};
+    std::uniform_int_distribution<uint64_t> dist(0, max_value);
+    utils::chunked_vector<uint64_t> chosen;
+    chosen.reserve(n_values);
+    for (size_t i = 0; i < n_values; ++i) {
+        chosen.push_back(dist(rng));
+    }
+    std::ranges::sort(chosen);
+    return chosen;
 }
+
+// In this function, we imagine a global list of all Data.db file chunks
+// (with size and alignment equal to `chunk_size`), sorted by <shard id; sstable index; offset within sstable>,
+// and we "address" each chunk by its offset in this list.
+// Then, we randomly select `n_chunks` of those chunks,
+// and we let each shard fulfill the choices which belong to its files.
+future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_files(
+    table_id id,
+    uint64_t chunk_size,
+    uint64_t n_chunks
+) {
+    // If the volume of samples is bigger than the semaphore allows,
+    // we still want to let the request in, so we clip the number of units to the semaphore's capacity.
+    auto memory_consumption = std::min(chunk_size * n_chunks, _memory_for_data_file_samples);
+    auto memory_units = co_await get_units(_sample_data_files_memory_limiter, memory_consumption);
+
+    // Note: this shard owns the result's `temporary_buffer`s. Other shards only write to them.
+    //
+    // The returned buffers will hold the semaphore units until they are freed.
+    auto result = utils::chunked_vector<temporary_buffer<char>>{};
+
+    struct state_by_shard {
+        // For sanity, we hold onto a stable snapshot of the sstable set throughout this function.
+        utils::chunked_vector<sstables::shared_sstable> snapshot;
+        // We need the schema for a semaphore permit, which is needed to perform a SSTable read.
+        schema_ptr schema;
+    };
+
+    sharded<state_by_shard> state;
+    co_await state.start();
+
+    // We *must* call `state.stop()` before returning,
+    // and we can't call it in a `defer`.
+    // so we surround everything between `start()` and `stop()`
+    // with a try..catch.
+    std::exception_ptr ep;
+    try {
+        // After the `exclusive_scan` later, this will say which range of chunks
+        // (in the global "list" of chunks) belongs to which shard.
+        // (Shard X owns range `global_offset[X] .. global_offset[X + 1]`).
+        std::vector<uint64_t> global_offset(smp::count + 1);
+
+        // Watch out: static lambda. Don't add captures to it.
+        static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) {
+            return sst->data_size() / chunk_size;
+        };
+
+        // Initialize `state` and `global_offset`.
+        co_await container().invoke_on_all(coroutine::lambda([&global_offset, id, chunk_size] (
+            replica::database& local_db,
+            state_by_shard& local_state
+        ) -> future<> {
+            auto t = local_db.get_tables_metadata().get_table_if_exists(id);
+            if (!t) {
+                throw std::runtime_error(fmt::format("sample_data_files: table {} does not exist", id));
+            }
+
+            local_state.schema = t->schema();
+            local_state.snapshot = co_await t->take_sstable_set_snapshot();
+
+            uint64_t my_total_chunks = 0;
+            for (const auto& sst : local_state.snapshot) {
+                my_total_chunks += size_in_chunks(sst, chunk_size);
+            }
+            global_offset[this_shard_id()] = my_total_chunks;
+        }), std::ref(state));
+
+        // [1, 2, 3, 0] --> [0, 1, 3, 6]
+        std::exclusive_scan(global_offset.begin(), global_offset.end(), global_offset.begin(), 0, std::plus());
+
+        // We can't generate random non-negative integers smaller than 0,
+        // so let's just deal with the `total_chunks == 0` case with an early return.
+        const uint64_t total_chunks = global_offset.back();
+        if (total_chunks == 0) {
+            co_await state.stop();
+            co_return utils::chunked_vector<temporary_buffer<char>>{};
+        }
+
+        // Generate `n_chunks` integers in the (inclusive) range [0, total_chunks - 1].
+        const auto chosen_chunks = compute_random_sorted_ints(total_chunks - 1, n_chunks);
+
+        // Allocate `n_chunks` output buffers of size `chunk_size`,
+        // and tie semaphore units (the ones we obtained at the top of the function) to their memory.
+        result.reserve(chosen_chunks.size());
+        for (uint64_t i = 0; i < chosen_chunks.size(); ++i) {
+            // Attach semaphore units to each sample.
+            auto buf = temporary_buffer<char>(chunk_size);
+            buf = temporary_buffer<char>(buf.get_write(), buf.size(),
+                                         make_object_deleter(buf.release(), memory_units.split(chunk_size)));
+            result.push_back(std::move(buf));
+        }
+
+        auto sample_one_shard = [
+            &chosen_chunks = std::as_const(chosen_chunks),
+            &global_offset = std::as_const(global_offset),
+            &result,
+            chunk_size
+        ] (database& local_db, state_by_shard& local_state) -> future<> {
+            auto ticket = get_units(local_db._sample_data_files_local_concurrency_limiter, 1);
+
+            // In `chosen_chunks`, the sorted array of chosen chunk offsets (in the "global chunk list"),
+            // find the range of offsets which belongs to us.
+            const uint64_t my_offset = global_offset[this_shard_id()];
+            const uint64_t neighbour_offset = global_offset[this_shard_id() + 1];
+            auto choices_it = std::ranges::lower_bound(chosen_chunks, my_offset);
+            const auto choices_end = std::ranges::lower_bound(chosen_chunks, neighbour_offset);
+            const uint64_t n_chunks_to_read = choices_end - choices_it;
+
+            // Output iterator, pointing into our subrange in `result`.
+            auto out_it = result.begin() + (choices_it - std::begin(chosen_chunks));
+
+            // Iterator over our SSTables, and the range of "global chunk offsets"
+            // belonging to the SSTable under the iterator.
+            auto sst_it = local_state.snapshot.begin();
+            const auto sst_end = local_state.snapshot.end();
+            uint64_t current_sst_beg = my_offset;
+            uint64_t current_sst_end = current_sst_beg
+                + (sst_it != sst_end ? size_in_chunks(*sst_it, chunk_size) : 0);
+
+            // Chooses the the next sample to be read.
+            // Returns a pointer to the sstable and the offset of the sample *in bytes*.
+            auto get_next_chunk = [&] () -> std::pair<sstables::shared_sstable, uint64_t> {
+                SCYLLA_ASSERT(sst_it != sst_end);
+                while (*choices_it >= current_sst_end) {
+                    ++sst_it;
+                    SCYLLA_ASSERT(sst_it != sst_end);
+                    current_sst_beg = current_sst_end;
+                    current_sst_end = current_sst_beg + size_in_chunks(*sst_it, chunk_size);
+                }
+                SCYLLA_ASSERT(choices_it != choices_end);
+                uint64_t chosen_chunk = *choices_it++;
+                return {*sst_it, (chosen_chunk - current_sst_beg) * chunk_size};
+            };
+
+            // An arbitrary limit.
+            int concurrency_limit = 10;
+            co_await max_concurrent_for_each(
+                std::views::iota(uint64_t(0), n_chunks_to_read),
+                concurrency_limit,
+                coroutine::lambda([&] (int) -> future<>
+            {
+                auto permit = co_await local_db._system_read_concurrency_sem.obtain_permit(
+                    local_state.schema, "sample_data_files", chunk_size, no_timeout, nullptr);
+                auto [sst, offset] = get_next_chunk();
+                auto sample = co_await sst->data_read(offset, chunk_size, permit);
+                auto& out_buf = *out_it++;
+                std::copy(sample.begin(), sample.end(), out_buf.get_write());
+            }));
+        };
+
+        co_await container().invoke_on_all(sample_one_shard, std::ref(state));
+    } catch (...) {
+        ep = std::current_exception();
+    }
+    co_await state.stop();
+    if (ep) {
+        co_return coroutine::exception(std::move(ep));
+    }
+    co_return result;
+}
+
+} // namespace replica

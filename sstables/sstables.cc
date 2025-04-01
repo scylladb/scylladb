@@ -855,7 +855,7 @@ void sstable::generate_toc() {
     if (_schema->bloom_filter_fp_chance() != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
-    if (_schema->get_compressor_params().get_compressor() == nullptr) {
+    if (!_schema->get_compressor_params().compression_enabled()) {
         _recognized_components.insert(component_type::CRC);
     } else {
         _recognized_components.insert(component_type::CompressionInfo);
@@ -1049,10 +1049,13 @@ template void sstable::write_simple<component_type::Summary>(const sstables::sum
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
     if (!has_component(component_type::CompressionInfo)) {
-        return make_ready_future<>();
+        co_return;
     }
 
-    return read_simple<component_type::CompressionInfo>(_components->compression);
+    co_await read_simple<component_type::CompressionInfo>(_components->compression);
+    auto compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
+    _components->compression.set_compressor(std::move(compressor));
+    _components->compression.discard_hidden_options();
 }
 
 void sstable::write_compression() {

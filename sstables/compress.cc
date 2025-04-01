@@ -219,83 +219,9 @@ void compression::segmented_offsets::push_back(uint64_t offset, compression::seg
     ++_size;
 }
 
-/**
- * Thin wrapper type around a "compressor" object.
- * This is the non-shared part of sstable compression,
- * since the compressor might have both dependents and
- * semi-state that cannot be shared across shards.
- *
- * The local state is instantiated in either
- * reader/writer object for the sstable on demand,
- * typically based on the shared compression
- * info/table schema.
- */
-class local_compression {
-    compressor_ptr _compressor;
-public:
-    local_compression()= default;
-    local_compression(const compression&);
-    local_compression(compressor_ptr);
-
-    size_t uncompress(const char* input, size_t input_len, char* output,
-                    size_t output_len) const;
-    size_t compress(const char* input, size_t input_len, char* output,
-                    size_t output_len) const;
-    size_t compress_max_size(size_t input_len) const;
-
-    operator bool() const {
-        return _compressor != nullptr;
-    }
-    const compressor_ptr& compressor() const {
-        return _compressor;
-    }
-};
-
-local_compression::local_compression(compressor_ptr p)
-    : _compressor(std::move(p))
-{}
-
-local_compression::local_compression(const compression& c)
-    : _compressor([&c] {
-        sstring n(c.name.value.begin(), c.name.value.end());
-        return compressor::create(n, [&c, &n](const sstring& key) -> compressor::opt_string {
-            if (key == compression_parameters::CHUNK_LENGTH_KB || key == compression_parameters::CHUNK_LENGTH_KB_ERR) {
-                return to_sstring(c.chunk_len / 1024);
-            }
-            if (key == compression_parameters::SSTABLE_COMPRESSION) {
-                return n;
-            }
-            for (auto& o : c.options.elements) {
-                if (key == sstring(o.key.value.begin(), o.key.value.end())) {
-                    return sstring(o.value.value.begin(), o.value.value.end());
-                }
-            }
-            return std::nullopt;
-        });
-    }())
-{}
-
-size_t local_compression::uncompress(const char* input,
-                size_t input_len, char* output, size_t output_len) const {
-    if (!_compressor) {
-        throw std::runtime_error("uncompress is not supported");
-    }
-    return _compressor->uncompress(input, input_len, output, output_len);
-}
-size_t local_compression::compress(const char* input, size_t input_len,
-                char* output, size_t output_len) const {
-    if (!_compressor) {
-        throw std::runtime_error("compress is not supported");
-    }
-    return _compressor->compress(input, input_len, output, output_len);
-}
-size_t local_compression::compress_max_size(size_t input_len) const {
-    return _compressor ? _compressor->compress_max_size(input_len) : 0;
-}
-
 void compression::set_compressor(compressor_ptr c) {
     if (c) {
-        unqualified_name uqn(compressor::make_name(""), c->name());
+        unqualified_name uqn(compression_parameters::name_prefix, c->name());
         const sstring& cn = uqn;
         name.value = bytes(cn.begin(), cn.end());
         for (auto& [k, v] : c->options()) {
@@ -307,14 +233,30 @@ void compression::set_compressor(compressor_ptr c) {
             }
         }
     }
+    _compressor = std::move(c);
+}
+
+void compression::discard_hidden_options() {
+    auto is_hidden_option = [] (const option& o) -> bool {
+        auto k_str = std::string_view(reinterpret_cast<const char*>(o.key.value.data()), o.key.value.size());
+        return compressor::is_hidden_option_name(k_str);
+    };
+    decltype(options) filtered_options;
+    for (auto& e : options.elements) {
+        if (!is_hidden_option(e)) {
+            filtered_options.elements.emplace_back(std::move(e));
+        }
+    }
+    options = std::move(filtered_options);
+}
+
+compressor& compression::get_compressor() const {
+    SCYLLA_ASSERT(_compressor);
+    return *_compressor.get();
 }
 
 void compression::update(uint64_t compressed_file_length) {
     _compressed_file_length = compressed_file_length;
-}
-
-compressor_ptr get_sstable_compressor(const compression& c) {
-    return local_compression(c).compressor();
 }
 
 // locate() takes a byte position in the uncompressed stream, and finds the
@@ -335,7 +277,22 @@ compression::locate(uint64_t position, const compression::segmented_offsets::acc
     return { chunk_start, chunk_end - chunk_start, chunk_offset };
 }
 
+std::map<sstring, sstring> options_from_compression(const compression& c) {
+    std::map<sstring, sstring> result;
+    result.emplace(compression_parameters::SSTABLE_COMPRESSION, sstring(c.name.value.begin(), c.name.value.end()));
+    result.emplace(compression_parameters::CHUNK_LENGTH_KB, to_sstring(c.chunk_len / 1024));
+    for (const auto& [k, v] : c.options.elements) {
+        auto k_str = sstring(k.value.begin(), k.value.end());
+        auto v_str = sstring(v.value.begin(), v.value.end());
+        if (compressor::is_hidden_option_name(k_str)) {
+            continue;
+        }
+        result.emplace(std::move(k_str), std::move(v_str));
+    }
+    return result;
 }
+
+} // namespace sstables
 
 // For SSTables 2.x (formats 'ka' and 'la'), the full checksum is a combination of checksums of compressed chunks.
 // For SSTables 3.x (format 'mc'), however, it is supposed to contain the full checksum of the file written so
@@ -350,7 +307,6 @@ class compressed_file_data_source_impl : public data_source_impl {
     std::optional<input_stream<char>> _input_stream;
     sstables::compression* _compression_metadata;
     sstables::compression::segmented_offsets::accessor _offsets;
-    sstables::local_compression _compression;
     [[no_unique_address]] sstables::digest_members<check_digest> _digests;
     reader_permit _permit;
     uint64_t _underlying_pos;
@@ -363,7 +319,6 @@ public:
                 reader_permit permit, std::optional<uint32_t> digest)
             : _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_accessor())
-            , _compression(*cm)
             , _permit(std::move(permit))
     {
         _pos = _beg_pos = pos;
@@ -451,7 +406,7 @@ public:
                 // The compressed data is the whole chunk, minus the last 4
                 // bytes (which contain the checksum verified above).
 
-                auto len = _compression.uncompress(buf.get(), compressed_len, out.get_write(), out.size());
+                auto len = _compression_metadata->get_compressor().uncompress(buf.get(), compressed_len, out.get_write(), out.size());
 
                 out.trim(len);
                 out.trim_front(addr.offset);
@@ -535,27 +490,25 @@ class compressed_file_data_sink_impl : public data_sink_impl {
     output_stream<char> _out;
     sstables::compression* _compression_metadata;
     sstables::compression::segmented_offsets::writer _offsets;
-    sstables::local_compression _compression;
     size_t _pos = 0;
     uint32_t _full_checksum;
 public:
-    compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm, sstables::local_compression lc)
+    compressed_file_data_sink_impl(output_stream<char> out, sstables::compression* cm)
             : _out(std::move(out))
             , _compression_metadata(cm)
             , _offsets(_compression_metadata->offsets.get_writer())
-            , _compression(lc)
             , _full_checksum(ChecksumType::init_checksum())
     {}
 
     virtual future<> put(net::packet data) override { abort(); }
     virtual future<> put(temporary_buffer<char> buf) override {
-        auto output_len = _compression.compress_max_size(buf.size());
+        auto output_len = _compression_metadata->get_compressor().compress_max_size(buf.size());
 
         // account space for checksum that goes after compressed data.
         temporary_buffer<char> compressed(output_len + 4);
 
         // compress flushed data.
-        auto len = _compression.compress(buf.get(), buf.size(), compressed.get_write(), output_len);
+        auto len = _compression_metadata->get_compressor().compress(buf.get(), buf.size(), compressed.get_write(), output_len);
         if (len > output_len) {
             return make_exception_future(std::runtime_error("possible overflow during compression"));
         }
@@ -601,28 +554,27 @@ template <typename ChecksumType, compressed_checksum_mode mode>
 requires ChecksumUtils<ChecksumType>
 class compressed_file_data_sink : public data_sink {
 public:
-    compressed_file_data_sink(output_stream<char> out, sstables::compression* cm, sstables::local_compression lc)
+    compressed_file_data_sink(output_stream<char> out, sstables::compression* cm)
         : data_sink(std::make_unique<compressed_file_data_sink_impl<ChecksumType, mode>>(
-                std::move(out), cm, std::move(lc))) {}
+                std::move(out), cm)) {}
 };
 
 template <typename ChecksumType, compressed_checksum_mode mode>
 requires ChecksumUtils<ChecksumType>
 inline output_stream<char> make_compressed_file_output_stream(output_stream<char> out,
          sstables::compression* cm,
-         const compression_parameters& cp) {
+         const compression_parameters& cp,
+         compressor_ptr p) {
+    cm->set_compressor(std::move(p));
     // buffer of output stream is set to chunk length, because flush must
     // happen every time a chunk was filled up.
-
-    auto p = cp.get_compressor();
-    cm->set_compressor(p);
     cm->set_uncompressed_chunk_length(cp.chunk_length());
     // FIXME: crc_check_chance can be configured by the user.
     // probability to verify the checksum of a compressed chunk we read.
     // defaults to 1.0.
     cm->options.elements.push_back({{"crc_check_chance"}, {"1.0"}});
 
-    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm, p));
+    return output_stream<char>(compressed_file_data_sink<ChecksumType, mode>(std::move(out), cm));
 }
 
 input_stream<char> sstables::make_compressed_file_k_l_format_input_stream(file f,
@@ -644,8 +596,9 @@ input_stream<char> sstables::make_compressed_file_m_format_input_stream(file f,
 
 output_stream<char> sstables::make_compressed_file_m_format_output_stream(output_stream<char> out,
         sstables::compression* cm,
-        const compression_parameters& cp) {
+        const compression_parameters& cp,
+        compressor_ptr p) {
     return make_compressed_file_output_stream<crc32_utils, compressed_checksum_mode::checksum_all>(
-            std::move(out), cm, cp);
+            std::move(out), cm, cp, std::move(p));
 }
 

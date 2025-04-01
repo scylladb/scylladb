@@ -49,7 +49,8 @@ tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
                                         std::string_view table_name,
                                         reader_permit permit) {
     sharded<sstable_manager_service> sst_man;
-    sst_man.start(std::ref(dbcfg)).get();
+    auto scf = make_sstable_compressor_factory();
+    sst_man.start(std::ref(dbcfg), std::ref(*scf)).get();
     auto stop_sst_man_service = deferred_stop(sst_man);
 
     auto schema = db::system_keyspace::tablets();

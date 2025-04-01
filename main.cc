@@ -114,6 +114,7 @@
 #include "utils/advanced_rpc_compressor.hh"
 #include "utils/shared_dict.hh"
 #include "message/dictionary_service.hh"
+#include "sstable_dict_autotrainer.hh"
 #include "utils/disk_space_monitor.hh"
 #include "utils/labels.hh"
 #include "tools/utils.hh"
@@ -1225,10 +1226,18 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_lang_man = defer_verbose_shutdown("lang manager", [] { langman.invoke_on_all(&lang::manager::stop).get(); });
             langman.invoke_on_all(&lang::manager::start).get();
 
+            auto sstable_compressor_factory = make_sstable_compressor_factory(sstable_compressor_factory::config{
+                .register_metrics = true,
+                .enable_writing_dictionaries = cfg->sstable_compression_dictionaries_enable_writing,
+                .memory_fraction_starting_at_which_we_stop_writing_dicts = cfg->sstable_compression_dictionaries_memory_budget_fraction,
+            });
+
             checkpoint(stop_signal, "starting database");
+
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
-                    std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), std::ref(stop_signal.as_sharded_abort_source()), utils::cross_shard_barrier()).get();
+                    std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), std::ref(*sstable_compressor_factory),
+                    std::ref(stop_signal.as_sharded_abort_source()), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
                 //return db.stop();
@@ -1646,6 +1655,25 @@ sharded<locator::shared_token_metadata> token_metadata;
                 mapreduce_service.stop().get();
             });
 
+            class sstable_dict_deleter : public service::migration_listener::empty_listener {
+                service::migration_notifier& _mn;
+                db::system_keyspace& _sys_ks;
+                gms::feature_service& _feat;
+            public:
+                sstable_dict_deleter(service::migration_notifier& mn, db::system_keyspace& sys_ks, gms::feature_service& feat) : _mn(mn) , _sys_ks(sys_ks), _feat(feat) {
+                    _mn.register_listener(this);
+                }
+                ~sstable_dict_deleter() {
+                    _mn.unregister_listener(this).get();
+                }
+                void on_before_drop_column_family(const schema& s, std::vector<mutation>& mutations, api::timestamp_type) override {
+                    if (_feat.sstable_compression_dicts) {
+                        mutations.push_back(db::system_keyspace::get_delete_dict_mutation(fmt::format("sstables/{}", s.id()), api::max_timestamp));
+                    }
+                }
+            };
+            auto the_sstable_dict_deleter = sstable_dict_deleter(mm_notifier.local(), sys_ks.local(), feature_service.local());
+
             checkpoint(stop_signal, "starting migration manager");
             debug::the_migration_manager = &mm;
             mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
@@ -1675,9 +1703,15 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto tablets_per_shard_goal_observer = cfg->tablets_per_shard_goal.observe(notify_topology);
             auto tablets_initial_scale_factor_observer = cfg->tablets_initial_scale_factor.observe(notify_topology);
 
-            auto compression_dict_updated_callback = [] () -> future<> {
-                auto dict = co_await sys_ks.local().query_dict();
-                co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+            auto compression_dict_updated_callback = [&sstable_compressor_factory] (std::string_view name) -> future<> {
+                auto dict = co_await sys_ks.local().query_dict(name);
+                auto sstables_prefix = std::string_view("sstables/");
+                if (name.starts_with(sstables_prefix)) {
+                    auto table = table_id(utils::UUID(name.substr(sstables_prefix.size())));
+                    co_await sstable_compressor_factory->set_recommended_dict(table, std::move(dict.data));
+                } else if (name == dictionary_service::rpc_compression_dict_name) {
+                    co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+                }
             };
 
             checkpoint(stop_signal, "starting system distributed keyspace");
@@ -1724,6 +1758,12 @@ sharded<locator::shared_token_metadata> token_metadata;
                 compression_dict_updated_callback,
                 only_on_shard0(&*disk_space_monitor_shard0)
             ).get();
+
+            ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
+                return rpc_dict_training_worker.submit<std::vector<std::byte>>([sample = std::move(sample)] {
+                    return utils::zdict_train(sample, {});
+                });
+            });
 
             auto stop_storage_service = defer_verbose_shutdown("storage_service", [&] {
                 ss.stop().get();
@@ -2153,6 +2193,16 @@ sharded<locator::shared_token_metadata> token_metadata;
             );
             auto stop_dict_service = defer_verbose_shutdown("dictionary training", [&] {
                 dict_service.stop().get();
+            });
+
+            auto sst_dict_autotrainer = sstable_dict_autotrainer(ss.local(), group0_client, sstable_dict_autotrainer::config{
+                .tick_period_in_seconds = cfg->sstable_compression_dictionaries_autotrainer_tick_period_in_seconds,
+                .retrain_period_in_seconds = cfg->sstable_compression_dictionaries_retrain_period_in_seconds,
+                .min_dataset_bytes = cfg->sstable_compression_dictionaries_min_training_dataset_bytes,
+                .min_improvement_factor = cfg->sstable_compression_dictionaries_min_training_improvement_factor,
+            });
+            auto stop_sst_dict_autotrainer = defer_verbose_shutdown("sstable_dict_autotrainer", [&] {
+                sst_dict_autotrainer.stop().get();
             });
 
             checkpoint(stop_signal, "starting tracing");

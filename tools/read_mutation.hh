@@ -35,10 +35,10 @@ struct sstable_manager_service {
     sstables::sstables_manager sst_man;
     abort_source abort;
 
-    explicit sstable_manager_service(const db::config& dbcfg)
+    explicit sstable_manager_service(const db::config& dbcfg, sstable_compressor_factory& scf)
         : feature_service(gms::feature_config_from_db_config(dbcfg))
         , dir_sem(1)
-        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, abort) {
+        , sst_man("schema_loader", large_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
     }
 
     future<> stop() {

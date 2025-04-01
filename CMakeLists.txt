@@ -163,14 +163,6 @@ file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 include(add_version_library)
 generate_scylla_version()
 
-add_library(scylla-zstd STATIC
-    zstd.cc)
-target_link_libraries(scylla-zstd
-  PRIVATE
-    db
-    Seastar::seastar
-    zstd::libzstd)
-
 add_library(scylla-main STATIC)
 target_sources(scylla-main
   PRIVATE
@@ -182,6 +174,7 @@ target_sources(scylla-main
     compress.cc
     converting_mutation_partition_applier.cc
     counters.cc
+    sstable_dict_autotrainer.cc
     direct_failure_detector/failure_detector.cc
     duration.cc
     exceptions/exceptions.cc
@@ -214,7 +207,6 @@ target_sources(scylla-main
     vint-serialization.cc)
 target_link_libraries(scylla-main
   PRIVATE
-    "$<LINK_LIBRARY:WHOLE_ARCHIVE,scylla-zstd>"
     db
     absl::headers
     absl::btree

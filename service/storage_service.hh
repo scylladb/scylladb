@@ -239,7 +239,7 @@ public:
         topology_state_machine& topology_state_machine,
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
-        std::function<future<void>()> compression_dictionary_updated_callback,
+        std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
         utils::disk_space_monitor* disk_space_minitor);
     ~storage_service();
 
@@ -322,6 +322,24 @@ public:
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_token_metadata.get();
     }
+
+    abort_source& get_abort_source() noexcept {
+        return _abort_source;
+    }
+
+    gms::feature_service& get_feature_service() noexcept {
+        return _feature_service;
+    }
+
+    replica::database& get_database() noexcept {
+        return _db.local();
+    }
+
+    db::system_keyspace& get_system_keyspace() noexcept {
+        return _sys_ks.local();
+    }
+
+    bool is_raft_leader() const noexcept;
 
 private:
     inet_address get_broadcast_address() const noexcept {
@@ -906,7 +924,8 @@ public:
     // but its intended usage is to set up the RPC connections to use the new dictionaries.
     //
     // Must be called on shard 0.
-    future<> compression_dictionary_updated_callback();
+    future<> compression_dictionary_updated_callback(std::string_view name);
+    future<> compression_dictionary_updated_callback_all();
 
     future<> do_cluster_cleanup();
 
@@ -954,6 +973,19 @@ public:
     future<> wait_for_topology_not_busy();
 
 private:
+    semaphore _do_sample_sstables_concurrency_limiter{1};
+    // To avoid overly-large RPC messages, `do_sample_sstables` is broken up into several rounds.
+    // This implements a single round.
+    future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables_oneshot(table_id, uint64_t chunk_size, uint64_t n_chunks);
+public:
+    // SSTable sampling results can occupy a considerable amount of memory.
+    // Callers of `do_sample_sstables` should hold this semaphore until they are done with the sample,
+    // to ensure that there's only one sample around.
+    semaphore& get_do_sample_sstables_concurrency_limiter();
+    // Gathers a randomly-selected sample of chunks of (decompressed) Data files for the given table,
+    // from across the entire cluster.
+    future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables(table_id, uint64_t chunk_size, uint64_t n_chunks);
+private:
     future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
@@ -996,7 +1028,14 @@ private:
     // We need to be able to abort all group0 operation during shutdown, so we need special abort source for that
     abort_source _group0_as;
 
-    std::function<future<void>()> _compression_dictionary_updated_callback;
+    std::function<future<void>(std::string_view)> _compression_dictionary_updated_callback;
+    using byte_vector = std::vector<std::byte>;
+    std::function<future<byte_vector>(std::vector<byte_vector>)> _train_dict;
+public:
+    future<uint64_t> estimate_total_sstable_volume(table_id);
+    future<std::vector<std::byte>> train_dict(utils::chunked_vector<temporary_buffer<char>> sample);
+    future<> publish_new_sstable_dict(table_id, std::span<const std::byte>, service::raft_group0_client&);
+    void set_train_dict_callback(decltype(_train_dict));
 
     utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 
