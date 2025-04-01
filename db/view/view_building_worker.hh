@@ -11,6 +11,7 @@
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/condition-variable.hh>
 #include "dht/token.hh"
 #include "raft/raft.hh"
 #include "schema/schema_fwd.hh"
@@ -65,6 +66,9 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
     std::unordered_map<dht::token_range, std::set<table_id>> _per_range_built_views_history;
     std::optional<vb_operation> _building_op;
 
+    condition_variable _cond;
+    future<> _staging_detector_fiber = make_ready_future();
+
 public:
     view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::raft_group0_client& group0_client, view_update_generator& vug, sharded<netw::messaging_service>& messaging);
 
@@ -72,6 +76,7 @@ public:
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override;
     virtual void on_drop_view(const sstring&, const sstring&) override;
 
+    future<> notify();
     future<> stop();
 
     class consumer;
@@ -82,6 +87,9 @@ private:
     future<std::vector<table_id>> do_build_operation(table_id base_id, dht::token_range range, std::vector<table_id> views, raft::term_t term);
     future<std::vector<table_id>> build_views_range(vb_parameters& params, abort_source& as);
     future<> maybe_abort_current_operation(raft::term_t term);
+
+    future<> start_staging_detector();
+    future<> detect_staging_sstables();
 
     void init_messaging_service();
     future<> uninit_messaging_service();
