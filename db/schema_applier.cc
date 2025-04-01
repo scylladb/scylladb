@@ -28,6 +28,7 @@
 #include "service/storage_service.hh"
 #include "mutation/frozen_mutation.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/assert.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "lang/manager.hh"
@@ -975,13 +976,10 @@ future<> schema_applier::commit() {
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
-    co_await sharded_db.invoke_on(0, [this] (replica::database& db) { return commit_on_shard(db); });
-    co_await sharded_db.invoke_on_all([this] (replica::database& db) {
-        if (this_shard_id() == 0) {
-            return make_ready_future<>();
-        }
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    commit_on_shard(sharded_db.local());
+    co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);
-        return make_ready_future<>();
     });
     // unlock as some functions in post_commit() may read data under those locks
     _affected_tables_and_views.locks = nullptr;

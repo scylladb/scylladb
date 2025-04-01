@@ -847,11 +847,9 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
-    co_await sharded_db.invoke_on(0, func);
-    co_await sharded_db.invoke_on_all([&] (replica::database& db) {
-        if (this_shard_id() == 0) {
-            return make_ready_future<>();
-        }
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    co_await func(sharded_db.local());
+    co_await sharded_db.invoke_on_others([&] (replica::database& db) {
         return func(db);
     });
 }
