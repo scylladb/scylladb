@@ -86,12 +86,34 @@ struct error_injection_at_startup {
 
 std::istream& operator>>(std::istream& is, error_injection_at_startup&);
 
+struct object_storage_endpoint_param {
+    sstring endpoint;
+    s3::endpoint_config config;
+
+    bool operator==(const object_storage_endpoint_param& other) const {
+        return endpoint == other.endpoint && config == other.config;
+    }
+
+    sstring to_json_string() const {
+            return fmt::format("{{ \"port\": {}, \"use_https\": {}, \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
+            config.port, config.use_https, config.region, config.role_arn);
+    }
+
+    friend fmt::formatter<object_storage_endpoint_param>;
+};
+
+std::istream& operator>>(std::istream& is, object_storage_endpoint_param& f);
 }
 
 template<>
 struct fmt::formatter<db::error_injection_at_startup> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const db::error_injection_at_startup&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<db::object_storage_endpoint_param> : fmt::formatter<sstring_view> {
+    auto format(const db::object_storage_endpoint_param&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 namespace utils {
@@ -491,7 +513,6 @@ public:
     named_value<uint64_t> wasm_udf_total_fuel;
     named_value<size_t> wasm_udf_memory_limit;
     named_value<sstring> relabel_config_file;
-    named_value<sstring> object_storage_config_file;
     // wasm_udf_reserved_memory is static because the options in db::config
     // are parsed using seastar::app_template, while this option is used for
     // configuring the Seastar memory subsystem.
@@ -539,7 +560,7 @@ public:
 
     const db::extensions& extensions() const;
 
-    utils::updateable_value_source<std::unordered_map<sstring, s3::endpoint_config>> object_storage_config;
+    named_value<std::vector<object_storage_endpoint_param>> object_storage_endpoints;
 
     named_value<std::vector<error_injection_at_startup>> error_injections_at_startup;
     named_value<double> topology_barrier_stall_detector_threshold_seconds;

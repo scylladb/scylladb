@@ -129,24 +129,3 @@ public:
 private:
     static void register_configurable(configurable &);
 };
-
-future<> read_object_storage_config(db::config& db_cfg);
-
-struct object_storage_endpoint_param {
-    sstring endpoint;
-    s3::endpoint_config config;
-};
-
-namespace YAML {
-template <>
-struct convert<object_storage_endpoint_param> {
-    static bool decode(const Node& node, ::object_storage_endpoint_param& ep) {
-        ep.endpoint = node["name"].as<std::string>();
-        ep.config.port = node["port"].as<unsigned>();
-        ep.config.use_https = node["https"].as<bool>(false);
-        ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
-        ep.config.role_arn = node["iam_role_arn"] ? node["iam_role_arn"].as<std::string>() : "";
-        return true;
-    }
-};
-}

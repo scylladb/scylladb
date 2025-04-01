@@ -212,7 +212,6 @@ read_config(bpo::variables_map& opts, db::config& cfg) {
             }
             startlog.log(level, "{} : {}", msg, opt);
         });
-        co_await read_object_storage_config(cfg);
     } catch (...) {
         auto ep = std::current_exception();
         startlog.error("Could not read configuration file {}: {}", file, ep);
