@@ -17,6 +17,10 @@ from cassandra.query import SimpleStatement              # type: ignore # pylint
 
 
 logger = logging.getLogger(__name__)
+<<<<<<< HEAD:test/topology/test_mutation_schema_change.py
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/test_mutation_schema_change.py
 
 
 @pytest.mark.asyncio

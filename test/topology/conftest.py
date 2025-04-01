@@ -267,7 +267,20 @@ def skip_mode_fixture(request, build_mode):
             pytest.skip(f'{request.node.name} skipped, reason: {reason}')
 
 
+<<<<<<< HEAD:test/topology/conftest.py
 def pytest_collection_modifyitems(items, config):
     run_id = config.getoption('run_id')
     for item in items:
         item.name = f"{item.name}.{run_id}"
+=======
+@pytest.fixture(scope="function", autouse=True)
+async def prepare_3_nodes_cluster(request, manager):
+    if request.node.get_closest_marker("prepare_3_nodes_cluster"):
+        await manager.servers_add(3)
+
+
+@pytest.fixture(scope="function", autouse=True)
+async def prepare_3_racks_cluster(request, manager):
+    if request.node.get_closest_marker("prepare_3_racks_cluster"):
+        await manager.servers_add(3, auto_rack_dc="dc1")
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/conftest.py

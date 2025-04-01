@@ -16,7 +16,11 @@ Tests case when bigger auth operation is split into multiple raft commands.
 """
 @pytest.mark.asyncio
 async def test_auth_raft_command_split(manager: ManagerClient) -> None:
+<<<<<<< HEAD:test/auth_cluster/test_auth_raft_command_split.py
     servers = await manager.servers_add(3)
+=======
+    servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/auth_cluster/test_auth_raft_command_split.py
     cql, hosts = await manager.get_ready_cql(servers)
 
     initial_perms = await cql.run_async("SELECT * FROM system.role_permissions")

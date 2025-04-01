@@ -8,6 +8,11 @@ from test.pylib.manager_client import ManagerClient
 import asyncio
 import pytest
 
+<<<<<<< HEAD:test/topology/test_replace_alive_node.py
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/test_replace_alive_node.py
 
 @pytest.mark.asyncio
 async def test_replacing_alive_node_fails(manager: ManagerClient) -> None:
@@ -22,4 +27,5 @@ async def test_replacing_alive_node_fails(manager: ManagerClient) -> None:
         replace_cfg = ReplaceConfig(replaced_id = srv.server_id, reuse_ip_addr = False,
                                     use_host_id = False, wait_replaced_dead = False)
         await manager.server_add(replace_cfg=replace_cfg,
+                                 property_file=srv.property_file(),
                                  expected_error="the topology coordinator rejected request to join the cluster")
