@@ -9,7 +9,7 @@ Test rejoin of a server after it was stopped suddenly (crash-like)
 from test.pylib.manager_client import ManagerClient
 import pytest
 
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
