@@ -28,6 +28,14 @@ static constexpr uint8_t NEGATIVE_DECIMAL_HEADER_MASK = 0x00;
 static constexpr uint8_t DECIMAL_EXPONENT_LENGTH_HEADER_MASK = 0x40;
 static constexpr uint8_t DECIMAL_LAST_BYTE = 0x00;
 
+// Escape value. Used, among other things, to mark the end of subcomponents (so that shorter
+// compares before anything longer). Actual zeros in input need to be escaped if this is in use.
+static constexpr uint8_t ESCAPE = 0x00;
+// Zeros are encoded as a sequence of ESCAPE, 0 or more of ESCAPED_0_CONT, ESCAPED_0_DONE
+// so zeroed spaces only grow by 1 byte
+static constexpr uint8_t ESCAPED_0_CONT = 0xFE;
+static constexpr uint8_t ESCAPED_0_DONE = 0xFF;
+
 static void read_fragmented_checked(managed_bytes_view& view, size_t bytes_to_read, bytes::value_type* out) {
     if (view.size_bytes() < bytes_to_read) {
         throw_with_backtrace<marshal_exception>(
@@ -692,6 +700,161 @@ static void decode_decimal_type(managed_bytes_view& comparable_bytes_view, bytes
     out.write(data_value(std::move(unscaled_value)).serialize_nonnull());
 }
 
+// Escape zeros to encode variable length natively byte-comparable data types.
+// Zeros in the source are escaped as ESCAPE followed by one or more ESCAPED_0_CONT and ending with ESCAPED_0_DONE.
+// The encoding terminates in an escaped state (either with ESCAPE or ESCAPED_0_CONT).
+// If the source ends in a zero, we use ESCAPED_0_CONT to ensure that the encoding remains smaller than
+// the same source with an additional zero at the end.
+//
+// E.g. "A\0\0B" translates to 4100FEFF4200
+//      "A\0B\0"               4100FF4200FE
+//      "A\0"                  4100FE
+//      "AB"                   414200
+//
+// In a single-byte source, the bytes could be passed unchanged, but this would prevent combining components.
+// This translation preserves order, and since the encoding for 0 is higher than the separator,
+// it also ensures that shorter components are treated as smaller.
+//
+// The encoding is not prefix-free since, for example, the encoding of "A" (4100) is a prefix of the encoding of "A\0" (4100FE).
+// However, the byte following the prefix is guaranteed to be FE or FF, making the encoding weakly prefix-free.
+// Additionally, any such prefix sequence will compare as smaller than the value it prefixes,
+// because any permitted separator byte will be smaller than the byte following the prefix.
+static void escape_zeros(managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    bool escaped = false;
+    // Process the input in multiple fixed-size chunks to allow the use of a fixed-size
+    // intermediate buffer for writing the encoded output. The buffer helps reduce the
+    // number of writes to the output stream.
+    constexpr size_t max_chunk_size = 1024;
+    // The encoded bytes will have one extra byte for every zero sequence in the source.
+    // So, worst case, it can only be 1.5 times the size of the chunk.
+    constexpr size_t buffer_size = (max_chunk_size / 2) * 3;
+    std::array<signed char, buffer_size> buffer;
+
+    while (!serialized_bytes_view.empty()) {
+        const size_t curr_chunk_size = std::min(max_chunk_size, serialized_bytes_view.current_fragment().size());
+        const auto& curr_chunk = serialized_bytes_view.prefix(curr_chunk_size).current_fragment();
+        serialized_bytes_view.remove_prefix(curr_chunk_size);
+        auto curr_zero_start = curr_chunk.find(ESCAPE);
+        if (curr_zero_start == managed_bytes_view::fragment_type::npos) {
+            // There are no zeros in current chunk
+            if (escaped) {
+                // but the previous chunk ended with a zero, so end the escape sequence
+                write_native_int(out, ESCAPED_0_DONE);
+                escaped = false;
+            }
+            // write the current chunk as it is; this is the fast path for the common text cases
+            out.write(curr_chunk);
+        } else {
+            // There are zeros that need to be escaped;
+            size_t buffer_pos = 0;
+            size_t curr_chunk_pos = 0;
+            while (curr_chunk_pos != curr_chunk_size) {
+                if (escaped) {
+                    // Fill one ESCAPED_0_CONT byte for each zero in the input
+                    const auto next_non_zero_byte = std::min(curr_chunk.find_first_not_of(ESCAPE, curr_chunk_pos), curr_chunk_size);
+                    const auto curr_seq_length = next_non_zero_byte - curr_chunk_pos;
+                    if (curr_seq_length > 0) {
+                        std::fill_n(buffer.data() + buffer_pos, curr_seq_length, ESCAPED_0_CONT);
+                        buffer_pos += curr_seq_length;
+                        curr_chunk_pos = next_non_zero_byte;
+                    }
+
+                    if (curr_chunk_pos != curr_chunk_size) {
+                        // The sequence ends before the end of the fragment
+                        escaped = false;
+                        buffer[buffer_pos++] = ESCAPED_0_DONE;
+                    }
+
+                } else if (curr_chunk[curr_chunk_pos] == ESCAPE) {
+                    // Start escape sequence
+                    buffer[buffer_pos++] = ESCAPE;
+                    curr_chunk_pos++;
+                    escaped = true;
+
+                } else {
+                    // Write the non zero byte sequence as it is
+                    const auto next_zero_byte = std::min(curr_chunk.find_first_of(ESCAPE, curr_chunk_pos), curr_chunk_size);
+                    const auto curr_seq_length = next_zero_byte - curr_chunk_pos;
+                    std::memcpy(reinterpret_cast<void*>(buffer.data() + buffer_pos), reinterpret_cast<const void*>(curr_chunk.data() + curr_chunk_pos), curr_seq_length);
+                    buffer_pos += curr_seq_length;
+                    curr_chunk_pos = next_zero_byte;
+                }
+            }
+
+            // Write the encoded bytes so far to out.
+            write_native_int_array(out, buffer, buffer_pos);
+        }
+    }
+
+    // Terminate encoded bytes in an escaped state
+    write_native_int(out, escaped ? ESCAPED_0_CONT : ESCAPE);
+}
+
+// Decode variable length natively byte-comparable data types into the original unescaped form
+static void unescape_zeros(managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    bool escaped = false;
+    // Process the input in multiple fixed-size chunks to allow the use of a fixed-size
+    // intermediate buffer for writing the decoded output. The buffer helps reduce the
+    // number of writes to the output stream.
+    constexpr size_t max_chunk_size = 1024;
+    // One byte is removed for every escape sequence present in the chunk, so the decoded
+    // output for a chunk will never exceed chunk_size.
+    std::array<signed char, max_chunk_size> buffer;
+
+    while (!comparable_bytes_view.empty()) {
+        const size_t curr_chunk_size = std::min(max_chunk_size, comparable_bytes_view.current_fragment().size());
+        const auto& curr_chunk = comparable_bytes_view.prefix(curr_chunk_size).current_fragment();
+        size_t buffer_pos = 0;
+        size_t curr_chunk_pos = 0;
+        while (curr_chunk_pos != curr_chunk_size) {
+            if (escaped) {
+                // The decoder is in an escaped state.
+                switch (uint8_t(curr_chunk[curr_chunk_pos])) {
+                case ESCAPED_0_CONT: {
+                    // Fill in as many ZEROs as there are ESCAPED_0_CONTs
+                    const auto end_of_escape_cont = std::min(curr_chunk.find_first_not_of(ESCAPED_0_CONT, curr_chunk_pos), curr_chunk_size);
+                    const auto curr_seq_length = end_of_escape_cont - curr_chunk_pos;
+                    if (curr_seq_length > 0) {
+                        std::fill_n(buffer.data() + buffer_pos, curr_seq_length, ESCAPE);
+                        buffer_pos += curr_seq_length;
+                        curr_chunk_pos = end_of_escape_cont;
+                    }
+                    break;
+                }
+                case ESCAPED_0_DONE:
+                    // End of escape sequence
+                    buffer[buffer_pos++] = ESCAPE;
+                    curr_chunk_pos++;
+                    escaped = false;
+                    break;
+                default:
+                    // The next byte is neither ESCAPED_0_CONT(0xFE) nor ESCAPED_0_DONE(0xFF).
+                    // This happens iff the byte-comparable is part of a multi-component sequence,
+                    // and we have reached the end of the current encoded component.
+                    // The next byte is a separator (between components) or
+                    // a terminator (end of sequence) and decoder should consume just until that byte.
+                    comparable_bytes_view.remove_prefix(curr_chunk_pos);
+                    write_native_int_array(out, buffer, buffer_pos);
+                    return;
+                }
+            } else if (curr_chunk[curr_chunk_pos] == ESCAPE) {
+                // Start of escape sequence
+                curr_chunk_pos++;
+                escaped = true;
+            } else {
+                // Find the next zero sequence.
+                const auto next_zero_byte = std::min(curr_chunk.find(ESCAPE, curr_chunk_pos), curr_chunk_size);
+                const auto curr_seq_length = next_zero_byte - curr_chunk_pos;
+                std::memcpy(reinterpret_cast<void*>(buffer.data() + buffer_pos), reinterpret_cast<const void*>(curr_chunk.data() + curr_chunk_pos), curr_seq_length);
+                buffer_pos += curr_seq_length;
+                curr_chunk_pos = next_zero_byte;
+            }
+        }
+        comparable_bytes_view.remove_prefix(curr_chunk_size);
+        write_native_int_array(out, buffer, buffer_pos);
+    }
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -749,6 +912,23 @@ struct to_comparable_bytes_visitor {
 
     void operator()(const decimal_type_impl&) {
         encode_decimal_type(serialized_bytes_view, out);
+    }
+
+    void operator()(const bytes_type_impl&) {
+        escape_zeros(serialized_bytes_view, out);
+    }
+
+    // Encode text and ascii types
+    void operator()(const string_type_impl&) {
+        escape_zeros(serialized_bytes_view, out);
+    }
+
+    void operator()(const duration_type_impl&) {
+        escape_zeros(serialized_bytes_view, out);
+    }
+
+    void operator()(const inet_addr_type_impl&) {
+        escape_zeros(serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -828,6 +1008,23 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const decimal_type_impl&) {
         decode_decimal_type(comparable_bytes_view, out);
+    }
+
+    void operator()(const bytes_type_impl&) {
+        unescape_zeros(comparable_bytes_view, out);
+    }
+
+    // Decode text and ascii types
+    void operator()(const string_type_impl&) {
+        unescape_zeros(comparable_bytes_view, out);
+    }
+
+    void operator()(const duration_type_impl&) {
+        unescape_zeros(comparable_bytes_view, out);
+    }
+
+    void operator()(const inet_addr_type_impl&) {
+        unescape_zeros(comparable_bytes_view, out);
     }
 
     // TODO: Handle other types
