@@ -8,6 +8,8 @@
 #define BOOST_TEST_MODULE core
 
 #include <boost/test/unit_test.hpp>
+#include <seastar/net/inet_address.hh>
+#include <seastar/net/ipv4_address.hh>
 #include <seastar/util/lazy.hh>
 
 #include "bytes_ostream.hh"
@@ -401,4 +403,116 @@ BOOST_AUTO_TEST_CASE(test_decimal) {
     }
 
     byte_comparable_test(std::move(_test_data));
+}
+
+BOOST_AUTO_TEST_CASE(test_blob) {
+    auto random_bytes = [] (size_t length) {
+        std::vector<int8_t> data(length);
+        for (auto& byte : data) {
+            byte = tests::random::get_int<uint8_t>();
+        }
+        return bytes(reinterpret_cast<const int8_t*>(data.data()), length);
+    };
+
+    std::vector<data_value> test_data;
+    test_data.reserve(500);
+    for (int i = 0; i < 100; i++) {
+        for (int length : {1, 10, 100, 1000}) {
+            test_data.emplace_back(random_bytes(length));
+        }
+    }
+
+    // test a few cases that are stored across multiple fragments
+    for (int i = 0; i < 10; i++) {
+        for (int frag_count = 1; frag_count <= 10; frag_count++) {
+            const size_t length = 128 * 1024 * frag_count;
+            test_data.emplace_back(random_bytes(length));
+        }
+    }
+
+    byte_comparable_test(std::move(test_data));
+}
+
+static std::vector<data_value> generate_string_test_data(
+    std::function<data_value(std::string&&)> create_data_value_func) {
+    const std::string charset = "0123456789"
+                                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                "abcdefghijklmnopqrstuvwxyz";
+
+    auto random_text = [&charset] (size_t length) {
+        std::string generated_text;
+        generated_text.reserve(length);
+        for (size_t i = 0; i < length; ++i) {
+            generated_text += charset[tests::random::get_int<size_t>(0, charset.size() - 1)];
+        }
+        return generated_text;
+    };
+
+    std::vector<data_value> test_data;
+    test_data.reserve(500);
+    for (int i = 0; i < 100; i++) {
+        for (int length : {1, 10, 100, 1000}) {
+            test_data.push_back(create_data_value_func(random_text(length)));
+        }
+    }
+
+    // test a few cases that are stored across multiple fragments
+    for (int i = 0; i < 10; i++) {
+        for (int frag_count = 1; frag_count <= 10; frag_count++) {
+            const size_t length = 128 * 1024 * frag_count;
+            test_data.push_back(create_data_value_func(random_text(length)));
+        }
+    }
+
+    return test_data;
+}
+
+BOOST_AUTO_TEST_CASE(test_ascii) {
+    byte_comparable_test(generate_string_test_data([] (std::string&& str) {
+        return data_value(ascii_native_type(str));
+    }));
+}
+
+BOOST_AUTO_TEST_CASE(test_text) {
+    byte_comparable_test(generate_string_test_data([] (std::string&& str) {
+        return data_value(str);
+    }));
+}
+
+BOOST_AUTO_TEST_CASE(test_duration) {
+    constexpr int64_t max_ns_in_a_day = 24L * 60 * 60 * 1000 * 1000 * 1000;
+    std::vector<data_value> test_data;
+    test_data.reserve(1000);
+    for (int i = 0; i < 1000; i++) {
+        const auto months = months_counter{tests::random::get_int<int32_t>(0, 12)};
+        const auto days = days_counter{tests::random::get_int<int32_t>(0, 28)};
+        const auto ns = nanoseconds_counter{tests::random::get_int<int64_t>(0, max_ns_in_a_day)};
+        test_data.emplace_back(cql_duration(months, days, ns));
+    }
+
+    byte_comparable_test(std::move(test_data));
+}
+
+BOOST_AUTO_TEST_CASE(test_inet) {
+    auto test_data = generate_integer_test_data<uint32_t>([](uint32_t value) {
+        return data_value(seastar::net::ipv4_address(value));
+    });
+
+    // Include few more addresses
+    for (const std::string& addr : {
+                 // IPv4
+                 "127.0.0.1",
+                 "10.0.0.1",
+                 "172.16.1.1",
+                 "192.168.2.2",
+                 "224.3.3.3",
+                 // IPv6
+                 "0000:0000:0000:0000:0000:0000:0000:0000",
+                 "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+                 "fe80:1:23:456:7890:1:23:456",
+         }) {
+        test_data.emplace_back(seastar::net::inet_address(addr));
+    }
+
+    byte_comparable_test(std::move(test_data));
 }
