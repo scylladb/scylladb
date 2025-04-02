@@ -3236,7 +3236,7 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     SCYLLA_ASSERT(get_config().rf_rack_valid_keyspaces());
 
     for (const auto& [name, info] : get_keyspaces()) {
-        locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
+        locator::validate_rf_rack_valid_replication(tmptr, info);
     }
 }
 
