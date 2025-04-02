@@ -56,7 +56,10 @@ struct test_provider_args {
 
     test_hook before_create_table;
     test_hook after_create_table;
+    test_hook after_insert;
     test_hook on_insert_exception;
+
+    test_hook before_verify;
 
     std::optional<timeout_config> timeout;
 };
@@ -84,6 +87,10 @@ static void do_create_and_insert(cql_test_env& env, const test_provider_args& ar
             args.on_insert_exception(env);
             throw;
         }
+        if (args.after_insert) {
+            testlog.debug("Calling after insert");
+            args.after_insert(env);
+        }
     }
 }
 
@@ -96,10 +103,12 @@ static future<> test_provider(const test_provider_args& args) {
         // Currently the test fails with consistent_cluster_management = true. See #2995.
         cfg->consistent_cluster_management(false);
 
-        if (!args.extra_yaml.empty()) {
+        {
             boost::program_options::options_description desc;
             boost::program_options::options_description_easy_init init(&desc);
             configurable::append_all(*cfg, init);
+        }
+        if (!args.extra_yaml.empty()) {
             cfg->read_from_yaml(args.extra_yaml);
         }
 
@@ -117,10 +126,15 @@ static future<> test_provider(const test_provider_args& args) {
         }, cfg, {}, cql_test_init_configurables{ *ext });
     }
 
+
     for (auto rs = 0u; rs < args.n_restarts; ++rs) {
         auto [cfg, ext] = make_config();
 
         co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            if (args.before_verify) {
+                testlog.debug("Calling after second start");
+                args.before_verify(env);
+            }
             for (auto i = 0u; i < args.n_tables; ++i) {
                 require_rows(env, fmt::format("select * from ks.t{}", i), {{utf8_type->decompose(pk), utf8_type->decompose(v)}});
 
@@ -1121,6 +1135,112 @@ SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMI
     });
 }
 
+SEASTAR_TEST_CASE(test_kmip_provider_broken_config_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+
+        bool past_create = false;
+
+        test_provider_args args{
+            .tmp = tmp,
+            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
+            .extra_yaml = yaml,
+            .n_tables = 1, 
+            .n_restarts = 1, 
+            .explicit_provider = {},
+        };
+
+        // After tables are created, and data inserted, remove EAR config
+        // for the restart. This should cause us to fail creating the 
+        // tables from schema tables, since the extension will throw.
+        args.after_insert = [&](cql_test_env&) {
+            past_create = true;
+            args.extra_yaml = {};
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_provider(args);
+            , std::exception
+        );
+
+        BOOST_REQUIRE(past_create);
+    });
+}
+
+
+SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+
+        bool past_create = false;
+        bool past_second_start = false;
+
+        test_provider_args args{
+            .tmp = tmp,
+            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
+            .extra_yaml = yaml,
+            .n_tables = 1, 
+            .n_restarts = 1, 
+            .explicit_provider = {},
+        };
+
+        // After data is inserted, flush all shards and alter the table
+        // to no longer use EAR, then remove EAR config. This will result
+        // in a schema that loads fine, but accessing the sstables will
+        // throw.
+        args.after_insert = [&](cql_test_env& env) {
+            try {
+                env.db().invoke_on_all([](replica::database& db) {
+                    auto& cf = db.find_column_family("ks", "t0");
+                    return cf.flush();
+                }).get();
+                env.execute_cql(fmt::format("alter table ks.t0 WITH scylla_encryption_options={{'key_provider': 'none'}}")).get();
+            } catch (...) {
+                testlog.error("Unexpected exception {}", std::current_exception());
+                throw;
+            }
+            past_create = true;
+            args.extra_yaml = {};
+            args.options = {};
+        };
+        // If we get here, startup of second run was successful.
+        args.before_verify = [&](cql_test_env& env) {
+            past_second_start = true;
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_provider(args);
+            , std::exception
+        );
+
+        BOOST_REQUIRE(past_create);
+        // We'd really want to be past this here, since "only" the sstables
+        // on disk should mention unresolvable EAR stuff here. But scylla will
+        // scan sstables on startup, and thus fail already there.
+        // TODO: move and upload sstables?
+        BOOST_REQUIRE(!past_second_start);
+    });
+}
 #endif // HAVE_KMIP
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
