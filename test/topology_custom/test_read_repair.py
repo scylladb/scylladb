@@ -334,9 +334,10 @@ async def test_incremental_read_repair(data_class, workdir, manager):
 async def test_read_repair_with_trace_logging(request, manager):
     logger.info("Creating a new cluster")
     cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace"]
+    config = {"read_request_timeout_in_ms": 60000}
 
     for i in range(2):
-        await manager.server_add(cmdline=cmdline)
+        await manager.server_add(cmdline=cmdline, config=config)
 
     cql = manager.get_cql()
     srvs = await manager.running_servers()
