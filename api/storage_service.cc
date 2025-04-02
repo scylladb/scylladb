@@ -702,7 +702,7 @@ rest_get_load(http_context& ctx, std::unique_ptr<http::request> req) {
 static
 future<json::json_return_type>
 rest_get_current_generation_number(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        auto ep = ss.local().get_token_metadata().get_topology().my_address();
+        auto ep = ss.local().get_token_metadata().get_topology().my_host_id();
         return ss.local().gossiper().get_current_generation_number(ep).then([](gms::generation_type res) {
             return make_ready_future<json::json_return_type>(res.value());
         });

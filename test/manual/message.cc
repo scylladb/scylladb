@@ -75,8 +75,8 @@ public:
             digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
             digests.push_back(gms::gossip_digest(ep2, gen++, ver++));
             std::map<inet_address, endpoint_state> eps{
-                {ep1, endpoint_state()},
-                {ep2, endpoint_state()},
+                {ep1, endpoint_state(ep1)},
+                {ep2, endpoint_state(ep2)},
             };
             gms::gossip_digest_ack ack(std::move(digests), std::move(eps));
             // FIXME: discarded future.
@@ -92,7 +92,7 @@ public:
             // Prepare gossip_digest_ack2 message
             auto ep1 = inet_address("3.3.3.3");
             std::map<inet_address, endpoint_state> eps{
-                {ep1, endpoint_state()},
+                {ep1, endpoint_state(ep1)},
             };
             gms::gossip_digest_ack2 ack2(std::move(eps));
             // FIXME: discarded future.
@@ -108,7 +108,7 @@ public:
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
         });
 
-        ser::gossip_rpc_verbs::register_gossip_shutdown(&ms, [] (inet_address from, rpc::optional<int64_t> generation_number_opt) {
+        ser::gossip_rpc_verbs::register_gossip_shutdown(&ms, [] (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number_opt) {
             test_logger.info("Server got shutdown msg = {}", from);
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
         });

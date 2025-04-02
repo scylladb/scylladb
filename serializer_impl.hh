@@ -384,7 +384,7 @@ struct serializer<std::map<K, V>> {
         while (sz--) {
             K k = deserialize(in, std::type_identity<K>());
             V v = deserialize(in, std::type_identity<V>());
-            m[k] = v;
+            m.emplace(k, v);
         }
         return m;
     }

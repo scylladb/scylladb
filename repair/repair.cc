@@ -1240,14 +1240,14 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
     auto& erm = germs->get();
     auto& topology = erm.get_token_metadata().get_topology();
-    auto my_address = erm.get_topology().my_address();
+    auto my_host_id = erm.get_topology().my_host_id();
 
     if (erm.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
         rlogger.info("repair[{}]: completed successfully: nothing to repair for keyspace {} with local replication strategy", id.uuid(), keyspace);
         co_return id.id;
     }
 
-    if (!_gossiper.local().is_normal(my_address)) {
+    if (!_gossiper.local().is_normal(my_host_id)) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
     }
 
@@ -1256,7 +1256,6 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     // Each of these ranges may have a different set of replicas, so the
     // repair of each range is performed separately with repair_range().
     dht::token_range_vector ranges;
-    auto my_host_id = erm.get_topology().my_host_id();
     if (options.ranges.size()) {
         ranges = options.ranges;
     } else if (options.primary_range) {

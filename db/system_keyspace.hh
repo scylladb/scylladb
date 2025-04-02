@@ -497,7 +497,7 @@ public:
      */
     future<std::unordered_set<dht::token>> get_local_tokens();
 
-    future<std::unordered_map<gms::inet_address, sstring>> load_peer_features();
+    future<std::unordered_map<locator::host_id, sstring>> load_peer_features();
     future<std::set<sstring>> load_local_enabled_features();
     // This function stores the features in the system.scylla_local table.
     // We pass visible_before_cl_replay=true iff the features should be available before

@@ -452,7 +452,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
             // Populate the table with the state from the gossiper here since storage_service::on_change()
             // (which is called each time gossiper state changes) may have skipped it because the tokens
             // for the node were not in the 'normal' state yet
-            auto info = get_peer_info_for_update(ip);
+            auto info = get_peer_info_for_update(id);
             if (info) {
                 // And then amend with the info from raft
                 info->tokens = rs.ring.value().tokens;
@@ -1495,7 +1495,7 @@ future<> storage_service::start_sys_dist_ks() const {
 future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
-        std::unordered_map<gms::inet_address, sstring> loaded_peer_features,
+        std::unordered_map<locator::host_id, sstring> loaded_peer_features,
         std::chrono::milliseconds delay,
         start_hint_manager start_hm,
         gms::generation_type new_generation) {
@@ -1579,7 +1579,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         // Check if the node is already removed from the cluster
         auto local_host_id = get_token_metadata().get_my_id();
         auto my_ip = get_broadcast_address();
-        if (!_gossiper.is_safe_for_restart(my_ip, local_host_id)) {
+        if (!_gossiper.is_safe_for_restart(local_host_id)) {
             throw std::runtime_error(::format("The node {} with host_id {} is removed from the cluster. Can not restart the removed node to join the cluster again!",
                     my_ip, local_host_id));
         }
@@ -2074,8 +2074,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     })(*this, proxy);
 
     std::unordered_set<locator::host_id> ids;
-    _gossiper.for_each_endpoint_state([this, &ids] (const inet_address& addr, const gms::endpoint_state& ep) {
-        if (_gossiper.is_normal(addr)) {
+    _gossiper.for_each_endpoint_state([this, &ids] (const gms::endpoint_state& ep) {
+        if (_gossiper.is_normal(ep.get_host_id())) {
             ids.insert(ep.get_host_id());
         }
     });
@@ -2274,7 +2274,7 @@ storage_service::get_range_to_address_map(locator::effective_replication_map_ptr
 future<> storage_service::handle_state_bootstrap(inet_address endpoint, locator::host_id host_id, gms::permit_id pid) {
     slogger.debug("endpoint={}/{} handle_state_bootstrap: permit_id={}", endpoint, host_id, pid);
     // explicitly check for TOKENS, because a bootstrapping node might be bootstrapping in legacy mode; that is, not using vnodes and no token specified
-    auto tokens = get_tokens_for(endpoint);
+    auto tokens = get_tokens_for(host_id);
 
     slogger.debug("Node {}/{} state bootstrapping, token {}", endpoint, host_id, tokens);
 
@@ -2302,28 +2302,38 @@ future<> storage_service::handle_state_bootstrap(inet_address endpoint, locator:
 }
 
 future<> storage_service::handle_state_normal(inet_address endpoint, locator::host_id host_id, gms::permit_id pid) {
+    // The handler is called on shard0 only. get_token_metadata_lock() already assert this,
+    // but lets make it more explicit here
+    assert(this_shard_id() == 0);
+    thread_local static semaphore lock(1);
+    auto units = co_await get_units(lock, 1);
+
     slogger.debug("endpoint={}/{} handle_state_normal: permit_id={}", endpoint, host_id, pid);
 
-    auto tokens = get_tokens_for(endpoint);
+    auto tokens = get_tokens_for(host_id);
 
     slogger.info("Node {}/{} is in normal state, tokens: {}", endpoint, host_id, tokens);
 
     auto tmlock = std::make_unique<token_metadata_lock>(co_await get_token_metadata_lock());
     auto tmptr = co_await get_mutable_token_metadata_ptr();
-    std::unordered_set<inet_address> endpoints_to_remove;
 
-    auto do_remove_node = [&] (gms::inet_address node) {
-        // this lambda is called in three cases:
-        // 1. old endpoint for the given host_id is ours, we remove the new endpoint;
-        // 2. new endpoint for the given host_id has bigger generation, we remove the old endpoint;
-        // 3. old endpoint for the given host_id has bigger generation, we remove the new endpoint.
-        // In all of these cases host_id is retained, only the IP addresses are changed.
-        // We don't need to call remove_endpoint on tmptr, since it will be called
-        // indirectly through the chain endpoints_to_remove->storage_service::remove_endpoint ->
-        // _gossiper.remove_endpoint -> storage_service::on_remove.
+    // peers table: IP1->ID1
+    // gossiper:    ID1->IP1
+    //
+    // replace with same IP:
+    //   peers table: IP1->ID2 (IP1->ID1 will be replaced, no need to remove)
+    //   gossiper: ID2->IP1    (ID1->IP1 entry needs to be removed)
+    //
+    // replace with different IP:
+    //   peers table: IP2->ID2 (IP1->ID1 entry needs to be removed)
+    //   gossiper: ID2->IP2    (ID1->IP1 entry needs to be removed)
+    //
+    // reboot with different IP:
+    //   peers table: IP2->ID1 (IP1->ID1 needs to be removed)
+    //   gossiper: ID1->IP2 (ID1->IP1 will replaced, no need to remove)
+    std::unordered_set<inet_address> remove_from_peers;
+    std::unordered_set<locator::host_id> remove_from_gossiper;
 
-        endpoints_to_remove.insert(node);
-    };
     // Order Matters, TM.updateHostID() should be called before TM.updateNormalToken(), (see CASSANDRA-4300).
     if (tmptr->is_normal_token_owner(host_id)) {
         slogger.info("handle_state_normal: node {}/{} was already a normal token owner", endpoint, host_id);
@@ -2332,49 +2342,25 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     // Old node in replace-with-same-IP scenario.
     std::optional<locator::host_id> replaced_id;
 
-    auto ips = _gossiper.get_nodes_with_host_id(host_id);
+    auto id_to_ip_map = co_await get_host_id_to_ip_map();
 
     std::optional<inet_address> existing;
 
     if (tmptr->get_topology().find_node(host_id)) {
-        // If node is not in the topology there is no existing address
-        // If there are two addresses for the same id the "other" one is existing
-        // If there is only one it is existing
-        if (ips.size() == 2) {
-            if (ips.erase(endpoint) == 0) {
-                on_internal_error(slogger, fmt::format("Gossiper has two ips {} for host id {} but none of them is {}", ips, endpoint, host_id));
-            }
-        }
-        existing = *ips.begin();
+        auto it = id_to_ip_map.find(host_id);
+        existing = it != id_to_ip_map.end() ? it->second : endpoint;
     }
 
+    // endpoint = IP2, existing=IP1, host_id=ID1
+    // need to remove IP1 from peers
     if (existing && *existing != endpoint) {
         // This branch in taken when a node changes its IP address.
-
         if (*existing == get_broadcast_address()) {
             slogger.warn("Not updating host ID {} for {} because it's mine", host_id, endpoint);
-            do_remove_node(endpoint);
-        } else if (std::is_gt(_gossiper.compare_endpoint_startup(endpoint, *existing))) {
-            // The new IP has greater generation than the existing one.
-            // Here we remap the host_id to the new IP. The 'owned_tokens' calculation logic below
-            // won't detect any changes - the branch 'endpoint == current_owner' will be taken.
-            // We still need to call 'remove_endpoint' for existing IP to remove it from system.peers.
-
+            remove_from_peers.emplace(endpoint);
+        } else  {
             slogger.warn("Host ID collision for {} between {} and {}; {} is the new owner", host_id, *existing, endpoint, endpoint);
-            do_remove_node(*existing);
-        } else {
-            // The new IP has smaller generation than the existing one,
-            // we are going to remove it, so we add it to the endpoints_to_remove.
-            // How does this relate to the tokens this endpoint may have?
-            // There is a condition below which checks that if endpoints_to_remove
-            // contains 'endpoint', then the owned_tokens must be empty, otherwise internal_error
-            // is triggered. This means the following is expected to be true:
-            // 1. each token from the tokens variable (which is read from gossiper) must have an owner node
-            // 2. this owner must be different from 'endpoint'
-            // 3. its generation must be greater than endpoint's
-
-            slogger.warn("Host ID collision for {} between {} and {}; ignored {}", host_id, *existing, endpoint, endpoint);
-            do_remove_node(endpoint);
+            remove_from_peers.emplace(*existing);
         }
     } else if (existing && *existing == endpoint) {
         // This branch is taken for all gossiper-managed topology operations.
@@ -2405,11 +2391,9 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
         // For example, a new node receives this notification for every
         // existing node in the cluster.
 
-        auto nodes = _gossiper.get_nodes_with_host_id(host_id);
-        bool left = std::any_of(nodes.begin(), nodes.end(), [this] (const gms::inet_address& node) { return _gossiper.is_left(node); });
-        if (left) {
-            slogger.info("Skip to set host_id={} to be owned by node={}, because the node is removed from the cluster, nodes {} used to own the host_id", host_id, endpoint, nodes);
-            _normal_state_handled_on_boot.insert(endpoint);
+        if (_gossiper.is_left(host_id)) {
+            slogger.info("Skip to set host_id={} to be owned by node={}, because the node is removed from the cluster", host_id, endpoint);
+            _normal_state_handled_on_boot.insert(host_id);
             co_return;
         }
     }
@@ -2422,11 +2406,8 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     // token_to_endpoint_map is used to track the current token owners for the purpose of removing replaced endpoints.
     // when any token is replaced by a new owner, we track the existing owner in `candidates_for_removal`
     // and eventually, if any candidate for removal ends up owning no tokens, it is removed from token_metadata.
-    std::unordered_map<token, inet_address> token_to_endpoint_map = get_token_metadata().get_token_to_endpoint() |
-            std::views::transform([this] (auto& e) {
-                return std::make_pair(e.first, _address_map.get(e.second));
-            }) | std::ranges::to<std::unordered_map>();
-    std::unordered_set<inet_address> candidates_for_removal;
+    std::unordered_map<token, locator::host_id> token_to_endpoint_map = get_token_metadata().get_token_to_endpoint();
+    std::unordered_set<locator::host_id> candidates_for_removal;
 
     // Here we convert endpoint tokens from gossiper to owned_tokens, which will be assigned as a new
     // normal tokens to the token_metadata.
@@ -2447,25 +2428,25 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
             continue;
         }
         auto current_owner = current->second;
-        if (endpoint == current_owner) {
-            slogger.info("handle_state_normal: endpoint={} == current_owner={} token {}", endpoint, current_owner, t);
+        if (host_id == current_owner) {
+            slogger.info("handle_state_normal: endpoint={} == current_owner={} token {}", host_id, current_owner, t);
             // set state back to normal, since the node may have tried to leave, but failed and is now back up
             owned_tokens.insert(t);
-        } else if (std::is_gt(_gossiper.compare_endpoint_startup(endpoint, current_owner))) {
-            slogger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", endpoint, current_owner, t);
+        } else if (std::is_gt(_gossiper.compare_endpoint_startup(host_id, current_owner))) {
+            slogger.debug("handle_state_normal: endpoint={} > current_owner={}, token {}", host_id, current_owner, t);
             owned_tokens.insert(t);
             slogger.info("handle_state_normal: remove endpoint={} token={}", current_owner, t);
             // currentOwner is no longer current, endpoint is.  Keep track of these moves, because when
             // a host no longer has any tokens, we'll want to remove it.
             token_to_endpoint_map.erase(current);
             candidates_for_removal.insert(current_owner);
-            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. {} is the new owner", endpoint, current_owner, t, endpoint);
+            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. {} is the new owner", host_id, current_owner, t, host_id);
         } else {
             // current owner of this token is kept and endpoint attempt to own it is rejected.
             // Keep track of these moves, because when a host no longer has any tokens, we'll want to remove it.
             token_to_endpoint_map.erase(current);
-            candidates_for_removal.insert(endpoint);
-            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. Ignoring {}", endpoint, current_owner, t, endpoint);
+            candidates_for_removal.insert(host_id);
+            slogger.info("handle_state_normal: Nodes {} and {} have the same token {}. Ignoring {}", host_id, current_owner, t, endpoint);
         }
     }
 
@@ -2486,15 +2467,15 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
 
     for (const auto& ep : candidates_for_removal) {
         slogger.info("handle_state_normal: endpoints_to_remove endpoint={}", ep);
-        endpoints_to_remove.insert(ep);
+        remove_from_gossiper.insert(ep);
     }
 
     bool is_normal_token_owner = tmptr->is_normal_token_owner(host_id);
     bool do_notify_joined = false;
 
-    if (endpoints_to_remove.contains(endpoint)) [[unlikely]] {
+    if (remove_from_gossiper.contains(host_id)) [[unlikely]] {
         if (!owned_tokens.empty()) {
-            on_fatal_internal_error(slogger, ::format("endpoint={} is marked for removal but still owns {} tokens", endpoint, owned_tokens.size()));
+            on_fatal_internal_error(slogger, ::format("endpoint={} is marked for removal but still owns {} tokens", host_id, owned_tokens.size()));
         }
     } else {
         if (!is_normal_token_owner) {
@@ -2520,13 +2501,26 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
 
-    for (auto ep : endpoints_to_remove) {
-        co_await remove_endpoint(ep, ep == endpoint ? pid : gms::null_permit_id);
+    for (auto id : remove_from_gossiper) {
+        auto ip = _address_map.get(id);
+        co_await _gossiper.remove_endpoint(id, id == host_id ? pid : gms::null_permit_id);
+        if (ip != endpoint) {
+            remove_from_peers.emplace(ip);
+        }
     }
-    slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} endpoint_to_remove={} owned_tokens={}", endpoint, is_normal_token_owner, endpoints_to_remove.contains(endpoint), owned_tokens);
-    if (!is_me(endpoint) && !owned_tokens.empty() && !endpoints_to_remove.count(endpoint)) {
+
+    for (auto ep : remove_from_peers) {
         try {
-            auto info = get_peer_info_for_update(endpoint).value();
+            co_await _sys_ks.local().remove_endpoint(ep);
+        } catch (...) {
+            slogger.error("fail to remove endpoint={}: {}", ep, std::current_exception());
+        }
+    }
+
+    slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} remove_from_peers={} owned_tokens={}", endpoint, is_normal_token_owner, remove_from_peers.contains(endpoint), owned_tokens);
+    if (!is_me(endpoint) && !owned_tokens.empty() && !remove_from_peers.count(endpoint)) {
+        try {
+            auto info = get_peer_info_for_update(host_id).value();
             info.tokens = std::move(owned_tokens);
             co_await _sys_ks.local().update_peer_info(endpoint, host_id, info);
         } catch (...) {
@@ -2547,7 +2541,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
             slogger.debug("handle_state_normal: token_metadata.ring_version={}, token={} -> endpoint={}/{}", ver, x.first, _address_map.get(x.second), x.second);
         }
     }
-    _normal_state_handled_on_boot.insert(endpoint);
+    _normal_state_handled_on_boot.insert(host_id);
     slogger.info("handle_state_normal for {}/{} finished", endpoint, host_id);
 }
 
@@ -2558,10 +2552,10 @@ future<> storage_service::handle_state_left(inet_address endpoint, locator::host
         slogger.warn("Fail to handle_state_left endpoint={} pieces={}", endpoint, pieces);
         co_return;
     }
-    auto tokens = get_tokens_for(endpoint);
+    auto tokens = get_tokens_for(host_id);
     slogger.debug("Node {}/{} state left, tokens {}", endpoint, host_id, tokens);
     if (tokens.empty()) {
-        auto eps = _gossiper.get_endpoint_state_ptr(endpoint);
+        auto eps = _gossiper.get_endpoint_state_ptr(host_id);
         if (eps) {
             slogger.warn("handle_state_left: Tokens for node={} are empty, endpoint_state={}", endpoint, *eps);
         } else {
@@ -2674,7 +2668,7 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
     if (node && node->is_member() && (co_await get_ip_from_peers_table(host_id)) == endpoint) {
         if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
-            if (auto info = get_peer_info_for_update(endpoint, states)) {
+            if (auto info = get_peer_info_for_update(host_id, states)) {
                 co_await _sys_ks.local().update_peer_info(endpoint, host_id, *info);
             }
         }
@@ -2746,7 +2740,7 @@ future<> storage_service::on_restart(gms::inet_address endpoint, locator::host_i
     return make_ready_future();
 }
 
-std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(inet_address endpoint) {
+std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(locator::host_id endpoint) {
     auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state) {
         return db::system_keyspace::peer_info{};
@@ -2758,7 +2752,7 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for
     return info;
 }
 
-std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(inet_address endpoint, const gms::application_state_map& app_state_map) {
+std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map) {
     std::optional<db::system_keyspace::peer_info> ret;
 
     auto get_peer_info = [&] () -> db::system_keyspace::peer_info& {
@@ -2817,7 +2811,7 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for
     return ret;
 }
 
-std::unordered_set<locator::token> storage_service::get_tokens_for(inet_address endpoint) {
+std::unordered_set<locator::token> storage_service::get_tokens_for(locator::host_id endpoint) {
     auto tokens_string = _gossiper.get_application_state_value(endpoint, application_state::TOKENS);
     slogger.trace("endpoint={}, tokens_string={}", endpoint, tokens_string);
     auto ret = versioned_value::tokens_from_string(tokens_string);
@@ -3313,7 +3307,7 @@ future<> storage_service::wait_for_group0_stop() {
     }
 }
 
-future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
+future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<locator::host_id, sstring>& loaded_peer_features) {
     slogger.debug("Starting shadow gossip round to check for endpoint collision");
 
     return seastar::async([this, initial_contact_nodes, loaded_peer_features] {
@@ -3364,7 +3358,10 @@ future<> storage_service::check_for_endpoint_collision(std::unordered_set<gms::i
 }
 
 future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id pid) {
-    co_await _gossiper.remove_endpoint(endpoint, pid);
+    auto host_id_opt = _gossiper.try_get_host_id(endpoint);
+    if (host_id_opt) {
+        co_await _gossiper.remove_endpoint(*host_id_opt, pid);
+    }
     try {
         co_await _sys_ks.local().remove_endpoint(endpoint);
     } catch (...) {
@@ -3373,7 +3370,7 @@ future<> storage_service::remove_endpoint(inet_address endpoint, gms::permit_id 
 }
 
 future<storage_service::replacement_info>
-storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<gms::inet_address, sstring>& loaded_peer_features) {
+storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> initial_contact_nodes, const std::unordered_map<locator::host_id, sstring>& loaded_peer_features) {
     locator::host_id replace_host_id;
     gms::inet_address replace_address;
 
@@ -3407,23 +3404,22 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
 
     // now that we've gossiped at least once, we should be able to find the node we're replacing
     if (replace_host_id) {
-        auto nodes = _gossiper.get_nodes_with_host_id(replace_host_id);
-        if (nodes.empty()) {
+        auto node = _gossiper.get_node_ip(replace_host_id);
+        if (!node) {
             throw std::runtime_error(::format("Replaced node with Host ID {} not found", replace_host_id));
         }
-        if (nodes.size() > 1) {
-            throw std::runtime_error(::format("Found multiple nodes with Host ID {}: {}", replace_host_id, nodes));
-        }
-        replace_address = *nodes.begin();
+        replace_address = *node;
+    } else {
+        replace_host_id = _gossiper.get_host_id(replace_address);
     }
 
-    auto state = _gossiper.get_endpoint_state_ptr(replace_address);
+    auto state = _gossiper.get_endpoint_state_ptr(replace_host_id);
     if (!state) {
         throw std::runtime_error(::format("Cannot replace_address {} because it doesn't exist in gossip", replace_address));
     }
 
     // Reject to replace a node that has left the ring
-    auto status = _gossiper.get_gossip_status(replace_address);
+    auto status = _gossiper.get_gossip_status(replace_host_id);
     if (status == gms::versioned_value::STATUS_LEFT || status == gms::versioned_value::REMOVED_TOKEN) {
         throw std::runtime_error(::format("Cannot replace_address {} because it has left the ring, status={}", replace_address, status));
     }
@@ -3434,10 +3430,6 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
         if (tokens.empty()) {
             throw std::runtime_error(::format("Could not find tokens for {} to replace", replace_address));
         }
-    }
-
-    if (!replace_host_id) {
-        replace_host_id = _gossiper.get_host_id(replace_address);
     }
 
     auto dc_rack = get_dc_rack_for(replace_host_id).value_or(locator::endpoint_dc_rack::default_location);
@@ -3459,24 +3451,23 @@ storage_service::prepare_replacement_info(std::unordered_set<gms::inet_address> 
             node_ip_specified = true;
         } else {
             host_id = hoep.id();
-            auto res = _gossiper.get_nodes_with_host_id(host_id);
-            if (res.size() == 0) {
+            auto res = _gossiper.get_node_ip(host_id);
+            if (!res) {
                 throw std::runtime_error(::format("Could not find ignored node with host_id {}", host_id));
-            } else if (res.size() > 1) {
-                throw std::runtime_error(::format("Found multiple nodes to ignore with host_id {}: {}", host_id, res));
             }
-            st.endpoint = *res.begin();
+            st.endpoint = *res;
         }
-        auto esp = _gossiper.get_endpoint_state_ptr(st.endpoint);
-        if (!esp) {
+        auto host_id_opt = _gossiper.try_get_host_id(st.endpoint);
+        if (!host_id_opt) {
             throw std::runtime_error(::format("Ignore node {}/{} has no endpoint state", host_id, st.endpoint));
         }
         if (!host_id) {
-            host_id = esp->get_host_id();
+            host_id = *host_id_opt;
             if (!host_id) {
                 throw std::runtime_error(::format("Could not find host_id for ignored node {}", st.endpoint));
             }
         }
+        auto esp = _gossiper.get_endpoint_state_ptr(host_id);
         st.tokens = esp->get_tokens();
         st.opt_dc_rack = esp->get_dc_rack();
         ri.ignore_nodes.emplace(host_id, std::move(st));
@@ -4054,9 +4045,7 @@ void storage_service::run_replace_ops(std::unordered_set<token>& bootstrap_token
             slogger.info("replace[{}]: Using repair based node ops to sync data", uuid);
             auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
             auto tmptr = get_token_metadata_ptr();
-            auto ignore_nodes = replace_info.ignore_nodes | std::views::transform([] (const auto& x) {
-                return x.first;
-            }) | std::ranges::to<std::unordered_set<locator::host_id>>();
+            auto ignore_nodes = replace_info.ignore_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
             _repair.local().replace_with_repair(std::move(ks_erms), std::move(tmptr), bootstrap_tokens, std::move(ignore_nodes), replace_info.host_id).get();
         } else {
             slogger.info("replace[{}]: Using streaming based node ops to sync data", uuid);
@@ -4259,9 +4248,9 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
 
                     // Step 7: Announce the node has left
                     slogger.info("removenode[{}]: Advertising that the node left the ring", uuid);
-                    auto permit = ss._gossiper.lock_endpoint(endpoint, gms::null_permit_id).get();
+                    auto permit = ss._gossiper.lock_endpoint(host_id, gms::null_permit_id).get();
                     const auto& pid = permit.id();
-                    ss._gossiper.advertise_token_removed(endpoint, host_id, pid).get();
+                    ss._gossiper.advertise_token_removed(host_id, pid).get();
                     std::unordered_set<token> tmp(tokens.begin(), tokens.end());
                     ss.excise(std::move(tmp), endpoint, host_id, pid).get();
                     removed_from_token_ring = true;
@@ -5421,7 +5410,7 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
             details._datacenter = node.dc_rack().dc;
             details._rack = node.dc_rack().rack;
             details._host = ip;
-            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(ip));
+            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(r.host));
             tr._endpoints.push_back(fmt::to_string(details._host));
             tr._endpoint_details.push_back(std::move(details));
         }
@@ -7609,7 +7598,7 @@ future<> endpoint_lifecycle_notifier::notify_up(gms::inet_address endpoint, loca
 }
 
 future<> storage_service::notify_up(inet_address endpoint, locator::host_id hid) {
-    if (!_gossiper.is_cql_ready(endpoint) || !_gossiper.is_alive(hid)) {
+    if (!_gossiper.is_cql_ready(hid) || !_gossiper.is_alive(hid)) {
         co_return;
     }
     co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
@@ -7654,7 +7643,7 @@ future<> storage_service::notify_cql_change(inet_address endpoint, locator::host
     }
 }
 
-bool storage_service::is_normal_state_handled_on_boot(gms::inet_address node) {
+bool storage_service::is_normal_state_handled_on_boot(locator::host_id node) {
     return _normal_state_handled_on_boot.contains(node);
 }
 
@@ -7669,11 +7658,11 @@ future<> storage_service::wait_for_normal_state_handled_on_boot() {
 
     slogger.info("Started waiting for normal state handlers to finish");
     auto start_time = std::chrono::steady_clock::now();
-    std::vector<gms::inet_address> eps;
+    std::vector<locator::host_id> eps;
     while (true) {
         eps = _gossiper.get_endpoints();
         auto it = std::partition(eps.begin(), eps.end(),
-                [this, me = get_broadcast_address()] (const gms::inet_address& ep) {
+                [this, me = my_host_id()] (const locator::host_id& ep) {
             return ep == me || !_gossiper.is_normal_ring_member(ep) || is_normal_state_handled_on_boot(ep);
         });
 

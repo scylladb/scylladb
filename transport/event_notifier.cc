@@ -234,7 +234,7 @@ future<> cql_server::event_notifier::on_effective_service_levels_cache_reloaded(
 
 void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoint, locator::host_id hid)
 {
-    if (!_server._gossiper.is_cql_ready(endpoint)) {
+    if (!_server._gossiper.is_cql_ready(hid)) {
         _endpoints_pending_joined_notification.insert(endpoint);
         return;
     }

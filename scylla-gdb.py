@@ -4396,7 +4396,7 @@ class scylla_gms(gdb.Command):
                 state = state_ptr.get().dereference()
             except Exception:
                 pass
-            ip = ip_to_str(int(get_ip(endpoint)), byteorder=sys.byteorder)
+            ip = ip_to_str(int(get_ip(state['_ip'])), byteorder=sys.byteorder)
             gdb.write('%s: (gms::endpoint_state*) %s (%s)\n' % (ip, state.address, state['_heart_beat_state']))
             try:
                 app_states_map = std_unordered_map(state['_application_state'])
