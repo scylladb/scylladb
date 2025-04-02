@@ -1053,9 +1053,9 @@ private:
             }
 
             if (cfg->rf_rack_valid_keyspaces()) {
-                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+                startlog.info("Verifying that all of the keyspaces are replicated on RF racks");
                 _db.local().check_rf_rack_validity(_token_metadata.local().get());
-                startlog.info("All keyspaces are RF-rack-valid");
+                startlog.info("All keyspaces are replicated on exactly RF racks");
             }
 
             utils::loading_cache_config perm_cache_config;
