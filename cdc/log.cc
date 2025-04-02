@@ -171,6 +171,16 @@ public:
         });
     }
 
+    virtual void on_before_allocate_tablet_map(const locator::tablet_map& map, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+        if (!is_log_schema(s)) {
+            return;
+        }
+
+        auto stream_ts = db_clock::now() - duration_cast<std::chrono::milliseconds>(get_generation_leeway());
+        auto mut = create_table_streams_mutation(s.id(), stream_ts, map, ts).get();
+        muts.emplace_back(std::move(mut));
+    }
+
     void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) override {
         std::vector<schema_ptr> new_cfms;
 
