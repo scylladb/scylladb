@@ -28,6 +28,8 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 
+using namespace std::string_literals;
+
 static logging::logger mylogger("alter_keyspace");
 
 bool is_system_keyspace(std::string_view keyspace);
@@ -207,6 +209,25 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
 
         auto ts = mc.write_timestamp();
         auto global_request_id = mc.new_group0_state_id();
+
+        // #22688 - filter out any dc*:0 entries - consider these
+        // null and void (removed). Migration planning will treat it
+        // as dc*=0 still.
+        std::erase_if(ks_options, [](const auto& i) {
+            static constexpr std::string replication_prefix = ks_prop_defs::KW_REPLICATION + ":"s;
+            // Flattened map, replication entries starts with "replication:".
+            // Only valid options are replication_factor, class and per-dc rf:s. We want to
+            // filter out any dcN=0 entries.
+            auto& [key, val] = i;
+            if (key.starts_with(replication_prefix) && val == "0") {
+                std::string_view v(key);
+                v.remove_prefix(replication_prefix.size());
+                return v != ks_prop_defs::REPLICATION_FACTOR_KEY 
+                    && v != ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY
+                    ;
+            }
+            return false;
+        });
 
         // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
         // TODO: the current `if (changes_tablets(qp))` is insufficient: someone may set the same RFs as before,
