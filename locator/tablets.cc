@@ -1131,6 +1131,103 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
 }
 
+static std::unordered_map<sstring, std::set<sstring>> get_racks_per_dc_used_by_table(const token_metadata_ptr tmptr, schema_ptr s) {
+    std::unordered_map<sstring, std::set<sstring>> racks_per_dc;
+    // Populate the racks_per_dc sets with the racks for each dc of the first tablet in first table.
+    auto& first_cf_tablets = tmptr->tablets().get_tablet_map(s->id());
+    auto first_tablet_id = first_cf_tablets.first_tablet();
+    auto& first_tablet_info = first_cf_tablets.get_tablet_info(first_tablet_id);
+    for (auto& replica : first_tablet_info.replicas) {
+        auto& dc = tmptr->get_topology().get_datacenter(replica.host);
+        auto& rack = tmptr->get_topology().get_rack(replica.host);
+        if (!racks_per_dc[dc].contains(rack)) {
+            racks_per_dc[dc].insert(rack);
+        } else {
+            throw std::invalid_argument(std::format(
+                    "The option `rf_rack_valid_keyspaces` is enabled. All tablets in a keyspace should have one replica per rack in RF racks in each DC. "
+                    "This condition is violated: keyspace '{}' doesn't satisfy it for DC '{}': table '{}' has multiple replicas in rack '{}'.",
+                    std::string_view(s->ks_name()), std::string_view(dc), std::string_view(s->cf_name()), std::string_view(rack)));
+        }
+    }
+    return racks_per_dc;
+}
+
+static void validate_rf_rack_valid_replication_for_table(const token_metadata_ptr tmptr, schema_ptr s, std::unordered_map<sstring, std::set<sstring>>& racks_per_dc, sstring first_cf_name) {
+    std::optional<tablet_id> curr_tablet_id = tmptr->tablets().get_tablet_map(s->id()).first_tablet();
+    for (const auto& tablet : tmptr->tablets().get_tablet_map(s->id()).tablets()) {
+        std::map<sstring, std::set<sstring>> curr_racks_per_dc;
+        for (auto& replica : tablet.replicas) {
+            auto dc = tmptr->get_topology().get_datacenter(replica.host);
+            auto rack = tmptr->get_topology().get_rack(replica.host);
+            curr_racks_per_dc[dc].insert(rack);
+        }
+        for (const auto& [dc, racks] : curr_racks_per_dc) {
+            if (racks_per_dc[dc].size() < 2) {
+                continue;
+            }
+            if (racks_per_dc[dc] != racks) {
+                throw std::invalid_argument(seastar::format(
+                        "The option `rf_rack_valid_keyspaces` is enabled. All tablets in a keyspace should have one replica per rack in RF racks in each DC. "
+                        "This condition is violated: keyspace '{}' doesn't satisfy it for DC '{}': "
+                        "tablet {} in table {} has replicas on racks {} but tablet {} in table {} has replicas on racks {}.",
+                        s->ks_name(), dc, *curr_tablet_id, s->cf_name(), racks, tablet_id(0), first_cf_name, racks_per_dc[dc]));
+            }
+        }
+        curr_tablet_id = tmptr->tablets().get_tablet_map(s->id()).next_tablet(*curr_tablet_id);
+    }
+}
+
+void validate_rf_rack_valid_replication(const token_metadata_ptr tmptr, const replica::keyspace& ks) {
+    auto ks_name = ks.metadata()->name();
+    tablet_logger.debug("[validate_rf_rack_valid_replication]: Starting verifying that all tables in keyspace '{}' are RF-rack-valid", ks_name);
+    const auto& ars = ks.get_replication_strategy();
+    // Any keyspace that does NOT use tablets is RF-rack-valid.
+    if (!ars.uses_tablets()) {
+        tablet_logger.debug("[validate_rf_rack_valid_replication]: Keyspace '{}' has been verified to be RF-rack-valid (no tablets)", ks_name);
+        return;
+    }
+
+    // Tablets can only be used with NetworkTopologyStrategy.
+    SCYLLA_ASSERT(ars.get_type() == replication_strategy_type::network_topology);
+    const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(ars));
+
+    const auto& dc_rack_map = tmptr->get_topology().get_datacenter_racks();
+    for (const auto& dc : nts.get_datacenters()) {
+        if (!dc_rack_map.contains(dc)) {
+            on_internal_error(tablet_logger, seastar::format(
+                    "Precondition violated: DC '{}' is part of the passed replication strategy, but it is not "
+                    "known by the passed locator::token_metadata_ptr.", dc));
+        }
+    }
+
+    bool all_dc_rf_lower_than_2 = true;
+    for (const auto& [dc, rack_map] : dc_rack_map) {
+        tablet_logger.debug("[validate_rf_rack_valid_replication]: Verifying for '{}' / '{}'", ks_name, dc);
+        if (nts.get_replication_factor(dc) >= 2) {
+            all_dc_rf_lower_than_2 = false;
+        }
+    }
+    if (all_dc_rf_lower_than_2) {
+        tablet_logger.debug("[validate_rf_rack_valid_replication]: Keyspace '{}' has been verified to be RF-rack-valid (RF in all DCs < 2)", ks_name);
+        return;
+    }
+    if (ks.metadata()->cf_meta_data().empty()) {
+        tablet_logger.debug("[validate_rf_rack_valid_replication]: Keyspace '{}' has been verified to be replicated on RF racks (no data to replicate)", ks_name);
+        return;
+    }
+
+    auto first_s = ks.metadata()->cf_meta_data().begin()->second;
+    // Populate the racks_per_dc sets with the racks for each dc of the first tablet in first table.
+    auto racks_per_dc = get_racks_per_dc_used_by_table(tmptr, first_s);
+
+    // At this point racks_per_dc contains exactly RF racks in each DC. Now we need to make sure
+    // that all tablets in all tables in the keyspace use exactly these racks in each DC.
+    for (const auto& [cf_name, s] : ks.metadata()->cf_meta_data()) {
+        tablet_logger.debug("[validate_rf_rack_valid_replication]: Verifying for table '{}'", cf_name);
+        validate_rf_rack_valid_replication_for_table(tmptr, s, racks_per_dc, first_s->cf_name());
+    }
+    tablet_logger.debug("[validate_rf_rack_valid_replication]: Keyspace '{}' has been verified to be replicated on RF racks", ks_name);
+}
 }
 
 auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_decision_way& way, fmt::format_context& ctx) const

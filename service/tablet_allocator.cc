@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -2051,9 +2052,27 @@ public:
 
         auto get_viable_targets = [&] () {
             std::unordered_set<host_id> viable_targets;
+            bool must_be_on_the_same_rack = false;
+            if (_db.get_config().rf_rack_valid_keyspaces()) {
+                auto t = _db.get_tables_metadata().get_table_if_exists(tablet.table);
+                if (!t) {
+                    on_internal_error(lblogger, format("Table with id: {} does not exist", tablet.table));
+                }
+                auto erm = t->get_effective_replication_map();
+                auto& rs = erm->get_replication_strategy();
+
+                // Tablets can only be used with NetworkTopologyStrategy.
+                const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(rs));
+                if (nts.get_replication_factor(src_info.dc()) > 1) {
+                    must_be_on_the_same_rack = true;
+                }
+            }
 
             for (auto&& [id, node] : nodes) {
                 if (node.dc() != src_info.dc() || node.drained) {
+                    continue;
+                }
+                if (must_be_on_the_same_rack && node.rack() != src_info.rack()) {
                     continue;
                 }
                 viable_targets.emplace(id);
@@ -2093,9 +2112,14 @@ public:
         if (dst_info.rack() != src_info.rack()) {
             auto targets = get_viable_targets();
             if (!targets.contains(dst_info.id)) {
-                auto new_rack_load = rack_load[dst_info.rack()] + 1;
-                lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
-                               tablet, dst_info.rack(), new_rack_load, max_rack_load);
+                if (_db.get_config().rf_rack_valid_keyspaces()) {
+                    lblogger.debug("candidate tablet {} skipped because `rf_rack_valid_keyspaces` is enabled, RF is greater than 1 in dc {}"
+                        " and source is on a different rack than destination ({} and {})", tablet.tablet, src_info.dc(), src_info.rack(), dst_info.rack());
+                } else {
+                    auto new_rack_load = rack_load[dst_info.rack()] + 1;
+                    lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
+                                tablet, dst_info.rack(), new_rack_load, max_rack_load);
+                }
                 _stats.for_dc(src_info.dc()).tablets_skipped_rack++;
                 return skip_info{std::move(targets)};
             }
