@@ -29,6 +29,8 @@ private:
 
     void abandon() noexcept;
 
+    [[nodiscard]] std::exception_ptr check_abort() const noexcept;
+
 public:
     queue_reader_handle_v2(queue_reader_handle_v2&& o) noexcept;
     ~queue_reader_handle_v2();

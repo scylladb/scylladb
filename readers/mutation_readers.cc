@@ -1330,6 +1330,16 @@ void queue_reader_handle_v2::abandon() noexcept {
     abort(std::move(ex));
 }
 
+std::exception_ptr queue_reader_handle_v2::check_abort() const noexcept {
+    if (_ex) [[unlikely]] {
+        return _ex;
+    }
+    if (!_reader) [[unlikely]] {
+        return std::make_exception_ptr(std::runtime_error("Dangling queue_reader_handle_v2"));
+    }
+    return {};
+}
+
 queue_reader_handle_v2::queue_reader_handle_v2(queue_reader_v2& reader) noexcept : _reader(&reader) {
     _reader->_handle = this;
 }
@@ -1358,18 +1368,15 @@ queue_reader_handle_v2& queue_reader_handle_v2::operator=(queue_reader_handle_v2
 }
 
 future<> queue_reader_handle_v2::push(mutation_fragment_v2 mf) {
-    if (!_reader) {
-        if (_ex) {
-            return make_exception_future<>(_ex);
-        }
-        return make_exception_future<>(std::runtime_error("Dangling queue_reader_handle_v2"));
+    if (auto ex = check_abort(); ex) [[unlikely]] {
+        return make_exception_future<>(std::move(ex));
     }
     return _reader->push(std::move(mf));
 }
 
 void queue_reader_handle_v2::push_end_of_stream() {
-    if (!_reader) {
-        throw std::runtime_error("Dangling queue_reader_handle_v2");
+    if (auto ex = check_abort(); ex)  [[unlikely]] {
+        std::rethrow_exception(std::move(ex));
     }
     _reader->push_end_of_stream();
     _reader->_handle = nullptr;
