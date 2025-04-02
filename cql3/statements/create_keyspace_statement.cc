@@ -234,9 +234,6 @@ std::vector<sstring> check_against_restricted_replication_strategies(
     // We ignore errors (non-number, negative number, etc.) here,
     // these are checked and reported elsewhere.
     for (auto opt : attrs.get_replication_options()) {
-        if (opt.first == sstring("initial_tablets")) {
-            continue;
-        }
         try {
             auto rf = std::stol(opt.second);
             if (rf > 0) {
