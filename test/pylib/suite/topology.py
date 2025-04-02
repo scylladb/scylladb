@@ -48,13 +48,14 @@ class TopologyTest(PythonTest):
         async with get_cluster_manager(self.uname, self.suite.clusters, str(self.suite.log_dir)) as manager:
             self.args.insert(0, "--tmpdir={}".format(options.tmpdir))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
+            self.args.insert(0, "--run-internet-dependent-tests={}".format(options.run_internet_dependent_tests))
             if options.artifacts_dir_url:
                 self.args.insert(0, "--artifacts_dir_url={}".format(options.artifacts_dir_url))
 
             try:
                 # Note: start manager here so cluster (and its logs) is available in case of failure
                 await manager.start()
-                self.success = await run_test(self, options)
+                self.success = await run_test(self, options, env=self.suite.scylla_env)
             except Exception as e:
                 self.server_log = manager.cluster.read_server_log()
                 self.server_log_filename = manager.cluster.server_log_filename()
