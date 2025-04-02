@@ -5508,10 +5508,15 @@ public:
                     }
                     exec->on_read_resolved();
                 } else { // digest mismatch
-                    // Do not optimize cross-dc repair if read_timestamp is missing (or just negative)
-                    // We're interested in reads that happen within write_timeout of a write,
-                    // and comparing a timestamp that is too far causes int overflow (#5556)
-                    if (is_datacenter_local(exec->_cl) && exec->_cmd->read_timestamp >= api::timestamp_type(0)) {
+                    // Skip cross-DC repair optimization in the following cases:
+                    // 1. When read_timestamp is missing or negative
+                    // 2. When the latest non-matching replica's timestamp is missing or negative
+                    //
+                    // This avoids integer overflow (#5556 and #23314) that can occur when comparing timestamps
+                    // that are too far apart. We only need to perform this optimization for reads that
+                    // occur within write_timeout of a write, as these are the cases where repair is most
+                    // beneficial.
+                    if (is_datacenter_local(exec->_cl) && exec->_cmd->read_timestamp >= 0 && digest_resolver->last_modified() >= 0) {
                         auto write_timeout = exec->_proxy->_db.local().get_config().write_request_timeout_in_ms() * 1000;
                         auto delta = int64_t(digest_resolver->last_modified()) - int64_t(exec->_cmd->read_timestamp);
                         if (std::abs(delta) <= write_timeout) {
