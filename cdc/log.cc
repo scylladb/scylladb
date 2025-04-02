@@ -158,6 +158,23 @@ public:
         });
     }
 
+    virtual void on_before_allocate_tablet_map(const locator::tablet_map& map, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+        if (s.get_partitioner().name() != cdc::cdc_partitioner::classname) {
+            return;
+        }
+
+        std::vector<cdc::stream_id> stream_ids;
+        stream_ids.reserve(map.tablet_count());
+        for (auto tid : map.tablet_ids()) {
+            stream_ids.emplace_back(map.get_last_token(tid), 0);
+        }
+
+        auto db_now = db_clock::now();
+        auto stream_uuid = utils::UUID_gen::get_random_time_UUID_from_micros(db_now.time_since_epoch());
+
+        muts.emplace_back(create_table_streams_mutation(s.id(), stream_uuid, stream_ids, ts));
+    }
+
     void on_before_create_column_family(const keyspace_metadata& ksm, const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
         if (schema.cdc_options().enabled()) {
             auto& db = _ctxt._proxy.get_db().local();
@@ -233,7 +250,26 @@ public:
             auto& keyspace = db.find_keyspace(schema.ks_name());
             auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+
+            // drop cdc streams
+            auto drop_stream_mut = make_drop_table_streams_mutations(log_schema->id(), timestamp);
+            mutations.insert(mutations.end(), std::make_move_iterator(drop_stream_mut.begin()), std::make_move_iterator(drop_stream_mut.end()));
+
             db.get_notifier().before_drop_column_family(*log_schema, mutations, timestamp);
+        }
+    }
+
+    void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>& mutations, api::timestamp_type ts) override {
+        auto& db = _ctxt._proxy.get_db().local();
+        auto& ks = db.find_keyspace(keyspace_name);
+        for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
+            if (s->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                continue;
+            }
+
+            // drop cdc streams
+            auto drop_stream_mut = make_drop_table_streams_mutations(s->id(), ts);
+            mutations.insert(mutations.end(), std::make_move_iterator(drop_stream_mut.begin()), std::make_move_iterator(drop_stream_mut.end()));
         }
     }
 
