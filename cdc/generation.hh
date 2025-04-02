@@ -184,4 +184,7 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
     schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&,
     size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
 
+mutation create_table_streams_mutation(table_id, db_clock::time_point, const std::vector<cdc::stream_id>&, api::timestamp_type);
+std::vector<mutation> make_drop_table_streams_mutations(table_id, api::timestamp_type ts);
+
 } // namespace cdc
