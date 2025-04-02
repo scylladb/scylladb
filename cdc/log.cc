@@ -158,6 +158,15 @@ public:
         });
     }
 
+    virtual void on_before_allocate_tablet_map(const locator::tablet_map& map, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+        if (!is_log_schema(s)) {
+            return;
+        }
+
+        auto mut = create_table_streams_mutation(s.id(), db_clock::now(), map, ts).get();
+        muts.emplace_back(std::move(mut));
+    }
+
     void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) override {
         std::vector<schema_ptr> new_cfms;
 
@@ -239,7 +248,33 @@ public:
             auto& keyspace = db.find_keyspace(schema.ks_name());
             auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+
+            if (keyspace.uses_tablets()) {
+                // drop cdc streams of this table
+                auto drop_stream_mut = make_drop_table_streams_mutations(log_schema->id(), timestamp);
+                mutations.insert(mutations.end(), std::make_move_iterator(drop_stream_mut.begin()), std::make_move_iterator(drop_stream_mut.end()));
+            }
+
             db.get_notifier().before_drop_column_family(*log_schema, mutations, timestamp);
+        }
+    }
+
+    void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>& mutations, api::timestamp_type ts) override {
+        auto& db = _ctxt._proxy.get_db().local();
+        auto& ks = db.find_keyspace(keyspace_name);
+
+        if (ks.uses_tablets()) {
+            // drop cdc streams for all CDC tables in this keyspace
+            for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
+                seastar::thread::maybe_yield();
+
+                if (!is_log_schema(*s)) {
+                    continue;
+                }
+
+                auto drop_stream_mut = make_drop_table_streams_mutations(s->id(), ts);
+                mutations.insert(mutations.end(), std::make_move_iterator(drop_stream_mut.begin()), std::make_move_iterator(drop_stream_mut.end()));
+            }
         }
     }
 
