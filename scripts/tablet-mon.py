@@ -495,9 +495,9 @@ def update_from_cql(initial=False):
         tablet_id_by_table[table_id] += 1
         return ret
 
-    for tablet in session.execute(tablets_query):
-        tablet_seq = tablet_id_for_table(tablet.table_id)
-        id = (tablet.table_id, tablet.last_token)
+    def process_tablet(table_id, tablet):
+        tablet_seq = tablet_id_for_table(table_id)
+        id = (table_id, tablet.last_token)
         replicas = set(tablet.replicas)
         new_replicas = set(tablet.new_replicas) if tablet.new_replicas else replicas
 
@@ -550,6 +550,22 @@ def update_from_cql(initial=False):
                 src_tablet.streaming = dst
                 fire_tracer(id, src, dst, light_red, light_green, tablet_h,
                             streaming_trace_decay_ms, streaming_trace_duration_ms)
+
+    all_tablets = {}
+    for tablet in session.execute(tablets_query):
+        if not tablet.table_id in all_tablets:
+            all_tablets[tablet.table_id] = []
+        all_tablets[tablet.table_id].append(tablet)
+
+    for (table_id, tablet) in all_tablets.items():
+        base_id = table_id
+        try:
+            base_id = tablet[0].base_table or table_id
+        except AttributeError:
+            pass
+
+        for t in all_tablets[base_id]:
+            process_tablet(table_id, t)
 
     for n in nodes:
         for s_idx, s in enumerate(n.shards):
