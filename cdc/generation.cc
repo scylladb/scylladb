@@ -1157,4 +1157,40 @@ db_clock::time_point get_ts(const generation_id& gen_id) {
     return std::visit([] (auto& id) { return id.ts; }, gen_id);
 }
 
+mutation create_table_streams_mutation(table_id table, utils::UUID stream_uuid, const std::vector<cdc::stream_id>& stream_ids, api::timestamp_type ts) {
+    auto s = db::system_keyspace::cdc_streams_state();
+    auto gc_now = gc_clock::now();
+    auto tombstone_ts = ts - 1;
+
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(tombstone_ts, gc_now));
+    m.set_static_cell("timestamp", data_value(timeuuid_native_type{stream_uuid}), ts);
+
+    // create a stream for each tablet
+    for (auto sid : stream_ids) {
+        auto ck = clustering_key::from_single_value(*s, sid.to_bytes());
+        m.partition().apply_insert(*s, ck, ts);
+    }
+
+    return m;
+}
+
+std::vector<mutation>
+make_drop_table_streams_mutations(table_id table, api::timestamp_type ts) {
+    std::vector<mutation> mutations;
+    mutations.reserve(3);
+    for (auto s : {db::system_keyspace::cdc_streams_state(),
+                   db::system_keyspace::cdc_streams_history(),
+                   db::system_keyspace::cdc_pending_streams()}) {
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        m.partition().apply(tombstone(ts, gc_clock::now()));
+        mutations.emplace_back(std::move(m));
+    }
+    return mutations;
+}
+
 } // namespace cdc
