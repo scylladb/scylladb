@@ -34,6 +34,7 @@ controller::controller(sharded<auth::service>& auth, sharded<service::migration_
         seastar::scheduling_group sg)
     : protocol_server(sg)
     , _ops_sem(1)
+    , _bg_stops("transport::controller::bg_stops")
     , _auth_service(auth)
     , _mnotifier(mn)
     , _lifecycle_notifier(elc_notif)

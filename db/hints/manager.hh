@@ -116,7 +116,7 @@ private:
     int64_t _max_hint_window_us = 0;
     replica::database& _local_db;
 
-    seastar::gate _draining_eps_gate; // gate used to control the progress of endpoint_managers stopping not in the context of manager::stop() call
+    seastar::named_gate _draining_eps_gate; // gate used to control the progress of endpoint_managers stopping not in the context of manager::stop() call
 
     resource_manager& _resource_manager;
 

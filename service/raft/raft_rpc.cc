@@ -33,6 +33,7 @@ raft_rpc::raft_rpc(raft_state_machine& sm, netw::messaging_service& ms,
           shared_ptr<raft::failure_detector> failure_detector, raft::group_id gid, raft::server_id my_id)
     : _sm(sm), _group_id(std::move(gid)), _my_id(my_id), _messaging(ms)
     , _failure_detector(std::move(failure_detector))
+    , _shutdown_gate("raft_rpc::shutdown")
     , _append_entries_semaphore(append_entries_semaphore_limit_bytes)
 {}
 

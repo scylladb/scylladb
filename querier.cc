@@ -213,7 +213,9 @@ static std::unique_ptr<querier_base> find_querier(querier_cache::index& index, q
 }
 
 querier_cache::querier_cache(is_user_semaphore_func is_user_semaphore_func, std::chrono::seconds entry_ttl)
-    : _entry_ttl(entry_ttl), _is_user_semaphore_func(is_user_semaphore_func) {
+    : _entry_ttl(entry_ttl)
+    , _closing_gate("querier_cache")
+    , _is_user_semaphore_func(is_user_semaphore_func) {
 }
 
 struct querier_utils {

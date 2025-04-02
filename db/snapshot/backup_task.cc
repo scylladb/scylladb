@@ -109,7 +109,7 @@ future<> backup_task_impl::do_backup() {
     }
 
     std::exception_ptr ex;
-    gate uploads;
+    named_gate uploads(format("do_backup({})", _snapshot_dir));
     auto snapshot_dir_lister = directory_lister(_snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>());
 
     for (;;) {

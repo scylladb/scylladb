@@ -48,14 +48,16 @@ const std::chrono::minutes prepared_statements_cache::entry_expiry = std::chrono
 struct query_processor::remote {
     remote(service::migration_manager& mm, service::mapreduce_service& fwd,
            service::storage_service& ss, service::raft_group0_client& group0_client)
-            : mm(mm), mapreducer(fwd), ss(ss), group0_client(group0_client) {}
+            : mm(mm), mapreducer(fwd), ss(ss), group0_client(group0_client)
+            , gate("query_processor::remote")
+    {}
 
     service::migration_manager& mm;
     service::mapreduce_service& mapreducer;
     service::storage_service& ss;
     service::raft_group0_client& group0_client;
 
-    seastar::gate gate;
+    seastar::named_gate gate;
 };
 
 bool query_processor::topology_global_queue_empty() {

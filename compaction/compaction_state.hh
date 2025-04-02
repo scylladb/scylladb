@@ -22,7 +22,7 @@ namespace compaction {
 struct compaction_state {
     // Used both by compaction tasks that refer to the compaction_state
     // and by any function running under run_with_compaction_disabled().
-    seastar::gate gate;
+    seastar::named_gate gate;
 
     // Prevents table from running major and minor compaction at the same time.
     seastar::rwlock lock;

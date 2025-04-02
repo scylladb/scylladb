@@ -325,7 +325,7 @@ private:
     future<> wait_for_next_tick(seastar::abort_source* as);
 
 
-    seastar::gate _do_on_leader_gate;
+    seastar::named_gate _do_on_leader_gate;
     // Call a function on a current leader until it returns stop_iteration::yes.
     // Handles aborts and leader changes, adds a delay between
     // iterations to protect against tight loops.
@@ -345,7 +345,8 @@ server_impl::server_impl(server_id uuid, std::unique_ptr<rpc> rpc,
         seastar::shared_ptr<failure_detector> failure_detector, server::configuration config) :
                     _rpc(std::move(rpc)), _state_machine(std::move(state_machine)),
                     _persistence(std::move(persistence)), _failure_detector(failure_detector),
-                    _id(uuid), _config(config) {
+                    _id(uuid), _config(config), _do_on_leader_gate("raft::server_impl::do_on_leader_gate")
+{
     set_rpc_server(_rpc.get());
     if (_config.snapshot_threshold_log_size > _config.max_log_size) {
         throw config_error(fmt::format("[{}] snapshot_threshold_log_size ({}) must not be greater than max_log_size ({})",

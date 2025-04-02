@@ -32,6 +32,7 @@ large_data_handler::large_data_handler(uint64_t partition_threshold_bytes, uint6
         , _cell_threshold_bytes(cell_threshold_bytes)
         , _rows_count_threshold(rows_count_threshold)
         , _collection_elements_count_threshold(collection_elements_count_threshold)
+        , _sys_ks("large_data_handler::system_keyspace")
 {
     large_data_logger.debug("partition_threshold_bytes={} row_threshold_bytes={} cell_threshold_bytes={} rows_count_threshold={} collection_elements_count_threshold={}",
         partition_threshold_bytes, row_threshold_bytes, cell_threshold_bytes, rows_count_threshold, _collection_elements_count_threshold);
