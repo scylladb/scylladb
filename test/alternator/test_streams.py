@@ -1584,6 +1584,34 @@ def test_stream_list_tables(dynamodb):
                 if table.name != listed_name:
                     assert table.name not in listed_name
 
+# The DynamoDB documentation for GetRecords says that "GetRecords can retrieve
+# a maximum of 1 MB of data or 1000 stream records, whichever comes first.",
+# and that for Limit, "the upper limit is 1000". Indeed, if we try Limit=1001,
+# we get a ValidationException. There is no reason why Alternator must
+# implement exactly the same maximum, but since it's documented, there is
+# no reason not to. In any case, some maximum is needed unless we make
+# sure the relevant code (executor::get_records()) has preemption points -
+# and currently it does not. Reproduces issue #23534
+def test_get_records_too_high_limit(test_table_ss_keys_only, dynamodbstreams):
+    table, arn = test_table_ss_keys_only
+    # Get just one shard - any shard - and its LATEST iterator. Because it's
+    # LATEST, there will be no data to read from this iterator, but we don't
+    # care, we just want to run the GetRecords request, we don't care what
+    # is returned.
+    shard = dynamodbstreams.describe_stream(StreamArn=arn, Limit=1)['StreamDescription']['Shards'][0]
+    shard_id = shard['ShardId']
+    iter = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
+    # Limit=1000 should be allowed:
+    response = dynamodbstreams.get_records(ShardIterator=iter, Limit=1000)
+    # Limit=1001 should NOT be allowed
+    with pytest.raises(ClientError, match='ValidationException.*[Ll]imit'):
+        response = dynamodbstreams.get_records(ShardIterator=iter, Limit=1001)
+    # Limit must be >= 0:
+    with pytest.raises(ClientError, match='ValidationException.*[Ll]imit'):
+        response = dynamodbstreams.get_records(ShardIterator=iter, Limit=0)
+    with pytest.raises(ClientError, match='ValidationException.*[Ll]imit'):
+        response = dynamodbstreams.get_records(ShardIterator=iter, Limit=-1)
+
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
 #   requires the user to wait for the first stream to become DISABLED before
