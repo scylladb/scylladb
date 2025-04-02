@@ -241,6 +241,10 @@ public:
                 ;
 
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+
+            if (!log_schema) {
+                db.get_notifier().before_create_column_family(*keyspace.metadata(), *new_log_schema, mutations, timestamp);
+            }
         }
     }
 
@@ -256,6 +260,7 @@ public:
             auto& keyspace = db.find_keyspace(schema.ks_name());
             auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            db.get_notifier().before_drop_column_family(*log_schema, mutations, timestamp);
         }
     }
 
