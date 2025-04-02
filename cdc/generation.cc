@@ -160,6 +160,10 @@ const bytes& stream_id::to_bytes() const {
     return _value;
 }
 
+bytes stream_id::to_bytes() && {
+    return std::move(_value);
+}
+
 partition_key stream_id::to_partition_key(const schema& log_schema) const {
     return partition_key::from_single_value(log_schema, _value);
 }
@@ -1176,6 +1180,24 @@ shared_ptr<db::system_distributed_keyspace> generation_service::get_sys_dist_ks(
 
 db_clock::time_point get_ts(const generation_id& gen_id) {
     return std::visit([] (auto& id) { return id.ts; }, gen_id);
+}
+
+future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const locator::tablet_map& map, api::timestamp_type ts) {
+    auto s = db::system_keyspace::cdc_streams_state();
+
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.set_static_cell("timestamp", stream_ts, ts);
+
+    for (auto tid : map.tablet_ids()) {
+        auto sid = cdc::stream_id(map.get_last_token(tid), 0);
+        auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(std::move(sid).to_bytes()), ts);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return std::move(m);
 }
 
 } // namespace cdc
