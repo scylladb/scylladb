@@ -808,6 +808,9 @@ future<executor::request_return_type> executor::get_records(client_state& client
     if (limit < 1) {
         throw api_error::validation("Limit must be 1 or more");
     }
+    if (limit > 1000) {
+        throw api_error::validation("Limit must be less than or equal to 1000");
+    }
 
     auto db = _proxy.data_dictionary();
     schema_ptr schema, base;
