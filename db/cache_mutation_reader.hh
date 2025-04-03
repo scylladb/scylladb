@@ -123,6 +123,9 @@ class cache_mutation_reader final : public mutation_reader::impl {
     gc_clock::time_point _read_time;
     gc_clock::time_point _gc_before;
 
+    api::timestamp_type _max_purgeable_timestamp = api::missing_timestamp;
+    api::timestamp_type _max_purgeable_timestamp_shadowable = api::missing_timestamp;
+
     future<> do_fill_buffer();
     future<> ensure_underlying();
     void copy_from_cache_to_buffer();
@@ -207,6 +210,11 @@ class cache_mutation_reader final : public mutation_reader::impl {
         return gc_clock::time_point::min();
     }
 
+    bool can_gc(tombstone t, is_shadowable is) const {
+        const auto max_purgeable = is ? _max_purgeable_timestamp_shadowable : _max_purgeable_timestamp;
+        return t.timestamp < max_purgeable;
+    }
+
 public:
     cache_mutation_reader(schema_ptr s,
                                dht::decorated_key dk,
@@ -228,8 +236,19 @@ public:
         , _read_time(get_read_time())
         , _gc_before(get_gc_before(*_schema, dk, _read_time))
     {
-        clogger.trace("csm {}: table={}.{}, reversed={}, snap={}", fmt::ptr(this), _schema->ks_name(), _schema->cf_name(), _read_context.is_reversed(),
-                      fmt::ptr(&*_snp));
+        _max_purgeable_timestamp = ctx.get_max_purgeable(dk, is_shadowable::no);
+        _max_purgeable_timestamp_shadowable = ctx.get_max_purgeable(dk, is_shadowable::yes);
+
+        clogger.trace("csm {}: table={}.{}, dk={}, gc-before={}, max-purgeable-regular={}, max-purgeable-shadowable={}, reversed={}, snap={}",
+                fmt::ptr(this),
+                _schema->ks_name(),
+                _schema->cf_name(),
+                dk,
+                _gc_before,
+                _max_purgeable_timestamp,
+                _max_purgeable_timestamp_shadowable,
+                _read_context.is_reversed(),
+                fmt::ptr(&*_snp));
         push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), _snp->partition_tombstone()));
     }
     cache_mutation_reader(schema_ptr s,
@@ -787,12 +806,12 @@ void cache_mutation_reader::copy_from_cache_to_buffer() {
             t.apply(range_tomb);
 
             auto row_tomb_expired = [&](row_tombstone tomb) {
-                return (tomb && tomb.max_deletion_time() < _gc_before);
+                return (tomb && tomb.max_deletion_time() < _gc_before && can_gc(tomb.tomb(), tomb.is_shadowable()));
             };
 
             auto is_row_dead = [&](const deletable_row& row) {
                 auto& m = row.marker();
-                return (!m.is_missing() && m.is_dead(_read_time) && m.deletion_time() < _gc_before);
+                return (!m.is_missing() && m.is_dead(_read_time) && m.deletion_time() < _gc_before && can_gc(tombstone(m.timestamp(), m.deletion_time()), is_shadowable::no));
             };
 
             if (row_tomb_expired(t) || is_row_dead(row)) {
@@ -800,9 +819,11 @@ void cache_mutation_reader::copy_from_cache_to_buffer() {
 
                 _read_context.cache()._tracker.on_row_compacted();
 
+                auto mutation_can_gc = can_gc_fn([this] (tombstone t, is_shadowable is) { return can_gc(t, is); });
+
                 with_allocator(_snp->region().allocator(), [&] {
                     deletable_row row_copy(row_schema, row);
-                    row_copy.compact_and_expire(row_schema, t.tomb(), _read_time, always_gc, _gc_before, nullptr);
+                    row_copy.compact_and_expire(row_schema, t.tomb(), _read_time, mutation_can_gc, _gc_before, nullptr);
                     std::swap(row, row_copy);
                 });
                 remove_row = row.empty();

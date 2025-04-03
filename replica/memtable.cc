@@ -283,6 +283,11 @@ memtable::slice(const dht::partition_range& range) const {
 }
 
 class iterator_reader {
+    // DO NOT RELEASE the memtable! Keep a reference to it, so it stays in
+    // memtable_list::_flushed_memtables_with_active_reads and so that it keeps
+    // blocking tombstone GC of tombstone in the cache, which cover data that
+    // used to be in this memtable, and which will possibly be produced by this
+    // reader later on.
     lw_shared_ptr<memtable> _memtable;
     schema_ptr _schema;
     const dht::partition_range* _range;
@@ -381,7 +386,6 @@ protected:
                                     streamed_mutation::forwarding fwd,
                                     mutation_reader::forwarding fwd_mr) {
         auto ret = _memtable->_underlying->make_reader_v2(_schema, std::move(permit), delegate, slice, nullptr, fwd, fwd_mr);
-        _memtable = {};
         _last = {};
         return ret;
     }
@@ -832,6 +836,10 @@ stop_iteration memtable_entry::clear_gently() noexcept {
 
 void memtable::mark_flushed(mutation_source underlying) noexcept {
     _underlying = std::move(underlying);
+}
+
+bool memtable::is_merging_to_cache() const noexcept {
+    return _merging_into_cache;
 }
 
 bool memtable::is_flushed() const noexcept {
