@@ -1071,10 +1071,9 @@ process_query_internal(service::client_state& client_state, distributed<cql3::qu
 
     if (init_trace) {
         tracing::set_page_size(trace_state, options.get_page_size());
-        tracing::set_consistency_level(trace_state, options.get_consistency());
-        tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
         tracing::add_query(trace_state, query);
-        tracing::set_user_timestamp(trace_state, options.get_specific_options().timestamp);
+        tracing::set_common_query_parameters(trace_state, options.get_consistency(),
+            options.get_serial_consistency(), options.get_specific_options().timestamp);
 
         tracing::begin(trace_state, "Execute CQL3 query", client_state.get_client_address());
     }
@@ -1150,10 +1149,10 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
 
     if (init_trace) {
         tracing::set_page_size(trace_state, options.get_page_size());
-        tracing::set_consistency_level(trace_state, options.get_consistency());
-        tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
         tracing::add_query(trace_state, prepared->statement->raw_cql_statement);
         tracing::add_prepared_statement(trace_state, prepared);
+        tracing::set_common_query_parameters(trace_state, options.get_consistency(),
+            options.get_serial_consistency(), options.get_specific_options().timestamp);
 
         tracing::begin(trace_state, seastar::value_of([&id] { return seastar::format("Execute CQL3 prepared query [{}]", id); }),
                 client_state.get_client_address());
@@ -1289,9 +1288,10 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     }
 
     if (init_trace) {
-        tracing::set_consistency_level(trace_state, options.get_consistency());
-        tracing::set_optional_serial_consistency_level(trace_state, options.get_serial_consistency());
         tracing::add_prepared_query_options(trace_state, options);
+        tracing::set_common_query_parameters(trace_state, options.get_consistency(),
+            options.get_serial_consistency(), options.get_specific_options().timestamp);
+
         tracing::trace(trace_state, "Creating a batch statement");
     }
 
