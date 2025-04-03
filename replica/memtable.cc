@@ -834,6 +834,10 @@ void memtable::mark_flushed(mutation_source underlying) noexcept {
     _underlying = std::move(underlying);
 }
 
+bool memtable::is_merging_to_cache() const noexcept {
+    return _merging_into_cache;
+}
+
 bool memtable::is_flushed() const noexcept {
     return bool(_underlying);
 }
