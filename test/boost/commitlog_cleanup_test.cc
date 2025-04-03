@@ -121,7 +121,7 @@ SEASTAR_TEST_CASE(test_commitlog_cleanups) {
     auto cfg = cql_test_config();
     cfg.db_config->auto_snapshot.set(false);
     cfg.db_config->commitlog_sync.set("batch");
-    cfg.db_config->enable_tablets.set(true);
+    cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
     cfg.initial_tablets = 1;
 
     return do_with_cql_env_thread([](cql_test_env& e) {
@@ -173,7 +173,7 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
     auto cfg = cql_test_config();
     cfg.db_config->auto_snapshot.set(false);
     cfg.db_config->commitlog_sync.set("batch");
-    cfg.db_config->enable_tablets.set(true);
+    cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
     cfg.initial_tablets = 1;
 
     return do_with_cql_env_thread([](cql_test_env& e) {
