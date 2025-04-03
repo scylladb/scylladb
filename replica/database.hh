@@ -479,6 +479,9 @@ private:
     std::optional<sstables::sstable_generation_generator> _sstable_generation_generator;
 
     db::replay_position _highest_rp;
+    // Tracks the highest replay position flushed to a sstable
+    db::replay_position _highest_flushed_rp;
+    // Tracks the highest position before flush actually starts
     db::replay_position _flush_rp;
     db::replay_position _lowest_allowed_rp;
 
@@ -973,6 +976,7 @@ public:
     future<bool> snapshot_exists(sstring name);
 
     db::replay_position set_low_replay_position_mark();
+    db::replay_position highest_flushed_replay_position() const;
 
 private:
     using snapshot_file_set = foreign_ptr<std::unique_ptr<std::unordered_set<sstring>>>;
@@ -1884,7 +1888,7 @@ private:
     struct table_truncate_state;
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
-    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state&, db_clock::time_point truncated_at);
+    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state&);
 public:
     /** Truncates the given column family */
     // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
