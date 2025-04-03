@@ -731,15 +731,15 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
 }
 
 future<compaction_manager::compaction_reenabler>
-compaction_manager::stop_and_disable_compaction(table_state& t) {
+compaction_manager::stop_and_disable_compaction(table_state& t, double stop_threshold) {
     compaction_reenabler cre(*this, t);
-    co_await stop_ongoing_compactions("user-triggered operation", &t);
+    co_await stop_ongoing_compactions("user-triggered operation", &t, std::nullopt, stop_threshold);
     co_return cre;
 }
 
 future<>
-compaction_manager::run_with_compaction_disabled(table_state& t, std::function<future<> ()> func) {
-    compaction_reenabler cre = co_await stop_and_disable_compaction(t);
+compaction_manager::run_with_compaction_disabled(table_state& t, std::function<future<> ()> func, double stop_threshold) {
+    compaction_reenabler cre = co_await stop_and_disable_compaction(t, stop_threshold);
 
     co_await func();
 }
@@ -1067,13 +1067,16 @@ void compaction_manager::postpone_compaction_for_table(table_state* t) {
     _postponed.insert(t);
 }
 
-future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) noexcept {
+void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept {
     // To prevent compaction from being postponed while tasks are being stopped,
     // let's stop all tasks before the deferring point below.
     for (auto& t : tasks) {
         cmlog.debug("Stopping {}", *t);
         t->stop_compaction(reason);
     }
+}
+
+future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks) const noexcept {
     co_await coroutine::parallel_for_each(tasks, [] (auto& task) -> future<> {
         auto unlink_task = deferred_action([task] { task->unlink(); });
         try {
@@ -1083,14 +1086,14 @@ future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_e
             // as it happens with reshard and reshape.
         } catch (...) {
             // just log any other errors as the callers have nothing to do with them.
-            cmlog.debug("Stopping {}: task returned error: {}", *task, std::current_exception());
+            cmlog.debug("Awaiting {}: task returned error: {}", *task, std::current_exception());
             co_return;
         }
-        cmlog.debug("Stopping {}: done", *task);
+        cmlog.debug("Awaiting {}: done", *task);
     });
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_state* t, std::optional<sstables::compaction_type> type_opt) noexcept {
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_state* t, std::optional<sstables::compaction_type> type_opt, double stop_threshold) noexcept {
     try {
         auto ongoing_compactions = get_compactions(t).size();
         auto tasks = _tasks
@@ -1098,6 +1101,12 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
                     return (!t || task.compacting_table() == t) && (!type_opt || task.compaction_type() == *type_opt);
                 })
                 | std::views::transform([] (auto& task) { return task.shared_from_this(); })
+                | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
+        auto tasks_to_stop = tasks
+                | std::views::filter([stop_threshold] (const auto& task) {
+                    auto& cdata = task->compaction_data();
+                    return !cdata.compaction_size || (task->progress_monitor().get_progress() / cdata.compaction_size) <= stop_threshold;
+                })
                 | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
         logging::log_level level = tasks.empty() ? log_level::debug : log_level::info;
         if (cmlog.is_enabled(level)) {
@@ -1110,11 +1119,11 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
             }
             cmlog.log(level, "Stopping {} tasks for {} ongoing compactions{} due to {}", tasks.size(), ongoing_compactions, scope, reason);
         }
-        return stop_tasks(std::move(tasks), std::move(reason));
+        stop_tasks(tasks_to_stop, std::move(reason));
+        co_await await_tasks(std::move(tasks));
     } catch (...) {
         cmlog.error("Stopping ongoing compactions failed: {}.  Ignored", std::current_exception());
     }
-    return make_ready_future();
 }
 
 future<> compaction_manager::drain() {

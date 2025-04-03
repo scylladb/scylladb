@@ -177,7 +177,8 @@ private:
     }
     future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
 
-    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason) noexcept;
+    void stop_tasks(const std::vector<shared_ptr<compaction::compaction_task_executor>>& tasks, sstring reason) noexcept;
+    future<> await_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>>) const noexcept;
     future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
@@ -386,10 +387,13 @@ public:
 
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
-    future<compaction_reenabler> stop_and_disable_compaction(compaction::table_state& t);
+    future<compaction_reenabler> stop_and_disable_compaction(compaction::table_state& t, double stop_threshold = 1.0);
 
     // Run a function with compaction temporarily disabled for a table T.
-    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
+    // Stop compaction only if their progress is less than the stop_threshold.
+    // stop_threshold=1: to stop all compactions
+    // stop_threshold=0: to wait for all compactions
+    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func, double stop_threshold = 1.0);
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     future<> unplug_system_keyspace() noexcept;
@@ -418,7 +422,7 @@ public:
     future<> stop_compaction(sstring type, compaction::table_state* table = nullptr);
 
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}, double stop_threshold = 1.0) noexcept;
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -590,6 +594,10 @@ public:
     const sstring& description() const noexcept {
         return _description;
     }
+
+    const sstables::compaction_progress_monitor& progress_monitor() const noexcept {
+        return _progress_monitor;
+    }
 private:
     // Before _compaction_done is set in compaction_task_executor::run_compaction(), compaction_done() returns ready future.
     future<compaction_manager::compaction_stats_opt> compaction_done() noexcept {
@@ -617,7 +625,8 @@ public:
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
-    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) noexcept;
+    //friend void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept;
+    friend future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_executor>>) const noexcept;
     friend sstables::test_env_compaction_manager;
 };
 
