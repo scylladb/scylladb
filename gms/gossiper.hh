@@ -347,7 +347,7 @@ public:
      */
     future<> remove_endpoint(locator::host_id endpoint, permit_id);
     // Returns true if an endpoint was removed
-    future<bool> force_remove_endpoint(inet_address endpoint, locator::host_id id, permit_id);
+    future<> force_remove_endpoint(locator::host_id id, permit_id);
 private:
     /**
      * Quarantines the endpoint for QUARANTINE_DELAY

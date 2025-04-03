@@ -682,24 +682,23 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
         std::chrono::steady_clock::now() - start).count());
 }
 
-future<bool> gossiper::force_remove_endpoint(inet_address endpoint, locator::host_id id, permit_id pid) {
-    return container().invoke_on(0, [this, endpoint, pid, id] (auto& gossiper) mutable -> future<bool> {
+future<> gossiper::force_remove_endpoint(locator::host_id id, permit_id pid) {
+    return container().invoke_on(0, [this, pid, id] (auto& gossiper) mutable -> future<> {
         auto permit = co_await gossiper.lock_endpoint(id, pid);
         pid = permit.id();
         try {
-            if (gossiper.get_host_id(endpoint) != id) {
-                co_return false;
+            if (id == my_host_id()) {
+                throw std::runtime_error(format("Can not force remove node {} itself", id));
             }
-            if (endpoint == get_broadcast_address()) {
-                throw std::runtime_error(format("Can not force remove node {} itself", endpoint));
+            if (!gossiper._endpoint_state_map.contains(id)) {
+                logger.debug("Force remove node is called on non exiting endpoint {}", id);
+                co_return;
             }
             co_await gossiper.remove_endpoint(id, pid);
             co_await gossiper.evict_from_membership(id, pid);
-            logger.info("Finished to force remove node {}", endpoint);
-            co_return true;
+            logger.info("Finished to force remove node {}", id);
         } catch (...) {
-            logger.warn("Failed to force remove node {}: {}", endpoint, std::current_exception());
-            co_return false;
+            logger.warn("Failed to force remove node {}: {}", id, std::current_exception());
         }
     });
 }
