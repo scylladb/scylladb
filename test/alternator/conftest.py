@@ -416,12 +416,15 @@ def cql(dynamodb):
     profile = ExecutionProfile(
         load_balancing_policy=RoundRobinPolicy(),
         consistency_level=ConsistencyLevel.LOCAL_QUORUM,
-        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL)
+        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
+        request_timeout=120)
     cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
         contact_points=[host],
         port=9042,
         protocol_version=4,
         auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
+        connect_timeout=60,
+        control_connection_timeout=60
     )
     try:
         ret = cluster.connect()
