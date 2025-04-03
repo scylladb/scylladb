@@ -9,7 +9,7 @@ from test.pylib.internal_types import HostID, ServerInfo, ServerNum
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
-from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, TabletReplicas
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver
 
@@ -1718,3 +1718,50 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
         expected_replicas_per_server = get_expected_replicas_per_server(live_servers.values(), dead_servers.values(), ctx.initial_tablets, ctx.rf)
         tablet_count = await get_tablet_count_per_shard_for_hosts(manager, all_servers.values(), tables)
         verify_replicas_per_server("After decommission", expected_replicas_per_server, tablet_count, ctx.initial_tablets, ctx.rf)
+
+# Reproduces assert failure when truncating table, either triggered by DROP TABLE or TRUNCATE.
+# See: https://github.com/scylladb/scylladb/issues/18059
+# It's achieved by migrating a tablet away that contains the highest replay position of a shard,
+# so when drop/truncate happens, the highest replay position will be greater than all the data
+# found in the table (includes data in memtable).
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ['DROP TABLE', 'TRUNCATE'])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, operation):
+    cmdline = [ '--smp=2' ]
+    cfg = { 'auto_snapshot': True }
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    ks = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND TABLETS = {{'initial': 4}}")
+
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+    await manager.api.disable_autocompaction(servers[0].ip_addr, ks)
+
+    keys = range(100)
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+    tablet_replicas_in_s0 = list[TabletReplicas]()
+
+    for replica in tablet_replicas:
+        if replica.replicas[0][1] == 0:
+            tablet_replicas_in_s0.append(replica)
+
+    assert len(tablet_replicas_in_s0) == 2
+
+    target_tablet = tablet_replicas_in_s0[0]
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+
+    logger.info("Migrating 1st tablet to shard 1")
+    await manager.api.move_tablet(servers[0].ip_addr, ks, "test", *(s0_host_id, 0), *(s0_host_id, 1), target_tablet.last_token)
+
+    await manager.api.enable_injection(servers[0].ip_addr, "truncate_disable_compaction_delay", one_shot=True)
+
+    logger.info(f"Running {operation} {ks}.test")
+    await cql.run_async(f"{operation} {ks}.test")
