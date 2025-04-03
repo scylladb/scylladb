@@ -822,9 +822,27 @@ public:
         auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
 
         for (auto tid : tmap.tablet_ids()) {
-            auto range = tmap.get_token_range(tid);
+            if (!tmap.has_replica(tid, local_replica)) {
+                continue;
+            }
 
-            if (tmap.has_replica(tid, local_replica)) {
+            bool has_local_replica_left = false;
+            auto trinfo = tmap.get_tablet_transition_info(tid);
+            if (trinfo) {
+                auto leaving_replica = locator::get_leaving_replica(tmap.get_tablet_info(tid), *trinfo);
+                auto pending_replica = trinfo->pending_replica;
+
+                has_local_replica_left =
+                        (leaving_replica
+                                && *leaving_replica == local_replica
+                                && locator::has_leaving_replica_left(trinfo->stage))
+                        || (pending_replica
+                                && *pending_replica == local_replica
+                                && has_pending_replica_left(trinfo->stage));
+            }
+
+            if (!has_local_replica_left) {
+                auto range = tmap.get_token_range(tid);
                 tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
                 ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range));
             }
