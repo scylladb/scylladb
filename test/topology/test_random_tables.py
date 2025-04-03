@@ -8,7 +8,13 @@ import time
 import pytest
 from cassandra.protocol import InvalidRequest, ReadFailure                         # type: ignore
 from cassandra.query import SimpleStatement                                        # type: ignore
+<<<<<<< HEAD:test/topology/test_random_tables.py
 from test.topology.util import wait_for_token_ring_and_group0_consistency
+=======
+from test.cluster.util import wait_for_token_ring_and_group0_consistency
+
+pytestmark = pytest.mark.prepare_3_racks_cluster
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/test_random_tables.py
 
 
 # Simple test of schema helper

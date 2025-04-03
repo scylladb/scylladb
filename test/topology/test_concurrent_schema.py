@@ -10,6 +10,11 @@ from test.pylib.random_tables import Column, UUIDType, IntType
 
 
 logger = logging.getLogger('schema-test')
+<<<<<<< HEAD:test/topology/test_concurrent_schema.py
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/test_concurrent_schema.py
 
 
 # #1207 Schema changes are not linearizable, so concurrent updates may lead to

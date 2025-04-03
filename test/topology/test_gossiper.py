@@ -7,6 +7,12 @@
 from test.pylib.manager_client import ManagerClient
 import pytest
 
+<<<<<<< HEAD:test/topology/test_gossiper.py
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
+
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/test_gossiper.py
 @pytest.mark.asyncio
 async def test_gossiper_endpoints(manager: ManagerClient) -> None:
     servers = await manager.running_servers()

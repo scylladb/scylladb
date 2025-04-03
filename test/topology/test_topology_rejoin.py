@@ -9,6 +9,11 @@ Test rejoin of a server after it was stopped suddenly (crash-like)
 from test.pylib.manager_client import ManagerClient
 import pytest
 
+<<<<<<< HEAD:test/topology/test_topology_rejoin.py
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/test_topology_rejoin.py
 
 @pytest.mark.asyncio
 async def test_start_after_sudden_stop(manager: ManagerClient, random_tables) -> None:

@@ -19,6 +19,11 @@ from test.topology.util import new_test_keyspace, new_test_table, new_materializ
 ksdef = "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 } AND TABLETS = {'enabled': false }"
 
 logger = logging.getLogger(__name__)
+<<<<<<< HEAD:test/topology/test_mv.py
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
+>>>>>>> 0fdf2a2090 (Merge 'test/pylib: servers_add: support list of property_files' from Benny Halevy):test/cluster/test_mv.py
 
 @pytest.mark.asyncio
 async def test_mv_tombstone_gc_setting(manager):
