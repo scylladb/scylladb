@@ -3157,10 +3157,6 @@ db::replay_position table::set_low_replay_position_mark() {
 
 template<typename... Args>
 void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
-    if (cg.async_gate().is_closed()) [[unlikely]] {
-        on_internal_error(tlogger, "async_gate of table's compaction group is closed");
-    }
-
     utils::latency_counter lc;
     _stats.writes.set_latency(lc);
     db::replay_position rp = h;
