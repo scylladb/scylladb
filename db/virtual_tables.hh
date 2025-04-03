@@ -20,10 +20,15 @@ class database;
 namespace service {
 class storage_service;
 class raft_group_registry;
+class tablet_allocator;
 }
 
 namespace gms {
 class gossiper;
+}
+
+namespace netw {
+class messaging_service;
 }
 
 namespace db {
@@ -36,7 +41,9 @@ future<> initialize_virtual_tables(
     distributed<service::storage_service>&,
     sharded<gms::gossiper>&,
     sharded<service::raft_group_registry>&,
-    sharded<db::system_keyspace>& sys_ks,
+    sharded<db::system_keyspace>&,
+    sharded<service::tablet_allocator>&,
+    sharded<netw::messaging_service>&,
     db::config&);
 
 

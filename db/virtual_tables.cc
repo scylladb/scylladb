@@ -18,6 +18,7 @@
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/virtual_table.hh"
+#include "partition_slice_builder.hh"
 #include "db/virtual_tables.hh"
 #include "db/size_estimates_virtual_reader.hh"
 #include "db/view/build_progress_virtual_reader.hh"
@@ -30,10 +31,17 @@
 #include "schema/schema_builder.hh"
 #include "service/raft/raft_group_registry.hh"
 #include "service/storage_service.hh"
+#include "service/tablet_allocator.hh"
+#include "locator/load_sketch.hh"
 #include "types/list.hh"
 #include "types/types.hh"
 #include "utils/build_id.hh"
 #include "utils/log.hh"
+#include "replica/exceptions.hh"
+#include "service/paxos/paxos_state.hh"
+#include "idl/storage_proxy.dist.hh"
+
+using namespace locator;
 
 namespace db {
 
@@ -975,12 +983,186 @@ private:
     }
 };
 
+/// Base class for virtual tables which are supposed to serve data from group0 leader.
+/// If queried on a different node, read will be redirected to the leader.
+/// Implementations need to override execute_on_leader(), which will be executed
+/// on shard0 of current group0 leader.
+///
+/// Current implementation is suitable for tables which are relatively small as all
+/// data is materialized in memory and queried in one page.
+class group0_virtual_table : public memtable_filling_virtual_table {
+private:
+    sharded<service::raft_group_registry>& _raft_gr;
+    sharded<netw::messaging_service>& _ms;
+public:
+    group0_virtual_table(schema_ptr s,
+                         sharded<service::raft_group_registry>& raft_gr,
+                         sharded<netw::messaging_service>& ms)
+        : memtable_filling_virtual_table(s)
+        , _raft_gr(raft_gr)
+        , _ms(ms) {
+    }
+
+    future<raft::server_id> get_leader(const reader_permit& permit) const {
+        while (!_raft_gr.local().group0().current_leader()) {
+            abort_on_expiry aoe(permit.timeout());
+            reader_permit::awaits_guard ag(permit);
+            co_await _raft_gr.local().group0().read_barrier(&aoe.abort_source());
+        }
+
+        co_return _raft_gr.local().group0().current_leader();
+    }
+
+    future<bool> is_leader(const reader_permit& permit) const {
+        auto leader = co_await get_leader(permit);
+        co_return leader == _raft_gr.local().get_my_raft_id();
+    }
+
+    future<> redirect_to_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) {
+        auto leader = co_await get_leader(permit);
+        auto cmd = query::read_command(_s->id(),
+                                       _s->version(),
+                                       partition_slice_builder(*_s).build(),
+                                       query::max_result_size(256*1024*1024), // Sanity limit
+                                       query::tombstone_limit::max,
+                                       query::row_limit(query::max_rows),
+                                       query::partition_limit(query::max_partitions));
+        reader_permit::awaits_guard ag(permit);
+        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms.local(),
+              locator::host_id(leader.uuid()),
+              permit.timeout(),
+              cmd,
+              query::full_partition_range,
+              {});
+        if (opt_exception.has_value() && *opt_exception) {
+            co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
+        }
+        for (auto&& p : result.partitions()) {
+            mutation_sink(p.mut().unfreeze(_s));
+            co_await coroutine::maybe_yield();
+        }
+        co_return;
+    }
+
+    // This function is executed on the node which was a group0 leader at some point since the query started.
+    // The node may not be the leader anymore by the time it is executed.
+    // Only executed on shard 0.
+    virtual future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit) = 0;
+
+    future<> execute(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+        if (this_shard_id() != 0) {
+            co_return;
+        }
+
+        if (co_await is_leader(permit)) {
+            co_await execute_on_leader(std::move(mutation_sink), std::move(permit));
+            co_return;
+        }
+
+        co_await redirect_to_leader(std::move(mutation_sink), std::move(permit));
+    }
+};
+
+class load_per_node : public group0_virtual_table {
+private:
+    sharded<service::tablet_allocator>& _talloc;
+    sharded<replica::database>& _db;
+    sharded<gms::gossiper>& _gossiper;
+public:
+    load_per_node(sharded<service::tablet_allocator>& talloc,
+                  sharded<replica::database>& db,
+                  sharded<service::raft_group_registry>& raft_gr,
+                  sharded<netw::messaging_service>& ms,
+                  sharded<gms::gossiper>& gossiper)
+        : group0_virtual_table(build_schema(), raft_gr, ms)
+        , _talloc(talloc)
+        , _db(db)
+        , _gossiper(gossiper)
+    { }
+
+    future<> execute_on_leader(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+        auto stats = _talloc.local().get_load_stats();
+        while (!stats) {
+            // Wait for stats to be refreshed by topology coordinator
+            {
+                abort_on_expiry aoe(permit.timeout());
+                reader_permit::awaits_guard ag(permit);
+                co_await seastar::sleep_abortable(std::chrono::milliseconds(200), aoe.abort_source());
+            }
+            if (!co_await is_leader(permit)) {
+                co_await redirect_to_leader(std::move(mutation_sink), std::move(permit));
+                co_return;
+            }
+            stats = _talloc.local().get_load_stats();
+        }
+
+        auto tm = _db.local().get_token_metadata_ptr();
+        auto target_tablet_size = _db.local().get_config().target_tablet_size_in_bytes();
+
+        locator::load_sketch load(tm);
+        co_await load.populate();
+
+        tm->get_topology().for_each_node([&] (const auto& node) {
+            auto host = node.host_id();
+            mutation m(schema(), make_partition_key(host));
+            auto& r = m.partition().clustered_row(*schema(), clustering_key::make_empty());
+
+            set_cell(r.cells(), "dc", node.dc());
+            set_cell(r.cells(), "rack", node.rack());
+            set_cell(r.cells(), "up", _gossiper.local().is_alive(host));
+            if (auto ip = _gossiper.local().get_address_map().find(host)) {
+                set_cell(r.cells(), "ip", data_value(inet_address(*ip)));
+            }
+            set_cell(r.cells(), "tablets_allocated", load.get_load(host));
+            set_cell(r.cells(), "tablets_allocated_per_shard", data_value(double(load.get_real_avg_shard_load(host))));
+            set_cell(r.cells(), "storage_allocated_load", data_value(int64_t(load.get_load(host) * target_tablet_size)));
+
+            if (stats && stats->capacity.contains(host)) {
+                auto capacity = stats->capacity.at(host);
+                set_cell(r.cells(), "storage_capacity", data_value(int64_t(capacity)));
+
+                auto utilization = load.get_allocated_utilization(host, *stats, target_tablet_size);
+                if (utilization) {
+                    set_cell(r.cells(), "storage_allocated_utilization", data_value(double(*utilization)));
+                }
+            }
+            mutation_sink(m);
+        });
+    }
+
+private:
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "load_per_node");
+        return schema_builder(system_keyspace::NAME, "load_per_node", std::make_optional(id))
+            .with_column("node", uuid_type, column_kind::partition_key)
+            .with_column("dc", utf8_type)
+            .with_column("rack", utf8_type)
+            .with_column("ip", inet_addr_type)
+            .with_column("up", boolean_type)
+            .with_column("tablets_allocated", long_type)
+            .with_column("tablets_allocated_per_shard", double_type)
+            .with_column("storage_capacity", long_type)
+            .with_column("storage_allocated_load", long_type)
+            .with_column("storage_allocated_utilization", double_type)
+            .with_sharder(1, 0) // shard0-only
+            .with_hash_version()
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(host_id host) {
+        return dht::decorate_key(*_s, partition_key::from_single_value(
+                *_s, data_value(host.uuid()).serialize_nonnull()));
+    }
+};
+
 }
 
 future<> initialize_virtual_tables(
         distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
         sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
         sharded<db::system_keyspace>& sys_ks,
+        sharded<service::tablet_allocator>& tablet_allocator,
+        sharded<netw::messaging_service>& ms,
         db::config& cfg) {
     auto& virtual_tables_registry = sys_ks.local().get_virtual_tables_registry();
     auto& virtual_tables = *virtual_tables_registry;
@@ -1008,6 +1190,7 @@ future<> initialize_virtual_tables(
     co_await add_table(std::make_unique<db_config_table>(cfg));
     co_await add_table(std::make_unique<clients_table>(ss));
     co_await add_table(std::make_unique<raft_state_table>(dist_raft_gr));
+    co_await add_table(std::make_unique<load_per_node>(tablet_allocator, dist_db, dist_raft_gr, ms, dist_gossiper));
 
     db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks.local())));
     db.find_column_family(system_keyspace::v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));

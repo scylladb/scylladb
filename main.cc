@@ -1782,7 +1782,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "initializing virtual tables");
             smp::invoke_on_all([&] {
-                return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, *cfg);
+                return db::initialize_virtual_tables(db, ss, gossiper, raft_gr, sys_ks, tablet_allocator, messaging, *cfg);
             }).get();
 
             // #293 - do not stop anything

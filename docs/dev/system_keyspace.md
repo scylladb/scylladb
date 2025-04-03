@@ -307,6 +307,35 @@ CREATE TABLE system.cluster_status (
 
 Implemented by `cluster_status_table` in `db/system_keyspace.cc`.
 
+## system.load_per_node
+
+Contains information about the current tablet load with node granularity.
+Can be queried on any node, but the data comes from the group0 leader.
+Reads wait for group0 leader to be elected and load balancer stats to become available.
+
+Schema:
+```cql
+CREATE TABLE system.load_per_node (
+    node uuid PRIMARY KEY,
+    dc text,
+    rack text,
+    storage_allocated_load bigint,
+    storage_allocated_utilization double,
+    storage_capacity bigint,
+    tablets_allocated bigint,
+    tablets_allocated_per_shard double
+);
+```
+
+Columns:
+* `dc` - The name of the data center to which the node belongs.
+* `rack` - The name of the rack to which the node belongs.
+* `storage_allocated_load` - Disk space allocated for tablets, assuming each tablet has a fixed size (target_tablet_size).
+* `storage_allocated_utilization` - Fraction of node's disk capacity taken for `storage_allocated_load`, where 1.0 means full utilization.
+* `storage_capacity` - Total disk capacity in bytes. Used to compute `storage_allocated_utilization`. By default equal to file system's capacity.
+* `tablets_allocated` - Number of tablet replicas on the node. Migrating tablets are accounted as if migration already finished.
+* `tablets_allocated_per_shard` - `tablets_allocated` divided by shard count on the node.
+
 ## system.protocol_servers
 
 The list of all the client-facing data-plane protocol servers and listen addresses (if running).
