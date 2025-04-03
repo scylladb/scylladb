@@ -221,6 +221,49 @@ std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, cons
     return *leaving.begin();
 }
 
+bool has_leaving_replica_left(tablet_transition_stage stage) {
+    // true if there is no reachable stage where some selector is 'previous' or 'both'
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+        case tablet_transition_stage::write_both_read_old:
+        case tablet_transition_stage::streaming:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::write_both_read_new:
+            return false;
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return true;
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return false;
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+            return false;
+    }
+}
+
+bool has_pending_replica_left(tablet_transition_stage stage) {
+    // true if there is no reachable stage where some selector is 'next' or 'both'
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+        case tablet_transition_stage::write_both_read_old:
+        case tablet_transition_stage::streaming:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::write_both_read_new:
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return false;
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return true;
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+            return true;
+    }
+}
+
 tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
