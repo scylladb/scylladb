@@ -82,7 +82,7 @@ public:
 
     const sstring& text() const;
 
-    virtual sstring to_string() const;
+    sstring to_string() const;
     sstring to_cql_string() const;
 
     friend std::hash<column_identifier_raw>;
