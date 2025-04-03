@@ -500,6 +500,12 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     const auto& application_states_wanted = request.application_states;
     for (const auto& [node, state] : _endpoint_state_map) {
         const heart_beat_state& hbs = state->get_heart_beat_state();
+        auto it = map.find(state->get_ip());
+        if (it != map.end()) {
+            if (it->second.get_heart_beat_state().get_generation() < hbs.get_generation()) {
+                map.erase(it);
+            }
+        }
         auto state_wanted = endpoint_state(hbs, state->get_ip());
         auto& apps = state->get_application_state_map();
         for (const auto& app : apps) {
