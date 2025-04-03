@@ -1120,8 +1120,9 @@ class client::do_upload_file : private multipart_upload {
                 if (buf.empty()) {
                     break;
                 }
-                co_await output.write(buf.get(), buf.size());
-                progress.uploaded += buf.size();
+                const size_t buf_size = buf.size();
+                co_await output.write(std::move(buf));
+                progress.uploaded += buf_size;
             }
             co_await output.flush();
         } catch (...) {
