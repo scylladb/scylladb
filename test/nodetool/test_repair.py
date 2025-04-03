@@ -52,6 +52,7 @@ def _remove_log_timestamp(res):
 def test_repair_all_single_keyspace(nodetool):
     res = nodetool("repair", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"}, response=["ks1"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=[]),
         expected_request("GET", "/storage_service/keyspaces", response=["ks1"], multiple=expected_request.ANY),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
@@ -80,6 +81,7 @@ def test_repair_all_two_keyspaces(nodetool):
     res = nodetool("repair", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
                          response=["ks1", "ks2"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=[]),
         expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.ANY, response=["ks1", "ks2"]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
@@ -126,6 +128,7 @@ Repair session 4 finished
 def test_repair_keyspace(nodetool):
     res = nodetool("repair", "ks", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
         expected_request(
@@ -152,6 +155,7 @@ Repair session 1 finished
 def test_repair_one_table(nodetool):
     res = nodetool("repair", "ks", "table1", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
         expected_request(
@@ -179,6 +183,7 @@ Repair session 1 finished
 def test_repair_two_tables(nodetool):
     res = nodetool("repair", "ks", "table1", "table2", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
         expected_request(
@@ -206,6 +211,7 @@ Repair session 1 finished
 def test_repair_long_progress(nodetool):
     res = nodetool("repair", "ks", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
         expected_request(
@@ -237,6 +243,7 @@ def test_repair_failed(nodetool):
         ("repair", "ks"),
         {"expected_requests": [
             expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+            expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
             JMX_COLUMN_FAMILIES_REQUEST,
             JMX_STREAM_MANAGER_REQUEST,
             expected_request(
@@ -263,6 +270,8 @@ def test_repair_all_three_keyspaces_failed(nodetool):
     expected_requests = [
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
                          response=["ks1", "ks2", "ks3"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"},
+                         response=[]),
         expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.ANY,
                          response=["ks1", "ks2", "ks3"]),
         JMX_COLUMN_FAMILIES_REQUEST,
@@ -325,6 +334,7 @@ def _do_test_repair_options(
 
     expected_requests = [
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
     ]
 
     if trace is None:
@@ -466,6 +476,7 @@ def test_repair_options_hosts(nodetool, hosts):
 def test_repair_parallelism_precedence(nodetool):
     res = nodetool("repair", "ks", "--dc-parallel", "--sequential", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
         expected_request(
@@ -492,6 +503,7 @@ Repair session 1 finished
 def test_repair_dc_precedence(nodetool):
     res = nodetool("repair", "ks", "--in-dc", "DC1", "-dc", "DC2", "--in-local-dc", expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
         expected_request("GET", "/snitch/datacenter", response="DC_local", multiple=expected_request.ANY),
@@ -535,6 +547,7 @@ def test_repair_unused_options(request, nodetool, jobs, full):
 
     res = nodetool(*args, expected_requests=[
         expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         JMX_COLUMN_FAMILIES_REQUEST,
         JMX_STREAM_MANAGER_REQUEST,
         expected_request(
@@ -564,6 +577,7 @@ def test_repair_pr_and_dcs(nodetool):
         ("repair", "ks", "-pr", "-dc", "DC1"),
         {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         ]},
         ["error: Primary range repair should be performed on all nodes in the cluster.",
          "error processing arguments: primary range repair should be performed on all nodes in the cluster"])
@@ -575,6 +589,7 @@ def test_repair_pr_and_hosts(nodetool):
         ("repair", "ks", "-pr", "-hosts", "127.0.0.2"),
         {"expected_requests": [
                 expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         ]},
         ["error: Primary range repair should be performed on all nodes in the cluster.",
          "error processing arguments: primary range repair should be performed on all nodes in the cluster"])
