@@ -2535,8 +2535,9 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
 
 struct database::table_truncate_state {
     gate::holder holder;
-    db_clock::time_point low_mark_at;
+    // This RP mark accounts for all data (includes memtable) generated until truncated_at.
     db::replay_position low_mark;
+    db_clock::time_point truncated_at;
     std::vector<compaction_manager::compaction_reenabler> cres;
     bool did_flush;
 };
@@ -2572,14 +2573,6 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
             auto st = std::make_unique<table_truncate_state>();
 
             st->holder = cf.async_gate().hold();
-
-            // Force mutations coming in to re-acquire higher rp:s
-            // This creates a "soft" ordering, in that we will guarantee that
-            // any sstable written _after_ we issue the flush below will
-            // only have higher rp:s than we will get from the discard_sstable
-            // call.
-            st->low_mark_at = db_clock::now();
-            st->low_mark = cf.set_low_replay_position_mark();
 
             st->cres.reserve(1 + cf.views().size());
             auto& db = sharded_db.local();
@@ -2621,17 +2614,34 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto& cf = *table_shards;
         auto& st = *table_states[shard];
 
+        // Force mutations coming in to re-acquire higher rp:s
+        // This creates a "soft" ordering, in that we will guarantee that
+        // any sstable written _after_ we issue the flush below will
+        // only have higher rp:s than we will get from the discard_sstables
+        // call.
+        st.low_mark = cf.set_low_replay_position_mark();
+
         co_await flush_or_clear(cf);
+
         co_await coroutine::parallel_for_each(cf.views(), [&] (view_ptr v) -> future<> {
             auto& vcf = db.find_column_family(v);
             co_await flush_or_clear(vcf);
         });
+        // Since writes could be appended to active memtable between getting low_mark above
+        // and flush, the low_mark has to be adjusted to account for those writes, where
+        // memtable was flushed with a higher replay position than the one obtained above.
+        st.low_mark = std::max(st.low_mark, cf.highest_flushed_replay_position());
+        // truncated_at is a time point that describes both the truncation time, and also
+        // serves as a filter, where a sstable is only filtered in if it was created before
+        // the truncated_at. The reason for saving it right after flush, is to prevent a
+        // sstable created after we're done here in this shard from being included, since
+        // different shards might have different pace.
+        st.truncated_at = truncated_at_opt.value_or(db_clock::now());
         st.did_flush = should_flush;
     });
 
-    auto truncated_at = truncated_at_opt.value_or(db_clock::now());
-
     if (with_snapshot) {
+        auto truncated_at = truncated_at_opt.value_or(db_clock::now());
         auto name = snapshot_name_opt.value_or(
             format("{:d}-{}", truncated_at.time_since_epoch().count(), cf.schema()->cf_name()));
         co_await table::snapshot_on_all_shards(sharded_db, table_shards, name);
@@ -2642,15 +2652,16 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         auto& cf = *table_shards;
         auto& st = *table_states[shard];
 
-        return db.truncate(sys_ks.local(), cf, st, truncated_at);
+        return db.truncate(sys_ks.local(), cf, st);
     });
     dblog.info("Truncated {}.{}", s->ks_name(), s->cf_name());
 }
 
-future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state& st, db_clock::time_point truncated_at) {
+future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state& st) {
     dblog.trace("Truncating {}.{} on shard", cf.schema()->ks_name(), cf.schema()->cf_name());
 
     const auto uuid = cf.schema()->id();
+    const auto truncated_at = st.truncated_at;
 
     dblog.debug("Discarding sstable data for truncated CF + indexes");
     // TODO: notify truncation
@@ -2663,10 +2674,11 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // We nowadays do not flush tables with sstables but autosnapshot=false. This means
     // the low_mark assertion does not hold, because we maybe/probably never got around to 
     // creating the sstables that would create them.
-    // If truncated_at is earlier than the time low_mark was taken
-    // then the replay_position returned by discard_sstables may be
-    // smaller than low_mark.
-    SCYLLA_ASSERT(!st.did_flush || rp == db::replay_position() || (truncated_at <= st.low_mark_at ? rp <= st.low_mark : st.low_mark <= rp));
+    //
+    // What we want to assert is that only data generated until truncation time was included,
+    // since we don't want to leave behind data on disk with RP lower than the one we set
+    // in the truncation table.
+    SCYLLA_ASSERT(!st.did_flush || rp == db::replay_position() || st.low_mark >= rp);
     if (rp == db::replay_position()) {
         // If this shard had no mutations, st.low_mark will be an empty, default constructed
         // replay_position. This is a problem because an empty replay_position has the shard_id

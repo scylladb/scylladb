@@ -1530,6 +1530,7 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         });
 
         cg.memtables()->add_memtable();
+        _highest_flushed_rp = std::max(_highest_flushed_rp, old->replay_position());
 
         // no exceptions allowed (nor expected) from this point on
         _stats.memtable_switch_count++;
@@ -2808,6 +2809,9 @@ logalloc::occupancy_stats table::occupancy() const {
     return res;
 }
 
+db::replay_position table::highest_flushed_replay_position() const {
+    return _highest_flushed_rp;
+}
 
 future<>
 table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
