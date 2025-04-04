@@ -55,7 +55,14 @@ public:
     // Override one of these execute() overloads.
     // The handler is always allowed to produce more data than implied by the query_restrictions.
     virtual future<> execute(std::function<void(mutation)> mutation_sink) { return make_ready_future<>(); }
-    virtual future<> execute(std::function<void(mutation)> mutation_sink, const query_restrictions&) { return execute(mutation_sink); }
+
+    virtual future<> execute(std::function<void(mutation)> mutation_sink, reader_permit) {
+        return execute(mutation_sink);
+    }
+
+    virtual future<> execute(std::function<void(mutation)> mutation_sink, const query_restrictions&, reader_permit permit) {
+        return execute(mutation_sink, permit);
+    }
 
     mutation_source as_mutation_source() override;
 };

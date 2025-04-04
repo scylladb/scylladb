@@ -22,8 +22,8 @@ public:
             : memtable_filling_virtual_table(s)
             , _mutations(std::move(mutations)) {}
 
-    future<> execute(std::function<void(mutation)> mutation_sink) override {
-        return with_timeout(db::no_timeout, do_for_each(_mutations, [mutation_sink = std::move(mutation_sink)] (const mutation& m) { mutation_sink(m); }));
+    future<> execute(std::function<void(mutation)> mutation_sink, reader_permit permit) override {
+        return with_timeout(permit.timeout(), do_for_each(_mutations, [mutation_sink = std::move(mutation_sink)] (const mutation& m) { mutation_sink(m); }));
     }
 };
 
