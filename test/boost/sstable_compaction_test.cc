@@ -2318,6 +2318,7 @@ public:
     using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
 
 private:
+    std::unique_ptr<sstable_compressor_factory> scf = make_sstable_compressor_factory_for_tests_in_thread();
     sharded<test_env> _env;
     uint32_t _seed;
     std::unique_ptr<tests::random_schema_specification> _random_schema_spec;
@@ -2335,7 +2336,7 @@ public:
                 compress))
         , _random_schema(_seed, *_random_schema_spec)
     {
-        _env.start().get();
+        _env.start(test_env_config(), std::ref(*scf)).get();
         testlog.info("random_schema: {}", _random_schema.cql());
     }
 
@@ -2401,12 +2402,14 @@ public:
     using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
 
 private:
+
+    std::unique_ptr<sstable_compressor_factory> scf = make_sstable_compressor_factory_for_tests_in_thread();
     sharded<test_env> _env;
 
 public:
     scrub_test_framework()
     {
-        _env.start().get();
+        _env.start(test_env_config(), std::ref(*scf)).get();
     }
 
     ~scrub_test_framework() {
