@@ -769,7 +769,6 @@ size_t snappy_processor::compress_max_size(size_t input_len) const {
 // and print warnings.
 class sstable_compressor_factory_impl : public weakly_referencable<sstable_compressor_factory_impl> {
     mutable logger::rate_limit budget_warning_rate_limit{std::chrono::minutes(10)};
-    shard_id _owner_shard;
     using config = default_sstable_compressor_factory::config;
     const config& _cfg;
     uint64_t _total_live_dict_memory = 0;
@@ -802,7 +801,6 @@ class sstable_compressor_factory_impl : public weakly_referencable<sstable_compr
     }
 public:
     lw_shared_ptr<const raw_dict> get_canonical_ptr(std::span<const std::byte> dict) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         if (dict.empty()) {
             return nullptr;
         }
@@ -817,7 +815,6 @@ public:
     }
     using foreign_zstd_ddict = foreign_ptr<lw_shared_ptr<const zstd_ddict>>;
     foreign_zstd_ddict get_zstd_dict_for_reading(lw_shared_ptr<const raw_dict> raw, int level) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         if (!raw) {
             return nullptr;
         }
@@ -838,7 +835,6 @@ public:
     }
     using foreign_zstd_cdict = foreign_ptr<lw_shared_ptr<const zstd_cdict>>;
     foreign_zstd_cdict get_zstd_dict_for_writing(lw_shared_ptr<const raw_dict> raw, int level) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         if (!_cfg.enable_writing_dictionaries() || !raw) {
             return nullptr;
         }
@@ -864,11 +860,9 @@ public:
     using foreign_lz4_ddict = foreign_ptr<lw_shared_ptr<const raw_dict>>;
     using foreign_lz4_cdict = foreign_ptr<lw_shared_ptr<const lz4_cdict>>;
     foreign_lz4_ddict get_lz4_dict_for_reading(lw_shared_ptr<const raw_dict> raw) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         return make_foreign(std::move(raw));
     }
     foreign_lz4_cdict get_lz4_dict_for_writing(lw_shared_ptr<const raw_dict> raw) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         if (!_cfg.enable_writing_dictionaries() || !raw) {
             return nullptr;
         }
@@ -889,8 +883,7 @@ public:
 
 public:
     sstable_compressor_factory_impl(const config& cfg)
-        : _owner_shard(this_shard_id())
-        , _cfg(cfg)
+        : _cfg(cfg)
     {
         if (_cfg.register_metrics) {
             namespace sm = seastar::metrics;
@@ -916,23 +909,18 @@ public:
         _recommended.clear();
     }
     void forget_raw_dict(dict_id id) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         _raw_dicts.erase(id);
     }
     void forget_zstd_cdict(dict_id id, int level) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         _zstd_cdicts.erase({id, level});
     }
     void forget_zstd_ddict(dict_id id) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         _zstd_ddicts.erase(id);
     }
     void forget_lz4_cdict(dict_id id) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         _lz4_cdicts.erase(id);
     }
-    future<> set_recommended_dict(table_id t, foreign_ptr<lw_shared_ptr<const raw_dict>> dict) {
-        return smp::submit_to(_owner_shard, [this, t, dict = std::move(dict)] mutable {
+    void set_recommended_dict(table_id t, foreign_ptr<lw_shared_ptr<const raw_dict>> dict) {
             _recommended.erase(t);
             if (dict) {
                 compressor_factory_logger.debug("set_recommended_dict: table={} size={} id={}",
@@ -941,7 +929,6 @@ public:
             } else {
                 compressor_factory_logger.debug("set_recommended_dict: table={} size=0", t);
             }
-        });
     }
     future<foreign_ptr<lw_shared_ptr<const raw_dict>>> get_recommended_dict(table_id t) {
         auto rec_it = _recommended.find(t);
@@ -952,7 +939,6 @@ public:
     }
 
     void account_memory_delta(ssize_t n) {
-        SCYLLA_ASSERT(this_shard_id() == _owner_shard);
         if (static_cast<ssize_t>(_total_live_dict_memory) + n < 0) {
             compressor_factory_logger.error(
                 "Error in dictionary memory accounting: delta {} brings live memory {} below 0",
@@ -1010,8 +996,8 @@ future<> default_sstable_compressor_factory::set_recommended_dict_local(table_id
             return make_foreign(local._impl->get_canonical_ptr(dict));
         });
         auto local_coordinator = group[0];
-        co_await container().invoke_on(local_coordinator, coroutine::lambda([t, d = std::move(d)](self& local) mutable -> future<> {
-            co_await local._impl->set_recommended_dict(t, std::move(d));
+        co_await container().invoke_on(local_coordinator, coroutine::lambda([t, d = std::move(d)](self& local) mutable {
+            local._impl->set_recommended_dict(t, std::move(d));
         }));
     }
 }
