@@ -195,7 +195,9 @@ private:
     }
 
 public:
-    perf_sstable_test_env(conf cfg) : _cfg(std::move(cfg))
+    perf_sstable_test_env(conf cfg, sstable_compressor_factory& scf)
+           : _env({}, scf)
+           , _cfg(std::move(cfg))
            , s(create_schema(cfg.compaction_strategy))
            , _distribution('@', '~')
            , _mt(make_lw_shared<replica::memtable>(s))

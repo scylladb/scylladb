@@ -109,7 +109,7 @@ public:
 
     void maybe_start_compaction_manager(bool enable = true);
 
-    explicit test_env(test_env_config cfg = {}, sstables::storage_manager* sstm = nullptr, tmpdir* tmp = nullptr);
+    explicit test_env(test_env_config cfg, sstable_compressor_factory&, sstables::storage_manager* sstm = nullptr, tmpdir* tmp = nullptr);
     ~test_env();
     test_env(test_env&&) noexcept;
 
@@ -183,7 +183,8 @@ public:
     template <typename T>
     static future<T> do_with_async_returning(noncopyable_function<T (test_env&)> func) {
         return seastar::async([func = std::move(func)] {
-            test_env env;
+            auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+            test_env env({}, *scf);
             auto stop = defer([&] { env.stop().get(); });
             return func(env);
         });

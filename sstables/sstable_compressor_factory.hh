@@ -27,3 +27,4 @@ struct sstable_compressor_factory {
 };
 
 std::unique_ptr<sstable_compressor_factory> make_sstable_compressor_factory(sstable_compressor_factory::config cfg = {});
+std::unique_ptr<sstable_compressor_factory> make_sstable_compressor_factory_for_tests_in_thread();
