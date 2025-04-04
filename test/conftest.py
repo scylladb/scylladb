@@ -88,7 +88,11 @@ async def testpy_testsuite(request: pytest.FixtureRequest, build_mode: str) -> T
 
 @pytest.fixture(scope="module")
 async def testpy_test(request: pytest.FixtureRequest, testpy_testsuite: TestSuite) -> Test:
-    await testpy_testsuite.add_test(shortname=request.node.name, casename=None)
+    # this name modification is done to have the same output as everywhere is used:
+    # suite_name.directory_subdirectory_file
+    # The first directory represents suite, and it deleted since later it added in Test class
+    shortname = "_".join(request.node.nodeid.split('.')[0].split('/')[1:])
+    await testpy_testsuite.add_test(shortname=shortname, casename=None)
     return testpy_testsuite.tests[-1]  # most recent test added to the test suite; i.e., by the previous line.
 
 
