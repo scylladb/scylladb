@@ -171,15 +171,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         std::optional<request_param> req_param;
     };
 
-    // The topology coordinator takes guard before operation start, but it releases it during various
-    // RPC commands that it sends to make it possible to submit new requests to the state machine while
-    // the coordinator drives current topology change. It is safe to do so since only the coordinator is
-    // ever allowed to change node's state, others may only create requests. To make sure the coordinator did
-    // not change while the lock was released, and hence the old coordinator does not work on old state, we check
-    // that the raft term is still the same after the lock is re-acquired. Throw term_changed_error if it did.
-
-    struct term_changed_error {};
-
     future<group0_guard> cleanup_group0_config_if_needed(group0_guard guard) {
         auto& topo = _topo_sm._topology;
         auto rconf = _group0.group0_server().get_configuration();
@@ -3566,7 +3557,7 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
         rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
     } catch (group0_concurrent_modification&) {
         rtlogger.info("topology change coordinator fiber got group0_concurrent_modification");
-    } catch (topology_coordinator::term_changed_error&) {
+    } catch (term_changed_error&) {
         // Term changed. We may no longer be a leader
         rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
     } catch (seastar::rpc::remote_verb_error&) {
