@@ -519,11 +519,13 @@ public:
     struct local_info {
         locator::host_id host_id;
         sstring cluster_name;
+        sstring dc;
+        sstring rack;
         gms::inet_address listen_address;
     };
 
     future<local_info> load_local_info();
-    future<> save_local_info(local_info, locator::endpoint_dc_rack, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address);
+    future<> save_local_info(local_info, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address);
 public:
     static api::timestamp_type schema_creation_timestamp();
 
