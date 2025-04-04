@@ -8,7 +8,9 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <cstdint>
 #include "utils/assert.hh"
+#include "utils/hashers.hh"
 #include "cql3/result_set.hh"
 
 namespace cql3 {
@@ -69,6 +71,18 @@ metadata::flag_enum_set metadata::flags() const {
 
 lw_shared_ptr<const service::pager::paging_state> metadata::paging_state() const {
     return _paging_state;
+}
+
+// Metadata_id is a checksum computed from given metadata to track schema changes in prepared statements.
+// Originally introduced in CQLv5.
+cql3::cql_metadata_id_type metadata::calculate_metadata_id() const {
+    auto h = sha256_hasher();
+    for (uint32_t i = 0; i < _column_info->_column_count; ++i) {
+        feed_hash(h, _column_info->_names[i]->name->name());
+        feed_hash(h, _column_info->_names[i]->type->name());
+    }
+    // Return first 16 bytes to have the same length as Cassandra's MD5
+    return cql_metadata_id_type(h.finalize().substr(0, 16));
 }
 
 prepared_metadata::prepared_metadata(const std::vector<lw_shared_ptr<column_specification>>& names,
