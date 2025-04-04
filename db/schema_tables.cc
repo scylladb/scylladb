@@ -2458,12 +2458,8 @@ static index_metadata create_index_from_index_row(const query::result_set_row& r
     return index_metadata{index_name, options, kind, is_local};
 }
 
-/*
- * View metadata serialization/deserialization.
- */
-
-view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)  {
-    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+static schema_builder prepare_view_schema_builder_from_mutations(const schema_ctxt& ctxt, const schema_mutations& sm, std::optional<table_schema_version> version,
+                                                                const query::result_set& table_rs) {
     const query::result_set_row& row = table_rs.row(0);
 
     auto ks_name = row.get_nonnull<sstring>("keyspace_name");
@@ -2497,13 +2493,47 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     } else {
         builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
     }
+    return builder;
+}
 
-    auto base_id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
+/*
+ * View metadata serialization/deserialization.
+ * If the base info is not provided, the schema context must have a reference to the database,
+ * and the most up-to-date base schema will be pulled from there.
+ */
+view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, schema_ptr base_schema, std::optional<table_schema_version> version)  {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    auto builder = prepare_view_schema_builder_from_mutations(ctxt, sm, version, table_rs);
+    const query::result_set_row& row = table_rs.row(0);
+    auto include_all_columns = row.get_nonnull<bool>("include_all_columns");
+    auto where_clause = row.get_nonnull<sstring>("where_clause");
+
+    builder.with_view_info(std::move(base_schema), include_all_columns, std::move(where_clause));
+    return view_ptr(builder.build());
+}
+
+view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<db::view::base_dependent_view_info> base_info, std::optional<table_schema_version> version)  {
+    auto table_rs = query::result_set(sm.columnfamilies_mutation());
+    auto builder = prepare_view_schema_builder_from_mutations(ctxt, sm, version, table_rs);
+    const query::result_set_row& row = table_rs.row(0);
+    auto id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
     auto base_name = row.get_nonnull<sstring>("base_table_name");
     auto include_all_columns = row.get_nonnull<bool>("include_all_columns");
     auto where_clause = row.get_nonnull<sstring>("where_clause");
 
-    builder.with_view_info(std::move(base_id), std::move(base_name), include_all_columns, std::move(where_clause));
+    if (!base_info) {
+        if (!ctxt.get_db()) {
+            auto ks_name = row.get_nonnull<sstring>("keyspace_name");
+            auto cf_name = row.get_nonnull<sstring>("view_name");
+            on_internal_error(slogger, format("No database reference with missing base schema when creating view {}.{} from mutations",
+                ks_name, cf_name));
+        }
+        auto base_id = table_id(row.get_nonnull<utils::UUID>("base_table_id"));
+        auto base_schema = ctxt.get_db()->find_schema(base_id);
+        builder.with_view_info(base_schema, include_all_columns, std::move(where_clause));
+    } else {
+        builder.with_view_info(id, base_name, include_all_columns, std::move(where_clause), *base_info);
+    }
     return view_ptr(builder.build());
 }
 
