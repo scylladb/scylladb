@@ -250,6 +250,13 @@ public:
     }
 };
 
+static lowres_clock::time_point compute_timeout(const query::mapreduce_request& req) {
+    lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
+    lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
+
+    return timeout_point;
+}
+
 // `retrying_dispatcher` is a class that dispatches mapreduce_requests to other
 // nodes. In case of a failure, local retries are available - request being
 // retried is executed on the super-coordinator.
@@ -294,6 +301,12 @@ public:
             flogger.warn("retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
             tracing::trace(_tr_state, "retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
             // Fall through since we cannot co_await in a catch block.
+        } catch (rpc::remote_verb_error& e) {
+            // Add timeout information to the exception, so CQL server can handle it properily.
+            // Parsing the exception message is hacky but its to avoid RPC protocol changes.
+            if (std::string_view(e.what()).starts_with("Operation timed out for")) {
+               throw exceptions::server_exception_with_lowres_time_point(e.what(), compute_timeout(req));
+            }
         }
         co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
     }
@@ -397,13 +410,6 @@ future<query::mapreduce_result> mapreduce_service::dispatch_to_shards(
 
         return *result;
     });
-}
-
-static lowres_clock::time_point compute_timeout(const query::mapreduce_request& req) {
-    lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
-    lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
-
-    return timeout_point;
 }
 
 // This function executes mapreduce_request on a shard.

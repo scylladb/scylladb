@@ -137,6 +137,8 @@ protected:
     virtual future<> unadvertise_connection(shared_ptr<connection> conn);
 
     future<> for_each_gently(noncopyable_function<void(connection&)>);
+
+    virtual future<> on_stop() { return seastar::make_ready_future<>(); }
 };
 
 }

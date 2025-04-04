@@ -15,6 +15,7 @@
 #include "db/operation_type.hh"
 #include <stdexcept>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/lowres_clock.hh>
 #include "bytes_fwd.hh"
 
 namespace exceptions {
@@ -83,6 +84,16 @@ public:
     { }
 };
 
+class server_exception_with_lowres_time_point : public server_exception {
+public:
+    const seastar::lowres_clock::time_point _timeout;
+
+    server_exception_with_lowres_time_point(sstring msg, seastar::lowres_clock::time_point timeout) noexcept
+        : server_exception(msg)
+        , _timeout(timeout)
+    { }
+};
+
 class protocol_exception : public cassandra_exception {
 public:
     protocol_exception(sstring msg) noexcept
@@ -142,6 +153,16 @@ public:
     read_timeout_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present) noexcept
         : read_write_timeout_exception{exception_code::READ_TIMEOUT, ks, cf, consistency, received, block_for}
         , data_present{data_present}
+    { }
+};
+
+class read_timeout_exception_with_lowres_time_point : public read_timeout_exception {
+public:
+    const seastar::lowres_clock::time_point _timeout;
+
+    read_timeout_exception_with_lowres_time_point(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present, seastar::lowres_clock::time_point timeout) noexcept
+        : read_timeout_exception{ks, cf, consistency, received, block_for, data_present}
+        , _timeout{timeout}
     { }
 };
 

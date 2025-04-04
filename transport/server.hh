@@ -174,6 +174,7 @@ private:
     semaphore& _memory_available;
     seastar::metrics::metric_groups _metrics;
     std::unique_ptr<event_notifier> _notifier;
+    seastar::abort_source _abort_source;
 private:
     transport_stats _stats;
     auth::service& _auth_service;
@@ -257,6 +258,8 @@ private:
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
     private:
         friend class process_request_executor;
+
+        future<foreign_ptr<std::unique_ptr<cql_server::response>>> sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const;
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
@@ -341,6 +344,8 @@ private:
     future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 
     ::timeout_config timeout_config() const { return _config.timeout_config.current_values(); }
+
+    future<> on_stop() override { co_return _abort_source.request_abort(); }
 };
 
 class cql_server::event_notifier : public service::migration_listener,
