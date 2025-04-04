@@ -7,7 +7,7 @@
 import os
 from pathlib import Path
 
-__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR", "path_to"]
+__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR", "COMBINED_TESTS", "path_to"]
 
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
@@ -15,6 +15,7 @@ TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
 TOP_SRC_DIR = Path(__file__).parent.parent  # ScyllaDB's source code root directory
 TEST_DIR = TOP_SRC_DIR / "test"
 BUILD_DIR = TOP_SRC_DIR / "build"
+COMBINED_TESTS = Path('test/boost/combined_tests')
 
 ALL_MODES = {
     "debug": "Debug",
