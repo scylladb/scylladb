@@ -13,6 +13,7 @@
 
 #include <boost/algorithm/string/trim.hpp>
 #include <seastar/core/coroutine.hh>
+#include "sstables/sstable_compressor_factory.hh"
 
 logging::logger startlog("init");
 
@@ -128,4 +129,18 @@ void service_set::add(std::any value) {
 
 std::any service_set::find(const std::type_info& type) const {
     return _impl->find(type);
+}
+
+// Placed here to avoid dependency on db::config in compress.cc,
+// where the rest of default_sstable_compressor_factory_config is.
+auto default_sstable_compressor_factory_config::from_db_config(
+    const db::config& cfg,
+    std::span<const unsigned> numa_config) -> self
+{
+    return self {
+        .register_metrics = true,
+        .enable_writing_dictionaries = cfg.sstable_compression_dictionaries_enable_writing,
+        .memory_fraction_starting_at_which_we_stop_writing_dicts = cfg.sstable_compression_dictionaries_memory_budget_fraction,
+        .numa_config{numa_config.begin(), numa_config.end()},
+    };
 }

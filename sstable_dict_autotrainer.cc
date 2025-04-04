@@ -189,7 +189,19 @@ future<float> try_one_compression_config(
     const compression_parameters& params,
     const utils::chunked_vector<temporary_buffer<char>>& validation_samples
 ) {
-    auto factory = make_sstable_compressor_factory();
-    co_await factory->set_recommended_dict(initial_schema->id(), dict);
-    co_return co_await try_one_compression_config(*factory, initial_schema, params, validation_samples);
+    sharded<default_sstable_compressor_factory> factory;
+    co_await factory.start();
+    std::exception_ptr ex;
+    float result;
+    try {
+        co_await factory.local().set_recommended_dict(initial_schema->id(), dict);
+        result = co_await try_one_compression_config(factory.local(), initial_schema, params, validation_samples);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await factory.stop();
+    if (ex) {
+        co_return coroutine::exception(ex);
+    }
+    co_return result;
 }
