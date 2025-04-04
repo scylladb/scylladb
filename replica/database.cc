@@ -895,6 +895,10 @@ static bool is_system_table(const schema& s) {
         k == db::system_distributed_keyspace::NAME_EVERYWHERE;
 }
 
+sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
+    return get_sstables_manager(system_keyspace(is_system_table(s)));
+}
+
 void database::init_schema_commitlog() {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
@@ -976,7 +980,7 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
         erm = ks.get_vnode_effective_replication_map();
     }
     // avoid self-reporting
-    auto& sst_manager = get_sstables_manager(system_keyspace(is_system_table(*schema)));
+    auto& sst_manager = get_sstables_manager(*schema);
     auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 

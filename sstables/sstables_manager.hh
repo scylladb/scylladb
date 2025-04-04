@@ -11,6 +11,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/gate.hh>
 
 #include "utils/assert.hh"
 #include "utils/disk-error-handler.hh"
@@ -25,6 +26,7 @@
 #include "utils/s3/creds.hh"
 #include <boost/intrusive/list.hpp>
 #include "sstable_compressor_factory.hh"
+#include "sstables/sstables_manager_subscription.hh"
 
 namespace db {
 
@@ -84,7 +86,14 @@ class sstables_manager {
             boost::intrusive::member_hook<sstable, sstable::manager_set_link_type, &sstable::_manager_set_link>,
             boost::intrusive::constant_time_size<false>,
             boost::intrusive::compare<sstable::lesser_reclaimed_memory>>;
+
 private:
+    enum class notification_event_type {
+        // Note: other event types like "added" may be needed in the future
+        deleted
+    };
+    using signal_type = boost::signals2::signal_type<void (sstables::generation_type, notification_event_type), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
+
     storage_manager* _storage;
     size_t _available_memory;
     db::large_data_handler& _large_data_handler;
@@ -131,6 +140,9 @@ private:
     sstable_compressor_factory& _compressor_factory;
 
     const abort_source& _abort;
+
+    gate _signal_gate;
+    signal_type _signal_source;
 
 public:
     explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem,
@@ -204,6 +216,9 @@ public:
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 
     sstable_compressor_factory& get_compressor_factory() const { return _compressor_factory; }
+
+    // unsubscribe happens automatically when the handler is destroyed
+    void subscribe(sstables_manager_event_handler& handler);
 
 private:
     void add(sstable* sst);
