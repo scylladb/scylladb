@@ -1101,6 +1101,85 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
 }
 
+void assert_rf_rack_valid_replication(const token_metadata_ptr tmptr, const replica::keyspace& ks) {
+    auto ks_name = ks.metadata()->name();
+    tablet_logger.debug("[assert_rf_rack_valid_replication]: Starting verifying that all tables in keyspace '{}' are RF-rack-valid", ks_name);
+    const auto& ars = ks.get_replication_strategy();
+    // Any keyspace that does NOT use tablets is RF-rack-valid.
+    if (!ars.uses_tablets()) {
+        tablet_logger.debug("[assert_rf_rack_valid_replication]: Keyspace '{}' has been verified to be RF-rack-valid (no tablets)", ks_name);
+        return;
+    }
+
+    // Tablets can only be used with NetworkTopologyStrategy.
+    SCYLLA_ASSERT(ars.get_type() == replication_strategy_type::network_topology);
+    const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(ars));
+
+    std::map<sstring, int> rf_per_dc;
+    bool all_dc_rf_lower_than_2 = true;
+    for (const auto& [dc, rack_map] : tmptr->get_topology().get_datacenter_racks()) {
+        tablet_logger.debug("[assert_rf_rack_valid_replication]: Verifying for '{}' / '{}'", ks_name, dc);
+        rf_per_dc[dc] = nts.get_replication_factor(dc);
+        if (rf_per_dc[dc] >= 2) {
+            all_dc_rf_lower_than_2 = false;
+        }
+    }
+    if (all_dc_rf_lower_than_2) {
+        tablet_logger.debug("[assert_rf_rack_valid_replication]: Keyspace '{}' has been verified to be RF-rack-valid (RF in all DCs < 2)", ks_name);
+        return;
+    }
+    if (ks.metadata()->cf_meta_data().empty()) {
+        tablet_logger.debug("[assert_rf_rack_valid_replication]: Keyspace '{}' has been verified to be RF-rack-valid (no tables)", ks_name);
+        return;
+    }
+
+    std::map<sstring, std::set<sstring>> racks_per_dc;
+    auto [first_cf_name, first_s] = *ks.metadata()->cf_meta_data().begin();
+    // Populate the dc_racks vector with the racks and dcs of the first tablet in first table.
+    auto& first_cf_tablets = tmptr->tablets().get_tablet_map(first_s->id());
+    auto first_tablet_id = first_cf_tablets.first_tablet();
+    auto& first_tablet_info = first_cf_tablets.get_tablet_info(first_tablet_id);
+    for (auto& replica : first_tablet_info.replicas) {
+        auto& dc = tmptr->get_topology().get_datacenter(replica.host);
+        auto& rack = tmptr->get_topology().get_rack(replica.host);
+        if (!racks_per_dc[dc].contains(rack)) {
+            racks_per_dc[dc].insert(rack);
+        } else {
+            throw std::invalid_argument(std::format(
+                    "The option `rf_rack_valid_keyspaces` is enabled. All tablets in a keyspace should have one replica per rack in RF racks in each DC. "
+                    "This condition is violated: keyspace '{}' doesn't satisfy it for DC '{}': table '{}' has multiple replicas in rack '{}'.",
+                    std::string_view(ks_name), std::string_view(dc), std::string_view(first_cf_name), std::string_view(rack)));
+        }
+    }
+
+    // At this point racks_per_dc contains exactly RF racks in each DC. Now we need to make sure
+    // that all tablets in all tables in the keyspace use exactly these racks in each DC.
+    for (const auto& [cf_name, s] : ks.metadata()->cf_meta_data()) {
+        std::optional<tablet_id> curr_tablet_id = tmptr->tablets().get_tablet_map(s->id()).first_tablet();
+        for (const auto& tablet : tmptr->tablets().get_tablet_map(s->id()).tablets()) {
+            std::map<sstring, std::set<sstring>> curr_racks_per_dc;
+            for (auto& replica : tablet.replicas) {
+                auto dc = tmptr->get_topology().get_datacenter(replica.host);
+                auto rack = tmptr->get_topology().get_rack(replica.host);
+                curr_racks_per_dc[dc].insert(rack);
+            }
+            for (const auto& [dc, racks] : curr_racks_per_dc) {
+                if (rf_per_dc[dc] < 2) {
+                    continue;
+                }
+                if (racks_per_dc[dc] != racks) {
+                    throw std::invalid_argument(seastar::format(
+                            "The option `rf_rack_valid_keyspaces` is enabled. All tablets in a keyspace should have one replica per rack in RF racks in each DC. "
+                            "This condition is violated: keyspace '{}' doesn't satisfy it for DC '{}': "
+                            "tablet {} in table {} has replicas on racks {} but tablet {} in table {} has replicas on racks {}.",
+                            ks_name, dc, *curr_tablet_id, cf_name, racks, first_tablet_id, first_cf_name, racks_per_dc[dc]));
+                }
+            }
+            curr_tablet_id = tmptr->tablets().get_tablet_map(s->id()).next_tablet(*curr_tablet_id);
+        }
+    }
+    tablet_logger.debug("[assert_rf_rack_valid_replication]: Keyspace '{}' has been verified to be RF-rack-valid", ks_name);
+}
 }
 
 auto fmt::formatter<locator::resize_decision_way>::format(const locator::resize_decision_way& way, fmt::format_context& ctx) const
