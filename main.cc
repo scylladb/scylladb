@@ -1236,17 +1236,19 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_lang_man = defer_verbose_shutdown("lang manager", [] { langman.invoke_on_all(&lang::manager::stop).get(); });
             langman.invoke_on_all(&lang::manager::start).get();
 
-            auto sstable_compressor_factory = make_sstable_compressor_factory(sstable_compressor_factory::config{
-                .register_metrics = true,
-                .enable_writing_dictionaries = cfg->sstable_compression_dictionaries_enable_writing,
-                .memory_fraction_starting_at_which_we_stop_writing_dicts = cfg->sstable_compression_dictionaries_memory_budget_fraction,
+            sharded<default_sstable_compressor_factory> sstable_compressor_factory;
+            auto numa_groups = local_engine->smp().shard_to_numa_node_mapping();
+            sstable_compressor_factory.start(sharded_parameter(default_sstable_compressor_factory::config::from_db_config,
+                                                               std::cref(*cfg), std::cref(numa_groups))).get();
+            auto stop_compressor_factory = defer_verbose_shutdown("sstable_compressor_factory", [&sstable_compressor_factory] {
+                sstable_compressor_factory.stop().get();
             });
 
             checkpoint(stop_signal, "starting database");
 
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
-                    std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), std::ref(*sstable_compressor_factory),
+                    std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), std::ref(sstable_compressor_factory),
                     std::ref(stop_signal.as_sharded_abort_source()), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
@@ -1717,7 +1719,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 auto sstables_prefix = std::string_view("sstables/");
                 if (name.starts_with(sstables_prefix)) {
                     auto table = table_id(utils::UUID(name.substr(sstables_prefix.size())));
-                    co_await sstable_compressor_factory->set_recommended_dict(table, std::move(dict.data));
+                    co_await sstable_compressor_factory.local().set_recommended_dict(table, std::move(dict.data));
                 } else if (name == dictionary_service::rpc_compression_dict_name) {
                     co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
                 }
