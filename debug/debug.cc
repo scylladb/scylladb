@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "debug.hh"
+#include "debug/debug.hh"
 
 namespace debug {
 
