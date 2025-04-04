@@ -1165,3 +1165,8 @@ lz4_cdict::~lz4_cdict() {
 std::unique_ptr<sstable_compressor_factory> make_sstable_compressor_factory(sstable_compressor_factory::config cfg) {
     return std::make_unique<sstable_compressor_factory_impl>(std::move(cfg));
 }
+
+std::unique_ptr<sstable_compressor_factory> make_sstable_compressor_factory_for_tests_in_thread() {
+    SCYLLA_ASSERT(thread::running_in_thread());
+    return make_sstable_compressor_factory();
+}

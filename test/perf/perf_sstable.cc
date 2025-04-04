@@ -144,7 +144,8 @@ int scylla_sstable_main(int argc, char** argv) {
             }
             cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
             cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
-            test.start(std::move(cfg)).get();
+            auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+            test.start(std::move(cfg), std::ref(*scf)).get();
             auto stop_test = deferred_stop(test);
 
             switch (mode) {
