@@ -921,14 +921,14 @@ public:
         _lz4_cdicts.erase(id);
     }
     void set_recommended_dict(table_id t, foreign_ptr<lw_shared_ptr<const raw_dict>> dict) {
-            _recommended.erase(t);
-            if (dict) {
-                compressor_factory_logger.debug("set_recommended_dict: table={} size={} id={}",
-                    t, dict->raw().size(), fmt_hex(dict->id()));
-                _recommended.emplace(t, std::move(dict));
-            } else {
-                compressor_factory_logger.debug("set_recommended_dict: table={} size=0", t);
-            }
+        _recommended.erase(t);
+        if (dict) {
+            compressor_factory_logger.debug("set_recommended_dict: table={} size={} id={}",
+                t, dict->raw().size(), fmt_hex(dict->id()));
+            _recommended.emplace(t, std::move(dict));
+        } else {
+            compressor_factory_logger.debug("set_recommended_dict: table={} size=0", t);
+        }
     }
     future<foreign_ptr<lw_shared_ptr<const raw_dict>>> get_recommended_dict(table_id t) {
         auto rec_it = _recommended.find(t);
