@@ -176,15 +176,6 @@ public:
 
     replica::table::config make_table_config();
 
-    template <typename Func>
-    static inline auto do_with(Func&& func, test_env_config cfg = {}) {
-        return seastar::do_with(test_env(std::move(cfg)), [func = std::move(func)] (test_env& env) mutable {
-            return futurize_invoke(func, env).finally([&env] {
-                return env.stop();
-            });
-        });
-    }
-
     static future<> do_with_async(noncopyable_function<void (test_env&)> func, test_env_config cfg = {});
 
     static future<> do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> func);
