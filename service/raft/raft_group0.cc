@@ -808,22 +808,26 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
         group0_log.info("finish_setup_after_join: group 0 ID present, loading server info.");
         auto my_id = load_my_id();
         if (!_raft_gr.group0().get_configuration().can_vote(my_id)) {
-            utils::get_local_injector().inject("stop_before_becoming_raft_voter",
-                [] { std::raise(SIGSTOP); });
-            group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
-            // Just bootstrapped and joined as non-voter. Become a voter.
-            auto pause_shutdown = _shutdown_gate.hold();
-            raft::server_address my_addr{my_id, {}};
-            co_await run_op_with_retry(_abort_source, [this, my_addr]() -> future<operation_result> {
-                try {
-                    co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
-                } catch (const raft::commit_status_unknown& e) {
-                    group0_log.info("finish_setup_after_join({}): modify_config returned \"{}\", retrying", my_addr, e);
-                    co_return operation_result::failure;
-                }
-                co_return operation_result::success;
-            }, "finish_setup_after_join->modify_config", {});
-            group0_log.info("finish_setup_after_join: became a group 0 voter.");
+            if (!ss.raft_topology_change_enabled() || !_feat.group0_limited_voters) {
+                // still using the gossip topology, or limited voters feature not enabled yet
+                // - need to become a voter in here
+                utils::get_local_injector().inject("stop_before_becoming_raft_voter",
+                    [] { std::raise(SIGSTOP); });
+                group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
+                // Just bootstrapped and joined as non-voter. Become a voter.
+                auto pause_shutdown = _shutdown_gate.hold();
+                raft::server_address my_addr{my_id, {}};
+                co_await run_op_with_retry(_abort_source, [this, my_addr]() -> future<operation_result> {
+                    try {
+                        co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
+                    } catch (const raft::commit_status_unknown& e) {
+                        group0_log.info("finish_setup_after_join({}): modify_config returned \"{}\", retrying", my_addr, e);
+                        co_return operation_result::failure;
+                    }
+                    co_return operation_result::success;
+                }, "finish_setup_after_join->modify_config", {});
+                group0_log.info("finish_setup_after_join: became a group 0 voter.");
+            }
 
             // No need to run `upgrade_to_group0()` since we must have bootstrapped with Raft
             // (that's the only way to join as non-voter today).

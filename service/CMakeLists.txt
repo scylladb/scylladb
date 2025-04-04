@@ -20,6 +20,7 @@ target_sources(service
     raft/group0_state_id_handler.cc
     raft/group0_state_machine.cc
     raft/group0_state_machine_merger.cc
+    raft/group0_voter_handler.cc
     raft/raft_group0.cc
     raft/raft_group0_client.cc
     raft/raft_group_registry.cc
