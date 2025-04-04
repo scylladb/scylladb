@@ -33,7 +33,8 @@ using coordinator_exception_container = utils::exception_container<
     read_timeout_exception,
     read_failure_exception,
     rate_limit_exception,
-    overloaded_exception
+    overloaded_exception,
+    read_failure_exception_with_timeout
 >;
 
 template<typename T = void>
