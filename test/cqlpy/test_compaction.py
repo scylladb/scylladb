@@ -4,16 +4,8 @@
 
 import pytest
 import requests
-from .util import new_materialized_view, new_test_table, unique_name
+from .util import new_materialized_view, new_test_table, unique_name, sleep_till_whole_second
 from . import nodetool
-import time
-
-# sleep to let a ttl (of `seconds`) expire and
-# the commitlog minimum gc time, in seconds,
-# to be greater than the tombstone deletion time
-def sleep_till_whole_second(seconds=1):
-    t = time.time()
-    time.sleep(seconds - (t - int(t)))
 
 def test_tombstone_gc_with_conflict_in_memtable(scylla_only, cql, test_keyspace):
     """
