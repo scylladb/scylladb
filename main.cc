@@ -1674,7 +1674,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "starting migration manager");
             debug::the_migration_manager = &mm;
-            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
+            mm.start(std::ref(mm_notifier), std::ref(feature_service), std::ref(messaging), std::ref(proxy), std::ref(ss), std::ref(gossiper), std::ref(group0_client), std::ref(sys_ks)).get();
             auto stop_migration_manager = defer_verbose_shutdown("migration manager", [&mm] {
                 mm.stop().get();
             });
@@ -1838,7 +1838,8 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "loading tablet metadata");
             try {
-                ss.local().load_tablet_metadata({}).get();
+                ss.local().update_tablet_metadata({},
+                        service::storage_service::wake_up_load_balancer::no).get();
             } catch (...) {
                 if (!cfg->maintenance_mode()) {
                     throw;
