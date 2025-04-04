@@ -50,6 +50,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::both;
         case tablet_transition_stage::streaming:
             return write_replica_set_selector::both;
+        case tablet_transition_stage::rebuild_repair:
+            return write_replica_set_selector::both;
         case tablet_transition_stage::repair:
             return write_replica_set_selector::previous;
         case tablet_transition_stage::end_repair:
@@ -78,6 +80,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::write_both_read_old:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::streaming:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::rebuild_repair:
             return read_replica_set_selector::previous;
         case tablet_transition_stage::repair:
             return read_replica_set_selector::previous;
@@ -141,6 +145,23 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
             });
 
             return result;
+        case tablet_transition_kind::rebuild_v2: {
+            if (!trinfo.pending_replica.has_value()) {
+                return result; // No nodes to stream to -> no nodes to stream from
+            }
+
+            auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
+            erase_if(s, [&] (const tablet_replica& r) {
+                auto* n = topo.find_node(r.host);
+                return !n || n->is_excluded();
+            });
+            result.stream_weight = locator::tablet_migration_stream_weight_repair;
+            result.read_from = s;
+            result.written_to = std::move(s);
+            result.written_to.insert(*trinfo.pending_replica);
+
+            return result;
+        }
         case tablet_transition_kind::repair:
             auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
             result.stream_weight = locator::tablet_migration_stream_weight_repair;
@@ -392,24 +413,27 @@ dht::token_range tablet_map::get_token_range_after_split(const token& t) const n
     return get_token_range(id_after_split, log2_tablets_after_split);
 }
 
+std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, std::function<bool(const tablet_replica&)> filter) {
+    const auto replicas = replica_set | std::views::filter(std::move(filter)) | std::ranges::to<tablet_replica_set>();
+    return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
+}
+
 tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
     const auto& replicas = get_tablet_info(id).replicas;
     return replicas.at(size_t(id) % replicas.size());
 }
 
 tablet_replica tablet_map::get_primary_replica_within_dc(tablet_id id, const topology& topo, sstring dc) const {
-    const auto replicas = get_tablet_info(id).replicas | std::views::filter([&] (const auto& tr) {
+    return maybe_get_primary_replica(id, get_tablet_info(id).replicas, [&] (const auto& tr) {
         const auto& node = topo.get_node(tr.host);
         return node.dc_rack().dc == dc;
-    }) | std::ranges::to<tablet_replica_set>();
-    return replicas.at(size_t(id) % replicas.size());
+    }).value();
 }
 
 std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
-    const auto replicas = get_tablet_info(id).replicas | std::views::filter([&] (const auto& tr) {
+    return maybe_get_primary_replica(id, get_tablet_info(id).replicas, [&] (const auto& tr) {
         return tablet_task_info.selected_by_filters(tr, topo);
-    }) | std::ranges::to<tablet_replica_set>();
-    return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
+    });
 }
 
 future<std::vector<token>> tablet_map::get_sorted_tokens() const {
@@ -511,6 +535,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::write_both_read_old, "write_both_read_old"},
     {tablet_transition_stage::write_both_read_new, "write_both_read_new"},
     {tablet_transition_stage::streaming, "streaming"},
+    {tablet_transition_stage::rebuild_repair, "rebuild_repair"},
     {tablet_transition_stage::repair, "repair"},
     {tablet_transition_stage::end_repair, "end_repair"},
     {tablet_transition_stage::use_new, "use_new"},
@@ -527,6 +552,10 @@ static const std::unordered_map<sstring, tablet_transition_stage> tablet_transit
     }
     return result;
 });
+
+tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features) {
+    return features.repair_based_tablet_rebuild ? tablet_transition_kind::rebuild_v2 : tablet_transition_kind::rebuild;
+}
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage stage) {
     auto i = tablet_transition_stage_to_name.find(stage);
@@ -545,6 +574,7 @@ static const std::unordered_map<tablet_transition_kind, sstring> tablet_transiti
         {tablet_transition_kind::migration, "migration"},
         {tablet_transition_kind::intranode_migration, "intranode_migration"},
         {tablet_transition_kind::rebuild, "rebuild"},
+        {tablet_transition_kind::rebuild_v2, "rebuild_v2"},
         {tablet_transition_kind::repair, "repair"},
 };
 
