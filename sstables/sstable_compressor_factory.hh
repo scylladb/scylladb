@@ -19,7 +19,7 @@ namespace db {
 class config;
 } // namespace db
 
-struct sstable_compressor_factory_impl;
+struct dictionary_holder;
 class raw_dict;
 
 struct sstable_compressor_factory {
@@ -60,7 +60,7 @@ struct default_sstable_compressor_factory_config {
 // (Note: this centralization shouldn't pose a performance problem because a dict is only requested once
 // per an opening of an SSTable).
 struct default_sstable_compressor_factory : peering_sharded_service<default_sstable_compressor_factory>, sstable_compressor_factory {
-    using impl = sstable_compressor_factory_impl;
+    using holder = dictionary_holder;
 public:
     using self = default_sstable_compressor_factory;
     using config = default_sstable_compressor_factory_config;
@@ -69,7 +69,7 @@ private:
     // Maps NUMA node ID to the array of shards on that node.
     std::vector<std::vector<shard_id>> _numa_groups;
     // Holds dictionaries owned by this shard.
-    std::unique_ptr<sstable_compressor_factory_impl> _impl;
+    std::unique_ptr<dictionary_holder> _holder;
     // All recommended dictionary updates are serialized by a single "leader shard".
     // We do this to avoid dealing with concurrent updates altogether.
     semaphore _recommendation_setting_sem{1};
