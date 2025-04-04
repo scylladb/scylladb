@@ -13,11 +13,13 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
+#include "db/view/view_build_status.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
 #include "mutation/canonical_mutation.hh"
 #include "locator/tablets.hh"
+#include "mutation/canonical_mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0.hh"
@@ -47,11 +49,13 @@ struct view_building_target {
 using view_building_tasks = std::map<view_building_target, dht::token_range_vector>;
 using base_building_tasks = std::map<table_id, view_building_tasks>;
 using view_building_coordinator_tasks = std::map<table_id, base_building_tasks>;
+using view_build_status_map = std::map<table_id, std::map<locator::host_id, db::view::build_status>>;
 
 class view_building_coordinator : public migration_listener::only_view_notifications {
     struct vbc_state {
         view_building_coordinator_tasks tasks;
         std::optional<table_id> currently_processed_base_table;
+        view_build_status_map status_map;
     };
 
     replica::database& _db;
@@ -96,8 +100,8 @@ private:
     
     future<std::optional<vbc_state>> update_coordinator_state();
     future<std::vector<canonical_mutation>> add_view(const group0_guard& guard, const table_id& view_id);
-    future<std::vector<canonical_mutation>> remove_view(const group0_guard& guard, const table_id& view_id);
-    future<canonical_mutation> remove_built_view(const group0_guard& guard, const table_id& view_id);
+    future<std::vector<canonical_mutation>> remove_view(const group0_guard& guard, const table_id& view_id, const vbc_state& state);
+    future<std::vector<canonical_mutation>> remove_built_view(const group0_guard& guard, const table_id& view_id);
 
     std::set<table_id> get_views_to_add(const vbc_state& state, const std::vector<table_id>& views, const std::vector<table_id>& built);
     std::set<table_id> get_views_to_remove(const vbc_state& state, const std::vector<table_id>& views);
@@ -110,6 +114,10 @@ private:
     future<> send_task(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
     future<> mark_task_completed(view_building_target target, table_id base_id, dht::token_range range, std::vector<table_id> views);
     future<> abort_work(const view_building_target& target);
+
+    future<std::vector<canonical_mutation>> mark_build_status_started_on_all_nodes(const group0_guard& guard, const std::vector<table_id>& views);
+    future<std::optional<mutation>> maybe_mark_build_status_success(const group0_guard& guard, const view_building_tasks& view_tasks, table_id view, locator::host_id host_id);
+    future<std::vector<canonical_mutation>> mark_build_status_success_on_remaining_nodes(const group0_guard& guard, vbc_state& state, table_id view);
 };
 
 }

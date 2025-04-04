@@ -19,6 +19,7 @@
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
+#include "db/view/view_build_status.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token.hh"
 #include "partition_slice_builder.hh"
@@ -58,6 +59,7 @@
 #include "view_info.hh"
 
 #include <unordered_map>
+#include <utility>
 
 using days = std::chrono::duration<int, std::ratio<24 * 3600>>;
 
@@ -2700,6 +2702,27 @@ static future<std::optional<mutation>> get_scylla_local_mutation(replica::databa
     }
 
     co_return std::nullopt;
+}
+
+future<system_keyspace::view_build_status_map> system_keyspace::get_view_build_status_map() {
+    static const sstring query = format("SELECT * FROM {}.{}", NAME, VIEW_BUILD_STATUS_V2);
+
+    view_build_status_map map;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto ks_name = row.get_as<sstring>("keyspace_name");
+        auto view_name = row.get_as<sstring>("view_name");
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto status = view::build_status_from_string(row.get_as<sstring>("status"));
+
+        auto view = std::make_pair(std::move(ks_name), std::move(view_name));
+        if (!map.contains(view)) {
+            map[view] = view_build_status_map::mapped_type();
+        }
+        map[view][host_id] = status;
+
+        co_return stop_iteration::no;
+    });
+    co_return map;
 }
 
 future<mutation> system_keyspace::make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status) {

@@ -8,6 +8,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <algorithm>
 #include <exception>
 #include <iterator>
 #include <ranges>
@@ -21,6 +22,8 @@
 #include "cql3/query_processor.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
+#include "db/view/view_build_status.hh"
+#include "db/view/view_builder.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
@@ -73,13 +76,18 @@ future<> view_building_coordinator::await_event() {
 future<view_building_coordinator::vbc_state> view_building_coordinator::load_coordinator_state() {
     auto tasks = co_await _sys_ks.get_view_building_coordinator_tasks();
     auto currently_processed_base_table = co_await _sys_ks.get_vbc_processing_base();
+    auto status_map = co_await _sys_ks.get_view_build_status_map() | std::views::transform([this] (auto entry) {
+        return std::make_pair(table_name_to_id(entry.first), entry.second);
+    }) | std::ranges::to<view_build_status_map>();
 
     vbc_logger.debug("Loaded state: {}", tasks);
     vbc_logger.debug("Processing base: {}", currently_processed_base_table);
+    vbc_logger.debug("Status map: {}", status_map);
 
     co_return vbc_state {
         .tasks = std::move(tasks),
         .currently_processed_base_table = std::move(currently_processed_base_table),
+        .status_map = std::move(status_map)
     };
 }
 
@@ -170,14 +178,14 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
     }
     if (auto to_remove = get_views_to_remove(state, views); !to_remove.empty()) {
         for (auto& view_id: to_remove) {
-            auto muts = co_await remove_view(guard, view_id);
+            auto muts = co_await remove_view(guard, view_id, state);
             cmuts.insert(cmuts.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
         }
     }
     if (auto built_to_remove = get_built_views_to_remove(built_views, views); !built_to_remove.empty()) {
         for (auto& view_id: built_to_remove) {
-            auto mut = co_await remove_built_view(guard, view_id);
-            cmuts.emplace_back(std::move(mut));
+            auto muts = co_await remove_built_view(guard, view_id);
+            cmuts.insert(cmuts.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
         }
     }
 
@@ -200,7 +208,9 @@ future<std::optional<view_building_coordinator::vbc_state>> view_building_coordi
                 vbc_logger.info("Start building views for base table: {}", base_id);
 
                 auto mut = co_await _sys_ks.make_vbc_processing_base_mutation(guard.write_timestamp(), base_id);
+                auto status_muts = co_await mark_build_status_started_on_all_nodes(guard, state.tasks.at(base_id) | std::views::keys | std::ranges::to<std::vector>());
                 cmuts.emplace_back(std::move(mut));
+                cmuts.insert(cmuts.end(), std::make_move_iterator(status_muts.begin()), std::make_move_iterator(status_muts.end()));
             }
         }
     }
@@ -348,7 +358,12 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
         auto& ranges = base_tasks[view][target];
         std::erase(ranges, range);
         if (ranges.empty()) {
+            // This means the view was built on the target.
             base_tasks[view].erase(target);
+            auto status_mut_opt = co_await maybe_mark_build_status_success(guard, base_tasks[view], view, target.host);
+            if (status_mut_opt) {
+                muts.emplace_back(std::move(*status_mut_opt));
+            }
         }
         vbc_logger.trace("Token range {} (view: {} | base_id: {}) was built on node {}, shard {}", range, view, base_id, target.host, target.shard);
 
@@ -356,7 +371,9 @@ future<> view_building_coordinator::mark_task_completed(view_building_target tar
         if (base_tasks[view].empty()) {
             auto view_name = table_id_to_name(view);
             auto mut = co_await _sys_ks.make_mark_view_as_built_mutation(guard.write_timestamp(), view_name.first, view_name.second);
+            auto status_muts = co_await mark_build_status_success_on_remaining_nodes(guard, state, view);
             muts.emplace_back(std::move(mut));
+            muts.insert(muts.end(), std::make_move_iterator(status_muts.begin()), std::make_move_iterator(status_muts.end()));
 
             base_tasks.erase(view);
             vbc_logger.info("View {}.{} was built", view_name.first, view_name.second);
@@ -382,6 +399,41 @@ future<> view_building_coordinator::abort_work(const view_building_target& targe
     } catch (...) {
         vbc_logger.warn("Error while aborting work on host {}, shard {}: {}", target.host, target.shard, std::current_exception());
     }
+}
+
+future<std::vector<canonical_mutation>> view_building_coordinator::mark_build_status_started_on_all_nodes(const group0_guard& guard, const std::vector<table_id>& views) {
+    std::vector<canonical_mutation> muts;
+    for (auto& [id, _]: _topo_sm._topology.normal_nodes) {
+        locator::host_id host_id{id.uuid()};
+        for (auto& view: views) {
+            auto mut = co_await _sys_ks.make_view_build_status_mutation(guard.write_timestamp(), table_id_to_name(view), host_id, db::view::build_status::STARTED);
+            muts.emplace_back(std::move(mut));
+        }
+    }
+    co_return muts;
+}
+
+future<std::optional<mutation>> view_building_coordinator::maybe_mark_build_status_success(const group0_guard& guard, const view_building_tasks& view_tasks, table_id view, locator::host_id host_id) {
+    bool host_has_any_tasks = std::any_of(view_tasks.begin(), view_tasks.end(), [&] (auto& e) {
+        return e.first.host == host_id;
+    });
+    if (host_has_any_tasks) {
+        co_return std::nullopt;
+    }
+    co_return co_await _sys_ks.make_view_build_status_update_mutation(guard.write_timestamp(), table_id_to_name(view), host_id, db::view::build_status::SUCCESS);
+}
+
+future<std::vector<canonical_mutation>> view_building_coordinator::mark_build_status_success_on_remaining_nodes(const group0_guard& guard, vbc_state& state, table_id view) {
+    std::vector<canonical_mutation> muts;
+    for (auto& [id, _]: _topo_sm._topology.normal_nodes) {
+        locator::host_id host_id{id.uuid()};
+        
+        if (!state.status_map[view].contains(host_id)) {
+            auto mut = co_await _sys_ks.make_view_build_status_mutation(guard.write_timestamp(), table_id_to_name(view), host_id, db::view::build_status::SUCCESS);
+            muts.emplace_back(std::move(mut));
+        }
+    }
+    co_return muts;
 }
 
 std::set<table_id> view_building_coordinator::get_views_to_add(const vbc_state& state, const std::vector<table_id>& views, const std::vector<table_id>& built) {
@@ -438,23 +490,35 @@ future<std::vector<canonical_mutation>> view_building_coordinator::add_view(cons
             muts.emplace_back(std::move(mut));
         }
     }
+    auto status_muts = co_await mark_build_status_started_on_all_nodes(guard, {view_id});
+    muts.insert(muts.end(), std::make_move_iterator(status_muts.begin()), std::make_move_iterator(status_muts.end()));
     co_return muts;
 }
 
-future<std::vector<canonical_mutation>> view_building_coordinator::remove_view(const group0_guard& guard, const table_id& view_id) {
+future<std::vector<canonical_mutation>> view_building_coordinator::remove_view(const group0_guard& guard, const table_id& view_id, const vbc_state& state) {
     auto view_name = table_id_to_name(view_id);
     vbc_logger.info("Unregister all remaining tasks for view: {}.{}", view_name.first, view_name.second);
     
     auto muts = co_await _sys_ks.make_vbc_remove_view_tasks_mutations(guard.write_timestamp(), view_id);
-    co_return std::vector<canonical_mutation>{muts.begin(), muts.end()};
+    std::vector<canonical_mutation> cmuts{muts.begin(), muts.end()};
+    if (state.status_map.contains(view_id)) {
+        auto status_mut = co_await _sys_ks.make_remove_view_build_status_mutation(guard.write_timestamp(), view_name);
+        cmuts.emplace_back(std::move(status_mut));
+    }
+    co_return cmuts;
 }
 
-future<canonical_mutation> view_building_coordinator::remove_built_view(const group0_guard& guard, const table_id& view_id) {
+future<std::vector<canonical_mutation>> view_building_coordinator::remove_built_view(const group0_guard& guard, const table_id& view_id) {
     auto view_name = table_id_to_name(view_id);
     vbc_logger.info("Remove status for built view: {}.{}", view_name.first, view_name.second);
 
-    auto mut = co_await _sys_ks.make_remove_built_view_mutation(guard.write_timestamp(), view_name.first, view_name.second);
-    co_return canonical_mutation(std::move(mut));
+    auto built_mut = co_await _sys_ks.make_remove_built_view_mutation(guard.write_timestamp(), view_name.first, view_name.second);
+    auto status_mut = co_await _sys_ks.make_remove_view_build_status_mutation(guard.write_timestamp(), view_name);
+
+    co_return std::vector<canonical_mutation>{
+        canonical_mutation(std::move(built_mut)), 
+        canonical_mutation(std::move(status_mut))
+    };
 }
 
 future<> view_building_coordinator::maybe_prepare_for_tablet_migration_start(const group0_guard& guard, table_id table_id, const locator::tablet_replica& abandoning_replica, const dht::token_range& range) {
