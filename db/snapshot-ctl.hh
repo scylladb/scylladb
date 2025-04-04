@@ -102,6 +102,7 @@ public:
 
     future<int64_t> true_snapshots_size();
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
+    sstables::storage_manager& storage_manager() { return _storage_manager; }
 private:
     config _config;
     sharded<replica::database>& _db;
