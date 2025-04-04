@@ -250,6 +250,13 @@ public:
     }
 };
 
+static lowres_clock::time_point compute_timeout(const query::mapreduce_request& req) {
+    lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
+    lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
+
+    return timeout_point;
+}
+
 // `retrying_dispatcher` is a class that dispatches mapreduce_requests to other
 // nodes. In case of a failure, local retries are available - request being
 // retried is executed on the super-coordinator.
@@ -397,13 +404,6 @@ future<query::mapreduce_result> mapreduce_service::dispatch_to_shards(
 
         return *result;
     });
-}
-
-static lowres_clock::time_point compute_timeout(const query::mapreduce_request& req) {
-    lowres_system_clock::duration time_left = req.timeout - lowres_system_clock::now();
-    lowres_clock::time_point timeout_point = lowres_clock::now() + time_left;
-
-    return timeout_point;
 }
 
 // This function executes mapreduce_request on a shard.
