@@ -112,7 +112,7 @@ async def test_truncate_with_concurrent_drop(manager: ManagerClient):
         # Start a TRUNCATE in the background
         trunc_future = cql.run_async(f'TRUNCATE TABLE {ks}.test', host=trunc_host)
         # Wait for the topology coordinator to reach a point wher it is about to start sending the truncate RPCs
-        await raft_leader_log.wait_for('truncate_table_wait: start')
+        await raft_leader_log.wait_for('truncate_table_wait: waiting for message')
         # Execute DROP TABLE
         await cql.run_async(f'DROP TABLE {ks}.test', host=drop_host)
         # Release TRUNCATE table in topology coordinator
