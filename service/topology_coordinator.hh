@@ -12,6 +12,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
+#include <stdexcept>
 
 #include "utils/log.hh"
 #include "raft/raft.hh"
@@ -54,6 +55,16 @@ extern logging::logger rtlogger;
 struct wait_for_ip_timeout : public std::runtime_error {
         wait_for_ip_timeout(raft::server_id id, long timeout) :
                 std::runtime_error::runtime_error(format("failed to obtain an IP for {} in {}s", id, timeout)) {}
+};
+
+// The topology coordinator takes guard before operation start, but it releases it during various
+// RPC commands that it sends to make it possible to submit new requests to the state machine while
+// the coordinator drives current topology change. It is safe to do so since only the coordinator is
+// ever allowed to change node's state, others may only create requests. To make sure the coordinator did
+// not change while the lock was released, and hence the old coordinator does not work on old state, we check
+// that the raft term is still the same after the lock is re-acquired. Throw term_changed_error if it did.
+struct term_changed_error : public std::runtime_error {
+        term_changed_error() : std::runtime_error::runtime_error("Raft term changed.") {}
 };
 
 // Wait for the node with provided id to appear in the gossiper
