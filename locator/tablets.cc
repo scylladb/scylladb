@@ -200,6 +200,47 @@ std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, cons
     return *leaving.begin();
 }
 
+bool has_leaving_replica_left(tablet_transition_stage stage) {
+    // true if there is no reachable stage where some selector is 'previous' or 'both'
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+        case tablet_transition_stage::write_both_read_old:
+        case tablet_transition_stage::streaming:
+        case tablet_transition_stage::write_both_read_new:
+            return false;
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return true;
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return false;
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+            return false;
+    }
+}
+
+bool has_pending_replica_left(tablet_transition_stage stage) {
+    // true if there is no reachable stage where some selector is 'next' or 'both'
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+        case tablet_transition_stage::write_both_read_old:
+        case tablet_transition_stage::streaming:
+        case tablet_transition_stage::write_both_read_new:
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::end_migration:
+            return false;
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+            return true;
+        case tablet_transition_stage::repair:
+        case tablet_transition_stage::end_repair:
+            return true;
+    }
+}
+
 tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
@@ -242,10 +283,32 @@ no_such_tablet_map::no_such_tablet_map(const table_id& id)
 
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
-        return *_tablets.at(id);
+        auto& map = *_tablets.at(id);
+        if (auto base_id = map.base_table()) {
+            return *_tablets.at(*base_id);
+        } else {
+            return map;
+        }
     } catch (const std::out_of_range&) {
         throw_with_backtrace<no_such_tablet_map>(id);
     }
+}
+
+locator::tablet_metadata::table_group_map
+tablet_metadata::all_table_groups() const {
+    table_group_map m;
+    for (auto&& [table, tmap_] : _tablets) {
+        m[get_base_table(table)].push_back(table);
+    }
+    return m;
+}
+
+table_id tablet_metadata::get_base_table(table_id id) const {
+    return _tablets.at(id)->base_table().value_or(id);
+}
+
+bool tablet_metadata::is_base_table(table_id id) const {
+    return !_tablets.at(id)->base_table().has_value();
 }
 
 void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
@@ -332,6 +395,13 @@ tablet_map::tablet_map(size_t tablet_count)
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
     _tablets.resize(tablet_count);
+}
+
+tablet_map::tablet_map(table_id base_table)
+        : _log2_tablets(0),
+          _base_table(base_table) {
+    // We only refer to the base tablet map, we don't have our own tablets
+    _tablets.resize(0);
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -444,6 +514,10 @@ void tablet_map::set_resize_task_info(tablet_task_info task_info) {
 
 void tablet_map::set_repair_scheduler_config(locator::repair_scheduler_config config) {
     _repair_scheduler_config = std::move(config);
+}
+
+void tablet_map::set_base_table(table_id base_table) {
+    _base_table = base_table;
 }
 
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
@@ -631,6 +705,10 @@ const locator::repair_scheduler_config& tablet_map::repair_scheduler_config() co
     return _repair_scheduler_config;
 }
 
+std::optional<table_id> tablet_map::base_table() const {
+    return _base_table;
+}
+
 static auto to_resize_type(sstring decision) {
     static const std::unordered_map<sstring, decltype(resize_decision::way)> string_to_type = {
         {"none", resize_decision::none{}},
@@ -764,7 +842,7 @@ bool tablet_metadata::has_replica_on(host_id host) const {
 
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host) {
     bool valid = true;
-    for (const auto& [table_id, tmap] : tm.all_tables()) {
+    for (const auto& [table, tmap] : tm.all_tables_ungrouped()) {
         co_await tmap->for_each_tablet([this_host, &valid] (locator::tablet_id tid, const tablet_info& tinfo) -> future<> {
             for (const auto& replica : tinfo.replicas) {
                 if (replica.host == this_host) {
