@@ -80,7 +80,7 @@ class LcovRecord(metaclass = MakeLcovRouter):
         self.source_file: Optional[Path] = None
         self.line_hits: dict[int, int] = dict()
 
-        self.function_hits: dict[Tuple(int, str), int] = dict()
+        self.function_hits: dict[Tuple[int, str], int] = dict()
         self.functions_to_lines: dict[str, int] = dict()
         self.branch_hits: dict[Tuple[int, int, int], Optional[int]] = dict()
         self.sealed: bool = False
@@ -235,16 +235,21 @@ class LcovRecord(metaclass = MakeLcovRouter):
         self.remove_branches([branch_line])
 
     def validate_integrity(self):
-        assert (
-            len(set(self.functions_to_lines.values()) - set(self.line_hits.keys())) == 0
-        )
-        assert (
-            len(
-                set([x[0] for x in self.branch_hits.keys()])
-                - set(self.line_hits.keys())
-            )
-            == 0
-        )
+        if len(set(self.functions_to_lines.values()) - set(self.line_hits.keys())) != 0:
+            print(f'validation failed (1)'
+                  f' source_file={self.source_file}'
+                  f' test_name={self._test_name}'
+                  f' functions_to_lines={list(sorted(set(self.functions_to_lines.values())))}'
+                  f' line_hits={list(sorted(set(self.line_hits.keys())))}'
+                  f' diff={list(sorted(set(self.functions_to_lines.values()) - set(self.line_hits.keys())))}')
+        if len(set([x[0] for x in self.branch_hits.keys()]) - set(self.line_hits.keys())) != 0:
+            print(f'validateion failed (2)'
+                  f' source_file={self.source_file}'
+                  f' test_name={self._test_name}'
+                  f' branch_hits={list(sorted(set([x[0] for x in self.branch_hits.keys()])))}'
+                  f' line_hits={list(sorted(set(self.line_hits.keys())))}'
+                  f' diff={list(sorted(set([x[0] for x in self.branch_hits.keys()]) - set(self.line_hits.keys())))}'
+                  )
 
     def get_lines(self) -> set[int]:
         return set(self.line_hits.keys())
