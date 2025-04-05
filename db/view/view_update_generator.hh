@@ -60,14 +60,19 @@ public:
     static constexpr size_t registration_queue_size = 100;
 
 private:
+    struct sstable_with_promise {
+        sstables::shared_sstable sst;
+        std::optional<promise<>> generated;
+    };
+
     replica::database& _db;
     sharded<service::storage_proxy>& _proxy;
     seastar::abort_source _as;
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
     named_semaphore _registration_sem{registration_queue_size, named_semaphore_exception_factory{"view update generator"}};
-    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
-    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
+    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstable_with_promise>> _sstables_with_tables;
+    std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstable_with_promise>> _sstables_to_move;
     metrics::metric_groups _metrics;
     class progress_tracker;
     std::unique_ptr<progress_tracker> _progress_tracker;
@@ -80,7 +85,7 @@ public:
     future<> start();
     future<> drain();
     future<> stop();
-    future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
+    future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table, std::optional<promise<>> generated = std::nullopt);
 
     replica::database& get_db() noexcept { return _db; }
 
