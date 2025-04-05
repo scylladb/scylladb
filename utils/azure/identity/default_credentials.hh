@@ -41,6 +41,12 @@ private:
 
     const char* get_name() const override { return NAME; };
     future<> refresh(const resource_type& resource_uri) override;
+    future<> detect(const resource_type& resource_uri);
+
+    using credentials_opt = std::optional<std::unique_ptr<credentials>>;
+    future<credentials_opt> get_credentials_from_env(const resource_type& resource_uri);
+    future<credentials_opt> get_credentials_from_azure_cli(const resource_type& resource_uri);
+    future<credentials_opt> get_credentials_from_imds(const resource_type& resource_uri);
 };
 
 }
