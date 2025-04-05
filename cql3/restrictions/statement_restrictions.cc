@@ -394,17 +394,18 @@ possible_lhs_values(const column_definition* cdef,
                             return nullptr;
                         },
                         [&] (const tuple_constructor& tuple) -> solve_for_t {
-                          return [tuple, cdef, oper, type] (const query_options& options) -> value_set {
                             if (!cdef) {
-                                return unbounded_value_set;
+                                return nullptr;
                             }
                             const auto found = std::ranges::find_if(
                                     tuple.elements, [&] (const expression& c) { return expr::as<column_value>(c).col == cdef; });
                             if (found == tuple.elements.end()) {
-                                return unbounded_value_set;
+                                return nullptr;
                             }
                             const auto column_index_on_lhs = std::distance(tuple.elements.begin(), found);
                             if (is_compare(oper.op)) {
+                              return [tuple, column_index_on_lhs, oper] (const query_options& options) -> value_set {
+
                                 // RHS must be a tuple due to upstream checks.
                                 managed_bytes_opt val = get_tuple_elements(evaluate(oper.rhs, options), *type_of(oper.rhs)).at(column_index_on_lhs);
                                 if (!val) {
@@ -419,11 +420,13 @@ possible_lhs_values(const column_definition* cdef,
                                     return unbounded_value_set;
                                 }
                                 return to_range(oper.op, std::move(*val));
+                              };
                             } else if (oper.op == oper_t::IN) {
+                              return [tuple, column_index_on_lhs, oper, type] (const query_options& options) -> value_set {
                                 return get_IN_values(oper.rhs, column_index_on_lhs, options, type->as_less_comparator());
+                              };
                             }
-                            return unbounded_value_set;
-                          };
+                            return nullptr;
                         },
                         [&] (const function_call& token_fun_call) -> solve_for_t {
                             if (!is_partition_token_for_schema(token_fun_call, *table_schema_opt)) {
