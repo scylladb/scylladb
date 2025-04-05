@@ -13,6 +13,19 @@ from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, Co
 from .util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
 from contextlib import contextmanager
 
+# Figure out which keyspace contains the roles table (its location changed
+# across different releases of Scylla and Cassandra)
+def get_roles_table(cql):
+    for ks in ['system', 'system_auth_v2', 'system_auth']:
+        try:
+            t = ks + '.roles'
+            cql.execute(f'SELECT * FROM {t}')
+            # If we're still here, the SELECT didn't fail
+            return t
+        except:
+            pass
+    pytest.fail("Couldn't find roles table")
+
 # Test that granting permissions to various resources works for the default user.
 # This case does not include functions, because due to differences in implementation
 # the tests will diverge between Scylla and Cassandra (e.g. there's no common language)
@@ -504,6 +517,28 @@ def test_grant_all_allows_superuser_password_change(cql):
             with new_session(cql, username) as user_session:
                 user_session.execute(f"ALTER ROLE {superuser} WITH PASSWORD = '{superuser}2'")
 
+# Reproduces https://github.com/scylladb/scylla-enterprise/issues/5210,
+# i.e. a CVE reported for Cassandra https://www.cve.org/CVERecord?id=CVE-2025-23015,
+def test_non_superuser_with_modify_all_keyspaces_permissions_cannot_modify_system_keyspaces(cql, test_keyspace):
+    roles_table = get_roles_table(cql)
+    with new_user(cql) as username:
+        with new_session(cql, username) as user_session:
+            with new_test_table(cql, test_keyspace, "a int, PRIMARY KEY (a)") as ks_cf:
+                # a non-superuser CANNOT modify any random table in any random keyspace
+                eventually_unauthorized(lambda: user_session.execute(f"INSERT INTO {ks_cf} (a) VALUES (1)"))
+                # unless we grant him a MODIFY permission to ALL KEYSPACES
+                grant(cql, 'MODIFY', 'ALL KEYSPACES', username)
+                # with which he can now MODIFY it
+                eventually_authorized(lambda: user_session.execute(f"INSERT INTO {ks_cf} (a) VALUES (1)"))
+
+                # but even an authenticated non-superuser with MODIFY on ALL KEYSPACES permissions
+                # cannot update system tables, especially elevate itself to a superuser
+                eventually_unauthorized(lambda: user_session.execute(f"UPDATE {roles_table} SET is_superuser = True WHERE role = '{username}'"))
+
+                # but an authenticated superuser user can update system tables
+                # (note that `cql` is a session for the already authenticated "cassandra" superuser)
+                cql.execute(f"UPDATE {roles_table} SET is_superuser = True WHERE role = '{username}'")
+
 # Test that permissions on a table are not granted to a user as a creator if the table already exists when the user
 # tries to create it. Reproduces GHSA-ww5v-p45p-3vhq
 def test_create_on_existing_table(cql):
@@ -753,28 +788,17 @@ def test_auto_revoke_cdc(cql, test_keyspace, scylla_only):
 
 # Test that an unprivileged user can read from *some* system tables, such
 # as system_schema.tables, but cannot read from *other* system tables - most
-# notibly the system.roles table. Allowing unprivileged users to read from
+# notably the system.roles table. Allowing unprivileged users to read from
 # the roles table could have allowed them to read other users' salted hash
 # keys (which can be used to brute-force the other users' passwords, and in
 # Alternator - to directly log as those users!)
 def test_select_system_table(cql):
-    # Figure out which keyspace contains the roles table (its location changed
-    # across different releases of Scylla and Cassandra)
-    roles_table = None
-    for ks in ['system', 'system_auth_v2', 'system_auth']:
-        try:
-            t = ks + '.roles'
-            cql.execute(f'SELECT * FROM {t}')
-            # If we're still here, the SELECT didn't fail
-            roles_table = t
-        except:
-            pass
-    assert roles_table
+    roles_table = get_roles_table(cql)
 
     with new_user(cql) as user1:
         with new_session(cql, user1) as user1_session:
-            # user1 was not explicity granted permissions for
-            # system_schema.tables, but can still read permissions it!
+            # user1 was not explicitly granted permissions for
+            # system_schema.tables, but can still read it!
             # This white-listing of certain system tables that even an
             # unprivileged user can read happens in the function
             # service::client_state::has_access().
