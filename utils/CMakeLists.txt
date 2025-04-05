@@ -17,6 +17,7 @@ target_sources(utils
     bloom_filter.cc
     buffer_input_stream.cc
     build_id.cc
+    comparable_bytes.cc
     config_file.cc
     dict_trainer.cc
     directories.cc
