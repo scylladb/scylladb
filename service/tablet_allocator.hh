@@ -232,6 +232,10 @@ public:
     ///
     future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
 
+    void set_load_stats(locator::load_stats_ptr);
+
+    locator::load_stats_ptr get_load_stats();
+
     load_balancer_stats_manager& stats();
 
     void set_use_table_aware_balancing(bool);
