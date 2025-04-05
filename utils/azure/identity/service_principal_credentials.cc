@@ -7,9 +7,17 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#define CPP_JWT_USE_VENDORED_NLOHMANN_JSON
+#include <jwt/jwt.hpp>
 #include <boost/regex.hpp>
 
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/util/file.hh>
+
 #include "db/config.hh"
+#include "types/types.hh"
+#include "utils/base64.hh"
+#include "utils/hashers.hh"
 #include "utils/rest/client.hh"
 #include "exceptions.hh"
 #include "service_principal_credentials.hh"
@@ -20,7 +28,7 @@ class sp_log_filter : public rest::nop_log_filter {
 public:
     string_opt filter_body(body_type type, std::string_view body) const override {
         if (type == body_type::request) {
-            for (const auto& param : {"client_secret="}) {
+            for (const auto& param : {"client_secret=", "client_assertion="}) {
                 size_t start_pos = body.find(param);
                 if (start_pos == std::string_view::npos) {
                     continue;
@@ -217,8 +225,110 @@ future<> service_principal_credentials::refresh_with_secret(const resource_type&
     _token = make_token(rjson::parse(resp), resource_uri);
 }
 
+static future<std::string> read_pem_artifact(const sstring& key_file, const sstring& header) {
+    auto contents = co_await util::read_entire_file_contiguous(std::filesystem::path(key_file.c_str()));
+    std::istringstream stream(contents);
+    std::string line;
+    std::string key_data;
+    bool in_key = false;
+    while (std::getline(stream, line)) {
+        if (line.find(header) != std::string::npos) {
+            in_key = !in_key;
+            key_data += line + "\n";
+        } else if (in_key) {
+            key_data += line + "\n";
+        }
+    }
+    co_return key_data;
+}
+
+/**
+ * Argument is expected to be a PEM encoded certificate.
+ * Thumbprint computed as the base64url-encoded SHA-256 hash of the certificate's DER encoding.
+ * https://learn.microsoft.com/en-us/entra/identity-platform/certificate-credentials#header
+ * https://datatracker.ietf.org/doc/html/rfc7517#section-4.9
+ */
+std::string compute_thumbprint(const std::string& pem_cert) {
+    BIO* bio = BIO_new_mem_buf(pem_cert.data(), pem_cert.size());
+    if (!bio) {
+        on_internal_error(az_creds_logger, "Error creating BIO object");
+    }
+
+    X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    if (!cert) {
+        on_internal_error(az_creds_logger, "Error reading certificate from memory");
+    }
+
+    // Convert to DER format
+    unsigned char* der = nullptr;
+    int der_len = i2d_X509(cert, &der);
+    X509_free(cert);
+    if (der_len < 0) {
+        on_internal_error(az_creds_logger, "Error converting certificate to DER");
+    }
+
+    std::string thumbprint(reinterpret_cast<char*>(der), der_len);
+    OPENSSL_free(der);
+    bytes sha = [&thumbprint] {
+        sha256_hasher hasher;
+        hasher.update(thumbprint.data(), thumbprint.size());
+        return hasher.finalize();
+    }();
+    return base64url_encode(sha);
+}
+
+/**
+ * Token request with certificate.
+ * Based on: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow#second-case-access-token-request-with-a-certificate
+ */
 future<> service_principal_credentials::refresh_with_certificate(const resource_type& resource_uri) {
-     throw std::logic_error("Not implemented");
+    // Scopes for the client credentials flow must contain only one resource
+    // identifier and only the .default scope.
+    auto scope = seastar::format("{}/.default", resource_uri);
+    sstring grant_type = "client_credentials";
+    sstring client_assertion_type = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+    std::string private_key;
+    try {
+        private_key = co_await read_pem_artifact(_client_cert, PEM_STRING_PKCS8INF);
+    } catch (const std::exception& e) {
+        throw std::runtime_error(seastar::format("Failed to read private key from certificate file {}: {}", _client_cert, e.what()));
+    }
+    if (private_key.empty()) {
+        throw std::invalid_argument(seastar::format("Private key not found in certificate file {}", _client_cert));
+    }
+    std::string cert = co_await read_pem_artifact(_client_cert, PEM_STRING_X509);
+    if (cert.empty()) {
+        throw std::invalid_argument(seastar::format("Certificate not found in certificate file {}", _client_cert));
+    }
+    auto alg = "RS256"; // docs suggest PS256, but it's not supported by jwt-cpp
+    auto thumbprint = compute_thumbprint(cert);
+
+    using namespace jwt::params;
+    jwt::jwt_object obj{algorithm(alg), secret(private_key), headers({{"x5t#S256", thumbprint }})};
+
+    const auto host = AZURE_ENTRA_ID_HOST;
+    const auto path = seastar::format(AZURE_ENTRA_ID_TOKEN_PATH_TEMPLATE, _tenant_id);
+    auto uri = seastar::format("https://{}{}", host, path);
+    using jwt_id = utils::tagged_uuid<struct jwt_id_tag>;
+    obj.add_claim("aud", uri)
+        .add_claim("exp", timeout_clock::now() + std::chrono::minutes(10))
+        .add_claim("iss", _client_id)
+        .add_claim("jti", jwt_id::create_random_id().to_sstring())
+        .add_claim("nbf", timeout_clock::now())
+        .add_claim("sub", _client_id)
+        .add_claim("iat", timeout_clock::now())
+    ;
+    auto sign = obj.signature();
+    sstring body = seastar::format(
+            "client_id={}&scope={}&client_assertion_type={}&client_assertion={}&grant_type={}",
+            _client_id,
+            seastar::http::internal::url_encode(scope),
+            seastar::http::internal::url_encode(client_assertion_type),
+            sign,
+            grant_type);
+    auto resp = co_await with_retries([&] { return post(body); });
+    _token = make_token(rjson::parse(resp), resource_uri);
 }
 
 }
