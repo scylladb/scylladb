@@ -1095,8 +1095,7 @@ void gossiper::run() {
                 logger.trace("My heartbeat is now {}", hbs.get_heart_beat_version());
             }
 
-            utils::chunked_vector<gossip_digest> g_digests;
-            make_random_gossip_digest(g_digests);
+            utils::chunked_vector<gossip_digest> g_digests = make_random_gossip_digest();
 
             if (g_digests.size() > 0) {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
@@ -1287,7 +1286,8 @@ void gossiper::quarantine_endpoint(locator::host_id id, clk::time_point quaranti
     }
 }
 
-void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const {
+utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const {
+    utils::chunked_vector<gossip_digest> g_digests;
     generation_type generation;
     version_type max_version;
 
@@ -1306,6 +1306,7 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
         }
         g_digests.push_back(gossip_digest(es->get_ip(), generation, max_version));
     }
+    return g_digests;
 }
 
 future<> gossiper::replicate(endpoint_state es, permit_id pid) {

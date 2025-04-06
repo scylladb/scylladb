@@ -369,9 +369,8 @@ private:
      * The gossip digest is built based on randomization
      * rather than just looping through the collection of live endpoints.
      *
-     * @param g_digests list of Gossip Digests.
      */
-    void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const;
+    utils::chunked_vector<gossip_digest> make_random_gossip_digest() const;
 
 public:
     /**
