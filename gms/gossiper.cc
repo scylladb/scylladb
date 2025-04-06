@@ -1287,7 +1287,7 @@ void gossiper::quarantine_endpoint(locator::host_id id, clk::time_point quaranti
 }
 
 utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const {
-    utils::chunked_vector<gossip_digest> g_digests;
+    std::unordered_map<inet_address, gossip_digest> g_digests;
     generation_type generation;
     version_type max_version;
 
@@ -1304,9 +1304,14 @@ utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const
             generation = eps.get_heart_beat_state().get_generation();
             max_version = get_max_endpoint_state_version(eps);
         }
-        g_digests.push_back(gossip_digest(es->get_ip(), generation, max_version));
+        gossip_digest d{es->get_ip(), generation, max_version};
+        auto [it, inserted] = g_digests.emplace(es->get_ip(), d);
+        if (!inserted && it->second.get_generation() < generation) {
+            // If there are multiple hosts with the same IP send out the one with newest generation
+            it->second = d;
+        }
     }
-    return g_digests;
+    return g_digests | std::views::values | std::ranges::to<utils::chunked_vector<gossip_digest>>();
 }
 
 future<> gossiper::replicate(endpoint_state es, permit_id pid) {
