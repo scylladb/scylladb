@@ -347,7 +347,7 @@ public:
      */
     future<> remove_endpoint(locator::host_id endpoint, permit_id);
     // Returns true if an endpoint was removed
-    future<bool> force_remove_endpoint(inet_address endpoint, locator::host_id id, permit_id);
+    future<> force_remove_endpoint(locator::host_id id, permit_id);
 private:
     /**
      * Quarantines the endpoint for QUARANTINE_DELAY
@@ -369,9 +369,8 @@ private:
      * The gossip digest is built based on randomization
      * rather than just looping through the collection of live endpoints.
      *
-     * @param g_digests list of Gossip Digests.
      */
-    void make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const;
+    utils::chunked_vector<gossip_digest> make_random_gossip_digest() const;
 
 public:
     /**

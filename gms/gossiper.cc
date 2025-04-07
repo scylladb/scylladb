@@ -500,6 +500,12 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     const auto& application_states_wanted = request.application_states;
     for (const auto& [node, state] : _endpoint_state_map) {
         const heart_beat_state& hbs = state->get_heart_beat_state();
+        auto it = map.find(state->get_ip());
+        if (it != map.end()) {
+            if (it->second.get_heart_beat_state().get_generation() < hbs.get_generation()) {
+                map.erase(it);
+            }
+        }
         auto state_wanted = endpoint_state(hbs, state->get_ip());
         auto& apps = state->get_application_state_map();
         for (const auto& app : apps) {
@@ -676,24 +682,23 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
         std::chrono::steady_clock::now() - start).count());
 }
 
-future<bool> gossiper::force_remove_endpoint(inet_address endpoint, locator::host_id id, permit_id pid) {
-    return container().invoke_on(0, [this, endpoint, pid, id] (auto& gossiper) mutable -> future<bool> {
+future<> gossiper::force_remove_endpoint(locator::host_id id, permit_id pid) {
+    return container().invoke_on(0, [this, pid, id] (auto& gossiper) mutable -> future<> {
         auto permit = co_await gossiper.lock_endpoint(id, pid);
         pid = permit.id();
         try {
-            if (gossiper.get_host_id(endpoint) != id) {
-                co_return false;
+            if (id == my_host_id()) {
+                throw std::runtime_error(format("Can not force remove node {} itself", id));
             }
-            if (endpoint == get_broadcast_address()) {
-                throw std::runtime_error(format("Can not force remove node {} itself", endpoint));
+            if (!gossiper._endpoint_state_map.contains(id)) {
+                logger.debug("Force remove node is called on non exiting endpoint {}", id);
+                co_return;
             }
             co_await gossiper.remove_endpoint(id, pid);
             co_await gossiper.evict_from_membership(id, pid);
-            logger.info("Finished to force remove node {}", endpoint);
-            co_return true;
+            logger.info("Finished to force remove node {}", id);
         } catch (...) {
-            logger.warn("Failed to force remove node {}: {}", endpoint, std::current_exception());
-            co_return false;
+            logger.warn("Failed to force remove node {}: {}", id, std::current_exception());
         }
     });
 }
@@ -1090,8 +1095,7 @@ void gossiper::run() {
                 logger.trace("My heartbeat is now {}", hbs.get_heart_beat_version());
             }
 
-            utils::chunked_vector<gossip_digest> g_digests;
-            make_random_gossip_digest(g_digests);
+            utils::chunked_vector<gossip_digest> g_digests = make_random_gossip_digest();
 
             if (g_digests.size() > 0) {
                 gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
@@ -1282,7 +1286,8 @@ void gossiper::quarantine_endpoint(locator::host_id id, clk::time_point quaranti
     }
 }
 
-void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g_digests) const {
+utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const {
+    std::unordered_map<inet_address, gossip_digest> g_digests;
     generation_type generation;
     version_type max_version;
 
@@ -1299,8 +1304,14 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
             generation = eps.get_heart_beat_state().get_generation();
             max_version = get_max_endpoint_state_version(eps);
         }
-        g_digests.push_back(gossip_digest(es->get_ip(), generation, max_version));
+        gossip_digest d{es->get_ip(), generation, max_version};
+        auto [it, inserted] = g_digests.emplace(es->get_ip(), d);
+        if (!inserted && it->second.get_generation() < generation) {
+            // If there are multiple hosts with the same IP send out the one with newest generation
+            it->second = d;
+        }
     }
+    return g_digests | std::views::values | std::ranges::to<utils::chunked_vector<gossip_digest>>();
 }
 
 future<> gossiper::replicate(endpoint_state es, permit_id pid) {
