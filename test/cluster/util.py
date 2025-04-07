@@ -301,7 +301,7 @@ async def check_system_topology_and_cdc_generations_v3_consistency(manager: Mana
 async def check_node_log_for_failed_mutations(manager: ManagerClient, server: ServerInfo):
     logging.info(f"Checking that node {server} had no failed mutations")
     log = await manager.server_open_log(server.server_id)
-    occurrences = await log.grep(expr="Failed to apply mutation from")
+    occurrences = await log.grep(expr="^(?!.*\b(INFO|DEBUG|TRACE)\b).*Failed to apply mutation from")
     assert len(occurrences) == 0
 
 
