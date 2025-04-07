@@ -610,4 +610,4 @@ Each table has `gc_grace_seconds` table attribute, which is a fixed time window,
 For example, with a `gc_grace_seconds=864000` (10 days), it is assumed that the user repaired their cluster thoroughly at least once, so that any tombstone that is 10 days old is guaranteed to have been propagated to all replicas already.
 In this system, the elibility for garbage collection of a tombstone is simply checking that it is at least `gc_grace_seconds` old. If so, it is considered expired.
 
-See [Tombstones GC options](https://opensource.docs.scylladb.com/stable/cql#tombstones-gc-options) for more details on different modes of expiry.
+See [Tombstones GC options](https://opensource.docs.scylladb.com/stable/cql/ddl.html#tombstones-gc-options) for more details on different modes of expiry.
