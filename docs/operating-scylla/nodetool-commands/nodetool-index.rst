@@ -1,1 +1,0 @@
-:doc:`Nodetool Reference <../nodetool>`

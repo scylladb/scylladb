@@ -1,9 +1,0 @@
-Scylla.db
-CRC.db
-Filter.db
-Statistics.db
-TOC.txt
-Digest.crc32
-Index.db
-Summary.db
-Data.db
