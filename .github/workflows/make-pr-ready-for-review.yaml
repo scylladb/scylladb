@@ -16,6 +16,13 @@ jobs:
       pull-requests: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.DEFAULT_BRANCH }}
+          token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          fetch-depth: 1
       - name: Mark pull request as ready for review
         run:  gh pr ready "${{ github.event.pull_request.number }}"
         env:
