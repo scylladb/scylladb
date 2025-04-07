@@ -9,11 +9,12 @@
 
 set -e
 
+shopt -s extglob
+
 trap 'echo "error $? in $0 line $LINENO"' ERR
 
 gh_hosts=~/.config/gh/hosts.yml
 jenkins_url="https://jenkins.scylladb.com"
-FORCE=$2
 ORANGE='\033[0;33m'
 NC='\033[0m'
 
@@ -30,17 +31,37 @@ if [[ -z "$JENKINS_USERNAME" || -z "$JENKINS_API_TOKEN" ]]; then
   exit 1
 fi
 
-if [ -z "$1" ]; then
-	echo Please provide a github pull request number
-	exit 1
-fi
-
 for required in jq curl; do
 	if ! type $required >& /dev/null; then
 		echo Please install $required first
 		exit 1
 	fi
 done
+
+FORCE=0
+
+while [[ $# -gt 0 ]]
+do
+    case $1 in
+        "--force"|"-f")
+            FORCE=1
+            shift 1
+            ;;
+        +([0-9]))
+            PR_NUM=$1
+            shift 1
+            ;;
+        *)
+            echo "error: unrecognized option: $1, see $0 -h for usage" >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [ -z "$PR_NUM" ]; then
+	echo Please provide a github pull request number
+	exit 1
+fi
 
 curl() {
     local opts=()
@@ -88,13 +109,12 @@ check_jenkins_job_status() {
   fi
 }
 
-if [[ "$FORCE" != "--force" ]]; then
+if [[ $FORCE -eq 0 ]]; then
   check_jenkins_job_status
 fi
 
 NL=$'\n'
 
-PR_NUM=$1
 # convert full repo URL to its project/repo part, in case of failure default to origin/master:
 REMOTE_SLASH_BRANCH="$(git rev-parse --abbrev-ref --symbolic-full-name  @{upstream} \
      || git rev-parse --abbrev-ref --symbolic-full-name master@{upstream} \
