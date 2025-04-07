@@ -1,0 +1,24 @@
+All the tests in this directory require externally mounted volumes. The tests
+use these volumes to setup scylla cluster nodes there in order to test disk
+space monitor working.
+
+The volumes can be of any size as the tests pre-create a file with random
+content of the size equal to 95% of the volume capacity. Then they ingest
+data to reach the critical disk utilization threshold.
+
+The volumes can be created as follow
+for i in seq(1,4); then
+    mkdir -p testlog/dev/mnt/scylla-$i
+    mount -t tmpfs -o size=100M tmpfs testlog/dev/mnt/scylla-$i
+done
+
+or simpler
+parallel 'mkdir -p testlog/dev/mnt/scylla-{}; sudo mount -t tmpfs -o size=100M tmpfs testlog/dev/mnt/scylla-{}' ::: 1 2 3
+
+The volumes must be then passed to the tests via the custom --space-limited-dirs
+argument, e.g.
+
+--space-limited-dirs=testlog/dev/mnt/scylla-1;testlog/dev/mnt/scylla-2;testlog/dev/mnt/scylla-3
+
+or via test.py:
+--pytest-arg="--space-limited-dirs testlog/dev/mnt/scylla-1;testlog/dev/mnt/scylla-2;testlog/dev/mnt/scylla-3"
