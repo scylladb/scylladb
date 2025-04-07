@@ -346,13 +346,19 @@ async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerC
     LZ4WithDictsCompressor and ZstdWithDictsCompressor
     to the Cassandra-compatible LZ4Compressor and ZstdCompressor.
     """
-    servers = await manager.servers_add(1)
+    servers = await manager.servers_add(1, [
+        *common_debug_cli_options,
+    ])
 
     # Create keyspace and table
     logger.info("Creating tables")
     cql = manager.get_cql()
 
-    algorithms = ['LZ4WithDicts', 'ZstdWithDicts']
+    dict_algorithms = ['LZ4WithDicts', 'ZstdWithDicts']
+    nondict_algorithms = ['Snappy', 'LZ4', 'Deflate', 'Zstd']
+    algorithms = dict_algorithms + nondict_algorithms
+    no_compression = 'NoCompression'
+    all_tables = dict_algorithms + nondict_algorithms + [no_compression]
 
     await cql.run_async("""
         CREATE KEYSPACE test
@@ -363,14 +369,19 @@ async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerC
             CREATE TABLE test."{algo}" (pk int PRIMARY KEY, c blob)
             WITH COMPRESSION = {{'sstable_compression': '{algo}Compressor'}};
         ''')
-        for algo in algorithms
-    ])
+        for algo in algorithms],
+        cql.run_async(f'''
+            CREATE TABLE test."{no_compression}" (pk int PRIMARY KEY, c blob)
+            WITH COMPRESSION  = {{}}
+        ''')
+    )
+
 
     # Populate data with
     blob = random.randbytes(16*1024);
     logger.info("Populating table")
     n_blobs = 100
-    for algo in algorithms:
+    for algo in all_tables:
         insert = cql.prepare(f'''INSERT INTO test."{algo}" (pk, c) VALUES (?, ?);''')
         insert.consistency_level = ConsistencyLevel.ALL;
         for pks in itertools.batched(range(n_blobs), n=100):
@@ -381,7 +392,7 @@ async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerC
 
     async def validate_select():
         cql = manager.get_cql()
-        for algo in algorithms:
+        for algo in all_tables:
             select = cql.prepare(f'''SELECT c FROM test."{algo}" WHERE pk = ? BYPASS CACHE;''')
             results = await cql.run_async(select, [42])
             assert results[0][0] == blob
@@ -424,7 +435,7 @@ async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerC
         names = set()
         for table_info in sstable_info:
             for sstable in table_info["sstables"]:
-                for prop in sstable["extended_properties"]:
+                for prop in sstable.get("extended_properties", []):
                     if prop["group"] == "compression_parameters":
                         for attr in prop["attributes"]:
                             if attr["key"] == "sstable_compression":
@@ -433,18 +444,24 @@ async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerC
 
     await asyncio.gather(*[
         manager.api.retrain_dict(servers[0].ip_addr, "test", algo)
-        for algo in algorithms
+        for algo in all_tables
     ])
     await asyncio.gather(*[read_barrier(manager.api, s.ip_addr) for s in servers])
     await manager.api.keyspace_upgrade_sstables(servers[0].ip_addr, "test")
 
+    name_prefix = "org.apache.cassandra.io.compress."
 
-    for algo in algorithms:
+    for algo in dict_algorithms:
         assert (await get_compressor_names(algo)) == {f"{algo}Compressor"}
+    for algo in nondict_algorithms:
+        assert (await get_compressor_names(algo)) == {name_prefix + f"{algo}Compressor"}
+    assert (await get_compressor_names(no_compression)) == set()
 
     await live_update_config(manager, servers, 'sstable_compression_dictionaries_enable_writing', "false")
     await manager.api.keyspace_upgrade_sstables(servers[0].ip_addr, "test")
 
-    name_prefix = "org.apache.cassandra.io.compress."
     assert (await get_compressor_names("LZ4WithDicts")) == {name_prefix + "LZ4Compressor"}
     assert (await get_compressor_names("ZstdWithDicts")) == {name_prefix + "ZstdCompressor"}
+    for algo in nondict_algorithms:
+        assert (await get_compressor_names(algo)) == {name_prefix + f"{algo}Compressor"}
+    assert (await get_compressor_names(no_compression)) == set()
