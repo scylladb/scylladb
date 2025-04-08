@@ -42,15 +42,18 @@ public:
      */
     virtual uint64_t get_half_units() const noexcept = 0;
     uint64_t _total_bytes = 0;
+    static bool should_add_capacity(const rjson::value& request);
 protected:
     bool _should_add_to_reponse = false;
 };
 
 class rcu_consumed_capacity_counter : public consumed_capacity_counter {
-    virtual uint64_t get_half_units() const noexcept;
     bool _is_quorum = false;
 public:
     rcu_consumed_capacity_counter(const rjson::value& request, bool is_quorum);
+    rcu_consumed_capacity_counter(): consumed_capacity_counter(false), _is_quorum(false){}
+    virtual uint64_t get_half_units() const noexcept;
+    static uint64_t get_half_units(uint64_t total_bytes, bool is_quorum) noexcept;
 };
 
 class wcu_consumed_capacity_counter : public consumed_capacity_counter {
