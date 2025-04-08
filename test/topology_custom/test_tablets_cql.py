@@ -76,10 +76,10 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerCl
     }
 
     logger.info("starting a node (the leader)")
-    servers = [await manager.server_add(config=config)]
+    servers = [await manager.server_add(config=config, property_file={"dc": "dc1", "rack": "r1"})]
 
     logger.info("starting a second node (the follower)")
-    servers += [await manager.server_add(config=config)]
+    servers += [await manager.server_add(config=config, property_file={"dc": "dc1", "rack": "r2"})]
 
     async with new_test_keyspace(manager, "with "
                                       "replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} and "
