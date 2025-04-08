@@ -22,11 +22,11 @@ async def test_zero_token_nodes_no_replication(manager: ManagerClient):
     Test that zero-token nodes aren't replicas in all non-local replication strategies with and without tablets.
     """
     logging.info('Adding the first server')
-    server_a = await manager.server_add()
+    server_a = await manager.server_add(property_file={"dc": "dc1", "rack": "r1"})
     logging.info('Adding the second server as zero-token')
-    server_b = await manager.server_add(config={'join_ring': False})
+    server_b = await manager.server_add(config={'join_ring': False}, property_file={"dc": "dc1", "rack": "r2"})
     logging.info('Adding the third server')
-    await manager.server_add()
+    await manager.server_add(property_file={"dc": "dc1", "rack": "r3"})
 
     logging.info(f'Initiating connections to {server_a} and {server_b}')
     cql_a = cluster_con([server_a.ip_addr], 9042, False,
