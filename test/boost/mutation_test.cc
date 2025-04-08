@@ -3961,3 +3961,65 @@ SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
 
     return make_ready_future();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_to_data_query_results_with_distinct_and_per_partition_limit) {
+    simple_schema ss;
+    const auto& s = *ss.schema();
+
+    query::result_memory_limiter limiter(query::result_memory_limiter::maximum_result_size * 100);
+
+    const auto max_size = query::max_result_size(
+            query::result_memory_limiter::maximum_result_size,
+            query::result_memory_limiter::maximum_result_size,
+            query::result_memory_limiter::maximum_result_size);
+
+    reconcilable_result_builder builder(s, s.full_slice(),
+            limiter.new_mutation_read(max_size, query::short_read::yes).get());
+
+    const auto& v_def = *s.get_column_definition(to_bytes("v"));
+    const auto value = serialized("v");
+
+    auto pkeys = ss.make_pkeys(4);
+    for (const auto& pkey : pkeys) {
+        builder.consume_new_partition(pkey);
+        for (uint32_t ck = 0; ck < 10; ck++) {
+            auto row = clustering_row(ss.make_ckey(ck));
+            row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ss.new_timestamp(), value));
+            builder.consume(std::move(row), {}, true);
+        }
+        builder.consume_end_of_partition();
+    }
+    auto rr = builder.consume_end_of_stream();
+
+    BOOST_REQUIRE_EQUAL(rr.partitions().size(), pkeys.size());
+    BOOST_REQUIRE_EQUAL(rr.row_count(), pkeys.size() * 10);
+
+    // SELECT DISTINCT
+    {
+        auto slice = partition_slice_builder(s)
+            .with_no_static_columns()
+            .with_no_regular_columns()
+            .with_range(query::clustering_range::make_open_ended_both_sides())
+            .with_option<query::partition_slice::option::send_partition_key>()
+            .with_option<query::partition_slice::option::distinct>()
+            .with_option<query::partition_slice::option::allow_short_read>()
+            .build();
+
+        auto result = to_data_query_result(rr, ss.schema(), slice, query::max_rows, query::max_partitions, {}).get();
+
+        BOOST_REQUIRE_EQUAL(result.row_count(), pkeys.size());
+    }
+
+    // per-partition limit
+    {
+        auto slice = partition_slice_builder(s)
+            .with_partition_row_limit(2)
+            .with_range(query::clustering_range::make_open_ended_both_sides())
+            .with_option<query::partition_slice::option::allow_short_read>()
+            .build();
+
+        auto result = to_data_query_result(rr, ss.schema(), slice, query::max_rows, query::max_partitions, {}).get();
+
+        BOOST_REQUIRE_EQUAL(result.row_count(), pkeys.size() * 2);
+    }
+}
