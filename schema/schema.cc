@@ -18,6 +18,7 @@
 #include "cql3/util.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
+#include "internal_column_set.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema_registry.hh"
 #include <type_traits>
@@ -1733,6 +1734,33 @@ gc_clock::duration schema::paxos_grace_seconds() const {
 
 schema_ptr schema_builder::build(compact_storage cp) {
     return with(cp).build();
+}
+
+internal_column_set::internal_column_set(bytes prefix_arg,
+    std::vector<schema::column> regular_columns_arg,
+    std::vector<schema::column> static_columns_arg)
+    : prefix(std::move(prefix_arg))
+    , regular_columns(std::move(regular_columns_arg))
+    , static_columns(std::move(static_columns_arg))
+{
+    if (!prefix.starts_with('$')) {
+        utils::on_internal_error(fmt::format("Column set prefix \"{}\" must start with the '$' symbol",
+            to_string_view(prefix)));
+    }
+    const auto all_cols = std::views::join(std::array{
+        std::span{regular_columns}, 
+        std::span{static_columns}
+    });
+    if (all_cols.empty()) {
+        utils::on_internal_error(fmt::format("Column set \"{}\" must contain at least one column",
+            to_string_view(prefix)));
+    }
+    for (const auto& c: all_cols) {
+        if (!c.name.starts_with(prefix)) {
+            utils::on_internal_error(fmt::format("Column name \"{}\" must start with the column set prefix \"{}\"",
+                to_string_view(c.name), to_string_view(prefix)));
+        }
+    }
 }
 
 // Useful functions to manipulate the schema's comparator field

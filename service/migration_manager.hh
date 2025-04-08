@@ -44,6 +44,8 @@ namespace db {
 class system_keyspace;
 }
 
+struct internal_column_set;
+
 namespace service {
 
 class storage_proxy;
@@ -140,6 +142,8 @@ public:
     future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description);
 
     void passive_announce(table_schema_version version);
+
+    future<schema_ptr> inject_internal_columns(schema_ptr schema, const internal_column_set& columns_set);
 
     future<> drain();
     future<> stop();
