@@ -10,7 +10,7 @@ import uuid
 import logging
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
@@ -21,8 +21,8 @@ async def test_global_ignored_nodes_list(manager: ManagerClient, random_tables) 
        since ignore node is permanent now and B is removed from the quorum early so it is enough to
        have two live nodes for the quorum.
     """
-    await manager.servers_add(2)
     servers = await manager.running_servers()
+    servers += await manager.servers_add(2, property_file=[servers[1].property_file(), servers[2].property_file()])
     await manager.server_stop_gracefully(servers[3].server_id)
     await manager.server_stop_gracefully(servers[4].server_id)
     # test that non existing uuid is rejected
@@ -37,6 +37,6 @@ async def test_global_ignored_nodes_list(manager: ManagerClient, random_tables) 
     # is 2
     await manager.server_stop_gracefully(servers[2].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[2].server_id, reuse_ip_addr = False, use_host_id = True)
-    await manager.server_add(start=False, replace_cfg=replace_cfg)
+    await manager.server_add(start=False, replace_cfg=replace_cfg, property_file=servers[2].property_file())
 
 

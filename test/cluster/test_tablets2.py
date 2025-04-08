@@ -94,7 +94,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
         '--logger-log-level', 'messaging_service=trace',
         '--logger-log-level', 'rpc=trace',
         ]
-    servers = await manager.servers_add(3, cmdline=cmdline)
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
 
     s0 = servers[0].server_id
     not_s0 = servers[1:]
@@ -495,7 +495,11 @@ async def test_tablet_repair(manager: ManagerClient):
         '--logger-log-level', 'repair=trace',
         '--task-ttl-in-seconds', '3600',    # Make sure the test passes with non-zero task_ttl.
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline)
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"}
+    ])
 
     await inject_error_on(manager, "tablet_allocator_shuffle", servers)
 
@@ -558,7 +562,11 @@ async def test_concurrent_tablet_repair_and_split(manager: ManagerClient):
     ]
     servers = await manager.servers_add(3, cmdline=cmdline, config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
-    })
+    }, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"}
+    ])
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
@@ -622,9 +630,7 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
     cmdline = [
         '--hinted-handoff-enabled', 'false',
         ]
-    servers = [await manager.server_add(cmdline=cmdline),
-               await manager.server_add(cmdline=cmdline),
-               await manager.server_add(cmdline=cmdline)]
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
@@ -660,7 +666,7 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_repair_history(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
 
     rf = 3
     tablets = 8
@@ -686,7 +692,7 @@ async def test_tablet_repair_history(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_repair_ranges_selection(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add()]
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
 
     rf = 2
     tablets = 4
@@ -1887,7 +1893,7 @@ async def test_truncate_during_topology_change(manager: ManagerClient):
     """Test truncate operation during topology change."""
 
     # Start 3 node cluster
-    servers = await manager.servers_add(3, config = { 'enable_tablets': True })
+    servers = await manager.servers_add(3, config = { 'enable_tablets': True }, auto_rack_dc="dc1")
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (k int PRIMARY KEY, v int)")
@@ -1905,7 +1911,8 @@ async def test_truncate_during_topology_change(manager: ManagerClient):
 
         truncate_task = asyncio.create_task(truncate_table())
         logger.info("Adding fourth node")
-        new_server = await manager.server_add(config={'error_injections_at_startup': ['delay_bootstrap_120s'], 'enable_tablets': True})
+        new_server = await manager.server_add(config={'error_injections_at_startup': ['delay_bootstrap_120s'], 'enable_tablets': True},
+                                              property_file=servers[0].property_file())
         await truncate_task
 
         # Wait for bootstrap completion

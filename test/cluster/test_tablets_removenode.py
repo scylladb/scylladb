@@ -211,7 +211,13 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
 
     # 5 nodes because we need a quorum with 2 nodes down.
     # 4 nodes would be enough to not lose data with RF=3.
-    servers = await manager.servers_add(5, cmdline=cmdline)
+    servers = await manager.servers_add(5, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"}
+    ])
 
     cql = manager.get_cql()
 
