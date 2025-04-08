@@ -1401,6 +1401,7 @@ class sstable_query_tester:
             sstable_query_result = json.loads(subprocess.check_output([
                 self._scylla_path, "sstable", "query",
                 "--logger-log-level", "scylla-sstable=debug",
+                "--reactor-backend=linux-aio",
                 "--output-format", "json",
                 "--schema-tables",
                 "--query-file", query_file.name] + self._sstables))
@@ -1680,7 +1681,7 @@ def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
     with nodetool.no_autocompaction_context(cql, "system.local"):
         sstables = get_sstables_for_table(scylla_data_dir, "system", "local")
 
-        common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--query"]
+        common_params = [scylla_path, "sstable", "query", "--system-schema", "--keyspace", "system", "--table", "local", "--reactor-backend=linux-aio", "--query"]
 
         def check(bad_query, expected_error):
             res = subprocess.run(common_params + [bad_query] + sstables, text=True, capture_output=True)
