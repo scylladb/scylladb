@@ -27,15 +27,15 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
     host_ids = []
     servers = []
 
-    async def make_server():
-        s = await manager.server_add(config=cfg)
+    async def make_server(rack: str):
+        s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
         await manager.api.disable_tablet_balancing(s.ip_addr)
 
-    await make_server()
-    await make_server()
-    await make_server()
+    await make_server("r1")
+    await make_server("r1")
+    await make_server("r2")
 
     cql = manager.get_cql()
 

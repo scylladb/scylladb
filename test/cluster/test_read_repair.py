@@ -382,11 +382,9 @@ async def test_read_repair_with_trace_logging(request, manager):
     cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace"]
     config = {"read_request_timeout_in_ms": 60000}
 
-    for i in range(2):
-        await manager.server_add(cmdline=cmdline, config=config)
+    srvs = await manager.server_add(cmdline=cmdline, config=config, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
-    srvs = await manager.running_servers()
     await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};") as ks:

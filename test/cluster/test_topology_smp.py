@@ -54,11 +54,11 @@ async def test_nodes_with_different_smp(request: FixtureRequest, manager: Manage
         ]
 
     logger.info(f'Adding --smp=3 server')
-    await manager.server_add(cmdline=['--smp', '3'] + log_args)
+    await manager.server_add(cmdline=['--smp', '3'] + log_args, property_file={"dc": "dc1", "rack": "r1"})
     logger.info(f'Adding --smp=4 server')
-    await manager.server_add(cmdline=['--smp', '4'] + log_args)
+    await manager.server_add(cmdline=['--smp', '4'] + log_args, property_file={"dc": "dc1", "rack": "r2"})
     logger.info(f'Adding --smp=5 server')
-    await manager.server_add(cmdline=['--smp', '5'] + log_args)
+    await manager.server_add(cmdline=['--smp', '5'] + log_args, property_file={"dc": "dc1", "rack": "r3"})
 
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
