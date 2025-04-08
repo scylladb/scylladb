@@ -74,6 +74,10 @@ For each of the nodes in the cluster, you will:
   ScyllaDB Manager's scheduled or running repairs.
 * Not to apply schema changes.
 
+**After** the upgrade, you may need to enable consistent topology updates.
+See :ref:`After Upgrading Every Node <upgrade-2024.x-2025.1-after-upgrading-nodes>` for details.
+
+
 Upgrade Steps
 =============
 
@@ -222,6 +226,23 @@ Validate
 #. Check again after two minutes to validate that no new issues are introduced.
 
 Once you are sure the node upgrade was successful, move to the next node in the cluster.
+
+.. _upgrade-2024.x-2025.1-after-upgrading-nodes:
+
+After Upgrading Every Node
+===============================
+
+This step applies if:
+
+* You're upgrading from ScyllaDB Enterprise **2024.1** to ScyllaDB 2025.1.
+* You previously upgraded from 2024.1 to 2024.2 without enabling consistent
+  topology updates (see the `2024.2 upgrade guide <https://enterprise.docs.scylladb.com/branch-2024.2/upgrade/upgrade-enterprise/upgrade-guide-from-2024.1-to-2024.2/enable-consistent-topology.html>`_
+  for reference).
+
+After you have upgraded every node, you must enable the Raft-based consistent
+topology updates feature. See 
+:doc:`Enable Consistent Topology Updates </upgrade/upgrade-guides/upgrade-guide-from-2024.x-to-2025.1/enable-consistent-topology>`
+for instructions.
 
 Rollback Procedure
 ==================
