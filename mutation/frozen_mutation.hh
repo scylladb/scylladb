@@ -134,9 +134,7 @@ public:
 
     auto on_end_of_partition() {
         flush_rows_and_tombstones(position_in_partition::after_all_clustered_rows());
-        if (_consumer.consume_end_of_partition()) {
-            _stop_consuming = stop_iteration::yes;
-        }
+        _stop_consuming = _consumer.consume_end_of_partition();
         using consume_res_type = decltype(_consumer.consume_end_of_stream());
         if constexpr (std::is_same_v<consume_res_type, void>) {
             _consumer.consume_end_of_stream();
