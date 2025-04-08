@@ -16,6 +16,7 @@
 #include "locator/tablets.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
+#include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
 
 #pragma once
@@ -58,6 +59,10 @@ class compaction_group {
     // Gates async operations confined to a single group.
     seastar::gate _async_gate;
     bool _tombstone_gc_enabled = true;
+    // Tracks the highest replay position flushed to a sstable
+    db::replay_position _highest_flushed_rp;
+    db::replay_position _highest_rp;
+    db::replay_position _flush_rp;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -100,6 +105,20 @@ public:
         return _group_id;
     }
 
+    const db::replay_position& highest_rp() const {
+        return _highest_rp;
+    }
+    void highest_rp(const db::replay_position& rp) {
+        _highest_rp = rp;
+    }
+
+    const db::replay_position& highest_flushed_rp() const {
+        return _highest_flushed_rp;
+    }
+    void highest_flushed_rp(const db::replay_position& rp) {
+        _highest_flushed_rp = rp;
+    }
+
     // Stops all activity in the group, synchronizes with in-flight writes, before
     // flushing memtable(s), so all data can be found in the SSTable set.
     future<> stop(sstring reason) noexcept;
@@ -117,7 +136,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush() noexcept;
+    future<> flush(std::optional<db::replay_position> = {}) noexcept;
     bool can_flush() const;
 
     const dht::token_range& token_range() const noexcept {

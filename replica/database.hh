@@ -478,11 +478,6 @@ private:
     // Initialized when the table is populated via update_sstables_known_generation.
     std::optional<sstables::sstable_generation_generator> _sstable_generation_generator;
 
-    db::replay_position _highest_rp;
-    // Tracks the highest replay position flushed to a sstable
-    db::replay_position _highest_flushed_rp;
-    // Tracks the highest position before flush actually starts
-    db::replay_position _flush_rp;
     db::replay_position _lowest_allowed_rp;
 
     // Provided by the database that owns this commitlog
@@ -549,6 +544,7 @@ private:
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
 
+    db::replay_position highest_rp() const;
 public:
     void on_flush_timer();
     void deregister_metrics();

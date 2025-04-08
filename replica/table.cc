@@ -1535,7 +1535,7 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         });
 
         cg.memtables()->add_memtable();
-        _highest_flushed_rp = std::max(_highest_flushed_rp, old->replay_position());
+        cg.highest_flushed_rp(std::max(cg.highest_flushed_rp(), old->replay_position()));
 
         // no exceptions allowed (nor expected) from this point on
         _stats.memtable_switch_count++;
@@ -2829,7 +2829,11 @@ logalloc::occupancy_stats table::occupancy() const {
 }
 
 db::replay_position table::highest_flushed_replay_position() const {
-    return _highest_flushed_rp;
+    db::replay_position p;
+    for_each_compaction_group([&] (const compaction_group& cg) {
+        p = std::max(p, cg.highest_flushed_rp());
+    });
+    return p;
 }
 
 future<>
@@ -3055,12 +3059,13 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     co_return details;
 }
 
-future<> compaction_group::flush() noexcept {
-    try {
-        return _memtables->flush();
-    } catch (...) {
-        return current_exception_as_future<>();
+future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcept {
+    if (pos && *pos < _flush_rp) {
+        co_return;
     }
+    auto fp = _highest_rp;
+    co_await _memtables->flush();
+    _flush_rp = std::max(_flush_rp, fp);
 }
 
 future<> storage_group::flush() noexcept {
@@ -3086,17 +3091,13 @@ size_t storage_group::memtable_count() const noexcept {
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {
-    if (pos && *pos < _flush_rp) {
-        co_return;
-    }
     // There is nothing to flush if the table was stopped.
     if (_pending_flushes_phaser.is_closed()) {
         co_return;
     }
     auto op = _pending_flushes_phaser.start();
-    auto fp = _highest_rp;
-    co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::flush));
-    _flush_rp = std::max(_flush_rp, fp);
+    // no std::bind_back in the clang version I'm on... :-(
+    co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
 }
 
 bool storage_group::can_flush() const {
@@ -3442,8 +3443,16 @@ table::check_valid_rp(const db::replay_position& rp) const {
     }
 }
 
+db::replay_position table::highest_rp() const {
+    db::replay_position p;
+    for_each_compaction_group([&] (const compaction_group& cg) {
+        p = std::max(p, cg.highest_rp());
+    });
+    return p;
+}
+
 db::replay_position table::set_low_replay_position_mark() {
-    _lowest_allowed_rp = _highest_rp;
+    _lowest_allowed_rp = highest_rp();
     return _lowest_allowed_rp;
 }
 
@@ -3455,7 +3464,7 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     check_valid_rp(rp);
     try {
         cg.memtables()->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
-        _highest_rp = std::max(_highest_rp, rp);
+        cg.highest_rp(std::max(cg.highest_rp(), rp));
     } catch (...) {
         _failed_counter_applies_to_memtable++;
         throw;
@@ -4074,6 +4083,7 @@ future<> table::flush_compaction_groups(storage_group& sg) {
 }
 
 future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
+    auto rp = highest_rp();
     for (auto& cg_ptr : sg.compaction_groups()) {
         co_await cg_ptr->cleanup();
         // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
@@ -4083,7 +4093,7 @@ future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys
         // in the first place, but it would be better to extract the exact replay_position from
         // the actually flushed/deleted sstables, like discard_sstable() does, so that the mutations
         // cleaned from sstables are exactly the same as the ones cleaned from commitlog.
-        co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg.token_range(), _highest_rp);
+        co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg.token_range(), rp);
         // This is the only place (outside of reboot) where we delete unneeded commitlog cleanup
         // records. This isn't ideal -- it would be more natural if the unneeded records
         // were deleted as soon as they become unneeded -- but this gets the job done with a
