@@ -43,8 +43,8 @@ async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
         with pytest.raises(ConfigurationException, match=f"Datacenter {this_dc} doesn't have enough token-owning nodes"):
             await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
-            await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
-            await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
 
 @pytest.mark.asyncio
