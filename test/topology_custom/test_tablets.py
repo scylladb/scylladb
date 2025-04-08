@@ -51,7 +51,12 @@ async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
 async def test_tablet_cannot_decommision_below_replication_factor(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
-    servers = await manager.servers_add(4, config=cfg)
+    servers = await manager.servers_add(4, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"}
+    ])
 
     logger.info("Creating table")
     cql = manager.get_cql()
@@ -184,7 +189,11 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
     not owned by the node is attempted to be read."""
     cfg = {'enable_user_defined_functions': False,
            'tablets_mode_for_new_keyspaces': 'enabled' }
-    servers = await manager.servers_add(3, config=cfg)
+    servers = await manager.servers_add(3, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"}
+    ])
 
     cql = manager.get_cql()
 
@@ -966,15 +975,15 @@ async def check_tablet_rebuild_with_repair(manager: ManagerClient, fail: bool):
     host_ids = []
     servers = []
 
-    async def make_server():
-        s = await manager.server_add(config=cfg)
+    async def make_server(rack: str):
+        s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
         await manager.api.disable_tablet_balancing(s.ip_addr)
 
-    await make_server()
-    await make_server()
-    await make_server()
+    await make_server("r1")
+    await make_server("r1")
+    await make_server("r2")
 
     cql = manager.get_cql()
 

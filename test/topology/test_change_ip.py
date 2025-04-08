@@ -20,6 +20,14 @@ from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 from test.topology.util import reconnect_driver
 
 logger = logging.getLogger(__name__)
+<<<<<<< HEAD:test/topology/test_change_ip.py
+||||||| parent of dbb8835fdf (test/cluster: Adjust simple tests to RF-rack-validity):test/cluster/test_change_ip.py
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
+>>>>>>> dbb8835fdf (test/cluster: Adjust simple tests to RF-rack-validity):test/cluster/test_change_ip.py
 
 
 @pytest.mark.asyncio
