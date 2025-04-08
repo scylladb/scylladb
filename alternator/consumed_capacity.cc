@@ -24,7 +24,7 @@ static constexpr uint64_t KB = 1024ULL;
 static constexpr uint64_t RCU_BLOCK_SIZE_LENGTH = 4*KB;
 static constexpr uint64_t WCU_BLOCK_SIZE_LENGTH = 1*KB;
 
-static bool should_add_capacity(const rjson::value& request) {
+bool consumed_capacity_counter::should_add_capacity(const rjson::value& request) {
     const rjson::value* return_consumed = rjson::find(request, "ReturnConsumedCapacity");
     if (!return_consumed) {
         return false;
@@ -62,9 +62,12 @@ static uint64_t calculate_half_units(uint64_t unit_block_size, uint64_t total_by
 rcu_consumed_capacity_counter::rcu_consumed_capacity_counter(const rjson::value& request, bool is_quorum) :
         consumed_capacity_counter(should_add_capacity(request)),_is_quorum(is_quorum) {
 }
+uint64_t rcu_consumed_capacity_counter::get_half_units(uint64_t total_bytes, bool is_quorum) noexcept {
+    return calculate_half_units(RCU_BLOCK_SIZE_LENGTH, total_bytes, is_quorum);
+}
 
 uint64_t rcu_consumed_capacity_counter::get_half_units() const noexcept {
-    return calculate_half_units(RCU_BLOCK_SIZE_LENGTH, _total_bytes, _is_quorum);
+    return get_half_units(_total_bytes, _is_quorum);
 }
 
 uint64_t wcu_consumed_capacity_counter::get_half_units() const noexcept {
