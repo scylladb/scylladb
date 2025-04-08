@@ -1835,3 +1835,47 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
         await s0_log.wait_for('Cleanup failed for tablet', from_mark=s0_mark)
 
         await manager.api.take_snapshot(servers[0].ip_addr, ks, "test_snapshot")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_split_monitor_read_barrier_failure_after_decommission(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+        '--target-tablet-size-in-bytes', '1024',
+    ]
+    servers = await manager.servers_add(3, cmdline=cmdline, config={
+        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+    })
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Populating table")
+
+        keys = range(500)
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+
+        await inject_error_on(manager, "split_monitor_wait_before_read_barrier", servers)
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+
+        await asyncio.gather(*[cql.run_async(stmt, [k, -1]) for k in keys])
+
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        await s0_log.wait_for('split_monitor_wait_before_read_barrier: waiting', from_mark=s0_mark)
+
+        decommission_task = asyncio.create_task(manager.decommission_node(servers[0].server_id))
+
+        await s0_log.wait_for('raft_topology - Decommission succeeded', from_mark=s0_mark)
+
+        await manager.api.message_injection(servers[0].ip_addr, "split_monitor_wait_before_read_barrier")
+        await s0_log.wait_for('split_monitor_wait_before_read_barrier: message', from_mark=s0_mark)
+
+        time.sleep(1)
+
+        await decommission_task
