@@ -316,7 +316,7 @@ async def test_read_repair_with_trace_logging(request, manager):
     cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace:debug_error_injection=trace"]
     config = {"read_request_timeout_in_ms": 60000}
 
-    [node1, node2] = await manager.servers_add(2, cmdline=cmdline, config=config)
+    [node1, node2] = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
     srvs = await manager.running_servers()
