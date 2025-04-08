@@ -642,8 +642,13 @@ public:
 private:
     table_to_tablet_map _tablets;
 
+    table_group_map _colocated_tables;
+
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
+
+    void update_colocated_tables(table_id id, std::optional<table_id> base_table_before, std::optional<table_id> base_table_after, bool is_new, bool is_dropped);
+
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
@@ -657,7 +662,7 @@ public:
 
     // get all tables by co-location groups. the key is the base table and the value
     // is the set of all co-located tables in the group (including the base table).
-    table_group_map all_table_groups() const;
+    const table_group_map& all_table_groups() const { return _colocated_tables; }
 
     // get all tables and their raw tablet maps. mostly for internal use.
     // for a child table the raw tablet map consists of just a pointer to the base table, and the

@@ -321,15 +321,6 @@ bool tablet_metadata::has_tablet_map(table_id id) const {
     return _tablets.contains(id);
 }
 
-locator::tablet_metadata::table_group_map
-tablet_metadata::all_table_groups() const {
-    table_group_map m;
-    for (auto&& [table, tmap_] : _tablets) {
-        m[get_base_table(table)].push_back(table);
-    }
-    return m;
-}
-
 table_id tablet_metadata::get_base_table(table_id id) const {
     return _tablets.at(id)->base_table().value_or(id);
 }
@@ -344,8 +335,11 @@ void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(t
         throw no_such_tablet_map(id);
     }
     auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
+    auto base_table_before = tablet_map_copy->base_table();
     func(*tablet_map_copy);
+    auto base_table_after = tablet_map_copy->base_table();
     it->second = make_foreign(lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy)));
+    update_colocated_tables(id, base_table_before, base_table_after, false, false);
 }
 
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
@@ -354,8 +348,11 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
         throw no_such_tablet_map(id);
     }
     auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
+    auto base_table_before = tablet_map_copy->base_table();
     co_await func(*tablet_map_copy);
+    auto base_table_after = tablet_map_copy->base_table();
     it->second = make_foreign(lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy)));
+    update_colocated_tables(id, base_table_before, base_table_after, false, false);
 }
 
 future<tablet_metadata> tablet_metadata::copy() const {
@@ -363,6 +360,8 @@ future<tablet_metadata> tablet_metadata::copy() const {
     for (const auto& e : _tablets) {
         copy._tablets.emplace(e.first, co_await e.second.copy());
     }
+
+    copy._colocated_tables = _colocated_tables;
 
     copy._balancing_enabled = _balancing_enabled;
 
@@ -372,10 +371,14 @@ future<tablet_metadata> tablet_metadata::copy() const {
 void tablet_metadata::set_tablet_map(table_id id, tablet_map map) {
     auto map_ptr = make_lw_shared<const tablet_map>(std::move(map));
     auto it = _tablets.find(id);
+    auto base_table_after = map_ptr->base_table();
     if (it == _tablets.end()) {
         _tablets.emplace(id, std::move(map_ptr));
+        update_colocated_tables(id, std::nullopt, base_table_after, true, false);
     } else {
+        auto base_table_before = it->second->base_table();
         it->second = std::move(map_ptr);
+        update_colocated_tables(id, base_table_before, base_table_after, false, false);
     }
 }
 
@@ -384,7 +387,9 @@ void tablet_metadata::drop_tablet_map(table_id id) {
     if (it == _tablets.end()) {
         return;
     }
+    auto base_table_before = it->second->base_table();
     _tablets.erase(it);
+    update_colocated_tables(id, base_table_before, std::nullopt, false, true);
 }
 
 future<> tablet_metadata::clear_gently() {
@@ -400,6 +405,7 @@ future<> tablet_metadata::clear_gently() {
         });
     }
     _tablets.clear();
+    _colocated_tables.clear();
     co_return;
 }
 
@@ -414,6 +420,35 @@ bool tablet_metadata::operator==(const tablet_metadata& o) const {
         }
     }
     return true;
+}
+
+void tablet_metadata::update_colocated_tables(table_id id, std::optional<table_id> base_table_before, std::optional<table_id> base_table_after, bool is_new, bool is_dropped) {
+    if (base_table_before && base_table_after) {
+        if (*base_table_before != *base_table_after) {
+            if (_colocated_tables.contains(*base_table_before)) {
+                auto& g = _colocated_tables.at(*base_table_before);
+                auto e = std::ranges::remove(g, id);
+                g.erase(e.begin(), e.end());
+            }
+            _colocated_tables[*base_table_after].push_back(id);
+        }
+    } else if (base_table_before && !base_table_after) {
+        if (_colocated_tables.contains(*base_table_before)) {
+            auto& g = _colocated_tables.at(*base_table_before);
+            auto e = std::ranges::remove(g, id);
+            g.erase(e.begin(), e.end());
+        }
+        if (!is_dropped) {
+            _colocated_tables[id].push_back(id);
+        }
+    } else if (!base_table_before && base_table_after) {
+        _colocated_tables.erase(id);
+        _colocated_tables[*base_table_after].push_back(id);
+    } else if (is_new) {
+        _colocated_tables[id].push_back(id);
+    } else if (is_dropped) {
+        _colocated_tables.erase(id);
+    }
 }
 
 tablet_map::tablet_map(size_t tablet_count)
