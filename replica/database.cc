@@ -1771,6 +1771,38 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     co_return m;
 }
 
+api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
+    const auto get_min_ts = [is] (const memtable& mt) {
+        // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
+        return is ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
+    };
+
+    auto min_live_ts = api::max_timestamp;
+
+    for (const auto& mt : _memtables) {
+        const auto mt_min_live_ts = get_min_ts(*mt);
+        if (mt_min_live_ts > max_seen_timestamp) {
+            continue;
+        }
+        // We cannot do lookups on flushing memtables, they might be in the
+        // process of merging into cache. Keys already merged will not be seen
+        // by the lookup.
+        if (!mt->is_merging_to_cache() && !mt->contains_partition(dk)) {
+            continue;
+        }
+        min_live_ts = std::min(min_live_ts, mt_min_live_ts);
+    }
+
+    for (const auto& mt : _flushed_memtables_with_active_reads) {
+        // We cannot check if the flushed memtable contains the key as it
+        // becomes empty after the merge to cache completes, so we only use the
+        // min ts metadata.
+        min_live_ts = std::min(min_live_ts, get_min_ts(mt));
+    }
+
+    return min_live_ts;
+}
+
 future<> memtable_list::flush() {
     if (!may_flush()) {
         return make_ready_future<>();
@@ -1962,6 +1994,12 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     ++_stats->total_writes;
     // assume failure until proven otherwise
     auto update_writes_failed = defer([&] { ++_stats->total_writes_failed; });
+
+    utils::get_local_injector().inject("database_apply", [&s] () {
+        if (!is_system_keyspace(s->ks_name())) {
+            throw std::runtime_error("injected error");
+        }
+    });
 
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is

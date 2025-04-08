@@ -15,6 +15,7 @@
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
@@ -4581,7 +4582,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
                 return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
-        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state);
+        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state, can_always_purge);
         auto close_rd = deferred_close(rd1);
         rd1.fill_buffer().get(); // cache_mutation_reader compacts cache on fill buffer
 
@@ -4659,7 +4660,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         set_cells_timestamp_to_min(cp.clustered_row(*s.schema(), ck3));
 
         {
-            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state);
+            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
             auto close_rd1 = deferred_close(rd1);
             rd1.fill_buffer().get();
 
@@ -4671,7 +4672,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         }
 
         {
-            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state);
+            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
             auto close_rd2 = deferred_close(rd2);
             rd2.fill_buffer().get();
 
@@ -4897,6 +4898,349 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
         &gc_state);
     auto close_rd = deferred_close(rd);
     read_mutation_from_mutation_reader(rd).get();
+}
+
+struct decorated_key_with_value {
+    dht::decorated_key dk;
+    int32_t value;
+};
+
+std::vector<decorated_key_with_value> get_local_int32_dks(const replica::table& tbl, size_t num) {
+    const auto& schema = *tbl.schema();
+    std::vector<decorated_key_with_value> dks;
+
+    int32_t pk = 0;
+
+    while (dks.size() < num) {
+
+        auto dk = dht::decorate_key(schema, partition_key::from_exploded(schema, { int32_type->decompose(pk) }));
+        auto write_replicas = tbl.shard_for_writes(dk.token());
+        BOOST_REQUIRE_EQUAL(write_replicas.size(), 1);
+
+        if (write_replicas.size() == 1 && write_replicas.front() == this_shard_id()) {
+            dks.emplace_back(decorated_key_with_value{std::move(dk), pk});
+        }
+
+        pk++;
+    }
+
+    std::ranges::sort(dks, [&schema] (const decorated_key_with_value& a, const decorated_key_with_value& b) {
+        return dht::ring_position_tri_compare(schema, a.dk, b.dk) < 0;
+    });
+
+    return dks;
+}
+
+mutation create_mutation_with_rows(const schema& schema, const dht::decorated_key& dk, int32_t ck1, int32_t num_rows, sstring v, api::timestamp_type ts) {
+    const auto& v_def = *schema.get_column_definition(to_bytes("v"));
+
+    const auto raw = utf8_type->decompose(v);
+
+    mutation mut(schema.shared_from_this(), dk);
+    for (int32_t ck2 = 0; ck2 != num_rows; ++ck2) {
+        const auto ck = clustering_key::from_exploded(schema, { int32_type->decompose(ck1), int32_type->decompose(ck2) });
+        mut.set_clustered_cell(ck, v_def, atomic_cell::make_live(*v_def.type, ts, raw));
+    }
+    return mut;
+}
+
+using apply_delete_fn = std::function<void(mutation&, const clustering_key&, const column_definition&, tombstone)>;
+
+void run_cache_tombstone_gc_overlap_checks_scenario(
+        cql_test_env& env,
+        std::function<void(cql_test_env&, replica::table&, api::timestamp_type, tombstone, apply_delete_fn)> scenario,
+        std::string_view scenario_name,
+        apply_delete_fn apply_delete) {
+    testlog.info("Running scenario {}", scenario_name);
+
+    const auto table_name = scenario_name;
+
+    env.execute_cql(std::format("CREATE TABLE ks.{} (pk int, ck1 int, ck2 int, v text, PRIMARY KEY (pk, ck1, ck2))"
+            " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+            " AND tombstone_gc = {{'mode': 'immediate', 'propagation_delay_in_seconds': 0}}", table_name)).get();
+
+    replica::database& db = env.local_db();
+
+    auto& tbl = db.find_column_family("ks", table_name);
+    const auto schema = tbl.schema();
+
+    BOOST_REQUIRE(tbl.uses_tablets());
+
+    const auto& tablet_map = db.get_token_metadata().tablets().get_tablet_map(schema->id());
+    BOOST_REQUIRE_EQUAL(tablet_map.tablet_count(), 1);
+
+    const auto replica_shard = tablet_map.tablets().front().replicas.front().shard;
+
+    smp::submit_to(replica_shard, [&env, scenario, table_name, apply_delete] {
+        return async([&] {
+            replica::database& db = env.local_db();
+            auto& tbl = db.find_column_family("ks", table_name);
+
+            const api::timestamp_type live_timestamp = 100;
+            const api::timestamp_type dead_timestamp = live_timestamp + 100;
+
+            const auto deletion_time = gc_clock::now() - std::chrono::seconds(10);
+            const auto tomb = tombstone(dead_timestamp, deletion_time);
+
+            scenario(env, tbl, live_timestamp, tomb, apply_delete);
+        });
+    }).get();
+}
+
+void test_cache_tombstone_gc_overlap_checks_single_row_scenario(cql_test_env& env, replica::table& tbl,
+        api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
+    replica::database& db = env.local_db();
+
+    const auto schema = tbl.schema();
+    const auto& v_def = *schema->get_column_definition(to_bytes("v"));
+    const auto table_name = schema->cf_name();
+
+    auto dks = get_local_int32_dks(tbl, 1);
+    const auto& [dk, pk] = dks.front();
+
+    auto ck = clustering_key::from_exploded(*schema, { int32_type->decompose(100), int32_type->decompose(0) });
+
+    mutation dead_row_mut(schema, dk);
+    apply_delete(dead_row_mut, ck, v_def, tomb);
+
+    db.apply(schema, freeze(dead_row_mut), {}, db::commitlog_force_sync::no, db::no_timeout).get();
+
+    db.flush("ks", table_name).get();
+
+    auto live_row_mut = create_mutation_with_rows(*schema, dk, 100, 1, "value", live_timestamp);
+
+    db.apply(schema, freeze(live_row_mut), {}, db::commitlog_force_sync::no, db::no_timeout).get();
+
+    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk)).get()).is_rows().is_empty();
+    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk)).get()).is_rows().is_empty();
+}
+
+template <typename MemtableFlushPolicy>
+void test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario(cql_test_env& env, replica::table& tbl,
+        api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
+    replica::database& db = env.local_db();
+
+    const auto schema = tbl.schema();
+    const auto& v_def = *schema->get_column_definition(to_bytes("v"));
+
+    const auto table_name = schema->cf_name();
+
+    auto dks = get_local_int32_dks(tbl, 1);
+    const auto& [dk, pk] = dks.front();
+
+    auto pr = dht::partition_range::make_singular(dk);
+
+    const auto ck1 = 100;
+
+    auto dead_ck = clustering_key::from_exploded(*schema, { int32_type->decompose(ck1), int32_type->decompose(20) });
+
+    mutation dead_row_mut(schema, dk);
+    apply_delete(dead_row_mut, dead_ck, v_def, tomb);
+
+    auto mut_v1 = create_mutation_with_rows(*schema, dk, ck1, 30, sstring(1024, '1'), live_timestamp);
+    auto mut_v2 = create_mutation_with_rows(*schema, dk, ck1, 30, sstring(1024, '2'), live_timestamp);
+
+    db.apply({ freeze(dead_row_mut), freeze(mut_v1) }, db::no_timeout).get();
+    db.flush("ks", table_name).get();
+
+    db.apply({ freeze(mut_v2) }, db::no_timeout).get();
+
+    auto reader1 = tbl.make_reader_v2(schema, db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(), pr, schema->full_slice());
+    const auto close_reader1 = deferred_close(reader1);
+
+    reader1.fill_buffer().get();
+
+    auto reader2 = tbl.make_reader_v2(schema, db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(), pr, schema->full_slice());
+    const auto close_reader2 = deferred_close(reader2);
+
+    reader2.fill_buffer().get();
+
+    MemtableFlushPolicy flush_policy(db, table_name);
+
+    // read 3
+    auto res = env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk)).get();
+
+    mutation expected_result(schema, dk);
+    expected_result.apply(mut_v2);
+    expected_result.apply(dead_row_mut);
+
+    for (auto* rd : {&reader1, &reader2}) {
+        auto m_opt = read_mutation_from_mutation_reader(*rd).get();
+
+        BOOST_REQUIRE(m_opt);
+        BOOST_REQUIRE(rd->is_end_of_stream());
+
+        assert_that(*m_opt).is_equal_to(expected_result);
+    }
+
+    const auto compacted_expected_result = expected_result.compacted();
+
+    assert_that(res).is_rows().with_size(compacted_expected_result.partition().live_row_count(*schema));
+}
+
+template <typename MemtableFlushPolicy>
+void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(cql_test_env& env, replica::table& tbl,
+        api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
+    replica::database& db = env.local_db();
+
+    const auto schema = tbl.schema();
+    const auto& v_def = *schema->get_column_definition(to_bytes("v"));
+
+    const auto table_name = schema->cf_name();
+
+    auto dks = get_local_int32_dks(tbl, 2);
+    const auto& [dk1, pk1] = dks[0];
+    const auto& [dk2, pk2] = dks[1];
+
+    const auto ck1 = 100;
+
+    auto mut1_v1 = create_mutation_with_rows(*schema, dk1, ck1, 20, sstring(1024, '1'), live_timestamp);
+    auto mut1_v2 = create_mutation_with_rows(*schema, dk1, ck1, 20, sstring(1024, '2'), live_timestamp);
+
+    auto dead_ck = clustering_key::from_exploded(*schema, { int32_type->decompose(ck1), int32_type->decompose(15) });
+
+    mutation mut2_dead_row(schema, dk2);
+    apply_delete(mut2_dead_row, dead_ck, v_def, tomb);
+
+    auto mut2_v1 = create_mutation_with_rows(*schema, dk2, ck1, 20, sstring(1024, '3'), live_timestamp);
+    auto mut2_v2 = create_mutation_with_rows(*schema, dk2, ck1, 20, sstring(1024, '4'), live_timestamp);
+
+    // Get the first version of partitions + deleted row to the disk.
+    db.apply({ freeze(mut1_v1), freeze(mut2_dead_row), freeze(mut2_v1) }, db::no_timeout).get();
+    db.flush("ks", table_name).get();
+
+    db.apply({ freeze(mut1_v2), freeze(mut2_v2) }, db::no_timeout).get();
+
+    // Make sure both partitions are in the cache
+    testlog.info("pre-populate partition {}", pk1);
+    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", table_name, pk1, ck1, 0)).get()).is_rows();
+    testlog.info("pre-populate partition {}", pk2);
+    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", table_name, pk2, ck1, 0)).get()).is_rows();
+
+    testlog.info("read 1");
+    auto reader1 = tbl.make_reader_v2(
+            schema,
+            db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(),
+            query::full_partition_range,
+            schema->full_slice());
+    const auto close_reader1 = deferred_close(reader1);
+
+    reader1.fill_buffer().get();
+
+    testlog.info("read 2");
+    auto reader2 = tbl.make_reader_v2(
+            schema,
+            db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(),
+            query::full_partition_range,
+            schema->full_slice());
+    const auto close_reader2 = deferred_close(reader2);
+
+    reader2.fill_buffer().get();
+
+    MemtableFlushPolicy flush_policy(db, table_name);
+
+    // read 3
+    testlog.info("read 3");
+    auto res = env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk2)).get();
+
+    mutation expected_mut2(schema, dk2);
+    expected_mut2.apply(mut2_v2);
+    expected_mut2.apply(mut2_dead_row);
+
+    for (auto* rd : {&reader1, &reader2}) {
+        auto m_opt = read_mutation_from_mutation_reader(*rd).get();
+        BOOST_REQUIRE(m_opt);
+        BOOST_REQUIRE(!rd->is_end_of_stream());
+        assert_that(*m_opt).is_equal_to(mut1_v2);
+
+        m_opt = read_mutation_from_mutation_reader(*rd).get();
+        BOOST_REQUIRE(m_opt);
+        BOOST_REQUIRE(rd->is_end_of_stream());
+        assert_that(*m_opt).is_equal_to(expected_mut2);
+    }
+
+    const auto compacted_expected_mut2 = expected_mut2.compacted();
+
+    assert_that(res).is_rows().with_size(compacted_expected_mut2.partition().live_row_count(*schema));
+}
+
+future<> test_cache_tombstone_gc_overlap_checks(apply_delete_fn apply_delete) {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+
+    struct flush_completely_policy {
+        flush_completely_policy(replica::database& db, std::string_view table_name) {
+            testlog.info("Creating flush_completely_policy");
+            db.flush("ks", sstring(table_name)).get();
+        }
+    };
+
+    static constexpr char injection_point_name[] = "replica_post_flush_after_update_cache";
+
+    class flush_halfway_policy {
+        future<> _fut;
+    public:
+        flush_halfway_policy(replica::database& db, std::string_view table_name) : _fut(make_ready_future<>()) {
+            testlog.info("Creating flush_halfway_policy");
+
+            auto& err_inj = utils::get_local_injector();
+
+            err_inj.enable(injection_point_name, false, {{"table_name", seastar::format("ks.{}", table_name)}});
+
+            _fut = db.flush("ks", sstring(table_name));
+
+            while (!err_inj.get_injection_parameters(injection_point_name).contains("suspended")) {
+                sleep(1s).get();
+            }
+        }
+        ~flush_halfway_policy() {
+            utils::get_local_injector().receive_message(injection_point_name);
+            _fut.get();
+        }
+    };
+
+    return do_with_cql_env_thread([apply_delete] (cql_test_env& env) {
+        run_cache_tombstone_gc_overlap_checks_scenario(env, test_cache_tombstone_gc_overlap_checks_single_row_scenario,
+                "single_row_scenario", apply_delete);
+        run_cache_tombstone_gc_overlap_checks_scenario(env, test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario<flush_completely_policy>,
+                "concurrent_singular_reads_scenario_1", apply_delete);
+        run_cache_tombstone_gc_overlap_checks_scenario(env, test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario<flush_completely_policy>,
+                "concurrent_scanning_reads_scenario_1", apply_delete);
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+        run_cache_tombstone_gc_overlap_checks_scenario(env, test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario<flush_halfway_policy>,
+                "concurrent_singular_reads_scenario_2", apply_delete);
+        run_cache_tombstone_gc_overlap_checks_scenario(env, test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario<flush_halfway_policy>,
+                "concurrent_scanning_reads_scenario_2", apply_delete);
+#endif
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_cache_partition_tombstone_gc_overlap_checks) {
+    return test_cache_tombstone_gc_overlap_checks([] (mutation& m, const clustering_key& ck, const column_definition&, tombstone tomb) {
+        m.partition().apply(tomb);
+    });
+}
+
+SEASTAR_TEST_CASE(test_cache_row_tombstone_gc_overlap_checks) {
+    return test_cache_tombstone_gc_overlap_checks([] (mutation& m, const clustering_key& ck, const column_definition&, tombstone tomb) {
+        m.partition().apply_delete(*m.schema(), ck, tomb);
+    });
+}
+
+SEASTAR_TEST_CASE(test_cache_range_tombstone_gc_overlap_checks) {
+    return test_cache_tombstone_gc_overlap_checks([] (mutation& m, const clustering_key& ck, const column_definition&, tombstone tomb) {
+        const auto& schema = *m.schema();
+        const auto ck_components = ck.explode(schema);
+        const auto ck_prefix = clustering_key::from_exploded(schema, { ck_components.front() });
+        m.partition().apply_row_tombstone(schema, ck_prefix, tomb);
+    });
+}
+
+SEASTAR_TEST_CASE(test_cache_cell_tombstone_gc_overlap_checks) {
+    return test_cache_tombstone_gc_overlap_checks([] (mutation& m, const clustering_key& ck, const column_definition& v_def, tombstone tomb) {
+        m.set_clustered_cell(ck, v_def, atomic_cell::make_dead(tomb.timestamp, tomb.deletion_time));
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()

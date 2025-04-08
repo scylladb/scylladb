@@ -776,12 +776,13 @@ row_cache::make_reader_opt(schema_ptr s,
                        const dht::partition_range& range,
                        const query::partition_slice& slice,
                        const tombstone_gc_state* gc_state,
+                       max_purgeable_fn get_max_purgeable,
                        tracing::trace_state_ptr trace_state,
                        streamed_mutation::forwarding fwd,
                        mutation_reader::forwarding fwd_mr)
 {
     auto make_context = [&] {
-        return std::make_unique<read_context>(*this, s, permit, range, slice, gc_state, trace_state, fwd_mr);
+        return std::make_unique<read_context>(*this, s, permit, range, slice, gc_state, get_max_purgeable, trace_state, fwd_mr);
     };
 
     if (query::is_single_partition(range) && !fwd_mr) {
@@ -1110,6 +1111,7 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
 }
 
 future<> row_cache::update(external_updater eu, replica::memtable& m, preemption_source& preempt_src) {
+    m._merging_into_cache = true;
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
             row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
             real_dirty_memory_accounter& acc, const partitions_type::bound_hint& hint, preemption_source& preempt_src) mutable {
