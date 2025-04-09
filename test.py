@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import collections
 import shlex
 from random import randint
 
@@ -257,15 +256,6 @@ def parse_cmd_line() -> argparse.Namespace:
     args.tmpdir = os.path.abspath(args.tmpdir)
     prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics)
 
-    # Get the list of tests configured by configure.py
-    try:
-        out = ninja('unit_test_list')
-        # [1/1] List configured unit tests
-        args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, count=1, flags=re.DOTALL).split("\n"))
-    except Exception:
-        print(palette.fail("Failed to read output of `ninja unit_test_list`: please run ./configure.py first"))
-        raise
-
     if args.extra_scylla_cmdline_options:
         args.extra_scylla_cmdline_options = args.extra_scylla_cmdline_options.split()
 
@@ -474,162 +464,6 @@ def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: arg
             print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed, {cancelled_tests} cancelled")
         else:
             print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed")
-
-
-def summarize_boost_tests(tests):
-    # in case we run a certain test multiple times
-    # - if any of the runs failed, the test is considered failed, and
-    #   the last failed run is returned.
-    # - otherwise, the last successful run is returned
-    failed_test = None
-    passed_test = None
-    num_failed_tests = collections.defaultdict(int)
-    num_passed_tests = collections.defaultdict(int)
-    for test in tests:
-        error = None
-        for tag in ['Error', 'FatalError', 'Exception']:
-            error = test.find(tag)
-            if error is not None:
-                break
-        mode = test.attrib['mode']
-        if error is None:
-            passed_test = test
-            num_passed_tests[mode] += 1
-        else:
-            failed_test = test
-            num_failed_tests[mode] += 1
-
-    if failed_test is not None:
-        test = failed_test
-    else:
-        test = passed_test
-
-    num_failed = sum(num_failed_tests.values())
-    num_passed = sum(num_passed_tests.values())
-    num_total = num_failed + num_passed
-    if num_total == 1:
-        return test
-    if num_failed == 0:
-        return test
-    # we repeated this test for multiple times.
-    #
-    # Boost::test's XML logger schema does not allow us to put text directly in a
-    # TestCase tag, so create a dummy Message tag in the TestCase for carrying the
-    # summary. and the schema requires that the tags should be listed in following order:
-    # 1. TestSuite
-    # 2. Info
-    # 3. Error
-    # 3. FatalError
-    # 4. Message
-    # 5. Exception
-    # 6. Warning
-    # and both "file" and "line" are required in an "Info" tag, so appease it. assuming
-    # there is no TestSuite under tag TestCase, we always add Info as the first subelements
-    if num_passed == 0:
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        message.text = f'The test failed {num_failed}/{num_total} times'
-        test.insert(0, message)
-    else:
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        modes = ', '.join(f'{mode}={n}' for mode, n in num_failed_tests.items())
-        message.text = f'failed: {modes}'
-        test.insert(0, message)
-
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        modes = ', '.join(f'{mode}={n}' for mode, n in num_passed_tests.items())
-        message.text = f'passed: {modes}'
-        test.insert(0, message)
-
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        message.text = f'{num_failed} out of {num_total} times failed.'
-        test.insert(0, message)
-    return test
-
-
-def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> str:
-    # collects all boost tests sorted by their full names
-    boost_tests = itertools.chain.from_iterable(suite.boost_tests()
-                                                for suite in TestSuite.suites.values())
-    test_cases = itertools.chain.from_iterable(test.get_test_cases()
-                                               for test in boost_tests)
-    test_cases = sorted(test_cases, key=BoostTest.test_path_of_element)
-
-    xml = ET.Element("TestLog")
-    for full_path, tests in itertools.groupby(
-            test_cases,
-            key=BoostTest.test_path_of_element):
-        # dedup the tests with the same name, so only the representative one is
-        # preserved
-        test_case = summarize_boost_tests(tests)
-        test_case.attrib.pop('path')
-        test_case.attrib.pop('mode')
-
-        suite_name, test_name, _ = full_path
-        suite = xml.find(f"./TestSuite[@name='{suite_name}']")
-        if suite is None:
-            suite = ET.SubElement(xml, 'TestSuite', name=suite_name)
-        test = suite.find(f"./TestSuite[@name='{test_name}']")
-        if test is None:
-            test = ET.SubElement(suite, 'TestSuite', name=test_name)
-        test.append(test_case)
-    et = ET.ElementTree(xml)
-    xunit_file = f'{tmpdir}/{mode}/xml/boost.xunit.xml'
-    et.write(xunit_file, encoding='unicode')
-    return xunit_file
-
-
-def boost_to_junit(boost_xml, junit_xml):
-    boost_root = ET.parse(boost_xml).getroot()
-    junit_root = ET.Element('testsuites')
-
-    def parse_tag_output(test_case_element: ET.Element, tag_output: str) -> str:
-        text_template = '''
-            [{level}] - {level_message}
-            [FILE] - {file_name}
-            [LINE] - {line_number}
-            '''
-        text = ''
-        tag_outputs = test_case_element.findall(tag_output)
-        if tag_outputs:
-            for tag_output in tag_outputs:
-                text += text_template.format(level='Info', level_message=tag_output.text,
-                                             file_name=tag_output.get('file'), line_number=tag_output.get('line'))
-        return text
-
-    # report produced {write_consolidated_boost_junit_xml} have the nested structure suite_boost -> [suite1, suite2, ...]
-    # so we are excluding the upper suite with name boost
-    for test_suite in boost_root.findall('./TestSuite/TestSuite'):
-        suite_time = 0.0
-        suite_test_total = 0
-        suite_test_fails_number = 0
-
-        junit_test_suite = ET.SubElement(junit_root, 'testsuite')
-        junit_test_suite.attrib['name'] = test_suite.attrib['name']
-
-        test_cases = test_suite.findall('TestCase')
-        for test_case in test_cases:
-            # convert the testing time: boost uses microseconds and Junit uses seconds
-            test_case_time = int(test_case.find('TestingTime').text) / 1_000_000
-            suite_time += test_case_time
-            suite_test_total += 1
-
-            junit_test_case = ET.SubElement(junit_test_suite, 'testcase')
-            junit_test_case.set('name', test_case.get('name'))
-            junit_test_case.set('time', str(test_case_time))
-            junit_test_case.set('file', test_case.get('file'))
-            junit_test_case.set('line', test_case.get('line'))
-
-            system_out = ET.SubElement(junit_test_case, 'system-out')
-            system_out.text = ''
-            for tag in ['Info', 'Message', 'Exception']:
-                output = parse_tag_output(test_case, tag)
-                if output:
-                    system_out.text += output
-
-        junit_test_suite.set('tests', str(suite_test_total))
-        junit_test_suite.set('time', str(suite_time))
-        junit_test_suite.set('failures', str(suite_test_fails_number))
-    ET.ElementTree(junit_root).write(junit_xml, encoding='UTF-8')
 
 
 def open_log(tmpdir: str, log_file_name: str, log_level: str) -> None:
