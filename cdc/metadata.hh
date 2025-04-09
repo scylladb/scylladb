@@ -107,6 +107,8 @@ public:
     const pending_streams_map& get_pending_streams() const {
         return _pending_streams;
     }
+
+    static cdc_stream_diff generate_stream_diff(const std::vector<stream_id>& current, const std::vector<stream_id>& pending);
 };
 
 } // namespace cdc
