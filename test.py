@@ -139,7 +139,8 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--tmpdir", action="store", default=str(TOP_SRC_DIR / "testlog"),
                         help="Path to temporary test data and log files.  The data is further segregated per build mode.")
     parser.add_argument("--gather-metrics", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--max-failures", type=int, default=-1, help="Maximum number of failures to tolerate before cancelling rest of tests.")
+    parser.add_argument("--max-failures", type=int, default=0,
+                        help="Maximum number of failures to tolerate before cancelling rest of tests.")
     parser.add_argument('--mode', choices=ALL_MODES, action="append", dest="modes",
                         help="Run only tests for given build mode(s)")
     parser.add_argument('--repeat', action="store", default="1", type=int,
@@ -328,7 +329,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 failed += await reap(done, pending, signaled)
-                if 0 < max_failures <= failed:
+                if max_failures != 0 and max_failures <= failed:
                     print("Too much failures, stopping")
                     await cancel(pending, "Too much failures, stopping")
             pending.add(asyncio.create_task(test.suite.run(test, options)))
@@ -337,7 +338,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         while len(pending) > 1:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             failed += await reap(done, pending, signaled)
-            if 0 < max_failures <= failed:
+            if max_failures != 0 and max_failures <= failed:
                 print("Too much failures, stopping")
                 await cancel(pending, "Too much failures, stopping")
     except asyncio.CancelledError:
