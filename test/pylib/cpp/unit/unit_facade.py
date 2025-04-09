@@ -18,7 +18,8 @@ class UnitTestFacade(CppTestFacade):
     def list_tests(
             self,
             executable: Path,
-            no_parallel_run: bool
+            no_parallel_run: bool,
+            mode: str
     ) -> tuple[bool, list[str]]:
         return False, [os.path.basename(os.path.splitext(executable)[0])]
 

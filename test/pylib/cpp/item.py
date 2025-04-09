@@ -142,7 +142,7 @@ class CppFile(pytest.File):
             if test_name in self.disabled_tests[mode]:
                 continue
             executable = Path(f'{self.project_root}/build/{mode}/test/{self.path.parent.name}/{test_name}')
-            combined, tests = self.facade.list_tests(executable, self.no_parallel_run)
+            combined, tests = self.facade.list_tests(executable, self.no_parallel_run, mode)
             if combined:
                 executable = executable.parent / COMBINED_TESTS.stem
             for test_name in tests:

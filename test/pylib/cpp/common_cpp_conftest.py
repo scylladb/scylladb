@@ -3,18 +3,14 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-import collections
 import os
-import subprocess
 from copy import copy
-from functools import cache
 from pathlib import Path, PosixPath
 
 import yaml
 from pytest import Collector
 
-from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR
-from test.pylib.cpp.boost.boost_facade import COMBINED_TESTS
+from test import ALL_MODES, DEBUG_MODES
 from test.pylib.cpp.facade import CppTestFacade
 from test.pylib.cpp.item import CppFile
 from test.pylib.util import get_modes_to_run
@@ -114,24 +110,3 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
         args.extend(custom_args)
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, no_parallel_run=no_parallel_run,
                                    modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, project_root=project_root, env=test_env)
-
-@cache
-def get_combined_tests():
-    suites = collections.defaultdict()
-    executable = TOP_SRC_DIR / COMBINED_TESTS
-    args = [executable, '--list_content']
-
-    output = subprocess.check_output(
-        args,
-        stderr=subprocess.STDOUT,
-        universal_newlines=True,
-    )
-    current_suite = ''
-    for line in output.splitlines():
-        if not line.startswith('    '):
-            current_suite = line.strip().rstrip('*')
-            suites[current_suite] = []
-        else:
-            case_name = line.strip().rstrip('*')
-            suites[current_suite].append(case_name)
-    return suites
