@@ -359,3 +359,39 @@ void cdc::metadata::load_streams_state(const cdc::base_streams_state& base_data,
         _pending_streams.erase(table);
     }
 }
+
+cdc::cdc_stream_diff cdc::metadata::generate_stream_diff(const std::vector<stream_id>& current, const std::vector<stream_id>& pending) {
+    std::vector<stream_id> closed, opened;
+
+    auto current_it = current.begin();
+    auto pending_it = pending.begin();
+
+    while (current_it != current.end()) {
+        if (pending_it == pending.end()) {
+            while (current_it != current.end()) {
+                closed.push_back(*current_it++);
+            }
+            break;
+        }
+
+        if (pending_it->token() < current_it->token()) {
+            opened.push_back(*pending_it++);
+        } else if (pending_it->token() > current_it->token()) {
+            closed.push_back(*current_it++);
+        } else if (*pending_it != *current_it) {
+            opened.push_back(*pending_it++);
+            closed.push_back(*current_it++);
+        } else {
+            pending_it++;
+            current_it++;
+        }
+    }
+    while (pending_it != pending.end()) {
+        opened.push_back(*pending_it++);
+    }
+
+    return cdc_stream_diff {
+        std::move(closed),
+        std::move(opened)
+    };
+}

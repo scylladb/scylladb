@@ -135,6 +135,11 @@ using base_streams_state = std::unordered_map<table_id, committed_stream_set>;
 using streams_history = std::unordered_map<table_id, std::vector<std::pair<utils::UUID, std::vector<std::pair<stream_kind, stream_id>>>>>;
 using pending_streams = std::unordered_map<table_id, std::vector<cdc::stream_id>>;
 
+struct cdc_stream_diff {
+    std::vector<stream_id> closed_streams;
+    std::vector<stream_id> opened_streams;
+};
+
 class no_generation_data_exception : public std::runtime_error {
 public:
     no_generation_data_exception(cdc::generation_id generation_ts)
