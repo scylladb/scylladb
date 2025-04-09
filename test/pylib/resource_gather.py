@@ -11,11 +11,14 @@ import getpass
 import logging
 import os
 import platform
+import shlex
 import subprocess
+import time
 from abc import ABC
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import psutil
@@ -57,7 +60,7 @@ CGROUP_TESTS = CGROUP_INITIAL.parent / 'tests'
 
 
 class ResourceGather(ABC):
-    def __init__(self, test: TestPyTest):
+    def __init__(self, test: TestPyTest | SimpleNamespace):
         # get the event loop for the current thread or create a new one if there's none
         try:
             self.loop = asyncio.get_running_loop()
@@ -66,7 +69,7 @@ class ResourceGather(ABC):
             self.loop = asyncio.new_event_loop()
             self.own_loop = True
         self.test = test
-        self.db_path = self.test.suite.log_dir / DEFAULT_DB_NAME
+        self.db_path = self.test.suite.log_dir.parent / DEFAULT_DB_NAME
         standardized_name = self.test.shortname.replace("/", "_")
         self.cgroup_path = Path(
             f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.suite.mode}.{self.test.id}"
@@ -76,6 +79,32 @@ class ResourceGather(ABC):
     def __del__(self):
         if self.own_loop:
             self.loop.close()
+
+    def  run_process(self, args: list[str], timeout, env: dict = None) -> [subprocess.Popen, str]:
+
+        args = shlex.split(' '.join(args))
+        if env:
+            env.update(os.environ)
+        p = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            env=env,
+            preexec_fn = self.put_process_to_cgroup
+        )
+        try:
+            stdout, stderr = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            logger.critical(f"Process {args} timed out")
+            stdout = p.stdout.read()
+            p.kill()
+        except KeyboardInterrupt:
+            p.kill()
+            raise
+        return p, stdout
+
 
     def make_cgroup(self) -> None:
         pass
@@ -102,7 +131,7 @@ class ResourceGatherOff(ResourceGather):
 
 
 class ResourceGatherOn(ResourceGather):
-    def __init__(self, test: TestPyTest):
+    def __init__(self, test: TestPyTest | SimpleNamespace):
         super().__init__(test)
         self.sqlite_writer = SQLiteWriter(self.db_path)
         self.test_id: int = self.sqlite_writer.write_row_if_not_exist(
@@ -127,13 +156,26 @@ class ResourceGatherOn(ResourceGather):
         memory_peak = self.cgroup_path / 'memory.peak'
         if memory_peak.exists():
             with open(memory_peak, 'r') as file:
-                test_metrics.memory_peak = file.read()
+                test_metrics.memory_peak = int(file.read().strip())
 
         cpu_stat = self.cgroup_path / 'cpu.stat'
         if cpu_stat.exists():
             with open(cpu_stat, 'r', ) as file:
                 self._parse_cpu_stat(file, test_metrics)
         return test_metrics
+
+    def run_process(self, args: list[str], timeout, env: dict = None):
+        stop_monitoring = asyncio.Event()
+
+        self.test.time_start = time.time()
+        test_resource_watcher = self.cgroup_monitor(test_event=stop_monitoring)
+        try:
+            p, stdout = super().run_process(args, timeout, env)
+        finally:
+            stop_monitoring.set()
+            self.test.time_end = time.time()
+            self.loop.run_until_complete(asyncio.gather(test_resource_watcher))
+        return p, stdout
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         metrics.success = success
@@ -185,7 +227,7 @@ class ResourceGatherOn(ResourceGather):
                 setattr(metrics, stats[stat], float(value) / 1_000_000)
 
 
-def get_resource_gather(is_switched_on: bool, test: TestPyTest) -> ResourceGather:
+def get_resource_gather(is_switched_on: bool, test: TestPyTest | SimpleNamespace ) -> ResourceGather:
     if is_switched_on:
         return ResourceGatherOn(test)
     else:
@@ -201,6 +243,7 @@ def _is_cgroup_rw() -> bool:
                     return True
                 else:
                     return False
+    return False
 
 
 def setup_cgroup(is_required: bool) -> None:
