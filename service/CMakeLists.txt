@@ -33,7 +33,8 @@ target_sources(service
     task_manager_module.cc
     topology_coordinator.cc
     topology_mutation.cc
-    topology_state_machine.cc)
+    topology_state_machine.cc
+    view_building_state.cc)
 target_include_directories(service
   PUBLIC
     ${CMAKE_SOURCE_DIR})
