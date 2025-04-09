@@ -2906,6 +2906,42 @@ future<mutation> system_keyspace::make_remove_view_building_task_mutation(api::t
     co_return std::move(muts[0]);
 }
 
+static constexpr auto VIEW_BUILDING_PROCESSING_BASE_ID_KEY = "view_building_processing_base_id";
+
+future<std::optional<table_id>> system_keyspace::get_view_building_processing_base_id() {
+    auto value = co_await get_scylla_local_param(VIEW_BUILDING_PROCESSING_BASE_ID_KEY);
+    co_return value.transform([] (sstring uuid) {
+        return table_id(utils::UUID(uuid));
+    });
+}
+
+future<std::optional<mutation>> system_keyspace::get_view_building_processing_base_id_mutation() {
+    return get_scylla_local_mutation(_db, VIEW_BUILDING_PROCESSING_BASE_ID_KEY);
+}
+
+
+future<mutation> system_keyspace::make_view_building_processing_base_id_mutation(api::timestamp_type ts, table_id base_id) {
+    static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    auto muts = co_await _qp.get_mutations_internal(
+            query, internal_system_query_state(), 
+            ts, {VIEW_BUILDING_PROCESSING_BASE_ID_KEY, base_id.to_sstring()});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<mutation> system_keyspace::make_remove_view_building_processing_base_id_mutation(api::timestamp_type ts) {
+    static sstring query = format("DELETE FROM {}.{} WHERE key = ?", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VIEW_BUILDING_PROCESSING_BASE_ID_KEY});
+    if (muts.size() != 1) {
+        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
 future<std::set<sstring>> system_keyspace::load_local_enabled_features() {
     std::set<sstring> features;
     auto features_str = co_await get_scylla_local_param(gms::feature_service::ENABLED_FEATURES_KEY);
