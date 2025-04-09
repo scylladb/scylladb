@@ -1332,4 +1332,58 @@ future<> generation_service::query_cdc_streams(table_id table, noncopyable_funct
     }
 }
 
+future<mutation> get_switch_streams_mutation(table_id table, db_clock::time_point stream_ts, cdc_stream_diff diff, api::timestamp_type ts) {
+    auto history_schema = db::system_keyspace::cdc_streams_history();
+
+    auto decomposed_ts = timestamp_type->decompose(stream_ts);
+    auto closed_kind = byte_type->decompose(std::to_underlying(stream_state::closed));
+    auto opened_kind = byte_type->decompose(std::to_underlying(stream_state::opened));
+
+    mutation m(history_schema, partition_key::from_single_value(*history_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+
+    for (auto&& sid : diff.closed_streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, closed_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(std::move(sid).to_bytes()), ts);
+    }
+    for (auto&& sid : diff.opened_streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, opened_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(std::move(sid).to_bytes()), ts);
+    }
+
+    co_return std::move(m);
+}
+
+future<> generation_service::generate_tablet_resize_update(utils::chunked_vector<canonical_mutation>& muts, table_id table, const locator::tablet_map& new_tablet_map, api::timestamp_type ts) {
+    if (!_cdc_metadata.get_all_tablet_streams().contains(table)) {
+        // not a CDC table
+        co_return;
+    }
+
+    std::vector<cdc::stream_id> new_streams;
+    new_streams.reserve(new_tablet_map.tablet_count());
+    for (auto tid : new_tablet_map.tablet_ids()) {
+        new_streams.emplace_back(new_tablet_map.get_last_token(tid), 0);
+        co_await coroutine::maybe_yield();
+    }
+
+    const auto& table_streams = *_cdc_metadata.get_all_tablet_streams().at(table);
+    auto current_streams_it = std::crbegin(table_streams);
+    if (current_streams_it == std::crend(table_streams)) {
+        // no streams at all - this should not happen
+        on_internal_error(cdc_log, format("generate_tablet_resize_update: no streams for table {}", table));
+    }
+    const auto& current_streams = current_streams_it->second;
+
+    auto new_ts = new_generation_timestamp(true, _cfg.ring_delay);
+    new_ts = std::max(new_ts, current_streams.ts + std::chrono::milliseconds(1)); // ensure timestamps are increasing
+
+    auto diff = co_await _cdc_metadata.generate_stream_diff(current_streams.streams, new_streams);
+    auto mut = co_await get_switch_streams_mutation(table, new_ts, std::move(diff), ts);
+    muts.emplace_back(std::move(mut));
+}
+
 } // namespace cdc

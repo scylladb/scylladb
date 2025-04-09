@@ -1193,6 +1193,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, _view_building_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
+                    _cdc_gens.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service,

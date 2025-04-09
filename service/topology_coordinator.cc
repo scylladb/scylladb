@@ -24,6 +24,7 @@
 
 #include "auth/service.hh"
 #include "cdc/generation.hh"
+#include "cdc/generation_service.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
@@ -136,6 +137,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     tablet_allocator& _tablet_allocator;
     std::unique_ptr<db::view::view_building_coordinator> _vb_coordinator;
+
+    cdc::generation_service& _cdc_gens;
 
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
@@ -1867,6 +1870,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
             _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
 
+            for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
+                co_await _cdc_gens.generate_tablet_resize_update(updates, table_id, new_tablet_map, guard.write_timestamp());
+            }
+
             const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             auto old_cnt = tmap.tablet_count();
             auto new_cnt = new_tablet_map.tablet_count();
@@ -3151,6 +3158,7 @@ public:
             service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
+            cdc::generation_service& cdc_gens,
             std::chrono::milliseconds ring_delay,
             gms::feature_service& feature_service, endpoint_lifecycle_notifier& lifecycle_notifier,
             topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
@@ -3163,6 +3171,7 @@ public:
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
         , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
+        , _cdc_gens(cdc_gens)
         , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
@@ -3785,6 +3794,7 @@ future<> run_topology_coordinator(
         service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
+        cdc::generation_service& cdc_gens,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
@@ -3795,6 +3805,7 @@ future<> run_topology_coordinator(
             sys_ks, db, group0, topo_sm, vb_sm, as, raft,
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
+            cdc_gens,
             ring_delay,
             feature_service, lifecycle_notifier,
             topology_cmd_rpc_tracker};
