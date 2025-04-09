@@ -538,14 +538,14 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str]) -> None:
 
 
 @universalasync.async_to_sync_wraps
-async def start_3rd_party_services(tempdir_base: pathlib.Path, toxyproxy_byte_limit: int):
+async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
     hosts = HostRegistry()
 
     finalize = start_ldap(
         host=await hosts.lease_host(),
         port=5000,
         instance_root=tempdir_base / 'ldap_instances',
-        toxyproxy_byte_limit=toxyproxy_byte_limit)
+        toxiproxy_byte_limit=toxiproxy_byte_limit)
     async def make_async_finalize():
         finalize()
 
