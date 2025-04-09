@@ -313,3 +313,43 @@ void cdc::metadata::remove_tablet_streams_map(table_id tid) {
 std::vector<table_id> cdc::metadata::get_tables_with_cdc_tablet_streams() const {
     return _tablet_streams | std::views::keys | std::ranges::to<std::vector<table_id>>();
 }
+
+future<cdc::cdc_stream_diff> cdc::metadata::generate_stream_diff(const std::vector<stream_id>& before, const std::vector<stream_id>& after) {
+    std::vector<stream_id> closed, opened;
+
+    auto before_it = before.begin();
+    auto after_it = after.begin();
+
+    while (before_it != before.end()) {
+        co_await coroutine::maybe_yield();
+
+        if (after_it == after.end()) {
+            while (before_it != before.end()) {
+                co_await coroutine::maybe_yield();
+                closed.push_back(*before_it++);
+            }
+            break;
+        }
+
+        if (after_it->token() < before_it->token()) {
+            opened.push_back(*after_it++);
+        } else if (after_it->token() > before_it->token()) {
+            closed.push_back(*before_it++);
+        } else if (*after_it != *before_it) {
+            opened.push_back(*after_it++);
+            closed.push_back(*before_it++);
+        } else {
+            after_it++;
+            before_it++;
+        }
+    }
+    while (after_it != after.end()) {
+        co_await coroutine::maybe_yield();
+        opened.push_back(*after_it++);
+    }
+
+    co_return cdc_stream_diff {
+        .closed_streams = std::move(closed),
+        .opened_streams = std::move(opened)
+    };
+}
