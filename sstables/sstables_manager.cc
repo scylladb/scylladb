@@ -54,6 +54,17 @@ sstables_manager::~sstables_manager() {
     SCYLLA_ASSERT(_undergoing_close.empty());
 }
 
+void sstables_manager::subscribe(sstables_manager_event_handler& handler) {
+    handler.subscribe(_signal_source.connect([this, &handler] (sstables::generation_type gen, notification_event_type event) mutable -> future<> {
+        if (auto gh = _signal_gate.try_hold()) {
+            switch (event) {
+            case notification_event_type::deleted:
+                co_await handler.deleted_sstable(gen);
+            }
+        }
+    }));
+}
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
@@ -337,6 +348,7 @@ future<> sstables_manager::close() {
     // stop the components reload fiber
     _components_memory_change_event.signal();
     co_await std::move(_components_reloader_status);
+    co_await _signal_gate.close();
 }
 
 void sstables_manager::plug_sstables_registry(std::unique_ptr<sstables::sstables_registry> sr) noexcept {
@@ -381,6 +393,7 @@ std::vector<std::filesystem::path> sstables_manager::get_local_directories(const
 
 void sstables_manager::on_unlink(sstable* sst) {
     reclaim_memory_and_stop_tracking_sstable(sst);
+    _signal_source(sst->generation(), notification_event_type::deleted);
 }
 
 sstables_registry::~sstables_registry() = default;

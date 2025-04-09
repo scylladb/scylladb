@@ -30,6 +30,8 @@ enum class component_type {
     Unknown,
 };
 
+constexpr size_t num_component_types = size_t(component_type::Unknown);
+
 struct sstable;
 struct component_name {
     const sstable& sst;
