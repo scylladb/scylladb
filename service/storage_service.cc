@@ -7388,6 +7388,9 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.compression_dicts) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
+                if (ss._feature_service.view_building_coordinator) {
+                    additional_tables.push_back(db::system_keyspace::view_building_tasks()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
