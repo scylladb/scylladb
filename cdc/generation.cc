@@ -17,6 +17,7 @@
 
 #include "gms/endpoint_state.hh"
 #include "gms/versioned_value.hh"
+#include "cql3/query_processor.hh"
 #include "keys.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
@@ -1287,6 +1288,56 @@ mutation get_open_and_close_streams_mutation(table_id table, const cdc_stream_di
     }
 
     return m;
+}
+
+future<> generation_service::commit_cdc_streams(std::vector<canonical_mutation>& muts, db_clock::time_point stream_ts, api::timestamp_type ts) {
+    auto stream_uuid = utils::UUID_gen::get_random_time_UUID_from_micros(stream_ts.time_since_epoch());
+    api::timestamp_type new_ts = std::chrono::duration_cast<api::timestamp_clock::duration>(stream_ts.time_since_epoch()).count();
+
+    for (const auto& [table, table_streams] : _cdc_metadata.get_all_tablet_streams()) {
+        const auto& pending = table_streams.pending;
+        if (!pending || pending->committed_time) {
+            continue;
+        }
+
+        // verify the timestamps are always increasing
+        api::timestamp_type prev_ts = std::crbegin(table_streams.committed)->first;
+        if (prev_ts >= new_ts) {
+            on_internal_error(cdc_log, format("commit_cdc_streams: timesamp of new CDC streams {} is not greater than the previous timestamp {}", new_ts, prev_ts));
+        }
+
+        muts.emplace_back(get_open_and_close_streams_mutation(table,
+                _cdc_metadata.generate_stream_diff(_cdc_metadata.get_current_tablet_stream_set(table), pending->stream_set),
+                stream_uuid,
+                ts));
+
+        co_await coroutine::maybe_yield();
+    }
+}
+
+future<> generation_service::close_cdc_streams(std::vector<canonical_mutation>& muts, cql3::query_processor& qp, api::timestamp_type ts) {
+    for (const auto& [table, table_streams] : _cdc_metadata.get_all_tablet_streams()) {
+        const auto& pending = table_streams.pending;
+        if (!pending || !pending->committed_time) {
+            continue;
+        }
+        auto log_schema = qp.db().find_schema(table);
+        const sstring query = seastar::format("UPDATE {}.{} SET \"{}\" = ? WHERE \"cdc$stream_id\" = ?", log_schema->ks_name(), log_schema->cf_name(), log_meta_column_name("closed_time"));
+
+        // The pending stream is committed, it means it's the last entry in all_table_streams, and
+        // the closed stream set is the one before last entry.
+        const auto& all_table_streams = table_streams.committed;
+        if (all_table_streams.size() < 2) {
+            on_internal_error(cdc_log, format("close_cdc_streams: expecting at least 2 stream sets but got {}", all_table_streams.size()));
+        }
+        auto it = std::prev(all_table_streams.end(), 2);
+
+        co_await coroutine::parallel_for_each(it->second.streams, [&] (auto sid) -> future<> {
+            return qp.execute_internal(query, db::consistency_level::ALL, {*pending->committed_time, data_value(sid.to_bytes())}, cql3::query_processor::cache_internal::no).discard_result();
+        });
+
+        muts.emplace_back(get_delete_pending_streams_mutation(table, ts));
+    }
 }
 
 } // namespace cdc
