@@ -585,27 +585,12 @@ shared_ptr<seastar::file_impl> make_delayed_encrypted_file(file f, size_t key_bl
 }
 
 class encrypted_data_sink : public data_sink_impl, public block_encryption_base {
-public:
     data_sink _sink;
     char _buffer[block_size];
-    uint64_t _pos = 0, _flush_pos = 0;
+    uint64_t _pos = 0;
     size_t _bufpos = 0;
 
     using mode = block_encryption_base::mode;
-
-    encrypted_data_sink(data_sink sink, shared_ptr<symmetric_key> k)
-        : block_encryption_base(std::move(k))
-        , _sink(std::move(sink))
-    {}
-
-    future<> put(net::packet data) override {
-        return fallback_put(std::move(data));
-    }
-    future<> put(std::vector<temporary_buffer<char>> data) override {
-        for (auto&& buf : data) {
-            co_await put(std::move(buf));
-        }
-    }
 
     void transform(uint64_t pos, char* data, size_t len) {
         assert(!(pos & (block_size - 1)));
@@ -626,6 +611,22 @@ public:
     future<> send_buffer() {
         return do_send(temporary_buffer<char>(_buffer, std::exchange(_bufpos, 0)));
     }
+
+public:
+    encrypted_data_sink(data_sink sink, shared_ptr<symmetric_key> k)
+        : block_encryption_base(std::move(k))
+        , _sink(std::move(sink))
+    {}
+
+    future<> put(net::packet data) override {
+        return fallback_put(std::move(data));
+    }
+    future<> put(std::vector<temporary_buffer<char>> data) override {
+        for (auto&& buf : data) {
+            co_await put(std::move(buf));
+        }
+    }
+
     future<> put(temporary_buffer<char> buf) override {
         if (_bufpos != 0) {
             auto add = std::min(buf.size(), sizeof(_buffer) - _bufpos);
