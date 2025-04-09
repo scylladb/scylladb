@@ -524,8 +524,10 @@ def prepare_dir(dirname: pathlib.Path, pattern: str) -> None:
 def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool) -> None:
     prepare_dir(tempdir_base, "*.log")
     setup_cgroup(gather_metrics)
-    shutil.rmtree(tempdir_base / "ldap_instances", ignore_errors=True)
-    prepare_dir(tempdir_base / "ldap_instances", "*")
+    for directory in ['report', 'ldap_instances']:
+        full_path_directory = tempdir_base / directory
+        shutil.rmtree(full_path_directory, ignore_errors=True)
+        prepare_dir(full_path_directory, '*')
     for mode in modes:
         prepare_dir(tempdir_base / mode, "*.log")
         prepare_dir(tempdir_base / mode, "*.reject")
