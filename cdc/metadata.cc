@@ -389,3 +389,39 @@ future<> cdc::metadata::load_tablet_streams_map(
         }
     }
 }
+
+cdc::cdc_stream_diff cdc::metadata::generate_stream_diff(const std::vector<stream_id>& before, const std::vector<stream_id>& after) {
+    std::vector<stream_id> closed, opened;
+
+    auto before_it = before.begin();
+    auto after_it = after.begin();
+
+    while (before_it != before.end()) {
+        if (after_it == after.end()) {
+            while (before_it != before.end()) {
+                closed.push_back(*before_it++);
+            }
+            break;
+        }
+
+        if (after_it->token() < before_it->token()) {
+            opened.push_back(*after_it++);
+        } else if (after_it->token() > before_it->token()) {
+            closed.push_back(*before_it++);
+        } else if (*after_it != *before_it) {
+            opened.push_back(*after_it++);
+            closed.push_back(*before_it++);
+        } else {
+            after_it++;
+            before_it++;
+        }
+    }
+    while (after_it != after.end()) {
+        opened.push_back(*after_it++);
+    }
+
+    return cdc_stream_diff {
+        std::move(closed),
+        std::move(opened)
+    };
+}
