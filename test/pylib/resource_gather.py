@@ -11,7 +11,9 @@ import getpass
 import logging
 import os
 import platform
+import shlex
 import subprocess
+import time
 from abc import ABC
 from datetime import datetime
 from functools import lru_cache
@@ -77,6 +79,32 @@ class ResourceGather(ABC):
         if self.own_loop:
             self.loop.close()
 
+    def  run_process(self, args: list[str], timeout, env: dict = None) -> [subprocess.Popen, str]:
+
+        args = shlex.split(' '.join(args))
+        if env:
+            env.update(os.environ)
+        p = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            env=env,
+            preexec_fn = self.put_process_to_cgroup
+        )
+        try:
+            stdout, stderr = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            logger.critical(f"Process {args} timed out")
+            stdout = p.stdout.read()
+            p.kill()
+        except KeyboardInterrupt:
+            p.kill()
+            raise
+        return p, stdout
+
+
     def make_cgroup(self) -> None:
         pass
 
@@ -134,6 +162,19 @@ class ResourceGatherOn(ResourceGather):
             with open(cpu_stat, 'r', ) as file:
                 self._parse_cpu_stat(file, test_metrics)
         return test_metrics
+
+    def run_process(self, args: list[str], timeout, env: dict = None):
+        stop_monitoring = asyncio.Event()
+
+        self.test.time_start = time.time()
+        test_resource_watcher = self.cgroup_monitor(test_event=stop_monitoring)
+        try:
+            p, stdout = super().run_process(args, timeout, env)
+        finally:
+            stop_monitoring.set()
+            self.test.time_end = time.time()
+            self.loop.run_until_complete(asyncio.gather(test_resource_watcher))
+        return p, stdout
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         metrics.success = success

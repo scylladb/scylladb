@@ -98,8 +98,7 @@ class CppTestFunction(pytest.Item):
         self._nodeid = nodeid
 
     def runtest(self) -> None:
-
-        failures, output = self.facade.run_test(self.executable, self.originalname, self.test_unique_name, self.mode,
+        failures, output = self.facade.run_test(self.executable, self.originalname, self.nodeid.split('::')[-1], self.mode,
                                                 self.file_name, self._arguments, env=self.env)
         # Report the c++ output in its own sections
         self.add_report_section("call", "c++", output)
