@@ -23,7 +23,6 @@ import psutil
 from test.pylib.db.model import Metric, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
-    DATE_TIME_TEMPLATE,
     DEFAULT_DB_NAME,
     METRICS_TABLE,
     SYSTEM_RESOURCE_METRICS_TABLE,
@@ -107,8 +106,8 @@ class ResourceGatherOn(ResourceGather):
     def get_test_metrics(self) -> Metric:
         test_metrics: Metric = Metric(test_id=self.test_id)
         test_metrics.time_taken = self.test.time_end - self.test.time_start
-        test_metrics.time_start = datetime.fromtimestamp(self.test.time_start).strftime(DATE_TIME_TEMPLATE)
-        test_metrics.time_end = datetime.fromtimestamp(self.test.time_end).strftime(DATE_TIME_TEMPLATE)
+        test_metrics.time_start = datetime.fromtimestamp(self.test.time_start)
+        test_metrics.time_end = datetime.fromtimestamp(self.test.time_end)
         test_metrics.success = self.test.success
         with open(self.cgroup_path / 'memory.peak', 'r') as file:
             test_metrics.memory_peak = file.read()

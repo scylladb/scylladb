@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 import asyncio
+import datetime
 import sqlite3
 from typing import List
 
@@ -64,6 +65,11 @@ create_table = [
     '''
 ]
 
+def adapt_datetime_iso(val):
+    """Adapt datetime.datetime to timezone-naive ISO 8601 date."""
+    return val.isoformat()
+
+sqlite3.register_adapter(datetime.datetime, adapt_datetime_iso)
 
 class SingletonMeta(type):
     _instances = {}
