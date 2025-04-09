@@ -12,6 +12,7 @@ from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, TabletReplicas
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
 
 import pytest
 import asyncio
@@ -1745,3 +1746,41 @@ async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, o
 
     logger.info(f"Running {operation} {ks}.test")
     await cql.run_async(f"{operation} {ks}.test")
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/22040.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_concurrent_schema_change_with_compaction_completion(manager: ManagerClient):
+    cmdline = ['--smp=2']
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.enable_injection(servers[0].ip_addr, "sstable_list_builder_delay", one_shot=False)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int);")
+
+        stop_compaction = False
+        async def background_compaction():
+            while stop_compaction == False:
+                await manager.api.keyspace_compaction(servers[0].ip_addr, ks)
+
+        compaction_task = asyncio.create_task(background_compaction())
+
+        for i in range(5):
+            dotestCreateAndDropIndex(cql, table, "CamelCase", False)
+            dotestCreateAndDropIndex(cql, table, "CamelCase2", True)
+
+        stop_compaction = True
+        await compaction_task
+
+        async def force_minor_compaction():
+            for i in range(4):
+                cql.run_async(f"INSERT INTO {ks}.test (a, b) VALUES (1, 1);")
+                await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        await cql.run_async(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'TimeWindowCompactionStrategy' }};")
+        await force_minor_compaction()
+        await cql.run_async(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'IncrementalCompactionStrategy' }};")
+        await force_minor_compaction()
