@@ -31,7 +31,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
-from test.pylib.resource_gather import get_resource_gather
+from test.pylib.resource_gather import get_resource_gather, setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
@@ -521,8 +521,9 @@ def prepare_dir(dirname: pathlib.Path, pattern: str) -> None:
         p.unlink()
 
 
-def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str]) -> None:
+def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool) -> None:
     prepare_dir(tempdir_base, "*.log")
+    setup_cgroup(gather_metrics)
     shutil.rmtree(tempdir_base / "ldap_instances", ignore_errors=True)
     prepare_dir(tempdir_base / "ldap_instances", "*")
     for mode in modes:

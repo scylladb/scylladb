@@ -163,8 +163,10 @@ class PythonTest(Test):
             "--junit-xml={}".format(self.xmlout),
             "-rs",
             "--run_id={}".format(self.id),
-            "--mode={}".format(self.mode)
+            "--mode={}".format(self.mode),
         ]
+        if options.gather_metrics:
+            self.args.append("--gather-metrics")
         self.args.append(f"--alluredir={self.allure_dir}")
         if not options.save_log_on_success:
             self.args.append("--allure-no-capture")
