@@ -222,4 +222,8 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
 future<mutation> create_table_streams_mutation(table_id, db_clock::time_point, const locator::tablet_map&, api::timestamp_type);
 utils::chunked_vector<mutation> make_drop_table_streams_mutations(table_id, api::timestamp_type ts);
 
+future<mutation> get_insert_pending_stream_mutation(table_id table, const std::vector<stream_id>& streams, api::timestamp_type ts);
+mutation get_delete_pending_streams_mutation(table_id table, api::timestamp_type ts);
+future<mutation> get_open_and_close_streams_mutation(table_id table, const cdc_stream_diff& diff, db_clock::time_point stream_ts, api::timestamp_type ts);
+
 } // namespace cdc
