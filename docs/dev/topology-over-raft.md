@@ -242,6 +242,8 @@ globally driven by the topology change coordinator and serialized per-tablet. Tr
 
 - rebuild - new tablet replica is rebuilt from existing ones, possibly dropping old replica afterwards (on node removal or replace)
 
+- rebuild_v2 - same as rebuild, but repairs a tablet and streams data from one replica, instead of streaming data from all replicas
+
 - repair - tablet replicas are repaired
 
 Each tablet has its own state machine for keeping state of transition stored in group0 which is part of the tablet state. It involves
@@ -332,6 +334,32 @@ stateDiagram-v2
 ```
 
 The above state transition state machine is the same for those tablet transition kinds: migration, intranode_migration, rebuild.
+
+In rebuild_v2 transition kind streaming stage is followed by the rebuild_repair stage:
+
+```mermaid
+stateDiagram-v2
+    state if_state <<choice>>
+    [*] --> allow_write_both_read_old
+    allow_write_both_read_old --> write_both_read_old
+    write_both_read_old --> rebuild_repair
+    rebuild_repair --> streaming
+    streaming --> write_both_read_new
+    write_both_read_new --> use_new
+    use_new --> cleanup
+    cleanup --> end_migration
+    end_migration --> [*]
+    allow_write_both_read_old --> cleanup_target: error
+    write_both_read_old --> cleanup_target: error
+    rebuild_repair --> cleanup_target: error
+    streaming --> cleanup_target: error
+    write_both_read_new --> if_state: error
+    if_state --> use_new: more new replicas
+    if_state --> cleanup_target: more old replicas
+    cleanup_target --> revert_migration
+    revert_migration --> [*]
+```
+
 The repair tablet transition kind is different. It transits only to the repair and end_repair stage because no token ownership is changed.
 
 The behavioral difference between "migration" and "intranode_migration" transitions is in the way "streaming" stage

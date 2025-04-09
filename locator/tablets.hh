@@ -27,6 +27,10 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+namespace gms {
+class feature_service;
+}
+
 namespace locator {
 
 class topology;
@@ -218,6 +222,7 @@ enum class tablet_transition_stage {
     allow_write_both_read_old,
     write_both_read_old,
     streaming,
+    rebuild_repair,
     write_both_read_new,
     use_new,
     cleanup,
@@ -242,9 +247,15 @@ enum class tablet_transition_kind {
     // The leaving replica is (tablet_info::replicas - tablet_transition_info::next).
     rebuild,
 
+    // Like rebuild, but instead of streaming data from all tablet replicas,
+    // it repairs the tablet and streams data from one replica.
+    rebuild_v2,
+
     // Repair the tablet replicas
     repair,
 };
+
+tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features);
 
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
 tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
@@ -644,6 +655,8 @@ public:
 
 // Check that all tablets which have replicas on this host, have a valid replica shard (< smp::count).
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
+
+std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, std::function<bool(const tablet_replica&)> filter);
 
 struct tablet_routing_info {
     tablet_replica_set tablet_replicas;
