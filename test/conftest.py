@@ -40,8 +40,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--run_id', action='store', default=None, help='Run id for the test run')
     parser.addoption('--byte-limit', action="store", default=randint(0, 2000), type=int,
                      help="Specific byte limit for failure injection (random by default)")
-    parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
-                     help='Switch on gathering cgroup metrics')
+    parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False, help='Switch on gathering cgroup metrics')
 
     # Following option is to use with bare pytest command.
     #

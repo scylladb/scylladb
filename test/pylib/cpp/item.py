@@ -32,7 +32,7 @@ import pytest
 from _pytest._code.code import TerminalRepr, ReprFileLocation
 from _pytest._io import TerminalWriter
 
-from test.pylib.cpp.boost.boost_facade import COMBINED_TESTS
+from test import COMBINED_TESTS
 from test.pylib.cpp.facade import CppTestFailure, CppTestFailureList, CppTestFacade
 
 
@@ -98,8 +98,7 @@ class CppTestFunction(pytest.Item):
         self._nodeid = nodeid
 
     def runtest(self) -> None:
-
-        failures, output = self.facade.run_test(self.executable, self.originalname, self.test_unique_name, self.mode,
+        failures, output = self.facade.run_test(self.executable, self.originalname, self.nodeid.split('::')[-1], self.mode,
                                                 self.file_name, self._arguments, env=self.env)
         # Report the c++ output in its own sections
         self.add_report_section("call", "c++", output)
@@ -138,10 +137,11 @@ class CppFile(pytest.File):
     def collect(self) -> Iterator[CppTestFunction]:
         for mode in self.modes:
             test_name = self.path.stem
+            self.env['TMPDIR'] = Path(self.parent.config.getoption('tmpdir'), mode).absolute()
             if test_name in self.disabled_tests[mode]:
                 continue
             executable = Path(f'{self.project_root}/build/{mode}/test/{self.path.parent.name}/{test_name}')
-            combined, tests = self.facade.list_tests(executable, self.no_parallel_run)
+            combined, tests = self.facade.list_tests(executable, self.no_parallel_run, mode)
             if combined:
                 executable = executable.parent / COMBINED_TESTS.stem
             for test_name in tests:
