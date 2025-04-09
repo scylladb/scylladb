@@ -29,6 +29,7 @@
 #include "virtual_tables.hh"
 #include "types/types.hh"
 #include "auth_version.hh"
+#include "db/view/view_building_state.hh"
 
 namespace utils {
     class shared_dict;
@@ -182,6 +183,7 @@ public:
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
+    static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -277,6 +279,7 @@ public:
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
+    static schema_ptr view_building_tasks();
 
     // auth
     static schema_ptr roles();
@@ -545,6 +548,12 @@ public:
     future<mutation> make_view_build_status_update_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
     future<mutation> make_remove_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name);
     future<mutation> make_remove_view_build_status_on_host_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id);
+
+    // system.view_building_tasks
+    future<db::view::building_tasks> get_view_building_tasks();
+    future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task);
+    future<mutation> make_update_view_building_task_state_mutation(api::timestamp_type ts, utils::UUID id, db::view::view_building_task::task_state state);
+    future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
 
     // CDC related functions
 
