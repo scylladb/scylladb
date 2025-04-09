@@ -168,8 +168,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Run stuff just once for the pytest session even running under xdist.
     if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
         temp_dir = Path(session.config.getoption("--tmpdir")).absolute()
-        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes())
-        start_3rd_party_services(tempdir_base=temp_dir, toxyproxy_byte_limit=session.config.getoption("byte_limit"))
+        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes(), gather_metrics=session.config.getoption("--gather-metrics"))
+        start_3rd_party_services(tempdir_base=temp_dir, toxiproxy_byte_limit=session.config.getoption('byte_limit'))
 
 
 def pytest_sessionfinish() -> None:
