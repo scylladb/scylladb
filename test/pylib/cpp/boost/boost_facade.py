@@ -178,7 +178,7 @@ class BoostTestFacade(CppTestFacade):
         result = []
         for elem in parsed_elements:
             last_checkpoint = elem.find('LastCheckpoint')
-            if last_checkpoint:
+            if last_checkpoint is not None:
                 elem = last_checkpoint
             file_name = elem.attrib['file']
             line_num = int(elem.attrib['line'])
