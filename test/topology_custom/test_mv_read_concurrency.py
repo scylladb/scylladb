@@ -28,7 +28,7 @@ async def test_mv_read_concurrency(manager: ManagerClient) -> None:
     # Disable cache to make reads use the read concurrency semaphore.
     # Tests remove the rcs multiplier by default, here we use a slightly smaller one (1 instead of default 2) to hit the issue faster.
     cfg = {
-        'enable_tablets': True,
+        'tablets_mode_for_new_keyspaces': 'enabled',
         'enable_cache': False,
         'reader_concurrency_semaphore_serialize_limit_multiplier': 1,
         'view_update_reader_concurrency_semaphore_serialize_limit_multiplier': 1,
@@ -99,7 +99,7 @@ async def test_mv_read_memory(manager: ManagerClient) -> None:
     # and we increase the kill limit. Without the view update read before write admission, the test exceeds even the increased limit.
     # With the admission, the memory usage should stay within the limits and cause no errors.
     cfg = {
-        'enable_tablets': True,
+        'tablets_mode_for_new_keyspaces': 'enabled',
         'enable_cache': False,
         'view_update_reader_concurrency_semaphore_serialize_limit_multiplier': 2,
         'view_update_reader_concurrency_semaphore_kill_limit_multiplier': 10

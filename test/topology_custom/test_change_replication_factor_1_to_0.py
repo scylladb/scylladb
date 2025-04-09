@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 )
 @pytest.mark.asyncio
 async def test_change_replication_factor_1_to_0(request: pytest.FixtureRequest, manager: ManagerClient, use_tablets: bool) -> None:
-    CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "enable_tablets": str(use_tablets)}
+    CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled" if use_tablets else "disabled"}
     logger.info("Creating a new cluster")
     for i in range(2):
         await manager.server_add(

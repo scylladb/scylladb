@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 async def test_tablet_transition_sanity(manager: ManagerClient, action):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     host_ids = []
     servers = []
 
@@ -105,7 +105,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
         pytest.skip('Failing source during target cleanup is pointless')
 
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True, 'failure_detector_timeout_in_ms': 2000}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled', 'failure_detector_timeout_in_ms': 2000}
     host_ids = []
     servers = []
 
@@ -247,7 +247,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
 @pytest.mark.asyncio
 async def test_tablet_back_and_forth_migration(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     host_ids = []
     servers = []
 
@@ -297,7 +297,7 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
 async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     # the error injection will halt view updates from staging, allowing migration to transfer the view update backlog.
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True,
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
            'error_injections_at_startup': ['view_update_generator_consume_staging_sstable']}
     servers = [await manager.server_add(config=cfg)]
 

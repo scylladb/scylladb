@@ -239,6 +239,13 @@ const config_type& config_type_for<enum_option<db::tri_mode_restriction_t>>() {
 }
 
 template <>
+const config_type& config_type_for<enum_option<db::tablets_mode_t>>() {
+    static config_type ct(
+        "tablets mode", printable_to_json<enum_option<db::tablets_mode_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<db::config::hinted_handoff_enabled_type>() {
     static config_type ct("hinted handoff enabled", hinted_handoff_enabled_to_json);
     return ct;
@@ -359,6 +366,23 @@ template <>
 class convert<enum_option<db::tri_mode_restriction_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::tri_mode_restriction_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::tablets_mode_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::tablets_mode_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1357,7 +1381,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
 
     , error_injections_at_startup(this, "error_injections_at_startup", error_injection_value_status, {}, "List of error injections that should be enabled on startup.")
     , topology_barrier_stall_detector_threshold_seconds(this, "topology_barrier_stall_detector_threshold_seconds", value_status::Used, 2, "Report sites blocking topology barrier if it takes longer than this.")
-    , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces.")
+    , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")
+    , tablets_mode_for_new_keyspaces(this, "tablets_mode_for_new_keyspaces", value_status::Used, tablets_mode_t::mode::unset, "Control tablets for new keyspaces.  Can be set to the following values:\n"
+            "\tdisabled: New keyspaces use vnodes by default, unless enabled by the tablets={'enabled':true} option\n"
+            "\tenabled:  New keyspaces use tablets by default, unless disabled by the tablets={'disabled':true} option\n"
+            "\tenforced: New keyspaces must use tablets. Tablets cannot be disabled using the CREATE KEYSPACE option")
     , view_flow_control_delay_limit_in_ms(this, "view_flow_control_delay_limit_in_ms", liveness::LiveUpdate, value_status::Used, 1000,
         "The maximal amount of time that materialized-view update flow control may delay responses "
         "to try to slow down the client and prevent buildup of unfinished view updates. "
@@ -1583,6 +1611,16 @@ std::unordered_map<sstring, db::tri_mode_restriction_t::mode> db::tri_mode_restr
             {"false", db::tri_mode_restriction_t::mode::FALSE},
             {"0", db::tri_mode_restriction_t::mode::FALSE},
             {"warn", db::tri_mode_restriction_t::mode::WARN}};
+}
+
+std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() {
+    return {{"disabled", db::tablets_mode_t::mode::disabled},
+            {"0", db::tablets_mode_t::mode::disabled},
+            {"enabled", db::tablets_mode_t::mode::enabled},
+            {"1", db::tablets_mode_t::mode::enabled},
+            {"enforced", db::tablets_mode_t::mode::enforced},
+            {"2", db::tablets_mode_t::mode::enforced}
+            };
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;

@@ -61,7 +61,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_service_levels_upgrade(request, manager: ManagerClient):
     # First, force the first node to start in legacy mode
-    cfg = {'force_gossip_topology_changes': True}
+    cfg = {'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
 
     servers = [await manager.server_add(config=cfg)]
     # Enable raft-based node operations for subsequent nodes - they should fall back to
@@ -382,6 +382,7 @@ async def test_workload_prioritization_upgrade(manager: ManagerClient):
         'authenticator': 'AllowAllAuthenticator',
         'authorizer': 'AllowAllAuthorizer',
         'force_gossip_topology_changes': True,
+        'tablets_mode_for_new_keyspaces': 'disabled',
         'error_injections_at_startup': [
             {
                 'name': 'suppress_features',

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
-    cfg = {'enable_tablets' : tablets_enabled}
+    cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled'}
     rf = 3
     num_nodes = rf
     if tablets_enabled:

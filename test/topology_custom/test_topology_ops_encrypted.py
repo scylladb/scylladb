@@ -28,7 +28,7 @@ async def test_topology_ops_encrypted(request, manager: ManagerClient, tablets_e
     d.mkdir()
     k = d / "system_key"
     k.write_text('AES/CBC/PKCS5Padding:128:ApvJEoFpQmogvam18bb54g==')
-    cfg = {'enable_tablets' : tablets_enabled,
+    cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled',
            'user_info_encryption': {'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory'},
            'system_key_directory': d.as_posix()}
     rf = 3

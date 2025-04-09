@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
     node_count = 2
-    config = {'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately'], 'enable_tablets': True}
+    config = {'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(node_count, config=config)
     cql, hosts = await manager.get_ready_cql(servers)
     await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}"
@@ -69,8 +69,8 @@ async def test_mv_admission_control_exception(manager: ManagerClient) -> None:
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_mv_retried_writes_reach_all_replicas(manager: ManagerClient) -> None:
     node_count = 4
-    servers = await manager.servers_add(node_count - 1, config={'error_injections_at_startup': ['update_backlog_immediately'], 'enable_tablets': True})
-    server = await manager.server_add(config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately'], 'enable_tablets': True})
+    servers = await manager.servers_add(node_count - 1, config={'error_injections_at_startup': ['update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'})
+    server = await manager.server_add(config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'})
 
     cql, hosts = await manager.get_ready_cql(servers)
     await cql.run_async(f"CREATE KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}"

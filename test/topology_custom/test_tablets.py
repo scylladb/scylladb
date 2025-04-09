@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
 async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(2, config=cfg)
 
     cql = manager.get_cql()
@@ -50,7 +50,7 @@ async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_cannot_decommision_below_replication_factor(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(4, config=cfg)
 
     logger.info("Creating table")
@@ -79,7 +79,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
 
 async def test_reshape_with_tablets(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     server = (await manager.servers_add(1, config=cfg, cmdline=['--smp', '1']))[0]
 
     logger.info("Creating table")
@@ -115,7 +115,7 @@ async def test_reshape_with_tablets(manager: ManagerClient):
 @pytest.mark.parametrize("direction", ["up", "down", "none"])
 @pytest.mark.asyncio
 async def test_tablet_rf_change(manager: ManagerClient, direction):
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(3, config=cfg)
     for s in servers:
         await manager.api.disable_tablet_balancing(s.ip_addr)
@@ -182,7 +182,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
     """Check that MUTATION_FRAGMENTS() queries handle the case when a partition
     not owned by the node is attempted to be read."""
     cfg = {'enable_user_defined_functions': False,
-           'enable_tablets': True }
+           'tablets_mode_for_new_keyspaces': 'enabled' }
     servers = await manager.servers_add(3, config=cfg)
 
     cql = manager.get_cql()
@@ -207,7 +207,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
 # See also cqlpy/test_tablets.py::test_alter_tablet_keyspace_rf for basic scenarios tested
 @pytest.mark.asyncio
 async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
-    config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "enable_tablets": "true"}
+    config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
 
     logger.info("Creating a new cluster of 2 nodes in 1st DC and 2 nodes in 2nd DC")
     # we have to have at least 2 nodes in each DC if we want to try setting RF to 2 in each DC
@@ -253,7 +253,7 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
 # from is migrated away.
 @pytest.mark.asyncio
 async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode):
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
 
     if build_mode != "release":
         cfg['error_injections_at_startup'] = [{'name': 'querier-cache-ttl-seconds', 'value': 999999999}]
@@ -325,7 +325,7 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_read_of_pending_replica_during_migration(manager: ManagerClient, with_cache):
     logger.info("Bootstrapping cluster")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'raft_topology=debug',
@@ -392,7 +392,7 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
 @pytest.mark.parametrize("replication_strategy", ["NetworkTopologyStrategy", "SimpleStrategy", "EverywhereStrategy", "LocalStrategy"])
 @pytest.mark.asyncio
 async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, with_tablets, replication_strategy):
-    cfg = {'enable_tablets': with_tablets}
+    cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if with_tablets else 'disabled'}
     server = await manager.server_add(config=cfg)
     cql = manager.get_cql()
 
@@ -428,13 +428,13 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
 
 @pytest.mark.asyncio
 async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):
-    cfg = {"enable_tablets": True, "force_gossip_topology_changes": True}
+    cfg = {"tablets_mode_for_new_keyspaces": "enabled", "force_gossip_topology_changes": True}
     with pytest.raises(Exception, match="Failed to add server"):
         await manager.server_add(config=cfg)
 
 @pytest.mark.asyncio
 async def test_tablets_disabled_with_gossip_topology_changes(manager: ManagerClient):
-    cfg = {"enable_tablets": False, "force_gossip_topology_changes": True}
+    cfg = {"tablets_mode_for_new_keyspaces": "disabled", "force_gossip_topology_changes": True}
     await manager.server_add(config=cfg)
     cql = manager.get_cql()
     ks_name = unique_name()
@@ -461,7 +461,7 @@ async def test_tablet_streaming_with_unbuilt_view(manager: ManagerClient):
         4) Once migration completes, the view should have the correct number of rows
     """
     logger.info("Starting Node 1")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'raft_topology=debug',
@@ -517,7 +517,7 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
         6) Once migration completes, the view should have the correct number of rows
     """
     logger.info("Starting Node 1")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'raft_topology=debug',
@@ -590,7 +590,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
         7) Attempting to start node1 should fail as it now has an 'orphaned' sstable
     """
     logger.info("Starting Node 1")
-    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'raft_topology=debug',
