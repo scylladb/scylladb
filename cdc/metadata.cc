@@ -205,8 +205,18 @@ const std::vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id
     return it->second.streams;
 }
 
-cdc::stream_id cdc::metadata::get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok) {
-    return ::get_stream(get_tablet_stream_set(tid, ts), tok);
+std::pair<cdc::stream_id, std::optional<cdc::stream_id>> cdc::metadata::get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok) {
+    auto sid = ::get_stream(get_tablet_stream_set(tid, ts), tok);
+
+    std::optional<stream_id> pending_sid;
+    if (const auto& pending = _tablet_streams.at(tid).pending; pending) {
+        auto maybe_pending_sid = ::get_stream(pending->stream_set, tok);
+        if (maybe_pending_sid != sid) {
+            pending_sid = std::move(maybe_pending_sid);
+        }
+    }
+
+    return std::make_pair(std::move(sid), std::move(pending_sid));
 }
 
 bool cdc::metadata::known_or_obsolete(db_clock::time_point tp) const {
