@@ -249,7 +249,6 @@ private:
         virtual ~connection();
         future<> process_request() override;
         void handle_error(future<>&& f) override;
-        void on_connection_close() override;
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
         void update_scheduling_group();

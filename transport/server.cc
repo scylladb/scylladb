@@ -630,10 +630,6 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
 }
 
 cql_server::connection::~connection() {
-}
-
-void cql_server::connection::on_connection_close()
-{
     _server._notifier->unregister_connection(this);
 }
 

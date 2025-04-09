@@ -208,7 +208,6 @@ future<> connection::process()
         });
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
-            on_connection_close();
             return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
                 if (is_broken_pipe_or_connection_reset(ep)) {
                     // expected if another side closes a connection or we're shutting down
@@ -226,10 +225,6 @@ void connection::on_connection_ready()
 {
     _conns_cpu_concurrency.stopped = true;
     _conns_cpu_concurrency.units.return_all();
-}
-
-void connection::on_connection_close()
-{
 }
 
 future<> connection::shutdown()
@@ -387,7 +382,6 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 _logger.log(log_level::warn, rate_limit,
                         "too many in-flight connection attempts: {}, connection dropped",
                         _conns_cpu_concurrency_semaphore.waiters());
-                conn->on_connection_close();
                 conn->shutdown().ignore_ready_future();
             }
             // Move the processing into the background.

@@ -74,8 +74,6 @@ public:
 
     virtual void on_connection_ready();
 
-    virtual void on_connection_close();
-
     virtual future<> shutdown();
 
     void switch_tenant(execute_under_tenant_type execute);
