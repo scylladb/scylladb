@@ -17,6 +17,7 @@
 
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
+#include "cdc/metadata.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
@@ -2088,6 +2089,77 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
         perform_test(false);
         perform_test(true);
     }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cdc_generate_stream_diff) {
+    // for convenience of testing we represent stream_id by its token as int64_t.
+    // this function takes care of translating it into stream_id and back
+    using stream_set = std::vector<int64_t>;
+
+    auto do_test_diff = [&] (stream_set a, stream_set b, stream_set expected_closed, stream_set expected_opened) {
+        std::unordered_map<int64_t, cdc::stream_id> token_to_stream;
+        std::vector<cdc::stream_id> a_sids, b_sids;
+        for (auto t : a) {
+            a_sids.push_back(cdc::stream_id(dht::token(t), 0));
+            token_to_stream[t] = a_sids.back();
+        }
+        for (auto t : b) {
+            auto it = token_to_stream.find(t);
+            if (it != token_to_stream.end()) {
+                b_sids.push_back(it->second);
+            } else {
+                b_sids.push_back(cdc::stream_id(dht::token(t), 0));
+            }
+        }
+
+        auto diff = cdc::metadata::generate_stream_diff(a_sids, b_sids).get();
+
+        stream_set closed_streams_tokens = std::views::transform(diff.closed_streams, [] (cdc::stream_id sid) { return dht::token::to_int64(sid.token()); }) | std::ranges::to<std::vector>();
+        stream_set opened_streams_tokens = std::views::transform(diff.opened_streams, [] (cdc::stream_id sid) { return dht::token::to_int64(sid.token()); }) | std::ranges::to<std::vector>();
+
+        BOOST_REQUIRE_EQUAL(closed_streams_tokens, expected_closed);
+        BOOST_REQUIRE_EQUAL(opened_streams_tokens, expected_opened);
+    };
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 10, 30, 50 },
+        stream_set { 20 }, stream_set { 50 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 30, 50, 70 },
+        stream_set { 10, 20 }, stream_set { 50, 70 }
+    );
+
+    do_test_diff(
+        stream_set {}, stream_set { 30, 50, 70 },
+        stream_set {}, stream_set { 30, 50, 70 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set {},
+        stream_set { 10, 20, 30 }, stream_set {}
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 5 },
+        stream_set { 10, 20, 30 }, stream_set { 5 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 5, 40, 80 },
+        stream_set { 10, 20, 30 }, stream_set { 5, 40, 80 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 10, 15, 20, 25, 30 },
+        stream_set {}, stream_set { 15, 25 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30, 40, 50 }, stream_set { 10, 30, 50},
+        stream_set { 20, 40 }, stream_set {}
+    );
 }
 
 BOOST_AUTO_TEST_SUITE_END()
