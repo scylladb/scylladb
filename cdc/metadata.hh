@@ -128,6 +128,8 @@ public:
         return _tablet_streams;
     }
 
+    static cdc_stream_diff generate_stream_diff(const std::vector<stream_id>& before, const std::vector<stream_id>& after);
+
 };
 
 } // namespace cdc
