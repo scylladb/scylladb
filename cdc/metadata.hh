@@ -76,7 +76,7 @@ public:
      * In addition to the base partition token and timestamp, the stream also depends on the table id because each table
      * has its own set of streams.
      */
-    stream_id get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
+    std::pair<stream_id, std::optional<stream_id>> get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
 
     /* Insert the generation given by `gen` with timestamp `ts` to be used by the `get_vnode_stream` function,
      * if the generation is not already known or older than the currently known ones.

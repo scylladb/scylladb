@@ -192,8 +192,26 @@ const std::vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id
     return it->second.streams;
 }
 
-cdc::stream_id cdc::metadata::get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok) {
-    return ::get_stream(get_tablet_stream_set(tid, ts), tok);
+std::pair<cdc::stream_id, std::optional<cdc::stream_id>> cdc::metadata::get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok) {
+    if (const auto& pending = _tablet_streams.at(tid)->pending; pending) {
+        auto pending_sid = ::get_stream(pending->stream_set, tok);
+
+        if (pending->committed_time) {
+            // the pending stream is also in the committed stream set.
+            // we want to double-write to the pending stream and to the normal stream that we get by ignoring the pending stream.
+            auto normal_sid = ::get_stream(get_tablet_stream_set(tid, std::min(ts, to_ts(*pending->committed_time) - 1)), tok);
+            return std::make_pair(std::move(normal_sid), std::move(pending_sid));
+        } else {
+            // the pending stream doesn't have a committed time yet.
+            // double-write to the pending stream and the normal stream according to the timestamp.
+            auto normal_sid = ::get_stream(get_tablet_stream_set(tid, ts), tok);
+            return std::make_pair(std::move(normal_sid), std::move(pending_sid));
+        }
+    } else {
+        // no pending stream
+        auto sid = ::get_stream(get_tablet_stream_set(tid, ts), tok);
+        return std::make_pair(std::move(sid), std::nullopt);
+    }
 }
 
 bool cdc::metadata::known_or_obsolete(db_clock::time_point tp) const {
