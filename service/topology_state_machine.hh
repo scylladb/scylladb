@@ -110,6 +110,8 @@ struct topology {
     enum class transition_state: uint16_t {
         join_group0,
         commit_cdc_generation,
+        commit_cdc_streams,
+        close_cdc_streams,
         tablet_draining,
         write_both_read_old,
         write_both_read_new,

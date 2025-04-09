@@ -83,6 +83,7 @@ public:
      */
     stream_id get_stream(api::timestamp_type ts, dht::token tok);
 
+    const std::vector<stream_id>& get_current_tablet_stream_set(table_id tid) const;
     const std::vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
 
     std::pair<stream_id, std::optional<stream_id>> get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
