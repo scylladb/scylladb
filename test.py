@@ -12,7 +12,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+import shlex
 from random import randint
+
+from types import SimpleNamespace
 
 import colorama
 import glob
@@ -28,13 +31,13 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, TOP_SRC_DIR, path_to
+from test import ALL_MODES, TOP_SRC_DIR, path_to, TEST_DIR
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
     Test,
@@ -45,13 +48,13 @@ from test.pylib.suite.base import (
     prepare_dirs,
     start_3rd_party_services,
 )
-from test.pylib.suite.boost import BoostTest
-from test.pylib.resource_gather import setup_cgroup, run_resource_watcher
+from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja
 
 if TYPE_CHECKING:
     from typing import List
 
+PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit']
 
 launch_time = time.monotonic()
 
@@ -277,20 +280,119 @@ async def find_tests(options: argparse.Namespace) -> None:
                 suite = TestSuite.opt_create(f, options, mode)
                 await suite.add_test_list()
 
-    if not TestSuite.test_count():
-        if len(options.name):
-            print("Test {} not found".format(palette.path(options.name[0])))
-            sys.exit(1)
+
+def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[SimpleNamespace]]:
+    failed_tests = []
+    temp_dir = pathlib.Path(options.tmpdir).absolute()
+    report_dir =  temp_dir / 'report'
+    junit_output_file = report_dir / f'pytest_cpp_{run_id}.xml'
+    files_to_run = []
+    test_names = []
+    for name in options.name:
+        file_name = name
+        if '::' in name:
+            file_name, _ = name.split('::', maxsplit=1)
+        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
+            files_to_run.append(name)
+    if not options.name:
+        files_to_run = [str(directory) for directory in PYTEST_RUNNER_DIRECTORIES]
+    if not files_to_run:
+        logging.info(f'No boost found. Skipping pytest execution for boost tests.')
+        return 0, []
+    expression = ' or '.join(test_names)
+    if options.skip_patterns:
+        expression += f'{"and not ".join(options.skip_patterns)}'
+    modes = ' '.join(f'--mode={mode}' for mode in options.modes)
+    args = [
+        'pytest',
+        "-s",  # don't capture print() output inside pytest
+        '--color=yes',
+        modes,
+    ]
+    if options.list_tests:
+        args.extend(['--collect-only', '--quiet'])
+    else:
+        args.extend([
+            "--log-level=DEBUG",  # Capture logs
+            f'--junit-xml={junit_output_file}',
+            "-rf",
+            f'-n{int(options.jobs)}',
+            f'--tmpdir={temp_dir}',
+            f'--run_id={run_id}',
+            f'--maxfail={options.max_failures}',
+            f'--alluredir={report_dir / "allure"}',
+            '-v' if options.verbose else '-q',
+        ])
+    if options.gather_metrics:
+        args.append('--gather-metrics')
+    if len(expression) > 1:
+        args.extend(['-k', expression])
+    if not options.save_log_on_success:
+        args.append('--allure-no-capture')
+    if options.markers:
+        args.append(f"-m={options.markers}")
+    args.extend(files_to_run)
+
+    args = shlex.split(' '.join(args))
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+    try:
+        # Read output from pytest and print it to the console
+        if options.verbose:
+            for line in p.stdout:
+                print(line, end='', flush=True)
         else:
-            print(palette.warn("No tests found. Please enable tests in ./configure.py first."))
-            sys.exit(0)
+            # without verbose, pytest output only one line, so to have live progress, need to read it by char,
+            # because each char is a test result
+            while True:
+                char = p.stdout.read(1)
+                if char == '' and p.poll() is not None:
+                    break
+                if char:
+                    print(char, end='', flush=True)
 
-    logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
-                 TestSuite.test_count(), options.repeat, options.jobs)
-    print("Found {} tests.".format(TestSuite.test_count()))
+        # Wait for pytest to finish and get its return code
+        p.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        print('Timeout reached')
+        p.kill()
+    except KeyboardInterrupt:
+        p.kill()
+        raise
+
+    if options.list_tests:
+        return 0, []
+
+    suite = ET.parse(junit_output_file).getroot().find('testsuite')
+    total_tests = int(suite.get('tests'))
+
+    # Find failed tests in the pytest XML output, create a SimpleNamespace for each to mimic the Test class to be able
+    # to print the summary later
+    for test_case in suite.findall('testcase'):
+        if test_case.find('error') is not None or test_case.find('failure') is not None:
+            classname = test_case.get('classname')
+            if classname.endswith('.cc'):
+                file_path, extension = test_case.get('classname').rsplit('.', 1)
+            else:
+                extension = 'py'
+                file_path = '/'.join(x for x in test_case.get('classname').split('.') if x.islower())
+            # get the test name without mode name
+            test_name = test_case.get('name').split('.')[0]
+            test = SimpleNamespace()
+
+            test.name = f"test/{file_path.replace('.', '/')}.{extension}::{test_name}"
+            # print_summary used to print additional information about the failed test that is called in verbose mode
+            # This is needed to mimic the Test class and not fail the run summary output
+            test.print_summary = Test.print_summary
+
+            failed_tests.append(test)
+
+    return total_tests, failed_tests
 
 
-async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
+
+async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> tuple[int | Any, list[
+    SimpleNamespace]] | None:
+    failed_tests = []
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
     pending = {signaled_task}
@@ -317,7 +419,11 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         return failed
 
     await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
-
+    total_tests = 0
+    for i in range(1, options.repeat+1):
+        result = run_pytest(options, run_id=i)
+        total_tests += result[0]
+        failed_tests.extend(result[1])
     console.print_start_blurb()
     max_failures = options.max_failures
     failed = 0
@@ -347,25 +453,27 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         await TestSuite.artifacts.cleanup_before_exit()
 
     console.print_end_blurb()
+    return total_tests, failed_tests
 
 
-def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: argparse.Namespace) -> None:
+def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: argparse.Namespace, failed_pytest_tests: list[SimpleNamespace], total_tests_pytest: int) -> None:
     rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_used = rusage.ru_stime + rusage.ru_utime
     cpu_available = (time.monotonic() - launch_time) * multiprocessing.cpu_count()
     utilization = cpu_used / cpu_available
     print(f"CPU utilization: {utilization*100:.1f}%")
-    if failed_tests:
-        print("The following test(s) have failed: {}".format(
-            palette.path(" ".join([t.name for t in failed_tests]))))
+    if failed_tests or failed_pytest_tests:
+        all_fails = [*failed_tests, *failed_pytest_tests]
+        total_tests = TestSuite.test_count() + total_tests_pytest
+        print(f'The following test(s) have failed: {" ".join(t.name for t in all_fails)}')
         if options.verbose:
             for test in failed_tests:
                 test.print_summary()
                 print("-"*78)
         if cancelled_tests > 0:
-            print(f"Summary: {len(failed_tests)} of the total {TestSuite.test_count()} tests failed, {cancelled_tests} cancelled")
+            print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed, {cancelled_tests} cancelled")
         else:
-            print(f"Summary: {len(failed_tests)} of the total {TestSuite.test_count()} tests failed")
+            print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed")
 
 
 def summarize_boost_tests(tests):
@@ -548,6 +656,7 @@ async def main() -> int:
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
+        run_pytest(options, run_id=1)
         return 0
 
     if options.manual_execution and TestSuite.test_count() > 1:
@@ -563,7 +672,7 @@ async def main() -> int:
 
     try:
         logging.info('running all tests')
-        await run_all_tests(signaled, options)
+        total_tests_pytest, failed_pytest_tests = await run_all_tests(signaled, options)
         logging.info('after running all tests')
         stop_event.set()
         async with asyncio.timeout(5):
@@ -578,12 +687,7 @@ async def main() -> int:
     failed_tests = [test for test in TestSuite.all_tests() if test.failed]
     cancelled_tests = sum(1 for test in TestSuite.all_tests() if test.did_not_run)
 
-    print_summary(failed_tests, cancelled_tests, options)
-
-    for mode in options.modes:
-        junit_file = f"{options.tmpdir}/{mode}/allure/boost.junit.xml"
-        xunit_file = write_consolidated_boost_junit_xml(options.tmpdir, mode)
-        boost_to_junit(xunit_file, junit_file)
+    print_summary(failed_tests, cancelled_tests, options, failed_pytest_tests, total_tests_pytest)
 
     if 'coverage' in options.modes:
         coverage.generate_coverage_report(path_to("coverage", "tests"))
