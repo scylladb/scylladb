@@ -1246,4 +1246,52 @@ future<> generation_service::load_cdc_tablet_streams(std::unordered_set<table_id
     });
 }
 
+future<mutation> get_insert_pending_stream_mutation(table_id table, std::vector<stream_id> streams, api::timestamp_type ts) {
+    auto pending_schema = db::system_keyspace::cdc_pending_streams();
+    mutation m(pending_schema, partition_key::from_single_value(*pending_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    for (auto&& sid : streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_singular(*pending_schema, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(std::move(sid).to_bytes()), ts);
+    }
+    co_return std::move(m);
+}
+
+mutation get_delete_pending_streams_mutation(table_id table, api::timestamp_type ts) {
+    auto pending_schema = db::system_keyspace::cdc_pending_streams();
+    mutation m(pending_schema, partition_key::from_single_value(*pending_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(ts, gc_clock::now()));
+    return m;
+}
+
+future<mutation> get_open_and_close_streams_mutation(table_id table, cdc_stream_diff diff, db_clock::time_point stream_ts, api::timestamp_type ts) {
+    auto history_schema = db::system_keyspace::cdc_streams_history();
+
+    auto decomposed_ts = timestamp_type->decompose(stream_ts);
+    auto closed_kind = byte_type->decompose(std::to_underlying(stream_kind::closed));
+    auto opened_kind = byte_type->decompose(std::to_underlying(stream_kind::opened));
+
+    mutation m(history_schema, partition_key::from_single_value(*history_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+
+    for (auto&& sid : diff.closed_streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, closed_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(std::move(sid).to_bytes()), ts);
+    }
+
+    for (auto&& sid : diff.opened_streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, opened_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(std::move(sid).to_bytes()), ts);
+    }
+
+    co_return std::move(m);
+}
+
 } // namespace cdc
