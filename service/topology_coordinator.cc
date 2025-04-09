@@ -2357,6 +2357,61 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 co_await update_topology_state(std::move(guard), std::move(updates), std::move(str));
             }
                 break;
+            case topology::transition_state::commit_cdc_streams: {
+                auto max_local_time = db_clock::now();
+                try {
+
+                    struct raft_command_result_with_max_local_time {
+                        db_clock::time_point max_local_time;
+
+                        void combine_result(raft_topology_cmd_result&& result) {
+                            if (result.status == raft_topology_cmd_result::command_status::success && result.local_time) {
+                                max_local_time = std::max(max_local_time, *result.local_time);
+                            }
+                        }
+                    };
+
+                    auto result = co_await exec_global_command_with_result<raft_command_result_with_max_local_time>(
+                            std::move(guard),
+                            raft_topology_cmd{raft_topology_cmd::command::barrier},
+                            {_raft.id()});
+
+                    guard = std::move(result.first);
+                    max_local_time = std::max(max_local_time, result.second.max_local_time);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (...) {
+                    rtlogger.error("transition_state::commit_cdc_streams, "
+                                    "raft_topology_cmd::command::barrier failed, error {}", std::current_exception());
+                    break;
+                }
+
+                utils::chunked_vector<canonical_mutation> muts;
+
+                auto t1 = max_local_time + duration_cast<db_clock::duration>(cdc::get_generation_leeway());
+                co_await _cdc_gens.commit_cdc_streams(muts, t1, guard.write_timestamp());
+
+                muts.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                        .set_transition_state(topology::transition_state::close_cdc_streams)
+                        .build());
+
+                co_await update_topology_state(std::move(guard), std::move(muts), "committed new CDC streams");
+            }
+                break;
+            case topology::transition_state::close_cdc_streams: {
+                utils::chunked_vector<canonical_mutation> muts;
+
+                co_await _cdc_gens.close_cdc_streams(muts, _sys_ks.query_processor(), guard.write_timestamp());
+
+                auto builder = topology_mutation_builder(guard.write_timestamp())
+                        .del_transition_state();
+                muts.emplace_back(builder.build());
+
+                co_await update_topology_state(std::move(guard), std::move(muts), "closing CDC streams");
+            }
+                break;
             case topology::transition_state::tablet_draining:
                 co_await utils::get_local_injector().inject("suspend_decommission", utils::wait_for_message(1min));
                 try {
