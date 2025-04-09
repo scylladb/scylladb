@@ -767,6 +767,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                     [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
+                case topology::transition_state::commit_cdc_streams:
+                    [[fallthrough]];
+                case topology::transition_state::close_cdc_streams:
+                    [[fallthrough]];
                 case topology::transition_state::tablet_draining:
                     [[fallthrough]];
                 case topology::transition_state::write_both_read_old:

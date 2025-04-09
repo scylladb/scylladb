@@ -156,6 +156,25 @@ cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok)
     return ret;
 }
 
+const std::vector<cdc::stream_id>& cdc::metadata::get_current_tablet_stream_set(table_id tid) const {
+    auto table_it = _tablet_streams.find(tid);
+    if (table_it == _tablet_streams.end()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find stream metadata for table {}.", tid));
+    }
+    auto& table_streams = table_it->second;
+
+    auto it = table_streams.end();
+    if (it == table_streams.begin()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find any CDC stream for table {}.", tid));
+    }
+    it = std::prev(it);
+
+    const auto& streams = it->second.streams;
+    return streams;
+}
+
 const std::vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id tid, api::timestamp_type ts) const {
     auto now = api::new_timestamp();
     if (ts > now + get_generation_leeway().count()) {
