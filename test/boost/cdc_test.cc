@@ -17,6 +17,7 @@
 
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
+#include "cdc/metadata.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
@@ -2231,6 +2232,115 @@ SEASTAR_THREAD_TEST_CASE(test_construct_next_stream_set) {
         testlog.info("test_construct_next_stream_set: expected={}", expected);
 
         do_test(prev, opened, closed, expected);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cdc_generate_stream_diff) {
+    // for convenience of testing we represent stream_id by its token as int64_t.
+    // this function takes care of translating it into stream_id and back
+    using stream_set = std::vector<int64_t>;
+
+    auto do_test_diff = [&] (stream_set a, stream_set b, stream_set expected_closed, stream_set expected_opened) {
+        std::unordered_map<int64_t, cdc::stream_id> token_to_stream;
+
+        auto stream_id_for_token = [&token_to_stream] (int64_t t) {
+            if (!token_to_stream.contains(t)) {
+                token_to_stream[t] = cdc::stream_id(dht::token(t), 0);
+            }
+            return token_to_stream[t];
+        };
+
+        auto tokens_to_stream_ids = [&stream_id_for_token] (const stream_set& tokens) {
+            std::vector<cdc::stream_id> stream_ids;
+            for (auto t : tokens) {
+                stream_ids.push_back(stream_id_for_token(t));
+            }
+            return stream_ids;
+        };
+
+        auto diff = cdc::metadata::generate_stream_diff(
+                tokens_to_stream_ids(a),
+                tokens_to_stream_ids(b)).get();
+
+        stream_set closed_streams_tokens = std::views::transform(diff.closed_streams, [] (cdc::stream_id sid) { return dht::token::to_int64(sid.token()); }) | std::ranges::to<std::vector>();
+        stream_set opened_streams_tokens = std::views::transform(diff.opened_streams, [] (cdc::stream_id sid) { return dht::token::to_int64(sid.token()); }) | std::ranges::to<std::vector>();
+
+        BOOST_REQUIRE_EQUAL(closed_streams_tokens, expected_closed);
+        BOOST_REQUIRE_EQUAL(opened_streams_tokens, expected_opened);
+    };
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 10, 30, 50 },
+        stream_set { 20 }, stream_set { 50 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 30, 50, 70 },
+        stream_set { 10, 20 }, stream_set { 50, 70 }
+    );
+
+    do_test_diff(
+        stream_set {}, stream_set { 30, 50, 70 },
+        stream_set {}, stream_set { 30, 50, 70 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set {},
+        stream_set { 10, 20, 30 }, stream_set {}
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 5 },
+        stream_set { 10, 20, 30 }, stream_set { 5 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 5, 40, 80 },
+        stream_set { 10, 20, 30 }, stream_set { 5, 40, 80 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 10, 15, 20, 25, 30 },
+        stream_set {}, stream_set { 15, 25 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30, 40, 50 }, stream_set { 10, 30, 50},
+        stream_set { 20, 40 }, stream_set {}
+    );
+
+    // Randomized test
+    {
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<int> size_dist(1, 100);
+        std::uniform_int_distribution<int> token_dist(1, 1000);
+
+        int a_size = size_dist(rng);
+        std::set<int64_t> a_set;
+        while (a_set.size() < size_t(a_size)) {
+            a_set.insert(token_dist(rng));
+        }
+        std::vector<int64_t> a(a_set.begin(), a_set.end());
+
+        // Generate random opened set (disjoint from prev)
+        int b_size = size_dist(rng);
+        std::set<int64_t> b_set;
+        while (b_set.size() < size_t(b_size)) {
+            int64_t candidate = token_dist(rng);
+            b_set.insert(candidate);
+        }
+        std::vector<int64_t> b(b_set.begin(), b_set.end());
+
+        std::vector<int64_t> expected_closed, expected_opened;
+        std::ranges::set_difference(b, a, std::back_inserter(expected_opened));
+        std::ranges::set_difference(a, b, std::back_inserter(expected_closed));
+
+        testlog.info("test_construct_next_stream_set: a={}", a);
+        testlog.info("test_construct_next_stream_set: b={}", b);
+        testlog.info("test_construct_next_stream_set: expected_closed={}", expected_closed);
+        testlog.info("test_construct_next_stream_set: expected_opened={}", expected_opened);
+
+        do_test_diff(a, b, expected_closed, expected_opened);
     }
 }
 

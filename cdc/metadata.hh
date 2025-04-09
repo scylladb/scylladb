@@ -113,6 +113,10 @@ public:
         std::vector<cdc::stream_id> opened,
         const std::vector<cdc::stream_id>& closed);
 
+    static future<cdc_stream_diff> generate_stream_diff(
+        const std::vector<stream_id>& before,
+        const std::vector<stream_id>& after);
+
 };
 
 } // namespace cdc
