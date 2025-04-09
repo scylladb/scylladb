@@ -21,8 +21,8 @@ class Metric:
     memory_peak: int = None
     success: bool = None
     system_sec: float = None
-    time_end: float = None
-    time_start: float = None
+    time_end: datetime = None
+    time_start: datetime = None
     time_taken: float = None
     usage_sec: float = None
     user_sec: float = None
