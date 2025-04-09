@@ -9,6 +9,9 @@
 
 #pragma once
 
+#include <seastar/core/sstring.hh>
+#include <stdexcept>
+
 #include "db/view/view_build_status.hh"
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
