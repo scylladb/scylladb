@@ -74,7 +74,7 @@ class CppTestFunction(pytest.Item):
     facade = None
 
     def __init__(self, *, executable: Path, facade: CppTestFacade, mode: str, test_unique_name: str, arguments: Sequence[str],
-                 file_name: Path, run_id:int = None, **kwargs: Any) -> None:
+                 file_name: Path, env:dict = None, run_id:int = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.facade = facade
         self.executable = executable
@@ -83,6 +83,7 @@ class CppTestFunction(pytest.Item):
         self.originalname = kwargs['name']
         self.test_unique_name = test_unique_name
         self._arguments = arguments
+        self.env = env
         self.run_id = run_id
         self.fixturenames = []
         self.own_markers = []
@@ -99,7 +100,7 @@ class CppTestFunction(pytest.Item):
     def runtest(self) -> None:
 
         failures, output = self.facade.run_test(self.executable, self.originalname, self.test_unique_name, self.mode,
-                                                self.file_name, self._arguments)
+                                                self.file_name, self._arguments, env=self.env)
         # Report the c++ output in its own sections
         self.add_report_section("call", "c++", output)
 
@@ -122,7 +123,7 @@ class CppFile(pytest.File):
     """
     def __init__(self, *, no_parallel_run: bool = False, modes: list[str], disabled_tests: dict[str, set[str]],
                  run_id=None, facade: CppTestFacade, arguments: Sequence[str], parameters: list[str] = None, project_root: Path,
-                 **kwargs: Any) -> None:
+                 env: dict = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.facade = facade
         self.modes = modes
@@ -131,11 +132,13 @@ class CppFile(pytest.File):
         self.no_parallel_run = no_parallel_run
         self.parameters = parameters
         self.project_root = project_root
+        self.env = env
         self._arguments = arguments
 
     def collect(self) -> Iterator[CppTestFunction]:
         for mode in self.modes:
             test_name = self.path.stem
+            self.env['TMPDIR'] = Path(self.parent.config.getoption('tmpdir'), mode).absolute()
             if test_name in self.disabled_tests[mode]:
                 continue
             executable = Path(f'{self.project_root}/build/{mode}/test/{self.path.parent.name}/{test_name}')
@@ -149,8 +152,8 @@ class CppFile(pytest.File):
                     for index, parameter in enumerate(self.parameters):
                         yield CppTestFunction.from_parent(self, name=test_name, executable=executable,
                                                           facade=self.facade, mode=mode, test_unique_name=f'{test_name}.{index + 1}',
-                                                          file_name=self.path, run_id=self.run_id,
+                                                          file_name=self.path, run_id=self.run_id, env=self.env,
                                                           arguments=[*self._arguments, parameter])
                 else:
                     yield CppTestFunction.from_parent(self, name=test_name, executable=executable, facade=self.facade, mode=mode,
-                                                      file_name=self.path, test_unique_name=test_name, run_id=self.run_id, arguments=self._arguments)
+                                                      file_name=self.path, test_unique_name=test_name, run_id=self.run_id, env=self.env, arguments=self._arguments)
