@@ -60,7 +60,8 @@ class CppTestFacade(ABC):
     def list_tests(self, executable: Path , no_parallel: bool) -> tuple[bool,list[str]]:
         raise NotImplementedError
 
-    def run_test(self, executable: Path, original_name: str, test_id: str, mode:str, file_name: Path, test_args: Sequence[str] = ()) -> tuple[Sequence[CppTestFailure] | None, str]:
+    def run_test(self, executable: Path, original_name: str, test_id: str, mode: str, file_name: Path,
+                 test_args: Sequence[str] = (), env: dict = None) -> tuple[Sequence[CppTestFailure] | None, str]:
          raise NotImplementedError
 
 

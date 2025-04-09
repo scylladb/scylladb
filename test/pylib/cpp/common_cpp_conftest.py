@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 import collections
+import os
 import subprocess
 from copy import copy
 from functools import cache
@@ -26,6 +27,18 @@ DEFAULT_ARGS = [
     '--blocked-reactor-notify-ms 2000000',
     '--collectd 0',
     '--max-networking-io-control-blocks=100',
+]
+UBSAN_OPTIONS = [
+            "halt_on_error=1",
+            "abort_on_error=1",
+            f"suppressions={os.getcwd()}/ubsan-suppressions.supp",
+            os.getenv("UBSAN_OPTIONS"),
+        ]
+ASAN_OPTIONS = [
+    "disable_coredump=0",
+    "abort_on_error=1",
+    "detect_stack_use_after_return=1",
+    os.getenv("ASAN_OPTIONS"),
 ]
 
 
@@ -76,6 +89,11 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     Collect c++ test based on the .cc files. C++ test binaries are located in different directory, so the method will take care
     to provide the correct path to the binary based on the file name and mode.
     """
+    test_env = dict(
+        UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
+        ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
+        SCYLLA_TEST_ENV='yes',
+    )
     run_id = parent.config.getoption('run_id')
     modes = get_modes_to_run(parent.session.config)
     project_root = Path(parent.session.config.rootpath).parent
@@ -91,12 +109,11 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     if len(custom_args) > 1:
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, parameters=custom_args,
                                    no_parallel_run=no_parallel_run, modes=modes, disabled_tests=disabled_tests,
-                                   run_id=run_id, facade=facade, project_root=project_root)
+                                   run_id=run_id, facade=facade, project_root=project_root, env=test_env)
     else:
         args.extend(custom_args)
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, no_parallel_run=no_parallel_run,
-                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, project_root=project_root)
-
+                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, project_root=project_root, env=test_env)
 
 @cache
 def get_combined_tests():

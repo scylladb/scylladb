@@ -30,6 +30,7 @@ class UnitTestFacade(CppTestFacade):
         mode: str,
         file_name: Path,
         test_args: Sequence[str] = (),
+        env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         args = [str(executable), *test_args]
         os.chdir(self.temp_dir.parent)

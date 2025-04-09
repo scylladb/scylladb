@@ -85,6 +85,7 @@ class BoostTestFacade(CppTestFacade):
         mode: str,
         file_name: Path,
         test_args:Sequence[str] = (),
+        env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         def read_file(name: Path) -> str:
             try:
