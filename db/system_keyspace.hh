@@ -552,6 +552,12 @@ public:
     future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const service::view_building::view_building_task& task);
     future<mutation> make_update_view_building_task_state_mutation(api::timestamp_type ts, utils::UUID id, service::view_building::view_building_task::task_state state);
     future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
+
+    // system.scylla_local, view_building_processing_base key
+    future<std::optional<table_id>> get_view_building_processing_base_id();
+    future<std::optional<mutation>> get_view_building_processing_base_id_mutation();
+    future<mutation> make_view_building_processing_base_id_mutation(api::timestamp_type ts, table_id base_id);
+    future<mutation> make_remove_view_building_processing_base_id_mutation(api::timestamp_type ts);
     
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
