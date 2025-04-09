@@ -1240,4 +1240,53 @@ future<> generation_service::load_cdc_tablet_streams(std::unordered_set<table_id
     });
 }
 
+mutation get_insert_pending_stream_mutation(table_id table, const std::vector<stream_id>& streams, api::timestamp_type ts) {
+    auto pending_schema = db::system_keyspace::cdc_pending_streams();
+    mutation m(pending_schema, partition_key::from_single_value(*pending_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    for (const auto& sid : streams) {
+        auto ck = clustering_key::from_single_value(*pending_schema, sid.to_bytes());
+        m.partition().apply_insert(*pending_schema, ck, ts);
+    }
+    return m;
+}
+
+mutation get_delete_pending_streams_mutation(table_id table, api::timestamp_type ts) {
+    auto pending_schema = db::system_keyspace::cdc_pending_streams();
+    mutation m(pending_schema, partition_key::from_single_value(*pending_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(ts, gc_clock::now()));
+    return m;
+}
+
+mutation get_open_and_close_streams_mutation(table_id table, const cdc_stream_diff& diff, utils::UUID stream_ts_uuid, api::timestamp_type ts) {
+    auto history_schema = db::system_keyspace::cdc_streams_history();
+
+    mutation m(history_schema, partition_key::from_single_value(*history_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+
+    auto decomposed_stream_ts = timeuuid_type->decompose(stream_ts_uuid);
+
+    auto add_stream_mutation = [&] (const stream_id& sid, stream_kind kind) {
+        auto ck = clustering_key::from_exploded(*history_schema, {
+            decomposed_stream_ts,
+            byte_type->decompose(std::to_underlying(kind)),
+            sid.to_bytes()
+        });
+        m.partition().apply_insert(*history_schema, ck, ts);
+    };
+
+    for (const auto& sid : diff.closed_streams) {
+        add_stream_mutation(sid, stream_kind::closed);
+    }
+    for (const auto& sid : diff.opened_streams) {
+        add_stream_mutation(sid, stream_kind::opened);
+    }
+
+    return m;
+}
+
 } // namespace cdc
