@@ -12,6 +12,7 @@
 
 #include <seastar/core/metrics_registration.hh>
 #include "utils/histogram.hh"
+#include "utils/estimated_histogram.hh"
 #include "cql3/stats.hh"
 
 namespace alternator {
@@ -75,6 +76,9 @@ public:
         utils::timed_rate_moving_average_summary_and_histogram batch_write_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram batch_get_item_latency;
         utils::timed_rate_moving_average_summary_and_histogram get_records_latency;
+
+        utils::estimated_histogram batch_get_item_histogram{22}; // a histogram that covers the range 1 - 100
+        utils::estimated_histogram batch_write_item_histogram{22}; // a histogram that covers the range 1 - 100
     } api_operations;
     // Miscellaneous event counters
     uint64_t total_operations = 0;

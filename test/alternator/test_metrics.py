@@ -104,12 +104,13 @@ def check_increases_metric(metrics, metric_names, requested_labels=None):
         assert saved_metrics[n] < get_metric(metrics, n, requested_labels, the_metrics), f'metric {n} did not increase'
 
 @contextmanager
-def check_increases_metric_exact(metrics, metric_name, increase_value):
+def check_increases_metric_exact(metrics, metric_name, value_and_labels):
     the_metrics = get_metrics(metrics)
-    saved_metric = get_metric(metrics, metric_name, None, the_metrics)
+    saved_metric = [get_metric(metrics, metric_name, vl[1], the_metrics) for vl in value_and_labels]
     yield
     the_metrics = get_metrics(metrics)
-    assert get_metric(metrics, metric_name, None, the_metrics) - saved_metric == increase_value, f'metric {metric_name} did not increase at expected value {increase_value}'
+    for idx, m in enumerate(saved_metric):
+        assert get_metric(metrics, metric_name, value_and_labels[idx][1], the_metrics) - m == value_and_labels[idx][0], f'metric {metric_name} did not increase at expected value {m}'
 
 @contextmanager
 def check_increases_operation(metrics, operation_names, metric_name = 'scylla_alternator_operation', expected_value=None):
@@ -130,6 +131,31 @@ def test_batch_write_item(test_table_s, metrics):
         test_table_s.meta.client.batch_write_item(RequestItems = {
             test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
 
+def test_batch_write_item_histogram(test_table_s, metrics):
+    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '2.000000'}], [1, {'op': 'BatchWriteItem', 'le': '3.000000'}]]):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}]})
+    items = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
+    items2 = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
+    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '86.000000'}], [2, {'op': 'BatchWriteItem', 'le': '103.000000'}]]):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: items})
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: items2})
+
+def test_batch_get_item_histogram(test_table_s, metrics):
+    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '2.000000'}], [1, {'op': 'BatchGetItem', 'le': '3.000000'}]]):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
+    keys = [{'p': random_string()} for i in range(100) ]
+    keys2 = [{'p': random_string()} for i in range(100) ]
+    with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchGetItem', 'le': '86.000000'}], [2, {'op': 'BatchGetItem', 'le': '103.000000'}]]):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': keys, 'ConsistentRead': True}})
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': keys2, 'ConsistentRead': True}})
+
+
 # Reproduces issue #9406:
 def test_batch_get_item(test_table_s, metrics):
     with check_increases_operation(metrics, ['BatchGetItem']):
@@ -148,7 +174,7 @@ def test_batch_get_item_count(test_table_s, metrics):
 
 KB = 1024
 def test_rcu(test_table_s, metrics):
-    with check_increases_metric_exact(metrics, 'scylla_alternator_rcu_total', 4):
+    with check_increases_metric_exact(metrics, 'scylla_alternator_rcu_total', [[4, None]]):
         p = random_string()
         val = random_string()
         total_length = len(p) + len(val) + len("pattanother")
