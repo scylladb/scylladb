@@ -61,7 +61,7 @@ class controller : public protocol_server {
     seastar::sharded<gms::gossiper>& _gossiper;
     std::vector<socket_address> _listen_addresses;
 private:
-    seastar::future<> listen(seastar::sharded<auth::service>& auth_service, db::config& cfg);
+    seastar::future<> listen(seastar::sharded<auth::service>& auth_service, const db::config& cfg);
 public:
     controller(seastar::sharded<service::storage_proxy>& proxy, seastar::sharded<auth::service>& auth_service,
             seastar::sharded<service::migration_manager>& mm, db::config& cfg, seastar::sharded<gms::gossiper>& gossiper,

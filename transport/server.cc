@@ -11,6 +11,7 @@
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/semaphore.hh>
 #include "types/collection.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -246,7 +247,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket)
-    : server("CQLServer", clogger)
+    : server("CQLServer", clogger, generic_server::config(db_cfg))
     , _query_processor(qp)
     , _config(std::move(config))
     , _max_request_size(_config.max_request_size)
@@ -289,6 +290,12 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         sm::make_counter("requests_shed", _stats.requests_shed,
                         sm::description("Holds an incrementing counter with the requests that were shed due to overload (threshold configured via max_concurrent_requests_per_shard). "
                                             "The first derivative of this value shows how often we shed requests due to overload in the \"CQL transport\" component."))(basic_level),
+        sm::make_counter("connections_shed", _shed_connections,
+            sm::description("Holds an incrementing counter with the CQL connections that were shed due to concurrency semaphore timeout (threshold configured via uninitialized_connections_semaphore_cpu_concurrency). "
+                                            "This typically can happen during connection storm. ")),
+        sm::make_counter("connections_blocked", _blocked_connections,
+            sm::description("Holds an incrementing counter with the CQL connections that were blocked before being processed due to threshold configured via uninitialized_connections_semaphore_cpu_concurrency. "
+                                            "Blocks are normal when we have multiple connections initialized at once. If connections are timing out and this value is high it indicates either connections storm or unusually slow processing.")),
         sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
@@ -318,8 +325,8 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
 cql_server::~cql_server() = default;
 
 shared_ptr<generic_server::connection>
-cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr) {
-    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr));
+cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
+    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr),sem, std::move(initial_sem_units));
     ++_stats.connects;
     ++_stats.connections;
     return conn;
@@ -609,8 +616,8 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
     });
 }
 
-cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr)
-    : generic_server::connection{server, std::move(fd)}
+cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
+    : generic_server::connection{server, std::move(fd), sem, std::move(initial_sem_units)}
     , _server(server)
     , _server_addr(server_addr)
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr)
@@ -623,10 +630,6 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
 }
 
 cql_server::connection::~connection() {
-}
-
-void cql_server::connection::on_connection_close()
-{
     _server._notifier->unregister_connection(this);
 }
 
@@ -934,6 +937,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
         }
     } else {
         _ready = true;
+        on_connection_ready();
         res = make_ready(stream, trace_state);
     }
 
@@ -967,6 +971,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
                 return f.then([this, stream, challenge = std::move(challenge), trace_state]() mutable {
                     _authenticating = false;
                     _ready = true;
+                    on_connection_ready();
                     return make_ready_future<std::unique_ptr<cql_server::response>>(make_auth_success(stream, std::move(challenge), trace_state));
                 });
             });
@@ -1324,6 +1329,7 @@ cql_server::connection::process_register(uint16_t stream, request_reader in, ser
         _server._notifier->register_event(et, this);
     }
     _ready = true;
+    on_connection_ready();
     return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, std::move(trace_state)));
 }
 

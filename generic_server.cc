@@ -9,19 +9,112 @@
 #include "generic_server.hh"
 
 
+#include <exception>
 #include <fmt/ranges.h>
 #include <seastar/core/when_all.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/smp.hh>
+#include <utility>
+
+#include "db/config.hh"
 
 namespace generic_server {
 
-connection::connection(server& server, connected_socket&& fd)
-    : _server{server}
+class counted_data_source_impl : public data_source_impl {
+    data_source _ds;
+    connection::cpu_concurrency_t& _cpu_concurrency;
+
+    template <typename F>
+    future<temporary_buffer<char>> invoke_with_counting(F&& fun) {
+        if (_cpu_concurrency.stopped) {
+            return fun();
+        }
+        return futurize_invoke([this] () {
+            _cpu_concurrency.units.return_all();
+        }).then([fun = std::move(fun)] () {
+            return fun();
+        }).finally([this] () {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
+        });
+    };
+public:
+    counted_data_source_impl(data_source ds, connection::cpu_concurrency_t& cpu_concurrency) : _ds(std::move(ds)), _cpu_concurrency(cpu_concurrency) {};
+    virtual ~counted_data_source_impl() = default;
+    virtual future<temporary_buffer<char>> get() override {
+        return invoke_with_counting([this] {return _ds.get();});
+    };
+    virtual future<temporary_buffer<char>> skip(uint64_t n) override {
+        return invoke_with_counting([this, n] {return _ds.skip(n);});
+    };
+    virtual future<> close() override {
+        return _ds.close();
+    };
+};
+
+class counted_data_sink_impl : public data_sink_impl {
+    data_sink _ds;
+    connection::cpu_concurrency_t& _cpu_concurrency;
+
+    template <typename F>
+    future<> invoke_with_counting(F&& fun) {
+        if (_cpu_concurrency.stopped) {
+            return fun();
+        }
+        return futurize_invoke([this] () {
+            _cpu_concurrency.units.return_all();
+        }).then([fun = std::move(fun)] () mutable {
+            return fun();
+        }).finally([this] () {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
+        });
+    };
+public:
+    counted_data_sink_impl(data_sink ds, connection::cpu_concurrency_t& cpu_concurrency) : _ds(std::move(ds)), _cpu_concurrency(cpu_concurrency) {};
+    virtual ~counted_data_sink_impl() = default;
+    virtual temporary_buffer<char> allocate_buffer(size_t size) override {
+        return _ds.allocate_buffer(size);
+    }
+    virtual future<> put(net::packet data) override {
+        return invoke_with_counting([this, data = std::move(data)] () mutable {
+            return _ds.put(std::move(data));
+        });
+    }
+    virtual future<> put(std::vector<temporary_buffer<char>> data)  override {
+        return invoke_with_counting([this, data = std::move(data)] () mutable {
+            return _ds.put(std::move(data));
+        });
+    }
+    virtual future<> put(temporary_buffer<char> buf) override {
+        return invoke_with_counting([this, buf = std::move(buf)] () mutable {
+            return _ds.put(std::move(buf));
+        });
+    }
+    virtual future<> flush() override {
+        return invoke_with_counting([this] (void) mutable {
+            return _ds.flush();
+        });
+    }
+    virtual future<> close() override {
+        return _ds.close();
+    }
+    virtual size_t buffer_size() const noexcept override {
+        return _ds.buffer_size();
+    }
+    virtual bool can_batch_flushes() const noexcept override {
+        return _ds.can_batch_flushes();
+    }
+    virtual void on_batch_flush_error() noexcept override {
+        _ds.on_batch_flush_error();
+    }
+};
+
+connection::connection(server& server, connected_socket&& fd, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
+    : _conns_cpu_concurrency{sem, std::move(initial_sem_units), false}
+    , _server{server}
     , _fd{std::move(fd)}
-    , _read_buf(_fd.input())
-    , _write_buf(_fd.output())
+    , _read_buf(data_source(std::make_unique<counted_data_source_impl>(_fd.input().detach(), _conns_cpu_concurrency)))
+    , _write_buf(output_stream<char>(data_sink(std::make_unique<counted_data_sink_impl>(_fd.output().detach(), _conns_cpu_concurrency)), 8192, output_stream_options{.batch_flushes = true}))
     , _hold_server(_server._gate)
 {
     ++_server._total_connections;
@@ -115,7 +208,6 @@ future<> connection::process()
         });
     }).finally([this] {
         return _pending_requests_gate.close().then([this] {
-            on_connection_close();
             return _ready_to_respond.handle_exception([] (std::exception_ptr ep) {
                 if (is_broken_pipe_or_connection_reset(ep)) {
                     // expected if another side closes a connection or we're shutting down
@@ -129,8 +221,10 @@ future<> connection::process()
     });
 }
 
-void connection::on_connection_close()
+void connection::on_connection_ready()
 {
+    _conns_cpu_concurrency.stopped = true;
+    _conns_cpu_concurrency.units.return_all();
 }
 
 future<> connection::shutdown()
@@ -143,10 +237,35 @@ future<> connection::shutdown()
     return make_ready_future<>();
 }
 
-server::server(const sstring& server_name, logging::logger& logger)
+config::config(const db::config& cfg)
+    : uninitialized_connections_semaphore_cpu_concurrency(
+            cfg.uninitialized_connections_semaphore_cpu_concurrency)
+{
+}
+
+config::config(uint32_t uninitialized_connections_semaphore_cpu_concurrency)
+    : uninitialized_connections_semaphore_cpu_concurrency(
+            uninitialized_connections_semaphore_cpu_concurrency) {
+}
+
+server::server(const sstring& server_name, logging::logger& logger, config cfg)
     : _server_name{server_name}
     , _logger{logger}
+    , _conns_cpu_concurrency(cfg.uninitialized_connections_semaphore_cpu_concurrency)
+    , _prev_conns_cpu_concurrency(_conns_cpu_concurrency)
+    , _conns_cpu_concurrency_semaphore(_conns_cpu_concurrency, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
 {
+    _conns_cpu_concurrency.observe([this] (const uint32_t &concurrency) {
+        if (concurrency == _prev_conns_cpu_concurrency) {
+            return;
+        }
+        if (concurrency > _prev_conns_cpu_concurrency) {
+            _conns_cpu_concurrency_semaphore.signal(concurrency - _prev_conns_cpu_concurrency);
+        } else {
+            _conns_cpu_concurrency_semaphore.consume(_prev_conns_cpu_concurrency - concurrency);
+        }
+        _prev_conns_cpu_concurrency = concurrency;
+    });
 }
 
 server::~server()
@@ -229,19 +348,42 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 }
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
-    return repeat([this, which, keepalive, server_addr] {
+    for (;;) {
         seastar::gate::holder holder(_gate);
-        return _listeners[which].accept().then_wrapped([this, keepalive, server_addr, holder = std::move(holder)] (future<accept_result> f_cs_sa) mutable {
-            if (_gate.is_closed()) {
-                f_cs_sa.ignore_ready_future();
-                return stop_iteration::yes;
+        bool shed = false;
+        try {
+            semaphore_units<named_semaphore_exception_factory> units(_conns_cpu_concurrency_semaphore, 0);
+            if (_conns_cpu_concurrency != std::numeric_limits<uint32_t>::max()) {
+                auto u = try_get_units(_conns_cpu_concurrency_semaphore, 1);
+                if (u) {
+                    units = std::move(*u);
+                } else {
+                    _blocked_connections++;
+                    try {
+                        units = co_await get_units(_conns_cpu_concurrency_semaphore, 1, std::chrono::minutes(1));
+                    } catch (const semaphore_timed_out&) {
+                        shed = true;
+                    }
+                }
             }
-            auto cs_sa = f_cs_sa.get();
+            accept_result cs_sa = co_await _listeners[which].accept();
+            if (_gate.is_closed()) {
+                break;
+            }
             auto fd = std::move(cs_sa.connection);
             auto addr = std::move(cs_sa.remote_address);
             fd.set_nodelay(true);
             fd.set_keepalive(keepalive);
-            auto conn = make_connection(server_addr, std::move(fd), std::move(addr));
+            auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
+                    _conns_cpu_concurrency_semaphore, std::move(units));
+            if (shed) {
+                _shed_connections++;
+                static thread_local logger::rate_limit rate_limit{std::chrono::seconds(10)};
+                _logger.log(log_level::warn, rate_limit,
+                        "too many in-flight connection attempts: {}, connection dropped",
+                        _conns_cpu_concurrency_semaphore.waiters());
+                conn->shutdown().ignore_ready_future();
+            }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
                 return advertise_new_connection(conn); // Notify any listeners about new connection.
@@ -266,12 +408,10 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                     return unadvertise_connection(conn);
                 });
             });
-            return stop_iteration::no;
-        }).handle_exception([this] (auto ep) {
-            _logger.debug("accept failed: {}", ep);
-            return stop_iteration::no;
-        });
-    });
+        } catch (...) {
+            _logger.debug("accept failed: {}", std::current_exception());
+        }
+    }
 }
 
 future<>
