@@ -11,6 +11,7 @@ from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrie
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.util import wait_for
 from test.topology.conftest import skip_mode
+from test.topology.util import new_test_keyspace
 
 import pytest
 import asyncio
@@ -63,131 +64,131 @@ async def test_tablet_merge_simple(manager: ManagerClient):
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
 
-    # Initial average table size of 400k (1 tablet), so triggers some splits.
-    total_keys = 200
-    keys = range(total_keys)
-    def populate(keys):
-        insert = cql.prepare(f"INSERT INTO test.test(pk, c) VALUES(?, ?)")
-        for pk in keys:
-            value = random.randbytes(2000)
-            cql.execute(insert, [pk, value])
-    populate(keys)
+        # Initial average table size of 400k (1 tablet), so triggers some splits.
+        total_keys = 200
+        keys = range(total_keys)
+        def populate(keys):
+            insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+            for pk in keys:
+                value = random.randbytes(2000)
+                cql.execute(insert, [pk, value])
+        populate(keys)
 
-    async def check():
-        logger.info("Checking table")
-        cql = manager.get_cql()
-        rows = await cql.run_async("SELECT * FROM test.test BYPASS CACHE;")
-        assert len(rows) == len(keys)
+        async def check():
+            logger.info("Checking table")
+            cql = manager.get_cql()
+            rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
+            assert len(rows) == len(keys)
 
-    await check()
+        await check()
 
-    await manager.api.flush_keyspace(servers[0].ip_addr, "test")
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
-    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
-    assert tablet_count == 1
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert tablet_count == 1
 
-    logger.info("Adding new server")
-    servers.append(await manager.server_add(cmdline=cmdline))
-    s1_host_id = await manager.get_host_id(servers[1].server_id)
+        logger.info("Adding new server")
+        servers.append(await manager.server_add(cmdline=cmdline))
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
 
-    # Increases the chance of tablet migration concurrent with split
-    await inject_error_one_shot_on(manager, "tablet_allocator_shuffle", servers)
-    await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
+        # Increases the chance of tablet migration concurrent with split
+        await inject_error_one_shot_on(manager, "tablet_allocator_shuffle", servers)
+        await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
 
-    s1_log = await manager.server_open_log(servers[0].server_id)
-    s1_mark = await s1_log.mark()
+        s1_log = await manager.server_open_log(servers[0].server_id)
+        s1_mark = await s1_log.mark()
 
-    # Now there's a split and migration need, so they'll potentially run concurrently.
-    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        # Now there's a split and migration need, so they'll potentially run concurrently.
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
 
-    await check()
-    time.sleep(2) # Give load balancer some time to do work
+        await check()
+        time.sleep(2) # Give load balancer some time to do work
 
-    await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
 
-    await check()
+        await check()
 
-    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
-    assert tablet_count > 1
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert tablet_count > 1
 
-    # Allow shuffling of tablet replicas to make co-location work harder
-    async def shuffle():
-        await inject_error_on(manager, "tablet_allocator_shuffle", servers)
-        time.sleep(2)
-        await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
+        # Allow shuffling of tablet replicas to make co-location work harder
+        async def shuffle():
+            await inject_error_on(manager, "tablet_allocator_shuffle", servers)
+            time.sleep(2)
+            await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
 
-    await shuffle()
+        await shuffle()
 
-    # This will allow us to simulate some balancing after co-location with shuffling, to make sure that
-    # balancer won't break co-location.
-    await inject_error_on(manager, "tablet_merge_completion_bypass", servers)
+        # This will allow us to simulate some balancing after co-location with shuffling, to make sure that
+        # balancer won't break co-location.
+        await inject_error_on(manager, "tablet_merge_completion_bypass", servers)
 
-    # Shrinks table significantly, forcing merge.
-    delete_keys = range(total_keys - 1)
-    await asyncio.gather(*[cql.run_async(f"DELETE FROM test.test WHERE pk={k};") for k in delete_keys])
-    keys = range(total_keys - 1, total_keys)
+        # Shrinks table significantly, forcing merge.
+        delete_keys = range(total_keys - 1)
+        await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
+        keys = range(total_keys - 1, total_keys)
 
-    # To avoid race of major with migration
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        # To avoid race of major with migration
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
-    for server in servers:
-        await manager.api.flush_keyspace(server.ip_addr, "test")
-        await manager.api.keyspace_compaction(server.ip_addr, "test")
-    await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+            await manager.api.keyspace_compaction(server.ip_addr, ks)
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
 
-    await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
-    # Waits for balancer to co-locate sibling tablets
-    await s1_log.wait_for("All sibling tablets are co-located")
-    # Do some shuffling to make sure balancer works with co-located tablets
-    await shuffle()
+        await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
+        # Waits for balancer to co-locate sibling tablets
+        await s1_log.wait_for("All sibling tablets are co-located")
+        # Do some shuffling to make sure balancer works with co-located tablets
+        await shuffle()
 
-    old_tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
-    s1_mark = await s1_log.mark()
+        old_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        s1_mark = await s1_log.mark()
 
-    await inject_error_on(manager, "replica_merge_completion_wait", servers)
-    await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
+        await inject_error_on(manager, "replica_merge_completion_wait", servers)
+        await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
 
-    await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
+        await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
 
-    tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
-    assert tablet_count < old_tablet_count
-    await check()
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert tablet_count < old_tablet_count
+        await check()
 
-    # Reproduces https://github.com/scylladb/scylladb/issues/21867 that could cause compaction group
-    # to be destroyed without being stopped first.
-    # That's done by:
-    #   1) Migrating a tablet to another node, and putting an artificial delay in cleanup stage when stopping groups
-    #   2) Force tablet split, causing new groups to be added in a tablet being cleaned up
-    # Without the fix, new groups are added to tablet being migrated away and never closed, potentially
-    # resulting in an use-after-free.
-    keys = range(total_keys)
-    populate(keys)
-    # Migrates a tablet to another node and put artificial delay on cleanup stage
-    await manager.api.enable_injection(servers[0].ip_addr, "delay_tablet_compaction_groups_cleanup", one_shot=True)
-    tablet_replicas = await get_all_tablet_replicas(manager, servers[0], 'test', 'test')
-    assert len(tablet_replicas) > 0
-    t = tablet_replicas[0]
-    migration_task = asyncio.create_task(
-        manager.api.move_tablet(servers[0].ip_addr, "test", "test", *t.replicas[0], *(s1_host_id, 0), t.last_token))
-    # Trigger split
-    for server in servers:
-        await manager.api.flush_keyspace(server.ip_addr, "test")
-    try:
-        await migration_task
-    except:
-        # move_tablet() fails if tablet is already in transit.
-        # forgive if balancer decided to migrate the target tablet post split.
-        pass
+        # Reproduces https://github.com/scylladb/scylladb/issues/21867 that could cause compaction group
+        # to be destroyed without being stopped first.
+        # That's done by:
+        #   1) Migrating a tablet to another node, and putting an artificial delay in cleanup stage when stopping groups
+        #   2) Force tablet split, causing new groups to be added in a tablet being cleaned up
+        # Without the fix, new groups are added to tablet being migrated away and never closed, potentially
+        # resulting in an use-after-free.
+        keys = range(total_keys)
+        populate(keys)
+        # Migrates a tablet to another node and put artificial delay on cleanup stage
+        await manager.api.enable_injection(servers[0].ip_addr, "delay_tablet_compaction_groups_cleanup", one_shot=True)
+        tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert len(tablet_replicas) > 0
+        t = tablet_replicas[0]
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", *t.replicas[0], *(s1_host_id, 0), t.last_token))
+        # Trigger split
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+        try:
+            await migration_task
+        except:
+            # move_tablet() fails if tablet is already in transit.
+            # forgive if balancer decided to migrate the target tablet post split.
+            pass
 
-    await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
+        await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
 
-    for server in servers:
-        await manager.api.flush_keyspace(server.ip_addr, "test")
-        await manager.api.keyspace_compaction(server.ip_addr, "test")
-    await check()
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+            await manager.api.keyspace_compaction(server.ip_addr, ks)
+        await check()
 
 # Multiple cycles of split and merge, with topology changes in parallel and RF > 1.
 @pytest.mark.asyncio
@@ -210,129 +211,129 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
                await manager.server_add(config=config, cmdline=cmdline)]
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
 
-    async def perform_topology_ops():
-        logger.info("Topology ops in background")
-        server_id_to_decommission = servers[-1].server_id
-        logger.info("Decommissioning old server with id {}".format(server_id_to_decommission))
-        await manager.decommission_node(server_id_to_decommission)
-        servers.pop()
-        logger.info("Adding new server")
-        servers.append(await manager.server_add(cmdline=cmdline))
-        logger.info("Completed topology ops")
+        async def perform_topology_ops():
+            logger.info("Topology ops in background")
+            server_id_to_decommission = servers[-1].server_id
+            logger.info("Decommissioning old server with id {}".format(server_id_to_decommission))
+            await manager.decommission_node(server_id_to_decommission)
+            servers.pop()
+            logger.info("Adding new server")
+            servers.append(await manager.server_add(cmdline=cmdline))
+            logger.info("Completed topology ops")
 
-    for cycle in range(2):
-        logger.info("Running split-merge cycle #{}".format(cycle))
+        for cycle in range(2):
+            logger.info("Running split-merge cycle #{}".format(cycle))
 
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+            await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
-        logger.info("Inserting data")
-        # Initial average table size of (400k + metadata_overhead). Enough to trigger a few splits.
-        total_keys = 200
-        keys = range(total_keys)
-        insert = cql.prepare(f"INSERT INTO test.test(pk, c) VALUES(?, ?)")
-        for pk in keys:
-            value = random.randbytes(2000)
-            cql.execute(insert, [pk, value])
+            logger.info("Inserting data")
+            # Initial average table size of (400k + metadata_overhead). Enough to trigger a few splits.
+            total_keys = 200
+            keys = range(total_keys)
+            insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+            for pk in keys:
+                value = random.randbytes(2000)
+                cql.execute(insert, [pk, value])
 
-        async def check():
-            logger.info("Checking table")
-            cql = manager.get_cql()
-            rows = await cql.run_async("SELECT * FROM test.test BYPASS CACHE;")
-            assert len(rows) == len(keys)
+            async def check():
+                logger.info("Checking table")
+                cql = manager.get_cql()
+                rows = await cql.run_async(f"SELECT * FROM {ks}.test BYPASS CACHE;")
+                assert len(rows) == len(keys)
 
-        await check()
+            await check()
 
-        logger.info("Flushing keyspace")
-        for server in servers:
-            await manager.api.flush_keyspace(server.ip_addr, "test")
+            logger.info("Flushing keyspace")
+            for server in servers:
+                await manager.api.flush_keyspace(server.ip_addr, ks)
 
-        tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
 
-        # Increases the chance of tablet migration concurrent with split
-        await inject_error_on(manager, "tablet_allocator_shuffle", servers)
-        await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
+            # Increases the chance of tablet migration concurrent with split
+            await inject_error_on(manager, "tablet_allocator_shuffle", servers)
+            await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
 
-        s1_log = await manager.server_open_log(servers[0].server_id)
-        s1_mark = await s1_log.mark()
+            s1_log = await manager.server_open_log(servers[0].server_id)
+            s1_mark = await s1_log.mark()
 
-        logger.info("Enabling balancing")
-        # Now there's a split and migration need, so they'll potentially run concurrently.
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+            logger.info("Enabling balancing")
+            # Now there's a split and migration need, so they'll potentially run concurrently.
+            await manager.api.enable_tablet_balancing(servers[0].ip_addr)
 
-        topology_ops_task = asyncio.create_task(perform_topology_ops())
+            topology_ops_task = asyncio.create_task(perform_topology_ops())
 
-        await check()
+            await check()
 
-        logger.info("Waiting for split")
-        await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+            logger.info("Waiting for split")
+            await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
+            await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
 
-        logger.info("Waiting for topology ops")
-        await topology_ops_task
+            logger.info("Waiting for topology ops")
+            await topology_ops_task
 
-        await check()
+            await check()
 
-        old_tablet_count = tablet_count
-        tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
-        assert tablet_count > old_tablet_count
-        logger.info("Split increased number of tablets from {} to {}".format(old_tablet_count, tablet_count))
+            old_tablet_count = tablet_count
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            assert tablet_count > old_tablet_count
+            logger.info("Split increased number of tablets from {} to {}".format(old_tablet_count, tablet_count))
 
-        # Allow shuffling of tablet replicas to make co-location work harder
-        await inject_error_on(manager, "tablet_allocator_shuffle", servers)
-        # This will allow us to simulate some balancing after co-location with shuffling, to make sure that
-        # balancer won't break co-location.
-        await inject_error_on(manager, "tablet_merge_completion_bypass", servers)
+            # Allow shuffling of tablet replicas to make co-location work harder
+            await inject_error_on(manager, "tablet_allocator_shuffle", servers)
+            # This will allow us to simulate some balancing after co-location with shuffling, to make sure that
+            # balancer won't break co-location.
+            await inject_error_on(manager, "tablet_merge_completion_bypass", servers)
 
-        logger.info("Deleting data")
-        # Delete almost all keys, enough to trigger a few merges.
-        delete_keys = range(total_keys - 1)
-        await asyncio.gather(*[cql.run_async(f"DELETE FROM test.test WHERE pk={k};") for k in delete_keys])
-        keys = range(total_keys - 1, total_keys)
+            logger.info("Deleting data")
+            # Delete almost all keys, enough to trigger a few merges.
+            delete_keys = range(total_keys - 1)
+            await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
+            keys = range(total_keys - 1, total_keys)
 
-        await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
+            await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
 
-        # To avoid race of major with migration
-        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+            # To avoid race of major with migration
+            await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+            logger.info("Flushing keyspace and performing major")
+            for server in servers:
+                await manager.api.flush_keyspace(server.ip_addr, ks)
+                await manager.api.keyspace_compaction(server.ip_addr, ks)
+            await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+            logger.info("Waiting for merge decision")
+            await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
+            # Waits for balancer to co-locate sibling tablets
+            await s1_log.wait_for("All sibling tablets are co-located")
+            # Do some shuffling to make sure balancer works with co-located tablets
+            await inject_error_on(manager, "tablet_allocator_shuffle", servers)
+
+            old_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+
+            topology_ops_task = asyncio.create_task(perform_topology_ops())
+
+            await inject_error_on(manager, "replica_merge_completion_wait", servers)
+            await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
+            await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
+
+            await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
+            await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
+
+            logger.info("Waiting for topology ops")
+            await topology_ops_task
+
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            assert tablet_count < old_tablet_count
+            logger.info("Merge decreased number of tablets from {} to {}".format(old_tablet_count, tablet_count))
+            await check()
 
         logger.info("Flushing keyspace and performing major")
         for server in servers:
-            await manager.api.flush_keyspace(server.ip_addr, "test")
-            await manager.api.keyspace_compaction(server.ip_addr, "test")
-        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
-
-        logger.info("Waiting for merge decision")
-        await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
-        # Waits for balancer to co-locate sibling tablets
-        await s1_log.wait_for("All sibling tablets are co-located")
-        # Do some shuffling to make sure balancer works with co-located tablets
-        await inject_error_on(manager, "tablet_allocator_shuffle", servers)
-
-        old_tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
-
-        topology_ops_task = asyncio.create_task(perform_topology_ops())
-
-        await inject_error_on(manager, "replica_merge_completion_wait", servers)
-        await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
-        await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
-
-        await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
-        await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
-
-        logger.info("Waiting for topology ops")
-        await topology_ops_task
-
-        tablet_count = await get_tablet_count(manager, servers[0], 'test', 'test')
-        assert tablet_count < old_tablet_count
-        logger.info("Merge decreased number of tablets from {} to {}".format(old_tablet_count, tablet_count))
-        await check()
-
-        logger.info("Flushing keyspace and performing major")
-        for server in servers:
-            await manager.api.flush_keyspace(server.ip_addr, "test")
-            await manager.api.keyspace_compaction(server.ip_addr, "test")
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+            await manager.api.keyspace_compaction(server.ip_addr, ks)
         await check()
 
 
@@ -350,42 +351,41 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
         servers.extend(await manager.servers_add(3, config=config, cmdline=cmdline, property_file={'dc': 'mydc', 'rack': rack}))
 
     cql = manager.get_cql()
-    ks = 'test'
-    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}};")
-    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}};") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
 
-    await inject_error_on(manager, "forbid_cross_rack_migration_attempt", servers)
+        await inject_error_on(manager, "forbid_cross_rack_migration_attempt", servers)
 
-    total_keys = 400
-    keys = range(total_keys)
-    insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
-    for pk in keys:
-        value = random.randbytes(2000)
-        cql.execute(insert, [pk, value])
+        total_keys = 400
+        keys = range(total_keys)
+        insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+        for pk in keys:
+            value = random.randbytes(2000)
+            cql.execute(insert, [pk, value])
 
-    for server in servers:
-        await manager.api.flush_keyspace(server.ip_addr, ks)
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
 
-    async def finished_splitting():
-        # FIXME: fragile since it's expecting on-disk size will be enough to produce a few splits.
-        #   (raw_data=800k / target_size=30k) = ~26, lower power-of-two is 16. Compression was disabled.
-        #   Per-table hints (min_tablet_count) can be used to improve this.
-        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
-        return tablet_count >= 16 or None
-    # Give enough time for split to happen in debug mode
-    await wait_for(finished_splitting, time.time() + 120)
+        async def finished_splitting():
+            # FIXME: fragile since it's expecting on-disk size will be enough to produce a few splits.
+            #   (raw_data=800k / target_size=30k) = ~26, lower power-of-two is 16. Compression was disabled.
+            #   Per-table hints (min_tablet_count) can be used to improve this.
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            return tablet_count >= 16 or None
+        # Give enough time for split to happen in debug mode
+        await wait_for(finished_splitting, time.time() + 120)
 
-    delete_keys = range(total_keys - 1)
-    await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
-    keys = range(total_keys - 1, total_keys)
+        delete_keys = range(total_keys - 1)
+        await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
+        keys = range(total_keys - 1, total_keys)
 
-    old_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        old_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
 
-    for server in servers:
-        await manager.api.flush_keyspace(server.ip_addr, ks)
-        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+            await manager.api.keyspace_compaction(server.ip_addr, ks)
 
-    async def finished_merging():
-        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
-        return tablet_count < old_tablet_count or None
-    await wait_for(finished_merging, time.time() + 120)
+        async def finished_merging():
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            return tablet_count < old_tablet_count or None
+        await wait_for(finished_merging, time.time() + 120)
