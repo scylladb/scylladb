@@ -77,7 +77,7 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     to provide the correct path to the binary based on the file name and mode.
     """
     run_id = parent.config.getoption('run_id')
-    modes = get_modes_to_run(parent.session)
+    modes = get_modes_to_run(parent.session.config)
     project_root = Path(parent.session.config.rootpath).parent
     suite_config = read_suite_config(file_path.parent)
     no_parallel_cases = suite_config.get('no_parallel_cases', [])
