@@ -25,18 +25,22 @@
 #
 from __future__ import annotations
 
+import collections
 import io
 import os
 import subprocess
 from collections.abc import Sequence
+from functools import cache
 from pathlib import Path
 from xml.etree import ElementTree
 
+from pytest import Config
+from test import BUILD_DIR, COMBINED_TESTS
+from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
 
 TIMEOUT_DEBUG = 60 * 5 # seconds
 TIMEOUT = 60 * 2 # seconds
-COMBINED_TESTS = Path('build', 'dev', 'test', 'boost', 'combined_tests')
 
 class BoostTestFacade(CppTestFacade):
     """
@@ -185,3 +189,28 @@ class BoostTestFacade(CppTestFacade):
             line_num = int(elem.attrib['line'])
             result.append(CppTestFailure(file_name, line_num, elem.text or ''))
         return result
+
+@cache
+def get_combined_tests(config: Config):
+    suites = collections.defaultdict()
+    modes = get_modes_to_run(config)
+    for mode in modes:
+        suites[mode] = collections.defaultdict()
+        executable = BUILD_DIR / mode / COMBINED_TESTS
+
+        args = [executable, '--list_content']
+
+        output = subprocess.check_output(
+            args,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+        )
+        current_suite = ''
+        for line in output.splitlines():
+            if not line.startswith('    '):
+                current_suite = line.strip().rstrip('*')
+                suites[mode][current_suite] = []
+            else:
+                case_name = line.strip().rstrip('*')
+                suites[mode][current_suite].append(case_name)
+    return suites
