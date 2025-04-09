@@ -17,16 +17,20 @@
 #include <seastar/util/defer.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/tls.hh>
+#include <seastar/http/client.hh>
+#include <seastar/http/request.hh>
 
 #include <seastar/testing/test_case.hh>
 
 #include <fmt/ranges.h>
 
+#include "ent/encryption/azure_host.hh"
 #include "ent/encryption/encryption.hh"
 #include "ent/encryption/symmetric_key.hh"
 #include "ent/encryption/local_file_provider.hh"
 #include "ent/encryption/encryption_exceptions.hh"
 #include "test/lib/tmpdir.hh"
+#include "test/lib/test_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
@@ -40,6 +44,9 @@
 #include "sstables/sstables.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/rjson.hh"
+#include "utils/azure/identity/exceptions.hh"
+#include "utils/azure/identity/managed_identity_credentials.hh"
+#include "utils/azure/identity/service_principal_credentials.hh"
 #include "replica/database.hh"
 #include "service/client_state.hh"
 
@@ -1283,3 +1290,609 @@ SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
 // but there is no infrastructure for that atm.
+
+/*
+    Simple test of Azure Key Provider.
+
+    User1 is assumed to have permissions to wrap/unwrap using the given key.
+    User2 is assumed to _not_ have permissions to wrap/unwrap using the given key.
+
+    This test is parameterized with env vars:
+    * ENABLE_AZURE_TEST - set to non-zero (1/true) to run Azure tests (enabled by default)
+    * ENABLE_AZURE_TEST_REAL - set to non-zero (1/true) to run tests against real Azure services (disabled by default, same tests run against a local mock server regardless)
+    * AZURE_TENANT_ID - the tenant where the principals live
+    * AZURE_USER_1_CLIENT_ID - the client ID of user1
+    * AZURE_USER_1_CLIENT_SECRET - the secret of user1
+    * AZURE_USER_1_CLIENT_CERTIFICATE - the PEM-encoded certificate and private key of user1
+    * AZURE_USER_2_CLIENT_ID - the client ID of user2
+    * AZURE_USER_2_CLIENT_SECRET - the secret of user2
+    * AZURE_USER_2_CLIENT_CERTIFICATE - the PEM-encoded certificate and private key of user2
+    * AZURE_KEY_NAME - set to <vault_name>/<keyname>
+*/
+
+struct azure_test_env {
+    std::string key_name;
+    std::string tenant_id;
+    std::string user_1_client_id;
+    std::string user_1_client_secret;
+    std::string user_1_client_certificate;
+    std::string user_2_client_id;
+    std::string user_2_client_secret;
+    std::string user_2_client_certificate;
+    std::string authority_host;
+    std::string imds_endpoint;
+};
+
+static std::string get_mock_azure_addr() {
+    return tests::getenv_safe("MOCK_AZURE_VAULT_SERVER_HOST");
+}
+
+static unsigned long get_mock_azure_port() {
+    return std::stoul(tests::getenv_safe("MOCK_AZURE_VAULT_SERVER_PORT"));
+}
+
+static future<azure_test_env> get_mock_azure_env(const tmpdir& tmp) {
+    co_return azure_test_env {
+        .key_name = fmt::format("http://{}:{}/mock-key", get_mock_azure_addr(), get_mock_azure_port()),
+        .tenant_id = "00000000-1111-2222-3333-444444444444",
+        .user_1_client_id = "mock-client-id",
+        .user_1_client_secret = "mock-client-secret",
+        .user_1_client_certificate = "test/resource/certs/scylla.pem", // a cert file with valid format - the contents won't be checked by the mock server
+        .user_2_client_id = "mock-client-id-invalid",
+        .user_2_client_secret = "mock-client-secret-invalid",
+        .user_2_client_certificate = "/dev/null", // a cert file with invalid format
+        .authority_host = fmt::format("http://{}:{}", get_mock_azure_addr(), get_mock_azure_port()),
+        .imds_endpoint = fmt::format("http://{}:{}", get_mock_azure_addr(), get_mock_azure_port()),
+    };
+}
+
+static azure_test_env get_real_azure_env() {
+    return azure_test_env {
+        .key_name = get_var_or_default("AZURE_KEY_NAME", ""),
+        .tenant_id = get_var_or_default("AZURE_TENANT_ID", ""),
+        .user_1_client_id = get_var_or_default("AZURE_USER_1_CLIENT_ID", ""),
+        .user_1_client_secret = get_var_or_default("AZURE_USER_1_CLIENT_SECRET", ""),
+        .user_1_client_certificate = get_var_or_default("AZURE_USER_1_CLIENT_CERTIFICATE", ""),
+        .user_2_client_id = get_var_or_default("AZURE_USER_2_CLIENT_ID", ""),
+        .user_2_client_secret = get_var_or_default("AZURE_USER_2_CLIENT_SECRET", ""),
+        .user_2_client_certificate = get_var_or_default("AZURE_USER_2_CLIENT_CERTIFICATE", ""),
+        .authority_host = "''",
+        .imds_endpoint = "''",
+    };
+}
+
+static future<> azure_test_helper(std::function<future<>(const tmpdir&, const azure_test_env&)> f, bool real_server = false) {
+    tmpdir tmp;
+
+    auto env = real_server ? get_real_azure_env() : co_await get_mock_azure_env(tmp);
+
+    if (real_server) {
+        if (env.key_name.empty()) {
+            BOOST_ERROR("No 'AZURE_KEY_NAME' provided");
+        }
+        if (env.tenant_id.empty()) {
+            BOOST_ERROR("No 'AZURE_TENANT_ID' provided");
+        }
+        if (env.user_1_client_id.empty() || env.user_1_client_secret.empty() || env.user_1_client_certificate.empty()) {
+            BOOST_ERROR("Missing or incompete credentials for user 1: All three of 'AZURE_USER_1_CLIENT_ID', 'AZURE_USER_1_CLIENT_SECRET' and 'AZURE_USER_1_CLIENT_CERTIFICATE' must be provided");
+        }
+        if (env.user_2_client_id.empty() || env.user_2_client_secret.empty() || env.user_2_client_certificate.empty()) {
+            BOOST_ERROR("Missing or incompete credentials for user 2: All three of 'AZURE_USER_2_CLIENT_ID', 'AZURE_USER_2_CLIENT_SECRET' and 'AZURE_USER_2_CLIENT_CERTIFICATE' must be provided");
+        }
+    }
+
+    co_await f(tmp, env);
+}
+
+static auto check_azure_mock_test_decorator() {
+    return check_run_test_decorator("ENABLE_AZURE_TEST", true);
+}
+
+static auto check_azure_real_test_decorator() {
+    return boost::unit_test::precondition([](boost::unit_test::test_unit_id){
+        return check_run_test("ENABLE_AZURE_TEST", true)
+            && check_run_test("ENABLE_AZURE_TEST_REAL", false);
+    });
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_imds, *check_azure_mock_test_decorator()) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    imds_endpoint: {1}
+                    )foo"
+            , azure.key_name, azure.imds_endpoint
+        );
+
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    }, false);
+}
+
+static future<> do_test_azure_provider_with_secret(bool real_server) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    azure_authority_host: {5}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
+        );
+
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    }, real_server);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_secret, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_secret(false);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_secret_real, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_secret(true);
+}
+
+static future<> do_test_azure_provider_with_certificate(bool real_server) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_certificate_path: {4}
+                    azure_authority_host: {5}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
+        );
+
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    }, real_server);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_certificate, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_certificate(false);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_certificate_real, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_certificate(true);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_master_key_in_cf, *check_azure_mock_test_decorator()) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    azure_authority_host: {5}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , exceptions::configuration_exception, [](const exceptions::configuration_exception& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const encryption::configuration_error& inner) {
+                    return sstring(inner.what()).find("No master key set") != sstring::npos;
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+
+        // should be ok
+        co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", azure.key_name)
+            , tmp, yaml
+            );
+    }, false);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_no_host, *check_azure_mock_test_decorator()) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = R"foo(
+            azure_hosts:
+            )foo";
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , std::invalid_argument
+            , [](const std::invalid_argument& e) {
+                return sstring(e.what()).find("No such host") != sstring::npos;
+            }
+        );
+    }, false);
+}
+
+/**
+ * Verify that the Azure key provider throws if the provided Service Principal
+ * credentials are incomplete. The provider will first fall back to the default
+ * credentials source to detect credentials from the system (env vars, Azure CLI,
+ * IMDS), and only after all these attempts fail will it throw.
+ *
+ * Note: Just in case we ever run these tests on Azure VMs, use a non-routable
+ * IP address for the IMDS endpoint to ensure the connection will fail.
+ */
+SEASTAR_TEST_CASE(test_azure_provider_with_incomplete_creds, *check_azure_mock_test_decorator()) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    imds_endpoint: http://192.0.2.1:80
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , permission_error, [](const encryption::permission_error& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const azure::auth_error& inner) {
+                    return sstring(inner.what()).find("No credentials found in any source.") != sstring::npos;
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+    }, false);
+}
+
+static future<> do_test_azure_provider_with_invalid_key(bool real_server) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto vault = azure.key_name.substr(0, azure.key_name.find_last_of('/'));
+        auto master_key = fmt::format("{}/nonexistentkey", vault);
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    azure_authority_host: {5}
+                    )foo"
+            , master_key, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate, azure.authority_host
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , service_error, [](const service_error& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const encryption::vault_error& inner) {
+                    // Both error codes are valid depending on the scope of the role assignment:
+                    // - "Forbidden": key-scoped permissions
+                    // - "KeyNotFound": vault-scoped permissions
+                    return inner.code() == "Forbidden" || inner.code() == "KeyNotFound";
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+    }, real_server);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_invalid_key, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_key(false);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_invalid_key_real, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_key(true);
+}
+
+/**
+ * Verify that trying to access key materials with a user w/o permissions to wrap/unwrap using vault
+ * fails.
+ */
+static future<> do_test_azure_provider_with_invalid_user(bool real_server) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    azure_authority_host: {5}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_2_client_id, azure.user_2_client_secret, azure.user_2_client_certificate, azure.authority_host
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , service_error, [](const service_error& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const encryption::vault_error& inner) {
+                    return inner.code() == "Forbidden";
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+    }, real_server);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_invalid_user, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_user(false);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_invalid_user_real, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_invalid_user(true);
+}
+
+/**
+ * Verify that the secret has higher precedence that the certificate.
+ * Use the wrong user's certificate to make sure it causes the test to fail.
+ */
+static future<> do_test_azure_provider_with_both_secret_and_cert(bool real_server) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    azure_client_certificate_path: {4}
+                    azure_authority_host: {5}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_2_client_certificate, azure.authority_host
+        );
+
+        // should be ok
+        co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", azure.key_name)
+            , tmp, yaml
+            );
+    }, real_server);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_both_secret_and_cert, *check_azure_mock_test_decorator()) {
+    co_await do_test_azure_provider_with_both_secret_and_cert(false);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_both_secret_and_cert_real, *check_azure_real_test_decorator()) {
+    co_await do_test_azure_provider_with_both_secret_and_cert(true);
+}
+
+SEASTAR_TEST_CASE(test_azure_network_error, *check_azure_mock_test_decorator()) {
+    co_await azure_test_helper([&](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto host_endpoint = fmt::format("{}:{}", get_mock_azure_addr(), get_mock_azure_port());
+        auto key = azure.key_name.substr(azure.key_name.find_last_of('/') + 1);
+        co_await network_error_test_helper(tmp, host_endpoint, [&](const auto& proxy) {
+            auto yaml = fmt::format(R"foo(
+                azure_hosts:
+                    azure_test:
+                        master_key: http://{0}/{1}
+                        azure_tenant_id: {2}
+                        azure_client_id: {3}
+                        azure_client_secret: {4}
+                        azure_authority_host: {5}
+                        key_cache_expiry: 1ms
+                        )foo"
+                , proxy.address(), key, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.authority_host
+            );
+            return std::make_tuple(scopts_map({ { "key_provider", "AzureKeyProviderFactory" }, { "azure_host", "azure_test" } }), yaml);
+        });
+    }, false);
+}
+
+/*
+ * Utility function to spawn a dedicated mock server instance for a particular test case.
+ * Useful for tests that require error injection, where the server's global state needs to be configured accordingly.
+ * Since test.py may run tests in parallel, using the global server instance is not safe for such tests.
+ *
+ * The code was based on `kmip_test_helper()`.
+ */
+static future<> with_dedicated_azure_mock_server(const std::function<future<>(std::string host, unsigned int port)>& f) {
+    tmpdir tmp;
+
+    auto pyexec = tests::proc::find_file_in_path("python");
+
+    promise<std::pair<std::string, int>> authority_promise;
+    auto fut = authority_promise.get_future();
+
+    BOOST_TEST_MESSAGE("Starting dedicated Azure Vault mock server");
+
+    auto python = co_await tests::proc::process_fixture::create(pyexec,
+        { // args
+            pyexec.string(),
+            "test/pylib/start_azure_vault_mock.py",
+            "--log-level", "INFO",
+            "--host", get_var_or_default("MOCK_AZURE_VAULT_SERVER_HOST", "127.0.0.1"),
+            "--port", "0", // random port
+        },
+        // env
+        {},
+        // stdout handler
+        tests::proc::process_fixture::create_copy_handler(std::cout),
+        // stderr handler
+        [authority_promise = std::move(authority_promise), b = false](std::string_view line) mutable -> future<consumption_result<char>> {
+            static std::regex authority_ex(R"foo(Starting Azure Vault mock server on \('([\d\.]+)', (\d+)\))foo");
+
+            std::cerr << line << std::endl;
+            std::match_results<typename std::string_view::const_iterator> m;
+            if (!b && std::regex_search(line.begin(), line.end(), m, authority_ex)) {
+                authority_promise.set_value(std::make_pair(m[1].str(), std::stoi(m[2].str())));
+                BOOST_TEST_MESSAGE("Matched Azure Vault host and port: " + m[1].str() + ":" + m[2].str());
+                b = true;
+            }
+            co_return continue_consuming{};
+        }
+    );
+
+    std::exception_ptr ep;
+
+    try {
+        // arbitrary timeout of 20s for the server to make some output. Very generous.
+        auto [host, port] = co_await with_timeout(std::chrono::steady_clock::now() + 20s, std::move(fut));
+
+        // wait for port.
+        auto sleep_interval = 100ms;
+        auto timeout = 5s;
+        auto end_time = seastar::lowres_clock::now() + timeout;
+        bool connected = false;
+        while (seastar::lowres_clock::now() < end_time) {
+            BOOST_TEST_MESSAGE(fmt::format("Connecting to {}:{}", host, port));
+            try {
+                // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
+                co_await seastar::connect(socket_address(net::inet_address(host), uint16_t(port)));
+                BOOST_TEST_MESSAGE("Dedicated Azure Vault mock server up and available");
+                connected = true;
+                break;
+            } catch (...) {
+            }
+            co_await sleep(sleep_interval);
+        }
+
+        if (!connected) {
+            throw std::runtime_error(fmt::format("Timed out connecting to Azure Vault mock server at {}:{}", host, port));
+        }
+
+        co_await f(host, port);
+
+    } catch (timed_out_error&) {
+        ep = std::make_exception_ptr(std::runtime_error("Could not start dedicated Azure Vault mock server"));
+    } catch (...) {
+        ep = std::current_exception();
+    }
+
+    BOOST_TEST_MESSAGE("Stopping dedicated Azure Vault mock server");
+
+    python.terminate();
+    co_await python.wait();
+
+    if (ep) {
+        std::rethrow_exception(ep);
+    }
+}
+
+static future<> configure_azure_mock_server(const std::string& host, const unsigned int port, const std::string& service, const std::string& error_type, int repeat) {
+    auto cln = http::experimental::client(socket_address(net::inet_address(host), uint16_t(port)));
+    auto close_client = deferred_close(cln);
+    auto req = http::request::make("POST", host, "/config/error");
+    req._headers["Content-Length"] = "0";
+    req.query_parameters["service"] = service;
+    req.query_parameters["error_type"] = error_type;
+    req.query_parameters["repeat"] = std::to_string(repeat);
+    co_await cln.make_request(std::move(req), [](const http::reply&, input_stream<char>&&) -> future<> { return seastar::make_ready_future(); });
+}
+
+SEASTAR_TEST_CASE(test_imds, *check_azure_mock_test_decorator()) {
+    co_await with_dedicated_azure_mock_server([](std::string host, unsigned int port) -> future<> {
+        // Create new credential object for each test case because it caches the token.
+        {
+            testlog.info("Testing IMDS success path");
+            azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
+            co_await creds.get_access_token("https://vault.azure.net/.default");
+        }
+
+        {
+            testlog.info("Testing IMDS transient errors");
+            azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
+            co_await configure_azure_mock_server(host, port, "imds", "InternalError", 1);
+            // expected to not throw
+            co_await creds.get_access_token("https://vault.azure.net/.default");
+        }
+
+        {
+            testlog.info("Testing IMDS non-transient errors");
+            azure::managed_identity_credentials creds { fmt::format("{}:{}", host, port) };
+            co_await configure_azure_mock_server(host, port, "imds", "NoIdentity", 1);
+            BOOST_REQUIRE_THROW(
+                co_await creds.get_access_token("https://vault.azure.net/.default"),
+                azure::creds_auth_error
+            );
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_entra_sts, *check_azure_mock_test_decorator()) {
+    co_await with_dedicated_azure_mock_server([](std::string host, unsigned int port) -> future<> {
+        auto make_entra_creds = [&] {
+            return azure::service_principal_credentials {
+                "00000000-1111-2222-3333-444444444444",
+                "mock-client-id",
+                "mock-client-secret",
+                "",
+                fmt::format("http://{}:{}", host, port),
+             };
+        };
+
+        // Create new credential object for each test case because it caches the token.
+        {
+            testlog.info("Testing Entra STS success path");
+            auto creds = make_entra_creds();
+            co_await creds.get_access_token("https://vault.azure.net/.default");
+        }
+
+        {
+            testlog.info("Testing Entra STS transient errors");
+            auto creds = make_entra_creds();
+            co_await configure_azure_mock_server(host, port, "entra", "TemporarilyUnavailable", 1);
+            // expected to not throw
+            co_await creds.get_access_token("https://vault.azure.net/.default");
+        }
+
+        {
+            testlog.info("Testing Entra STS non-transient errors");
+            auto creds = make_entra_creds();
+            co_await configure_azure_mock_server(host, port, "entra", "InvalidSecret", 1);
+            BOOST_REQUIRE_THROW(
+                co_await creds.get_access_token("https://vault.azure.net/.default"),
+                azure::creds_auth_error
+            );
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(test_azure_host, *check_azure_mock_test_decorator()) {
+    co_await with_dedicated_azure_mock_server([](std::string host, unsigned int port) -> future<> {
+        key_info kinfo { .alg = "AES/CBC/PKCS5Padding", .len = 128};
+        azure_host::host_options options {
+            .imds_endpoint = fmt::format("http://{}:{}", host, port),
+            .master_key = fmt::format("http://{}:{}/test-key", host, port),
+        };
+
+        {
+            testlog.info("Testing Key Vault success path");
+            azure_host azhost {"azure_test", options};
+            co_await azhost.get_or_create_key(kinfo, nullptr);
+        }
+
+        {
+            testlog.info("Testing Key Vault transient errors");
+            azure_host azhost {"azure_test", options};
+            co_await configure_azure_mock_server(host, port, "vault", "Throttled", 1);
+            co_await azhost.get_or_create_key(kinfo, nullptr);
+        }
+
+        {
+            testlog.info("Testing Key Vault non-transient errors");
+            azure_host azhost {"azure_test", options};
+            co_await configure_azure_mock_server(host, port, "vault", "Forbidden", 1);
+            BOOST_REQUIRE_THROW(
+                co_await azhost.get_or_create_key(kinfo, nullptr),
+                encryption::service_error
+            );
+        }
+    });
+}
