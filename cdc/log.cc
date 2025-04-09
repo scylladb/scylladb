@@ -1562,6 +1562,8 @@ private:
     utils::chunked_vector<mutation> _result_mutations;
     std::optional<log_mutation_builder> _builder;
 
+    std::optional<cdc::stream_id> _pending_stream_id;
+
     // When enabled, process_change will update _clustering_row_states and _static_row_state
     bool _enable_updating_state = false;
 
@@ -1580,7 +1582,8 @@ public:
 
     // DON'T move the transformer after this
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
-        const auto stream_id = _uses_tablets ? _ctx._cdc_metadata.get_tablet_stream(_log_schema->id(), ts, _dk.token()) : _ctx._cdc_metadata.get_vnode_stream(ts, _dk.token());
+        auto [stream_id, pending_sid] = _uses_tablets ? _ctx._cdc_metadata.get_tablet_stream(_log_schema->id(), ts, _dk.token()) : std::make_pair(_ctx._cdc_metadata.get_vnode_stream(ts, _dk.token()), std::nullopt);
+        _pending_stream_id = pending_sid;
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
         _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());
@@ -1691,6 +1694,17 @@ public:
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
     // The `transformer` object on which this method was called on should not be used anymore.
     std::tuple<utils::chunked_vector<mutation>, stats::part_type_set> finish() && {
+        if (_pending_stream_id) {
+            // double write - create a duplicate of all mutations to the pending stream
+            auto orig_size = _result_mutations.size();
+            _result_mutations.reserve(orig_size * 2);
+            auto pending_pk = _pending_stream_id->to_partition_key(*_log_schema);
+            for (size_t i = 0; i < orig_size; i++) {
+                mutation m(_log_schema, pending_pk);
+                m.apply(_result_mutations[i]);
+                _result_mutations.push_back(std::move(m));
+            }
+        }
         return std::make_pair<utils::chunked_vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
     }
 
