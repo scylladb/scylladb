@@ -9,7 +9,7 @@ import time
 import logging
 import random
 
-from cassandra.cluster import NoHostAvailable  # type: ignore
+from cassandra.cluster import NoHostAvailable, OperationTimedOut  # type: ignore
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
@@ -23,10 +23,13 @@ pytestmark = pytest.mark.prepare_3_racks_cluster
 
 @pytest.mark.asyncio
 @skip_mode("release", "error injections are not supported in release mode")
-async def test_cancel_mapreduce(manager: ManagerClient):
+@pytest.mark.parametrize("stop_node", ['sender', 'receiver'])
+async def test_cancel_mapreduce(manager: ManagerClient, stop_node):
     """
-    This test verifies that stopping the supercoordinator of a mapreduce task cancels
-    outgoing queries to other nodes, which would otherwise prevent the shutdown.
+    Reproduces: scylladb/scylladb#22337
+    This test verifies that stopping a node which is a supercoordinator of mapreduce request (sender)
+    or is executing a mapreduce subquery (receiver) cancels
+    outgoing operations, which would otherwise prevent the shutdown.
     """
 
     running_servers = await manager.running_servers()
@@ -57,25 +60,37 @@ async def test_cancel_mapreduce(manager: ManagerClient):
             s2_mark = await s2_log.mark()
 
             # Prevent finishing local mapreduce tasks on node 2.
-            async with inject_error(manager.api, s2.ip_addr, "mapreduce_pause_dispatch_to_shards"):
-                async def do_select():
-                    # Make node 1 the supercoordinator of the mapreduce task corresponding to aggregation.
-                    # We use this timeout because it's longer than the cumulative timeout of the following
-                    # steps. For the test to be reliable, the query cannot end on its own.
-                    try:
-                        await cql.run_async(f"SELECT count(*) FROM {t} BYPASS CACHE USING TIMEOUT 600s", host=host1)
-                        pytest.fail(f"Query finished, but it wasn't supposed to")
-                    except NoHostAvailable:
-                        pass
+            await manager.api.enable_injection(s2.ip_addr, "mapreduce_pause_dispatch_to_shards", one_shot=False)
 
-                async def wait_and_shutdown():
-                    # Make sure node 1 is the supercoordinator and sends a mapreduce task to node 2.
-                    await s1_log.wait_for(f"dispatching mapreduce_request=.* to address={host_id2}", from_mark=s1_mark, timeout=60)
-                    # Make sure that node 2 is preventing its local mapreduce task from finishing.
-                    await s2_log.wait_for("mapreduce_pause_dispatch_to_shards: waiting for message", from_mark=s2_mark, timeout=60)
-                    # Verify that the supercoordinator stops without an issue despite the ongoing mapreduce task.
+            async def do_select():
+                # Make node 1 the supercoordinator of the mapreduce task corresponding to aggregation.
+                # We use this timeout because it's longer than the cumulative timeout of the following
+                # steps. For the test to be reliable, the query cannot end on its own.
+                try:
+                    await cql.run_async(f"SELECT count(*) FROM {t} BYPASS CACHE USING TIMEOUT 600s", host=host1)
+                    pytest.fail(f"Query finished, but it wasn't supposed to")
+                except NoHostAvailable:
+                    pass
+                except OperationTimedOut:
+                    pass
+
+            async def wait_and_shutdown():
+                # Make sure node 1 is the supercoordinator and sends a mapreduce task to node 2.
+                await s1_log.wait_for(f"dispatching mapreduce_request=.* to address={host_id2}", from_mark=s1_mark, timeout=60)
+                # Make sure that node 2 is preventing its local mapreduce task from finishing.
+                await s2_log.wait_for("mapreduce_pause_dispatch_to_shards: waiting for message", from_mark=s2_mark, timeout=60)
+                
+                # Verify that the designated node stops without an issue despite the ongoing mapreduce task.
+                if stop_node == 'sender':
                     await manager.server_stop_gracefully(s1.server_id, timeout=120)
+                else:
+                    stop_mark = await s2_log.mark()
+                    loop = asyncio.get_event_loop()
+                    shutdown_task = loop.create_task(manager.server_stop_gracefully(s2.server_id, timeout=120))
+                    await s2_log.wait_for("Signal received; shutting down", from_mark=stop_mark, timeout=60)
+                    await manager.api.message_injection(s2.ip_addr, 'mapreduce_pause_dispatch_to_shards')
+                    await shutdown_task
 
-                async with asyncio.TaskGroup() as tg:
-                    _ = tg.create_task(do_select())
-                    _ = tg.create_task(wait_and_shutdown())
+            async with asyncio.TaskGroup() as tg:
+                _ = tg.create_task(do_select())
+                _ = tg.create_task(wait_and_shutdown())
