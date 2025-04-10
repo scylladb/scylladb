@@ -180,3 +180,36 @@ def test_rewrite_sstables_keyspace_compaction_task_async(cql, rest_api, test_key
     checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_upgrade_sstables/{keyspace}"), "upgrade sstables compaction")
     # scrub sstables compaction
     checkout_async_task(cql, rest_api, test_keyspace, lambda keyspace: rest_api.send("GET", f"tasks/compaction/keyspace_scrub/{keyspace}"), "scrub sstables compaction")
+
+def test_compaction_progress(cql, this_dc, rest_api):
+    drain_module_tasks(rest_api, module_name)
+    with set_tmp_task_ttl(rest_api, long_time):
+        with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+            schema = 'p int, v text, primary key (p)'
+            with new_test_table(cql, keyspace, schema) as t0:
+                stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [0, 'hello'])
+                cql.execute(stmt, [1, 'world'])
+                cql.execute(stmt, [2, '!'])
+
+                with new_test_table(cql, keyspace, schema) as t1:
+                    stmt = cql.prepare(f"INSERT INTO {t1} (p, v) VALUES (?, ?)")
+                    cql.execute(stmt, [1, 'hello'])
+                    cql.execute(stmt, [0, 'world'])
+
+                    injection = "compaction_run_table_tasks"
+                    with scylla_inject_error(rest_api, injection, True):
+                        rest_api.send("POST", f"storage_service/keyspace_compaction/{keyspace}")
+
+                        tasks = [task for task in list_tasks(rest_api, module_name) if task["type"] == "major compaction"]
+                        assert tasks, "compaction task was not created"
+                        assert len(tasks) == 1, "More than one compaction task was created"
+                        task = tasks[0]
+
+                        root_id = task["task_id"]
+                        status = wait_for_task(rest_api, root_id)
+                        assert status["state"] == "failed", "Task should have failed"
+                        children = [s for s in get_task_status_recursively(rest_api, root_id) if s["parent_id"] == root_id]
+                        assert status["progress_total"] == 100, "Invalid total progress value"
+                        assert sum([child["progress_completed"] for child in children]) / len(children) == status["progress_completed"]
+    drain_module_tasks(rest_api, module_name)
