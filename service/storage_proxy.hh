@@ -71,6 +71,10 @@ class feature_service;
 
 namespace db {
 class system_keyspace;
+
+namespace view {
+struct view_building_state_machine;
+}
 }
 
 namespace service {
@@ -538,6 +542,9 @@ public:
         return _cdc;
     }
 
+    db::system_keyspace& system_keyspace();
+    const db::view::view_building_state_machine& view_building_state_machine();
+
     response_id_type get_next_response_id() {
         auto next = _next_response_id++;
         if (next == 0) { // 0 is reserved for unique_response_handler
@@ -547,7 +554,7 @@ public:
     }
 
     // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
-    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, sharded<paxos::paxos_store>& paxos_store, raft_group0_client&, topology_state_machine&);
+    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, sharded<paxos::paxos_store>& paxos_store, raft_group0_client&, topology_state_machine&, const db::view::view_building_state_machine&);
     future<> stop_remote();
 
     gms::inet_address my_address() const noexcept;
