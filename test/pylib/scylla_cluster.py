@@ -1347,7 +1347,9 @@ class ScyllaClusterManager:
         root_logger = logging.getLogger()
         # file handler file name should be consistent with topology/conftest.py:manager test_py_log_test variable
         parent_test_name = self.test_uname.replace('/', '_')
-        self.test_case_log_fh = logging.FileHandler(f"{self.base_dir}/{parent_test_name}_{test_case_name}_cluster.log")
+        self.test_case_log_fh = logging.FileHandler(f"{self.base_dir}/{parent_test_name}.{test_case_name}_cluster.log")
+        # to avoid fail when no cluster logs are not present creating an empty file here
+        open(self.test_case_log_fh.baseFilename, 'a').close()
         self.test_case_log_fh.setLevel(root_logger.getEffectiveLevel())
         # to have the custom formatter with a timestamp that used in a test.py but for each testcase's log, we need to
         # extract it from the root logger and apply to the handler
@@ -1524,7 +1526,8 @@ class ScyllaClusterManager:
             self.cluster.after_test(self.current_test_case_full_name, success)
         finally:
             logging.getLogger().removeHandler(self.test_case_log_fh)
-            pathlib.Path(self.test_case_log_fh.baseFilename).unlink()
+            if success:
+                pathlib.Path(self.test_case_log_fh.baseFilename).unlink()
             self.current_test_case_full_name = ''
         self.is_after_test_ok = True
         cluster_str = str(self.cluster)
