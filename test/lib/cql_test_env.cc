@@ -1004,7 +1004,7 @@ private:
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
 
             if (cfg_in.need_remote_proxy) {
-                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(group0_client), std::ref(_topology_state_machine)).get();
+                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(group0_client), std::ref(_topology_state_machine), std::ref(_view_building_state_machine)).get();
             }
             auto stop_proxy_remote = defer_verbose_shutdown("storage proxy RPC verbs", [this, need = cfg_in.need_remote_proxy] {
                 if (need) {

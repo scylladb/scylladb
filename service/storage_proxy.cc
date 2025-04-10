@@ -24,6 +24,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "storage_proxy.hh"
 #include "service/topology_state_machine.hh"
+#include "service/view_building_state.hh"
 #include "unimplemented.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
@@ -240,6 +241,7 @@ class storage_proxy::remote {
     sharded<db::system_keyspace>& _sys_ks;
     raft_group0_client& _group0_client;
     topology_state_machine& _topology_state_machine;
+    const view_building::view_building_state_machine& _vb_state_machine;
     abort_source _group0_as;
 
     seastar::named_gate _truncate_gate;
@@ -251,8 +253,8 @@ class storage_proxy::remote {
 
 public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
-                raft_group0_client& group0_client, topology_state_machine& tsm)
-        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _group0_client(group0_client), _topology_state_machine(tsm)
+                raft_group0_client& group0_client, topology_state_machine& tsm, const view_building::view_building_state_machine& vbsm)
+        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _group0_client(group0_client), _topology_state_machine(tsm), _vb_state_machine(vbsm)
         , _truncate_gate("storage_proxy::remote::truncate_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
@@ -296,6 +298,10 @@ public:
 
     db::system_keyspace& system_keyspace() {
         return _sys_ks.local();
+    }
+
+    const view_building::view_building_state_machine& view_building_state_machine() {
+        return _vb_state_machine;
     }
 
     // Note: none of the `send_*` functions use `remote` after yielding - by the first yield,
@@ -6731,9 +6737,18 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     }
 }
 
+db::system_keyspace& storage_proxy::system_keyspace() {
+    return remote().system_keyspace();
+}
+
+const view_building::view_building_state_machine& storage_proxy::view_building_state_machine() {
+    return remote().view_building_state_machine();
+}
+
+
 void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
-        raft_group0_client& group0_client, topology_state_machine& tsm) {
-    _remote = std::make_unique<struct remote>(*this, ms, g, mm, sys_ks, group0_client, tsm);
+        raft_group0_client& group0_client, topology_state_machine& tsm, const view_building::view_building_state_machine& vbsm) {
+    _remote = std::make_unique<struct remote>(*this, ms, g, mm, sys_ks, group0_client, tsm, vbsm);
 }
 
 future<> storage_proxy::stop_remote() {
