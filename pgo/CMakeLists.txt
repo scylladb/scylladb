@@ -9,7 +9,6 @@ add_custom_command(
   OUTPUT "${sampled_profdata}"
   DEPENDS
     scylla
-    dist-tools-tar
   COMMAND ${CMAKE_COMMAND} -E rm -r "${profdata_dir}"
   COMMAND ${CMAKE_SOURCE_DIR}/pgo/train "$<TARGET_FILE:scylla>"
             ${sampled_profdata}
