@@ -755,17 +755,23 @@ sstring index_metadata::get_default_index_name(const sstring& cf_name,
     return cf_name + "_idx";
 }
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_computation_ptr computation, api::timestamp_type dropped_at)
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_is_internal is_internal, column_computation_ptr computation, api::timestamp_type dropped_at)
         : _name(std::move(name))
         , _dropped_at(dropped_at)
         , _is_atomic(type->is_atomic())
         , _is_counter(type->is_counter())
         , _is_view_virtual(is_view_virtual)
+        , _is_internal(is_internal)
         , _computation(std::move(computation))
         , type(std::move(type))
         , id(component_index)
         , kind(kind)
-{}
+{
+    if (_is_internal) {
+        SCYLLA_ASSERT(_is_view_virtual == column_view_virtual::no);
+        SCYLLA_ASSERT(kind == column_kind::regular_column || kind == column_kind::static_column);
+    }
+}
 
 auto fmt::formatter<column_definition>::format(const column_definition& cd, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
@@ -774,6 +780,9 @@ auto fmt::formatter<column_definition>::format(const column_definition& cd, fmt:
                          cd.name_as_text(), cd.type->name(), to_sstring(cd.kind));
     if (cd.is_view_virtual()) {
         out = fmt::format_to(out, ", view_virtual");
+    }
+    if (cd.is_internal()) {
+        out = fmt::format_to(out, ", internal");
     }
     if (cd.is_computed()) {
         out = fmt::format_to(out, ", computed:{}", cd.get_computation().serialize());
@@ -1345,16 +1354,16 @@ bool schema_builder::has_column(const cql3::column_identifier& c) {
 }
 
 schema_builder& schema_builder::with_column_ordered(const column_definition& c) {
-    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual(), c.get_computation_ptr());
+    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual(), c.is_internal(), c.get_computation_ptr());
 }
 
-schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_view_virtual is_view_virtual) {
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_view_virtual is_view_virtual, column_is_internal is_internal) {
     // component_index will be determined by schema constructor
-    return with_column(name, type, kind, 0, is_view_virtual);
+    return with_column(name, type, kind, 0, is_view_virtual, is_internal);
 }
 
-schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_computation_ptr computation) {
-    _raw._columns.emplace_back(name, type, kind, component_index, is_view_virtual, std::move(computation));
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_is_internal is_internal, column_computation_ptr computation) {
+    _raw._columns.emplace_back(name, type, kind, component_index, is_view_virtual, is_internal, std::move(computation));
     if (type->is_multi_cell()) {
         with_collection(name, type);
     } else if (type->is_counter()) {
@@ -1364,7 +1373,7 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, column_k
 }
 
 schema_builder& schema_builder::with_computed_column(bytes name, data_type type, column_kind kind, column_computation_ptr computation) {
-    return with_column(name, type, kind, 0, column_view_virtual::no, std::move(computation));
+    return with_column(name, type, kind, 0, column_view_virtual::no, column_is_internal::no, std::move(computation));
 }
 
 schema_builder& schema_builder::remove_column(bytes name, std::optional<api::timestamp_type> timestamp)

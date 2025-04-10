@@ -128,6 +128,8 @@ enum class column_kind { partition_key, clustering_key, static_column, regular_c
 
 enum class column_view_virtual { no, yes };
 
+using column_is_internal = bool_class<class column_is_internal_tag>;
+
 sstring to_sstring(column_kind k);
 bool is_compatible(column_kind k1, column_kind k2);
 
@@ -220,6 +222,7 @@ private:
     bool _is_atomic;
     bool _is_counter;
     column_view_virtual _is_view_virtual;
+    column_is_internal _is_internal;
     column_computation_ptr _computation;
 
     struct thrift_bits {
@@ -236,6 +239,7 @@ public:
     column_definition(bytes name, data_type type, column_kind kind,
         column_id component_index = 0,
         column_view_virtual view_virtual = column_view_virtual::no,
+        column_is_internal = column_is_internal::no,
         column_computation_ptr = nullptr,
         api::timestamp_type dropped_at = api::missing_timestamp);
 
@@ -262,6 +266,7 @@ public:
             , _is_atomic(other._is_atomic)
             , _is_counter(other._is_counter)
             , _is_view_virtual(other._is_view_virtual)
+            , _is_internal(other._is_internal)
             , _computation(other.get_computation_ptr())
             , type(other.type)
             , id(other.id)
@@ -295,6 +300,10 @@ public:
     // These columns should be hidden from the user's SELECT queries.
     bool is_view_virtual() const { return _is_view_virtual == column_view_virtual::yes; }
     column_view_virtual view_virtual() const { return _is_view_virtual; }
+    // Internal columns can be injected into user tables by Scylla components.
+    // They are used to store internal state, such as Paxos state.
+    // These columns must be hidden from user-facing APIs.
+    column_is_internal is_internal() const { return _is_internal; }
     // Computed column values are generated from other columns (and possibly other sources) during updates.
     // Their values are still stored on disk, same as a regular columns.
     bool is_computed() const { return bool(_computation); }
