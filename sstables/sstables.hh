@@ -665,6 +665,7 @@ private:
     // This should be called only before an sstable is sealed.
     void maybe_rebuild_filter_from_index(uint64_t num_partitions);
 
+    future<> read_toc() noexcept;
     future<> read_summary() noexcept;
 
     void write_summary() {
@@ -784,7 +785,6 @@ private:
     // runs in async context (called from storage::open)
     void write_toc(file_writer w);
 public:
-    future<> read_toc() noexcept;
 
     shareable_components& get_shared_components() const {
         return *_components;
