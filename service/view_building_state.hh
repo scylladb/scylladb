@@ -10,6 +10,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
+#include <seastar/core/condition-variable.hh>
 #include <stdexcept>
 
 #include "db/view/view_build_status.hh"
@@ -89,6 +90,12 @@ struct views_state {
 
     views_state(std::map<table_id, std::vector<table_id>> views_per_base, view_build_status_map status_map);
     views_state() = default;
+};
+
+struct view_building_state_machine {
+    view_building_state building_state;
+    views_state views_state;
+    condition_variable event;
 };
 
 view_building_task::task_type task_type_from_string(std::string_view str);
