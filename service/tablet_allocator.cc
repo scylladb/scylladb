@@ -2139,6 +2139,7 @@ public:
                 max_shard_load = std::max(max_shard_load, load);
                 this_node_max_shard_load = std::max(this_node_max_shard_load, load);
             }
+            node_load /= node.shard_count;
             lblogger.debug("Load on host {} for table {}: total={}, max={}", host, table, node_load, this_node_max_shard_load);
         }
         auto avg_load = double(total_load) / shard_count;

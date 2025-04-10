@@ -441,7 +441,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             }
             const auto& host_id = node.get().host_id();
             if (!existing.contains(host_id)) {
-                candidate.nodes.emplace_back(host_id, load.get_load(host_id));
+                candidate.nodes.emplace_back(host_id, load.get_avg_shard_load(host_id));
             }
         }
         if (candidate.nodes.empty()) {
