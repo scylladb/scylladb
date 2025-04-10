@@ -356,7 +356,13 @@ void mutation_partition_json_writer::write_atomic_cell_value(const atomic_cell_v
 }
 
 void mutation_partition_json_writer::write_collection_value(const collection_mutation_view_description& mv, data_type type) {
-    write_each_collection_cell(mv, type, [&] (atomic_cell_view v, data_type t) { write_atomic_cell_value(v, t); });
+    write_each_collection_cell(mv, type, [&] (atomic_cell_view v, data_type t) {
+        if (v.is_live()) {
+            write_atomic_cell_value(v, t);
+        } else {
+            writer().Null();
+        }
+    });
 }
 
 void mutation_partition_json_writer::write(gc_clock::duration ttl, gc_clock::time_point expiry) {

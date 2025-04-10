@@ -159,6 +159,11 @@ class error_injection {
                 return boost::lexical_cast<T>(s.data(), s.size());
             }
         }
+
+        template <typename T>
+        void set(sstring name, const T& value) {
+            parameters[name] = std::to_string(value);
+        }
     };
 
     class injection_data;
@@ -240,6 +245,14 @@ public:
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
             return _shared_data->template get<T>(std::string(key));
+        }
+
+        template <typename T>
+        void set(std::string_view key, const T& value) const {
+            if (!_shared_data) {
+                on_internal_error(errinj_logger, "injection_shared_data is not initialized");
+            }
+            return _shared_data->template set<T>(sstring(key), value);
         }
 
         friend class error_injection;
