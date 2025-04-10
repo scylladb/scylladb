@@ -89,6 +89,8 @@ namespace utils::internal {
 #if defined(OPTIMIZED_EXCEPTION_HANDLING_AVAILABLE)
 void* try_catch_dynamic(std::exception_ptr& eptr, const std::type_info* catch_type) noexcept;
 
+using default_nested_exception_type = std::runtime_error;
+
 template<typename Ex>
 class nested_exception : public Ex, public std::nested_exception {
 private:
@@ -147,6 +149,29 @@ inline T* try_catch(std::exception_ptr& eptr) noexcept {
     }
     return nullptr;
 #endif
+}
+
+/// The same as try_catch, but also unwraps if the exception was nested.
+template <typename TException>
+inline TException* try_catch_nested(std::exception_ptr& eptr) noexcept {
+    // Check if we got the exception we were looking for in the upper level.
+    auto* non_nested = try_catch<TException>(eptr);
+    if (non_nested) {
+        return non_nested;
+    }
+
+    // Go through all the wrapped levels until we find the requested exception.
+    std::exception_ptr parent_eptr = eptr;
+    std::exception_ptr nested_eptr;
+    std::nested_exception* nested{nullptr};
+    while (parent_eptr && (nested = try_catch<std::nested_exception>(parent_eptr)) && (nested_eptr = nested->nested_ptr())) {
+        auto* res = try_catch<TException>(nested_eptr);
+        if (res) {
+            return res;
+        }
+        parent_eptr = nested_eptr;
+    }
+    return nullptr;
 }
 
 /// Analogous to std::throw_with_nested, but instead of capturing the currently
