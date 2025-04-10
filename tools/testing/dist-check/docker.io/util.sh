@@ -39,8 +39,6 @@ SCYLLA_RELEASE=$(cat build/SCYLLA-RELEASE-FILE)
 SCYLLA_PYTHON_RELEASE=$(cat tools/python3/build/SCYLLA-RELEASE-FILE)
 SCYLLA_JMX_PRODUCT=$(cat tools/jmx/build/SCYLLA-PRODUCT-FILE)
 SCYLLA_JMX_RELEASE=$(cat tools/jmx/build/SCYLLA-RELEASE-FILE)
-SCYLLA_TOOLS_PRODUCT=$(cat tools/java/build/SCYLLA-PRODUCT-FILE)
-SCYLLA_TOOLS_RELEASE=$(cat tools/java/build/SCYLLA-RELEASE-FILE)
 SCYLLA_CQLSH_PRODUCT=$(cat tools/cqlsh/build/SCYLLA-PRODUCT-FILE)
 SCYLLA_CQLSH_RELEASE=$(cat tools/cqlsh/build/SCYLLA-RELEASE-FILE)
 
@@ -74,8 +72,6 @@ fi
 SCYLLA_RPMS=(
     build/dist/$MODE/redhat/RPMS/x86_64/$SCYLLA_PRODUCT-*$SCYLLA_RELEASE*.rpm
     tools/python3/build/redhat/RPMS/x86_64/$SCYLLA_PRODUCT-python3-*$SCYLLA_PYTHON_RELEASE*.rpm
-    tools/jmx/build/redhat/RPMS/noarch/$SCYLLA_JMX_PRODUCT*$SCYLLA_JMX_RELEASE*.rpm
-    tools/java/build/redhat/RPMS/noarch/$SCYLLA_TOOLS_PRODUCT*$SCYLLA_TOOLS_RELEASE*.rpm
     tools/cqlsh/build/redhat/RPMS/x86_64/$SCYLLA_CQLSH_PRODUCT-cqlsh-*$SCYLLA_CQLSH_RELEASE*.rpm
 )
 

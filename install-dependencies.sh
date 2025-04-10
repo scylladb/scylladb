@@ -120,7 +120,6 @@ fedora_packages=(
     wabt
     binaryen
     lcov
-    java-11-openjdk-devel # for tools/java
 
     llvm-bolt
     moreutils
@@ -132,6 +131,8 @@ fedora_packages=(
     cyrus-sasl
     fipscheck
     cpp-jwt-devel
+
+    https://github.com/scylladb/cassandra-stress/releases/download/v3.17.5/cassandra-stress-3.17.5-1.noarch.rpm
 )
 
 # lld is not available on s390x, see
@@ -329,7 +330,6 @@ fi
 umask 0022
 
 ./seastar/install-dependencies.sh
-./tools/java/install-dependencies.sh
 
 if [ "$ID" = "ubuntu" ] || [ "$ID" = "debian" ]; then
     apt-get -y install "${debian_base_packages[@]}"

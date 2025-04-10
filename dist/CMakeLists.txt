@@ -113,8 +113,6 @@ add_custom_target(package
 set(dist_pkgs
   "${stripped_dist_pkg}")
 dist_submodule(cqlsh cqlsh dist_pkgs)
-dist_submodule(tools java dist_pkgs
-  NOARCH)
 dist_submodule(python3 python3 dist_pkgs)
 set(unified_dist_pkg
   "${CMAKE_BINARY_DIR}/$<CONFIG>/dist/tar/${Scylla_PRODUCT}-unified-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz")
@@ -136,7 +134,6 @@ add_custom_target(dist-unified ALL
 add_custom_target(dist)
 add_dependencies(dist
   dist-cqlsh
-  dist-tools
   dist-python3
   dist-server)
 

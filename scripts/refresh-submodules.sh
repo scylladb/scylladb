@@ -15,12 +15,10 @@ trap 'echo "error $? in $0 line $LINENO"' ERR
 
 # The following is the default list of submodules to refresh. To only refresh
 # some of them, pass the list of modules to refresh as arguments. For example,
-# "scripts/refresh-submodules.sh seastar tools/java" only refreshes the
-# two submodules seastar and tools/java.
+# "scripts/refresh-submodules.sh seastar tools/python3" only refreshes the
+# two submodules seastar and tools/python3.
 submodules=(
     seastar
-    tools/jmx
-    tools/java
     tools/python3
 )
 
