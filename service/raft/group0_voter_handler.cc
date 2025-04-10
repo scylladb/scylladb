@@ -160,7 +160,7 @@ class datacenter_info {
     using racks_store_t = std::priority_queue<rack_info>;
     racks_store_t _racks;
 
-    static racks_store_t create_racks_list(std::ranges::input_range auto&& nodes, size_t nodes_remaining) {
+    static racks_store_t create_racks_list(std::ranges::input_range auto&& nodes) {
         const auto nodes_by_rack = nodes | std::views::transform([](const auto& node_entry) {
             const auto& [id, node] = node_entry;
             return std::make_pair(std::string_view{node.rack}, std::make_pair(id, std::cref(node)));
@@ -174,16 +174,15 @@ class datacenter_info {
             racks.emplace_back(std::ranges::subrange(first, last) | std::views::transform([](const auto& node_entry) {
                 return node_entry.second;
             }));
-
-            nodes_remaining += std::distance(first, last);
         }
 
         return racks | std::ranges::to<racks_store_t>();
     }
 
 public:
-    explicit datacenter_info(std::ranges::input_range auto&& nodes)
-        : _racks(create_racks_list(nodes, _nodes_remaining)) {
+    explicit datacenter_info(std::ranges::sized_range auto&& nodes)
+        : _nodes_remaining(nodes.size())
+        , _racks(create_racks_list(nodes)) {
     }
 
     // Select the "best" next voter from the datacenter
@@ -208,6 +207,8 @@ public:
             if (rack.has_more_candidates()) {
                 _racks.push(rack);
             }
+
+            SCYLLA_ASSERT(_nodes_remaining > 0);
 
             --_nodes_remaining;
             ++_voters_count;
