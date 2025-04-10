@@ -25,4 +25,6 @@ shared_ptr<file_impl> make_delayed_encrypted_file(file, size_t, get_key_func);
 
 std::unique_ptr<data_sink_impl> make_encrypted_sink(data_sink, ::shared_ptr<symmetric_key>);
 
+std::unique_ptr<data_source_impl> make_encrypted_source(data_source source, shared_ptr<symmetric_key> k);
+
 }

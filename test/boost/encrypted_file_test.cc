@@ -483,3 +483,77 @@ SEASTAR_TEST_CASE(test_encrypted_sink_data_large) {
     return test_random_data_sink({ 4096, 4096, 4096, 4096, 8192, 1232, 32, 4096, 134 });
 }
 
+static future<> test_random_data_source(std::vector<size_t> sizes) {
+    auto name = "test_rand_source";
+    std::vector<temporary_buffer<char>> bufs, srcs;
+
+    auto [dst, k] = make_filename(name);
+    using namespace std::chrono_literals;
+    std::exception_ptr ex = nullptr;
+
+    data_sink sink(make_encrypted_sink(create_memory_sink(bufs), k));
+
+    try {
+        for (size_t s : sizes) {
+            auto buf = generate_random<char>(s);
+            co_await sink.put(buf.clone()); // deep copy. encrypted sink uses "owned" data
+            srcs.emplace_back(std::move(buf));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await sink.close();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+
+    {
+        auto os = co_await make_file_output_stream(co_await open_file_dma(dst, open_flags::wo | open_flags::create));
+        for (auto& buf : bufs) {
+            co_await os.write(buf.get(), buf.size());
+        }
+        co_await os.flush();
+        co_await os.close();
+    }
+    auto source = make_file_data_source(co_await open_file_dma(dst, open_flags::ro), file_input_stream_options{});
+    try {
+        auto encrypted_source = data_source(make_encrypted_source(std::move(source), k));
+        temporary_buffer<char> unified_buff(std::accumulate(srcs.begin(), srcs.end(), 0, [](size_t acc, const auto& buf) { return acc + buf.size(); }));
+        size_t pos = 0;
+        for (const auto& src : srcs) {
+            memcpy(unified_buff.get_write() + pos, src.get(), src.size());
+            pos += src.size();
+        }
+
+        pos = 0;
+        while (auto read_buff = co_await encrypted_source.get()) {
+            size_t size_to_compare = std::min(unified_buff.size() - pos, read_buff.size());
+            BOOST_REQUIRE_EQUAL(memcmp(read_buff.get(), unified_buff.get() + pos, size_to_compare), 0);
+            pos += size_to_compare;
+        }
+        co_await encrypted_source.close();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
+
+SEASTAR_TEST_CASE(test_encrypted_data_source_fuzzy) {
+    std::mt19937_64 rand_gen(std::random_device{}());
+    for (auto i = 0; i < 1000; ++i) {
+        std::uniform_int_distribution<uint16_t> rand_dist(1, 15);
+        std::vector<size_t> sizes(rand_dist(rand_gen));
+        for (auto& s : sizes) {
+            std::uniform_int_distribution<uint16_t> buff_sizes(1, 10000);
+            s = buff_sizes(rand_gen);
+        }
+        testlog.info("test_random_data_source with sizes: {}", sizes);
+        co_await test_random_data_source(sizes);
+    }
+
+    co_return;
+}
