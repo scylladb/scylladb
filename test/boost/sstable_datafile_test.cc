@@ -107,7 +107,7 @@ SEASTAR_TEST_CASE(datafile_generation_09) {
         BOOST_REQUIRE(sst1_s.first_key.value == sst2_s.first_key.value);
         BOOST_REQUIRE(sst1_s.last_key.value == sst2_s.last_key.value);
 
-        sst2->read_toc().get();
+        sstables::test(sst2).read_toc().get();
         auto& sst1_c = sstables::test(sst).get_components();
         auto& sst2_c = sstables::test(sst2).get_components();
 

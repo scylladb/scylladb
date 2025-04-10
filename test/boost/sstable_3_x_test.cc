@@ -47,18 +47,17 @@
 
 using namespace sstables;
 
-class sstable_assertions final {
+class sstable_assertions final : public sstables::test {
     test_env& _env;
-    shared_sstable _sst;
 
     sstable_assertions(test_env& env, schema_ptr schema, const sstring& path, sstable_version_types version, sstables::generation_type generation)
-        : _env(env)
-        , _sst(_env.make_sstable(std::move(schema),
+        : test(env.make_sstable(std::move(schema),
                             path,
                             generation,
                             version,
                             sstable_format_types::big,
                             1))
+        , _env(env)
     { }
 public:
     sstable_assertions(test_env& env, schema_ptr schema, const sstring& path)
@@ -71,18 +70,6 @@ public:
 
     test_env& get_env() {
         return _env;
-    }
-    void read_toc() {
-        _sst->read_toc().get();
-    }
-    void read_summary() {
-        _sst->read_summary().get();
-    }
-    void read_filter() {
-        _sst->read_filter().get();
-    }
-    void read_statistics() {
-        _sst->read_statistics().get();
     }
     void load() {
         _sst->load(_sst->get_schema()->get_sharder()).get();
@@ -2649,7 +2636,7 @@ static thread_local const schema_ptr UNCOMPRESSED_SIMPLE_SCHEMA =
 SEASTAR_TEST_CASE(test_uncompressed_simple_read_toc) {
   return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
-    sst.read_toc();
+    sst.read_toc().get();
     using ct = component_type;
     sst.assert_toc({ct::Index,
                     ct::Data,
@@ -2665,24 +2652,24 @@ SEASTAR_TEST_CASE(test_uncompressed_simple_read_toc) {
 SEASTAR_TEST_CASE(test_uncompressed_simple_read_summary) {
   return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
-    sst.read_toc();
-    sst.read_summary();
+    sst.read_toc().get();
+    sst.read_summary().get();
   });
 }
 
 SEASTAR_TEST_CASE(test_uncompressed_simple_read_filter) {
   return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
-    sst.read_toc();
-    sst.read_filter();
+    sst.read_toc().get();
+    sst.read_filter().get();
   });
 }
 
 SEASTAR_TEST_CASE(test_uncompressed_simple_read_statistics) {
   return test_env::do_with_async([] (test_env& env) {
     sstable_assertions sst(env, UNCOMPRESSED_SIMPLE_SCHEMA, UNCOMPRESSED_SIMPLE_PATH);
-    sst.read_toc();
-    sst.read_statistics();
+    sst.read_toc().get();
+    sst.read_statistics().get();
   });
 }
 
