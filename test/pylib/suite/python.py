@@ -213,7 +213,9 @@ class PythonTest(Test):
                     cc.execute(stmt)
                 cluster.prepare_cql_executed = True
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(0, "--host={}".format(cluster.endpoint()))
+            self.args.insert(0, f"--host={cluster.endpoint()}")
+            log_filename = next(server.log_filename for server in cluster.running.values())
+            self.args.insert(0, f"--scylla-log-filename={log_filename}")
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
             status = await run_test(self, options, env=self.suite.scylla_env)
