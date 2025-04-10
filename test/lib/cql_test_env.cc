@@ -43,6 +43,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
+#include "service/view_building_state.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
 #include "db/view/view_builder.hh"
@@ -142,6 +143,7 @@ private:
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
     sharded<service::topology_state_machine> _topology_state_machine;
+    sharded<service::view_building::view_building_state_machine> _view_building_state_machine;
     sharded<utils::walltime_compressor_tracker> _compressor_tracker;
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
@@ -884,6 +886,11 @@ private:
                 _topology_state_machine.stop().get();
             });
 
+            _view_building_state_machine.start().get();
+            auto stop_view_building_state_machine = defer_verbose_shutdown("view building state machine", [this] {
+                _view_building_state_machine.stop().get();
+            });
+
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
@@ -922,6 +929,7 @@ private:
                 std::ref(_qp),
                 std::ref(_sl_controller),
                 std::ref(_topology_state_machine),
+                std::ref(_view_building_state_machine),
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,

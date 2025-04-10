@@ -21,6 +21,7 @@
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
+#include "service/view_building_state.hh"
 #include "tasks/task_manager.hh"
 #include "utils/assert.hh"
 #include "utils/build_id.hh"
@@ -1725,6 +1726,12 @@ sharded<locator::shared_token_metadata> token_metadata;
                 }
             };
 
+            sharded<service::view_building::view_building_state_machine> vbsm;
+            vbsm.start().get();
+            auto stop_vbsm = defer_verbose_shutdown("view_building_state_machine", [&vbsm] {
+                vbsm.stop().get();
+            });
+
             checkpoint(stop_signal, "starting system distributed keyspace");
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
@@ -1783,7 +1790,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
-                std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map),
+                std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
                 only_on_shard0(&*disk_space_monitor_shard0)
             ).get();
