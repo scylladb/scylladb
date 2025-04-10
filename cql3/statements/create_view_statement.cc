@@ -365,7 +365,9 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     // determines the liveness of the view row.
     if (!has_non_pk_column) {
         for (auto* def : unselected_columns) {
-            db::view::create_virtual_column(builder, def->name(), def->type);
+            if (!def->is_internal()) {
+                db::view::create_virtual_column(builder, def->name(), def->type);
+            }
         }
     }
     _properties.properties()->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());

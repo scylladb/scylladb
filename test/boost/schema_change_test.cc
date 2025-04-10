@@ -184,6 +184,21 @@ SEASTAR_THREAD_TEST_CASE(test_inject_internal_columns) {
                 {int32_type->decompose(3)}
             });
         }
+
+        // Check that view_virtual columns are not created for internal columns.
+        // Internal columns should not affect the lifetime of rows in the view.
+        {
+            const auto c1_col = view_schema->get_column_definition("c1");
+            BOOST_REQUIRE(c1_col != nullptr);
+            BOOST_REQUIRE(!c1_col->is_view_virtual());
+
+            const auto c2_col = view_schema->get_column_definition("c2");
+            BOOST_REQUIRE(c2_col != nullptr);
+            BOOST_REQUIRE(c2_col->is_view_virtual());
+
+            const auto int_col = view_schema->get_column_definition("$test_set_c1");
+            BOOST_REQUIRE(int_col == nullptr);
+        }
     }).get();
 }
 
