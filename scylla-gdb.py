@@ -5021,8 +5021,10 @@ class scylla_small_objects(gdb.Command):
     [2019] 0x635002ecbc60
     """
     class small_object_iterator():
-        def __init__(self, small_pool, resolve_symbols):
-            self._small_pool = small_pool
+        def __init__(self, small_pools, resolve_symbols):
+            self._small_pools = small_pools
+            self._small_pool_addresses = [small_pool.address for small_pool in small_pools]
+            self._object_size = int(small_pools[0]['_object_size'])
             self._resolve_symbols = resolve_symbols
 
             self._text_ranges = get_text_ranges()
@@ -5031,8 +5033,9 @@ class scylla_small_objects(gdb.Command):
             self._free_in_pool = set()
             self._free_in_span = set()
 
-            pool_next_free = self._small_pool['_free']
-            while pool_next_free:
+            for small_pool in self._small_pools:
+              pool_next_free = small_pool['_free']
+              while pool_next_free:
                 self._free_in_pool.add(int(pool_next_free))
                 pool_next_free = pool_next_free.reinterpret_cast(self._free_object_ptr).dereference()
 
@@ -5043,7 +5046,7 @@ class scylla_small_objects(gdb.Command):
             # Let any StopIteration bubble up, as it signals we are done with
             # all spans.
             span = next(self._span_it)
-            while span.pool() != self._small_pool.address:
+            while span.pool() not in self._small_pool_addresses:
                 span = next(self._span_it)
 
             self._free_in_span = set()
@@ -5066,7 +5069,7 @@ class scylla_small_objects(gdb.Command):
                 pass
 
             span_start, span_end = self._next_span()
-            self._obj_it = iter(range(span_start, span_end, int(self._small_pool['_object_size'])))
+            self._obj_it = iter(range(span_start, span_end, int(self._object_size)))
             return next(self._obj_it)
 
         def __next__(self):
@@ -5102,16 +5105,14 @@ class scylla_small_objects(gdb.Command):
         return [int(small_pools['_u']['a'][i]['_object_size']) for i in range(nr)]
 
     @staticmethod
-    def find_small_pool(object_size):
+    def find_small_pools(object_size):
         cpu_mem = gdb.parse_and_eval('\'seastar::memory::cpu_mem\'')
         small_pools = cpu_mem['small_pools']
+        small_pools_a = small_pools['_u']['a']
         nr = int(small_pools['nr_small_pools'])
-        for i in range(nr):
-            sp = small_pools['_u']['a'][i]
-            if object_size == int(sp['_object_size']):
-                return sp
-
-        return None
+        return [small_pools_a[i]
+                for i in range(nr)
+                if int(small_pools_a[i]['_object_size']) == object_size]
 
     def init_parser(self):
         parser = argparse.ArgumentParser(description="scylla small-objects")
@@ -5128,10 +5129,10 @@ class scylla_small_objects(gdb.Command):
 
         self._parser = parser
 
-    def get_objects(self, small_pool, offset=0, count=0, resolve_symbols=False, verbose=False):
-        if self._last_object_size != int(small_pool['_object_size']) or offset < self._last_pos:
+    def get_objects(self, small_pools, offset=0, count=0, resolve_symbols=False, verbose=False):
+        if self._last_object_size != int(small_pools[0]['_object_size']) or offset < self._last_pos:
             self._last_pos = 0
-            self._iterator = scylla_small_objects.small_object_iterator(small_pool, resolve_symbols)
+            self._iterator = scylla_small_objects.small_object_iterator(small_pools, resolve_symbols)
 
         skip = offset - self._last_pos
         if verbose:
@@ -5161,15 +5162,15 @@ class scylla_small_objects(gdb.Command):
         except SystemExit:
             return
 
-        small_pool = scylla_small_objects.find_small_pool(args.object_size)
-        if small_pool is None:
+        small_pools = scylla_small_objects.find_small_pools(args.object_size)
+        if not small_pools:
             raise ValueError("{} is not a valid object size for any small pools, valid object sizes are: {}", scylla_small_objects.get_object_sizes())
 
         if args.summarize:
             if self._last_object_size != args.object_size:
                 if args.verbose:
                     gdb.write("Object size changed ({} -> {}), scanning pool.\n".format(self._last_object_size, args.object_size))
-                self._num_objects = len(self.get_objects(small_pool, verbose=args.verbose))
+                self._num_objects = len(self.get_objects(small_pools, verbose=args.verbose))
                 self._last_object_size = args.object_size
             gdb.write("number of objects: {}\n"
                       "page size        : {}\n"
@@ -5184,7 +5185,7 @@ class scylla_small_objects(gdb.Command):
             if self._last_object_size != args.object_size:
                 if args.verbose:
                     gdb.write("Object size changed ({} -> {}), scanning pool.\n".format(self._last_object_size, args.object_size))
-                self._num_objects = len(self.get_objects(small_pool, verbose=args.verbose))
+                self._num_objects = len(self.get_objects(small_pools, verbose=args.verbose))
                 self._last_object_size = args.object_size
             page = random.randint(0, int(self._num_objects / args.page_size) - 1)
         else:
@@ -5192,7 +5193,7 @@ class scylla_small_objects(gdb.Command):
 
         offset = page * args.page_size
         gdb.write("page {}: {}-{}\n".format(page, offset, offset + args.page_size - 1))
-        for i, (obj, sym) in enumerate(self.get_objects(small_pool, offset, args.page_size, resolve_symbols=True, verbose=args.verbose)):
+        for i, (obj, sym) in enumerate(self.get_objects(small_pools, offset, args.page_size, resolve_symbols=True, verbose=args.verbose)):
             if sym is None:
                 sym_text = ""
             else:
