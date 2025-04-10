@@ -79,6 +79,8 @@ class compaction_manager;
 class frozen_mutation;
 class reconcilable_result;
 
+namespace bi = boost::intrusive;
+
 namespace tracing { class trace_state_ptr; }
 namespace s3 { struct endpoint_config; }
 
@@ -180,8 +182,13 @@ class global_table_ptr;
 class memtable_list {
 public:
     using seal_immediate_fn_type = std::function<future<> (flush_permit&&)>;
+    using intrusive_memtable_list = bi::list<
+            memtable,
+            bi::base_hook<bi::list_base_hook<bi::link_mode<bi::auto_unlink>>>,
+            bi::constant_time_size<false>>;
 private:
     std::vector<shared_memtable> _memtables;
+    intrusive_memtable_list _flushed_memtables_with_active_reads;
     seal_immediate_fn_type _seal_immediate_fn;
     std::function<schema_ptr()> _current_schema;
     replica::dirty_memory_manager* _dirty_memory_manager;
@@ -237,6 +244,15 @@ public:
         return _memtables.back();
     }
 
+    // Returns the minimum live timestamp. Considers all memtables, even
+    // those that were flushed and removed with erase(), but an
+    // in-progress read is still using them.
+    // Memtables whose min live timestamp > max_seen_timestamp are ignored as we
+    // consider that their content is more recent than any potential tombstone in
+    // other mutation sources.
+    // Returns api::max_timestamp if the key is not in any of the memtables.
+    api::timestamp_type min_live_timestamp(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept;
+
     // # 8904 - this method is akin to std::set::erase(key_type), not
     // erase(iterator). Should be tolerant against non-existing.
     void erase(const shared_memtable& element) noexcept {
@@ -244,6 +260,7 @@ public:
         if (i != _memtables.end()) {
             _memtables.erase(i);
         }
+        _flushed_memtables_with_active_reads.push_back(*element);
     }
 
     // Synchronously swaps the active memtable with a new, empty one,

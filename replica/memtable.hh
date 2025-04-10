@@ -104,7 +104,10 @@ class dirty_memory_manager;
 struct table_stats;
 
 // Managed by lw_shared_ptr<>.
-class memtable final : public enable_lw_shared_from_this<memtable>, private dirty_memory_manager_logalloc::size_tracked_region {
+class memtable final
+    : public enable_lw_shared_from_this<memtable>
+    , public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>
+    , private dirty_memory_manager_logalloc::size_tracked_region {
 public:
     using partitions_type = double_decker<int64_t, memtable_entry,
                             dht::raw_token_less_comparator, dht::ring_position_comparator,
@@ -127,6 +130,7 @@ private:
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
     uint64_t _flushed_memory = 0;
+    bool _merging_into_cache = false;
     bool _merged_into_cache = false;
     replica::table_stats& _table_stats;
 
@@ -304,6 +308,7 @@ public:
 
     bool empty() const noexcept { return partitions.empty(); }
     void mark_flushed(mutation_source) noexcept;
+    bool is_merging_to_cache() const noexcept;
     bool is_flushed() const noexcept;
     void on_detach_from_region_group() noexcept;
     void revert_flushed_memory() noexcept;
