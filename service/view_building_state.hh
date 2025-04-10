@@ -96,6 +96,8 @@ struct view_building_state_machine {
     view_building_state building_state;
     views_state views_state;
     condition_variable event;
+
+    utils::UUID get_biggest_task_id();
 };
 
 view_building_task::task_type task_type_from_string(std::string_view str);

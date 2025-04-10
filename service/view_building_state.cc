@@ -69,6 +69,28 @@ seastar::sstring task_state_to_sstring(view_building_task::task_state state) {
     }
 }
 
+utils::UUID view_building_state_machine::get_biggest_task_id() {
+    utils::UUID max_id;
+
+    for (auto& [_, base_tasks]: building_state.tasks_state) {
+        for (auto& [_, replica_tasks]: base_tasks) {
+            for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
+                for (auto& [id, _]: view_tasks) {
+                    if (id > max_id) {
+                        max_id = id;
+                    }
+                }
+            }
+            for (auto& [id, _]: replica_tasks.staging_tasks) {
+                if (id > max_id) {
+                    max_id = id;
+                }
+            }
+        }
+    }
+    return max_id;
+}
+
 }
 
 }
