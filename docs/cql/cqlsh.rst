@@ -56,7 +56,7 @@ The ``cqlshrc`` file holds configuration options for cqlsh.  By default, this is
 ``~/.cassandra/cqlsh``, but a custom location can be specified with the ``--cqlshrc`` option.
 
 Example config values and documentation can be found in the ``conf/cqlshrc.sample`` file of a tarball installation.  You
-can also view the latest version of `cqlshrc online <https://github.com/scylladb/scylla-tools-java/blob/master/conf/cqlshrc.sample>`_.
+can also view the latest version of `cqlshrc online <https://github.com/scylladb/scylla-cqlsh/blob/master/conf/cqlshrc.sample>`_.
 
 
 Command Line Options

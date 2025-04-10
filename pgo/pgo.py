@@ -535,7 +535,7 @@ async def with_cluster(executable: PathLike, workdir: PathLike, cpusets: Optiona
 def cs_command(cmd: list[str], n: int, node: str, cl: str, pop: Optional[str] = None, warmup: bool = False, rate: str = "threads=200", schema: Optional[str] = None) -> list[str]:
     """Strings together a cassandra-stress command from given options."""
     return (["env", f"JAVA_HOME={JAVA_HOME.get()}"] if JAVA_HOME.get() else []) + [
-        "../tools/java/tools/bin/cassandra-stress",
+        "cassandra-stress",
         *cmd,
         f"n={n}",
         f"cl={cl}",
@@ -717,7 +717,7 @@ populators["si_dataset"] = populate_si
 
 async def populate_counters(executable: PathLike, workdir: PathLike) -> None:
     async with with_cs_populate(executable=executable, workdir=workdir) as server:
-        await bash(fr"../tools/java/bin/cqlsh -f conf/counters.yaml {server}")
+        await bash(fr"../tools/cqlsh/bin/cqlsh -f conf/counters.yaml {server}")
         # Sleeps added in reaction to schema disagreement errors.
         # FIXME: get rid of this sleep and find a sane way to wait for schema
         # agreement.

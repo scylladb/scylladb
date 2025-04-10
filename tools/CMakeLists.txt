@@ -25,8 +25,6 @@ target_link_libraries(tools
 
 include(build_submodule)
 build_submodule(cqlsh cqlsh)
-build_submodule(tools java
-  NOARCH)
 
 execute_process(
   COMMAND "${CMAKE_SOURCE_DIR}/install-dependencies.sh" --print-python3-runtime-packages

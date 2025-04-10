@@ -1881,9 +1881,8 @@ def prepare_advanced_optimizations(*, modes, build_modes, args):
                 submode['profile_target'] = profile_target
             submode['lib_cflags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
             submode['cxx_ld_flags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
-            # Profile collection depends on java tools because we use cassandra-stress as the load.
             submode['profile_recipe'] = textwrap.dedent(f"""\
-                build $builddir/{submode_name}/profiles/prof.profdata: train $builddir/{submode_name}/scylla | dist-tools-tar
+                build $builddir/{submode_name}/profiles/prof.profdata: train $builddir/{submode_name}/scylla
                 build $builddir/{submode_name}/profiles/merged.profdata: merge_profdata $builddir/{submode_name}/profiles/prof.profdata {profile_target or str()}
                 """)
             submode['is_profile'] = True
@@ -2631,11 +2630,10 @@ def write_build_file(f,
         f.write(f'  mode = {mode}\n')
         f.write(f'build dist-server-{mode}: phony $builddir/dist/{mode}/redhat $builddir/dist/{mode}/debian\n')
         f.write(f'build dist-server-debuginfo-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-debuginfo-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
-        f.write(f'build dist-tools-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz dist-tools-rpm dist-tools-deb\n')
         f.write(f'build dist-cqlsh-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz dist-cqlsh-rpm dist-cqlsh-deb\n')
         f.write(f'build dist-python3-{mode}: phony dist-python3-tar dist-python3-rpm dist-python3-deb\n')
         f.write(f'build dist-unified-{mode}: phony $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
-        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz: unified $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz | always\n')
+        f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz: unified $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz | always\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unified-{arch}-package-{scylla_version}-{scylla_release}.tar.gz: copy $builddir/{mode}/dist/tar/{scylla_product}-unified-{scylla_version}-{scylla_release}.{arch}.tar.gz\n')
@@ -2676,17 +2674,6 @@ def write_build_file(f,
         rule build-submodule-deb
           command = cd $dir && ./reloc/build_deb.sh --reloc-pkg $artifact
 
-        build tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
-          reloc_dir = tools/java
-        build dist-tools-rpm: build-submodule-rpm tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
-          dir = tools/java
-          artifact = build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
-        build dist-tools-deb: build-submodule-deb tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
-          dir = tools/java
-          artifact = build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
-        build dist-tools-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz'.format(mode=mode, scylla_product=scylla_product, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
-        build dist-tools: phony dist-tools-tar dist-tools-rpm dist-tools-deb
-
         build tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: build-submodule-reloc | $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE
           reloc_dir = tools/cqlsh
         build dist-cqlsh-rpm: build-submodule-rpm tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
@@ -2709,11 +2696,11 @@ def write_build_file(f,
           artifact = build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build dist-python3-tar: phony {' '.join(['$builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz'.format(mode=mode, scylla_product=scylla_product, arch=arch, scylla_version=scylla_version, scylla_release=scylla_release) for mode in default_modes])}
         build dist-python3: phony dist-python3-tar dist-python3-rpm dist-python3-deb
-        build dist-deb: phony dist-server-deb dist-python3-deb dist-tools-deb dist-cqlsh-deb
-        build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-tools-rpm dist-cqlsh-rpm
-        build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-tools-tar dist-cqlsh-tar
+        build dist-deb: phony dist-server-deb dist-python3-deb dist-cqlsh-deb
+        build dist-rpm: phony dist-server-rpm dist-python3-rpm dist-cqlsh-rpm
+        build dist-tar: phony dist-unified-tar dist-server-tar dist-python3-tar dist-cqlsh-tar
 
-        build dist: phony dist-unified dist-server dist-python3 dist-tools dist-cqlsh
+        build dist: phony dist-unified dist-server dist-python3 dist-cqlsh
         '''))
 
     f.write(textwrap.dedent(f'''\
@@ -2726,12 +2713,10 @@ def write_build_file(f,
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-python3-{arch}-package.tar.gz: copy tools/python3/build/{scylla_product}-python3-{scylla_version}-{scylla_release}.{arch}.tar.gz
-        build $builddir/{mode}/dist/tar/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz: copy tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
-        build $builddir/{mode}/dist/tar/{scylla_product}-tools-package.tar.gz: copy tools/java/build/{scylla_product}-tools-{scylla_version}-{scylla_release}.noarch.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
         build $builddir/{mode}/dist/tar/{scylla_product}-cqlsh-package.tar.gz: copy tools/cqlsh/build/{scylla_product}-cqlsh-{scylla_version}-{scylla_release}.{arch}.tar.gz
 
-        build {mode}-dist: phony dist-server-{mode} dist-server-debuginfo-{mode} dist-python3-{mode} dist-tools-{mode} dist-unified-{mode} dist-cqlsh-{mode}
+        build {mode}-dist: phony dist-server-{mode} dist-server-debuginfo-{mode} dist-python3-{mode} dist-unified-{mode} dist-cqlsh-{mode}
         build dist-{mode}: phony {mode}-dist
         build dist-check-{mode}: dist-check
           mode = {mode}
