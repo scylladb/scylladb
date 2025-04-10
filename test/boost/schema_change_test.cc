@@ -212,6 +212,79 @@ SEASTAR_THREAD_TEST_CASE(test_inject_internal_columns) {
             "where pk is not null "
             "primary key (pk)").get();
         check_inject_into("view1");
+
+        // Check that view_virtual columns are not created for internal columns.
+        // Internal columns should not affect the lifetime of rows in the view.
+        e.execute_cql("create materialized view tests_ks.view2 as select pk, c1 from tests_ks.table1 "
+            "where pk is not null "
+            "primary key (pk)").get();
+        {
+            const auto view_schema = e.db().local().find_schema("tests_ks", "view2");
+
+            const auto c1_col = view_schema->get_column_definition("c1");
+            BOOST_REQUIRE(c1_col != nullptr);
+            BOOST_REQUIRE(!c1_col->is_view_virtual());
+
+            const auto c2_col = view_schema->get_column_definition("c2");
+            BOOST_REQUIRE(c2_col != nullptr);
+            BOOST_REQUIRE(c2_col->is_view_virtual());
+
+            const auto int_col = view_schema->get_column_definition("$test_set_c1");
+            BOOST_REQUIRE(int_col == nullptr);
+        }
+
+        // Check that internal columns are not included in select* views.
+        e.execute_cql("create materialized view tests_ks.view3 as select * from tests_ks.table1 "
+            "where pk is not null "
+            "primary key (pk)").get();
+        {
+            const auto table_schema = e.db().local().find_schema("tests_ks", "table1");
+            const auto view_schema = e.db().local().find_schema("tests_ks", "view3");
+
+            const auto view_c1 = view_schema->get_column_definition("c1");
+            BOOST_REQUIRE(view_c1 != nullptr);
+            BOOST_REQUIRE(!view_c1->is_view_virtual());
+            BOOST_REQUIRE(!static_cast<bool>(view_c1->is_internal()));
+
+            const auto view_c2 = view_schema->get_column_definition("c2");
+            BOOST_REQUIRE(view_c2 != nullptr);
+            BOOST_REQUIRE(!view_c2->is_view_virtual());
+            BOOST_REQUIRE(!static_cast<bool>(view_c2->is_internal()));
+
+            const auto ic1 = table_schema->get_column_definition("$test_set_c1");
+            BOOST_REQUIRE(ic1 != nullptr);
+            BOOST_REQUIRE(!ic1->is_view_virtual());
+            BOOST_REQUIRE(static_cast<bool>(ic1->is_internal()));
+
+            const auto ic2 = table_schema->get_column_definition("$test_set_c2");
+            BOOST_REQUIRE(ic2 != nullptr);
+            BOOST_REQUIRE(!ic2->is_view_virtual());
+            BOOST_REQUIRE(static_cast<bool>(ic2->is_internal()));
+
+            const auto view_ic1 = view_schema->get_column_definition("$test_set_c1");
+            BOOST_REQUIRE(view_ic1 == nullptr);
+
+            const auto view_ic2 = view_schema->get_column_definition("$test_set_c2");
+            BOOST_REQUIRE(view_ic2 == nullptr);
+        }
+
+        // Check that we can't explicitly reference internal columns in create view select statement.
+        {
+            const char* cql = R"(
+                create materialized view tests_ks.view4 as 
+                select pk, c1, c2, "$test_set_c1"
+                from tests_ks.table1
+                where pk is not null
+                primary key (pk)
+            )";
+            BOOST_REQUIRE_EXCEPTION(
+                e.execute_cql(cql).get();,
+                exceptions::invalid_request_exception,
+                [](const exceptions::invalid_request_exception& e) {
+                    const char* expected_error = "Unknown column name detected in CREATE MATERIALIZED VIEW statement: $test_set_c1";
+                    return std::string_view(e.what()).starts_with(expected_error);
+                });
+        }
     }).get();
 }
 
