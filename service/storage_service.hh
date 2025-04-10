@@ -43,6 +43,7 @@
 #include "node_ops/id.hh"
 #include "raft/server.hh"
 #include "service/topology_state_machine.hh"
+#include "db/view/view_building_state.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "timestamp.hh"
@@ -242,6 +243,7 @@ public:
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
         topology_state_machine& topology_state_machine,
+        db::view::view_building_state_machine& view_building_state_machine,
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
         std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
@@ -879,6 +881,7 @@ public:
 private:
      // State machine that is responsible for topology change
     topology_state_machine& _topology_state_machine;
+    db::view::view_building_state_machine& _view_building_state_machine;
 
     future<> _topology_change_coordinator = make_ready_future<>();
     future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, cdc::generation_service&, sharded<db::system_distributed_keyspace>&, abort_source&);
@@ -924,7 +927,11 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
     future<> topology_transition(state_change_hint hint = {});
-
+    
+    // This is called on all nodes for each new command related to tablet-view-building, received through raft
+    // raft_group0_client::_read_apply_mutex must be held
+    // Precondition: the mutations were already written to disk; the function only transitions the in-memory state machine.
+    future<> view_building_transition();
 public:
     // Reloads in-memory topology state safely under group 0 read_apply mutex.
     // Does not modify on-disk state.
@@ -1036,6 +1043,9 @@ private:
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
+    // load view building state machine snapshot into memory
+    // raft_group0_client::_read_apply_mutex must be held
+    future<> view_building_state_load();
 
     utils::chunked_vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp);
     std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);
