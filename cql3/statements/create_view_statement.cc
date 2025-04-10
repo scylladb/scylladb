@@ -189,7 +189,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         }, selectable);
 
         auto* def = get_column_definition(*schema, *identifier);
-        if (!def) {
+        if (!def || def->is_internal()) {
             throw exceptions::invalid_request_exception(format("Unknown column name detected in CREATE MATERIALIZED VIEW statement: {}", identifier));
         }
         return def;
@@ -240,6 +240,9 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     // used in the view and whether or not to generate a tombstone. In order to not surprise our users, we require
     // that they include all of the columns. We provide them with a list of all of the columns left to include.
     for (auto& def : schema->all_columns()) {
+        if (def.is_internal()) {
+            continue;
+        }
         bool included_def = included.empty() || included.contains(&def);
         if (included_def && def.is_static()) {
             throw exceptions::invalid_request_exception(format("Unable to include static column '{}' which would be included by Materialized View SELECT * statement", def.name_as_text()));
