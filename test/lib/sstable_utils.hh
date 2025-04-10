@@ -37,6 +37,7 @@ namespace sstables {
 using sstable_ptr = shared_sstable;
 
 class test {
+protected:
     sstable_ptr _sst;
 public:
 
@@ -89,6 +90,14 @@ public:
 
     future<> read_summary() noexcept {
         return _sst->read_summary();
+    }
+
+    future<> read_toc() {
+        return _sst->read_toc();
+    }
+
+    future<> read_filter() {
+        return _sst->read_filter();
     }
 
     future<summary_entry&> read_summary_entry(size_t i) {
