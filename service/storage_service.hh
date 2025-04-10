@@ -180,7 +180,7 @@ private:
     std::vector<protocol_server*> _protocol_servers;
     std::vector<std::any> _listeners;
     gms::feature::listener_registration _workload_prioritization_registration;
-    gate _async_gate;
+    named_gate _async_gate;
 
     condition_variable _tablet_split_monitor_event;
     utils::sequenced_set<table_id> _tablet_split_candidates;

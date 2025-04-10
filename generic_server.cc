@@ -115,6 +115,7 @@ connection::connection(server& server, connected_socket&& fd, named_semaphore& s
     , _fd{std::move(fd)}
     , _read_buf(data_source(std::make_unique<counted_data_source_impl>(_fd.input().detach(), _conns_cpu_concurrency)))
     , _write_buf(output_stream<char>(data_sink(std::make_unique<counted_data_sink_impl>(_fd.output().detach(), _conns_cpu_concurrency)), 8192, output_stream_options{.batch_flushes = true}))
+    , _pending_requests_gate("generic_server::connection")
     , _hold_server(_server._gate)
 {
     ++_server._total_connections;
@@ -251,6 +252,7 @@ config::config(uint32_t uninitialized_connections_semaphore_cpu_concurrency)
 server::server(const sstring& server_name, logging::logger& logger, config cfg)
     : _server_name{server_name}
     , _logger{logger}
+    , _gate("generic_server::server")
     , _conns_cpu_concurrency(cfg.uninitialized_connections_semaphore_cpu_concurrency)
     , _prev_conns_cpu_concurrency(_conns_cpu_concurrency)
     , _conns_cpu_concurrency_semaphore(_conns_cpu_concurrency, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})

@@ -66,7 +66,7 @@ class sstables_format_listener {
     sharded<gms::feature_service>& _features;
     sstables_format_selector& _selector;
     seastar::named_semaphore _sem = {1, named_semaphore_exception_factory{"feature listeners"}};
-    seastar::gate _sel;
+    seastar::named_gate _sel;
 
     feature_enabled_listener _me_feature_listener;
 public:

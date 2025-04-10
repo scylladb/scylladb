@@ -147,6 +147,7 @@ manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_fi
     , _proxy(proxy)
     , _max_hint_window_us(max_hint_window_ms * 1000)
     , _local_db(db.local())
+    , _draining_eps_gate(seastar::format("hints::manager::{}", _hints_dir.native()))
     , _resource_manager(res_manager)
 {
     if (utils::get_local_injector().enter("decrease_hints_flush_period")) {

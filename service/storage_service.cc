@@ -200,6 +200,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _snitch(snitch)
         , _sl_controller(sl_controller)
         , _group0(nullptr)
+        , _async_gate("storage_service")
         , _node_ops_abort_thread(node_ops_abort_thread())
         , _node_ops_module(make_shared<node_ops::task_manager_module>(tm, *this))
         , _tablets_module(make_shared<service::task_manager_module>(tm, *this))

@@ -67,6 +67,7 @@ sstables_format_listener::sstables_format_listener(gms::gossiper& g, sharded<gms
     : _gossiper(g)
     , _features(f)
     , _selector(selector)
+    , _sel("sstables_format_listener")
     , _me_feature_listener(*this, sstables::sstable_version_types::me)
 { }
 

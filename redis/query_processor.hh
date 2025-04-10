@@ -30,7 +30,7 @@ class query_processor {
     service::storage_proxy& _proxy;
     data_dictionary::database _db;
     seastar::metrics::metric_groups _metrics;
-    seastar::gate _pending_command_gate;
+    seastar::named_gate _pending_command_gate;
 public:
     query_processor(service::storage_proxy& proxy, data_dictionary::database db);
 

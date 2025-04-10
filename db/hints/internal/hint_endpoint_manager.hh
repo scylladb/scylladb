@@ -41,7 +41,7 @@ private:
     endpoint_id _key;
     manager& _shard_manager;
     hints_store_ptr _hints_store_anchor;
-    seastar::gate _store_gate;
+    seastar::named_gate _store_gate;
     lw_shared_ptr<seastar::shared_mutex> _file_update_mutex_ptr;
     seastar::shared_mutex& _file_update_mutex;
 
