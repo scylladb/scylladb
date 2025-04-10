@@ -164,6 +164,7 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--logger-log-level', 'raft_topology=debug',
     '--logger-log-level', 'query_processor=debug',
     '--logger-log-level', 'group0_raft_sm=trace',
+    '--logger-log-level', 'group0_voter_handler=debug',
 ]
 
 # [--smp, 1], [--smp, 2] -> [--smp, 2]
