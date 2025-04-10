@@ -21,6 +21,7 @@
 #include "db/write_type.hh"
 #include "db/hints/manager.hh"
 #include "db/view/node_view_update_backlog.hh"
+#include "service/view_building_state.hh"
 #include "tracing/trace_state.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include "storage_proxy_stats.hh"
@@ -79,6 +80,10 @@ namespace paxos {
     class proposal;
     class promise;
     using prepare_response = std::variant<utils::UUID, promise>;
+}
+
+namespace view_building {
+    struct view_building_state_machine;
 }
 
 class abstract_write_response_handler;
@@ -508,6 +513,9 @@ public:
         return _cdc;
     }
 
+    db::system_keyspace& system_keyspace();
+    const view_building::view_building_state_machine& view_building_state_machine();
+
     response_id_type get_next_response_id() {
         auto next = _next_response_id++;
         if (next == 0) { // 0 is reserved for unique_response_handler
@@ -517,7 +525,7 @@ public:
     }
 
     // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
-    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, raft_group0_client&, topology_state_machine&);
+    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, raft_group0_client&, topology_state_machine&, const view_building::view_building_state_machine&);
     future<> stop_remote();
 
     gms::inet_address my_address() const noexcept;
