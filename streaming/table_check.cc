@@ -7,10 +7,10 @@
  */
 
 #include "replica/database.hh"
-#include "repair/table_check.hh"
+#include "streaming/table_check.hh"
 #include "service/migration_manager.hh"
 
-namespace repair {
+namespace streaming {
 
 future<table_dropped> table_sync_and_check(replica::database& db, service::migration_manager& mm, const table_id& uuid) {
     if (mm.use_raft()) {
