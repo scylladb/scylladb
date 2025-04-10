@@ -128,7 +128,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
-    locator::load_stats_ptr _tablet_load_stats;
     std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
     // FIXME: make frequency per table in order to reduce work in each iteration.
@@ -1581,7 +1580,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         bool has_nodes_to_drain = false;
         if (!preempt) {
-            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), _tablet_load_stats, get_dead_nodes());
+            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), {}, get_dead_nodes());
             has_nodes_to_drain = plan.has_nodes_to_drain();
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
@@ -1661,7 +1660,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
 
         auto tm = get_token_metadata_ptr();
-        auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
+        auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
 
         std::vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
@@ -2946,7 +2945,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     }
 
     auto tm = get_token_metadata_ptr();
-    auto plan = co_await _tablet_allocator.balance_tablets(tm, _tablet_load_stats, get_dead_nodes());
+    auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
     if (plan.empty()) {
         rtlogger.debug("Tablet load balancer did not make any plan");
         co_return false;
@@ -3095,7 +3094,7 @@ future<> topology_coordinator::refresh_tablet_load_stats() {
 
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
 
-    _tablet_load_stats = make_lw_shared<const locator::load_stats>(std::move(stats));
+    _tablet_allocator.set_load_stats(make_lw_shared<const locator::load_stats>(std::move(stats)));
 }
 
 future<> topology_coordinator::start_tablet_load_stats_refresher() {

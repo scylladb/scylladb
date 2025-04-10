@@ -35,7 +35,7 @@ Even though not widely known, CQL also has built-in JSON support (`select json..
 The process of adding a new virtual table is as follows:
 * Choose the appropriate class to inherit from: `db::memtable_filling_virtual_table` or `db::streaming_virtual_table` (located in `db/virtual_table.hh`);
 * Implement the interface generating the data, mind shard awareness and query restrictions if they apply;
-* Instantiate and register your virtual table in `register_virtual_tables()` in `db/system_keyspace.cc`;
+* Instantiate and register your virtual table in `initialize_virtual_tables()` in `db/virtual_tables.cc`;
 
 ### Choosing the right class for you virtual table
 

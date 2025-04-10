@@ -20,8 +20,11 @@
 #
 # Key bindings:
 #
-#  t - toggle display of table tags. Each table has a unique color which is displayed in the bottom part of the tablet.
+#  t - toggle display of table tags. Each table has a unique color which fills tablets of that table.
 #  i - toggle display of tablet ids. Only visible when table tags are visible.
+#  s - toggle mode of scaling of tablet size. Modes:
+#        - fixed-size (each tablet has the same displayed size)
+#        - scaled-to-capacity (tablet size is proportional to its utilization of shard's storage capacity)
 #
 
 import math
@@ -31,6 +34,9 @@ import logging
 import pygame
 
 from cassandra.cluster import Cluster
+
+tablet_size_modes = ["fixed size", "scaled to capacity"]
+tablet_size_mode_idx = 1
 
 # Layout settings
 tablet_size = 60
@@ -71,6 +77,8 @@ class Node(object):
     def __init__(self, id):
         self.shards = []
         self.id = id
+        self.capacity = None
+        self.capacity_weight = 1
 
 
 class Shard(object):
@@ -86,7 +94,7 @@ class Tablet(object):
     STATE_JOINING = 1
     STATE_LEAVING = 2
 
-    def __init__(self, id, state, initial):
+    def __init__(self, id, node, state, initial):
         self.id = id
         self.state = state
         self.insert_time = pygame.time.get_ticks()
@@ -104,14 +112,23 @@ class Tablet(object):
         self.size_frac = 0
         self.speed = 0
         self.fall_start = None
+        self.h_scale = 1
+
+        self.update_h_scale(node)
 
         if initial:
-            self.h = tablet_h + tablet_frame_size * 2
+            self.h = self.h_scale * (tablet_h + tablet_frame_size * 2)
             self.size_frac = 1
 
         # Updated by redraw()
         self.x = 0
         self.y = 0
+
+    def update_h_scale(self, node):
+        if tablet_size_mode_idx == 0:
+            self.h_scale = 1
+        else:
+            self.h_scale = node.capacity_weight
 
     def get_mid_x(self):
         return self.x + tablet_frame_size + float(tablet_w) / 2
@@ -341,6 +358,13 @@ def move_tracers(now):
             tracers.remove(tracer)
 
 
+def on_capacity_weight_changed():
+    for node in nodes:
+        for shard in node.shards:
+            for tablet in shard.tablets.values():
+                tablet.update_h_scale(node)
+    changed = True
+
 BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 GRAY = (192, 192, 192)
@@ -403,6 +427,7 @@ cluster = Cluster(['127.0.0.1'])
 session = cluster.connect()
 topo_query = session.prepare("SELECT host_id, shard_count FROM system.topology")
 tablets_query = session.prepare("SELECT * FROM system.tablets")
+load_per_node_query = session.prepare("SELECT * FROM system.load_per_node")
 
 data_source_alive = False
 
@@ -432,12 +457,33 @@ def update_from_cql(initial=False):
         while len(n.shards) < host.shard_count:
             n.shards.append(Shard())
 
-
     for id in nodes_by_id:
         if id not in all_host_ids:
             nodes.remove(nodes_by_id[id])
             del nodes_by_id[id]
             changed = True
+
+    for row in session.execute(load_per_node_query):
+        host_id = row.node
+        if host_id in nodes_by_id:
+            n = nodes_by_id[host_id]
+            if row.storage_capacity:
+                n.capacity = int(row.storage_capacity)
+
+
+    # Nodes are scaled to the node with smallest capacity.
+    # Nodes with more capacity will have smaller tablets (smaller capacity_weight).
+    min_capacity = min([n.capacity for n in nodes if n.capacity], default=0)
+    capacity_changed = False
+    for n in nodes:
+        if n.capacity:
+            new_weight = float(min_capacity) / n.capacity
+            if n.capacity_weight != new_weight:
+                n.capacity_weight = new_weight
+                capacity_changed = True
+
+    if capacity_changed:
+        on_capacity_weight_changed()
 
     tablets_by_shard = set()
     tablet_id_by_table = {}
@@ -476,9 +522,10 @@ def update_from_cql(initial=False):
             else:
                 state = (Tablet.STATE_NORMAL, None)
 
-            s = nodes_by_id[host].shards[shard]
+            node = nodes_by_id[host]
+            s = node.shards[shard]
             if id not in s.tablets:
-                s.tablets[id] = Tablet(id, state, initial=initial)
+                s.tablets[id] = Tablet(id, node, state, initial=initial)
                 stage_change = True
                 inserted = True
                 changed = True
@@ -562,7 +609,7 @@ def draw_tablet(tablet, x, y):
     tablet.x = x
     tablet.y = y
     w = tablet.size_frac * tablet_w
-    h = tablet.size_frac * (tablet_h + 2 * tablet_frame_size)
+    h = tablet.h
     if h > 2 * tablet_frame_size:
         color = tablet_colors[tablet.state]
         if show_table_tag:
@@ -575,7 +622,7 @@ def draw_tablet(tablet, x, y):
                                          w,
                                          h - 2 * tablet_frame_size), border_radius=tablet_radius)
 
-        if show_table_tag:
+        if show_table_tag and tablet.state[0] != Tablet.STATE_NORMAL:
             table_tag_h = tablet_radius
             pygame.draw.rect(window, color, (x + tablet_frame_size + (tablet_w - w) / 2,
                                              y + tablet_frame_size,
@@ -584,11 +631,11 @@ def draw_tablet(tablet, x, y):
                              border_top_left_radius=tablet_radius,
                              border_top_right_radius=tablet_radius)
 
-            if show_tablet_id:
-                number_text = str(tablet.seq)
-                number_image = number_font.render(number_text, True, BLACK)
-                window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
-                                           y + tablet_frame_size + (h-1 - number_image.get_height()) / 2))
+        if show_table_tag and show_tablet_id:
+            number_text = str(tablet.seq)
+            number_image = number_font.render(number_text, True, BLACK)
+            window.blit(number_image, (x + tablet_frame_size + (w - number_image.get_width()) / 2,
+                                       y + tablet_frame_size + (h - 2 * tablet_frame_size - number_image.get_height()) / 2))
 
 def draw_node_frame(x, y, x2, y2, color):
     pygame.draw.rect(window, color, (x, y, x2 - x, y2 - y), node_frame_thickness,
@@ -607,12 +654,16 @@ def animate(now):
             tablet_max_pos = 0
             for tablet in shard.ordered_tablets():
                 # Appearing
-                if tablet.h < tablet_max_h:
+                if tablet.h < tablet.h_scale * tablet_max_h:
                     frac = cubic_ease_in(interpolate(tablet.insert_time, insert_time_ms))
-                    new_h = frac * tablet_max_h
+                    new_h = frac * tablet.h_scale * tablet_max_h
                     tablet.pos += new_h - tablet.h
                     tablet.h = new_h
                     tablet.size_frac = frac
+                    changed = True
+                elif tablet.h > tablet_max_h * tablet.h_scale:
+                    tablet.h = tablet_max_h * tablet.h_scale
+                    tablet.size_frac = 1
                     changed = True
 
                 # Falling
@@ -690,6 +741,10 @@ while running:
             elif event.key == pygame.K_i:
                 show_tablet_id = not show_tablet_id
                 changed = True
+            elif event.key == pygame.K_s:
+                tablet_size_mode_idx = (tablet_size_mode_idx + 1) % len(tablet_size_modes)
+                print("Tablet size mode:", tablet_size_modes[tablet_size_mode_idx])
+                on_capacity_weight_changed()
 
     now = float(pygame.time.get_ticks())
 

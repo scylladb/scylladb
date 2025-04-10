@@ -3079,6 +3079,7 @@ class tablet_allocator_impl : public tablet_allocator::impl
     load_balancer_stats_manager _load_balancer_stats;
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
+    locator::load_stats_ptr _load_stats;
 private:
     load_balancer make_load_balancer(token_metadata_ptr tm,
             locator::load_stats_ptr table_load_stats,
@@ -3111,8 +3112,16 @@ public:
     }
 
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
-        auto lb = make_load_balancer(tm, std::move(table_load_stats), std::move(skiplist));
+        auto lb = make_load_balancer(tm, table_load_stats ? table_load_stats : _load_stats, std::move(skiplist));
         co_return co_await lb.make_plan();
+    }
+
+    void set_load_stats(locator::load_stats_ptr load_stats) {
+        _load_stats = std::move(load_stats);
+    }
+
+    locator::load_stats_ptr get_load_stats() {
+        return _load_stats;
     }
 
     void set_use_tablet_aware_balancing(bool use_tablet_aware_balancing) {
@@ -3162,6 +3171,7 @@ public:
 
     void on_leadership_lost() {
         _load_balancer_stats.unregister();
+        _load_stats = {};
     }
 
     load_balancer_stats_manager& stats() {
@@ -3271,6 +3281,14 @@ future<> tablet_allocator::stop() {
 
 future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist) {
     return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist));
+}
+
+void tablet_allocator::set_load_stats(locator::load_stats_ptr load_stats) {
+    impl().set_load_stats(std::move(load_stats));
+}
+
+locator::load_stats_ptr tablet_allocator::get_load_stats() {
+    return impl().get_load_stats();
 }
 
 void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balancing) {
