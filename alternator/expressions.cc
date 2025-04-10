@@ -165,7 +165,9 @@ static std::optional<std::string> resolve_path_component(const std::string& colu
                     fmt::format("ExpressionAttributeNames missing entry '{}' required by expression", column_name));
         }
         used_attribute_names.emplace(column_name);
-        return std::string(rjson::to_string_view(*value));
+        auto result = std::string(rjson::to_string_view(*value));
+        validate_attr_name_length("", result.size(), false, "ExpressionAttributeNames contains invalid value: ");
+        return result;
     }
     return std::nullopt;
 }
@@ -735,6 +737,26 @@ rjson::value calculate_value(const parsed::set_rhs& rhs,
     }
     // Can't happen
     return rjson::null_value();
+}
+
+void validate_attr_name_length(std::string_view supplementary_context, size_t attr_name_length, bool is_key, std::string_view error_msg_prefix) {
+    constexpr const size_t DYNAMODB_KEY_ATTR_NAME_SIZE_MAX = 255;
+    constexpr const size_t DYNAMODB_NONKEY_ATTR_NAME_SIZE_MAX = 65535;
+
+    const size_t max_length = is_key ? DYNAMODB_KEY_ATTR_NAME_SIZE_MAX : DYNAMODB_NONKEY_ATTR_NAME_SIZE_MAX;
+    if (attr_name_length > max_length) {
+        std::string error_msg;
+        if (!error_msg_prefix.empty()) {
+            error_msg += error_msg_prefix;
+        }
+        if (!supplementary_context.empty()) {
+            error_msg += "in ";
+            error_msg += supplementary_context;
+            error_msg += " - ";
+        }
+        error_msg += fmt::format("Attribute name is too large, must be less than {} bytes", std::to_string(max_length + 1));
+        throw api_error::validation(error_msg);
+    }
 }
 
 } // namespace alternator
