@@ -274,8 +274,16 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         }).then([] { return make_ready_future<stop_iteration>(stop_iteration::no); });
     };
 
+<<<<<<< HEAD
     co_await seastar::with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
+||||||| parent of 5b5f9120d0 (db/batchlog_manager: improve replayAllFailedBatches logs)
+    co_await with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
+        blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
+=======
+    co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch)] () mutable -> future<> {
+        blogger.debug("Started replayAllFailedBatches with cleanup: {}", cleanup);
+>>>>>>> 5b5f9120d0 (db/batchlog_manager: improve replayAllFailedBatches logs)
         co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
         co_await _qp.query_internal(
                 format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
@@ -289,8 +297,8 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             // Replaying batches could have generated tombstones, flush to disk,
             // where they can be compacted away.
             return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
-        }).then([] {
-            blogger.debug("Finished replayAllFailedBatches");
+        }).then([&all_replayed] {
+            blogger.debug("Finished replayAllFailedBatches with all_replayed: {}", all_replayed);
         });
     });
 }
