@@ -28,6 +28,12 @@ struct prepared_cache_entry_size {
 };
 
 typedef bytes cql_prepared_id_type;
+struct cql_metadata_id_type {
+    explicit cql_metadata_id_type(const bytes&& metadata_id) : _metadata_id(std::move(metadata_id)) {}
+    bytes _metadata_id;
+
+    bool operator==(const cql_metadata_id_type& other) const = default;
+};
 
 /// \brief The key of the prepared statements cache
 ///
@@ -175,6 +181,13 @@ struct hash<cql3::prepared_cache_key_type> final {
     }
 };
 }
+
+template <> struct fmt::formatter<cql3::cql_metadata_id_type> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const cql3::cql_metadata_id_type& m, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", m._metadata_id);
+    }
+};
 
 // for prepared_statements_cache log printouts
 template <> struct fmt::formatter<cql3::prepared_cache_key_type::cache_key_type> {

@@ -11,6 +11,7 @@
 #include "auth/service.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/core/scheduling.hh>
+#include "cql3/prepared_statements_cache.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
 #include "auth/authenticator.hh"
@@ -148,6 +149,39 @@ struct connection_service_level_params {
     sstring scheduling_group_name;
 };
 
+class cql_metadata_id_wrapper {
+public:
+    enum class state {
+        UNSUPPORTED_BY_PROTOCOL,
+        SUPPORTED_BY_PROTOCOL_EMPTY, // metadata_id supported by protocol but no value provided (e.g. handling QUERY or BATCH)
+        SUPPORTED_BY_PROTOCOL_NON_EMPTY // metadata_id supported by protocol and provided (i.e. handling EXECUTE)
+    };
+private:
+    cql3::cql_metadata_id_type _metadata_id; 
+    state _state;
+
+public:
+    explicit cql_metadata_id_wrapper(bool supported)
+        : _metadata_id{bytes{}}
+        , _state(supported ? state::SUPPORTED_BY_PROTOCOL_EMPTY : state::UNSUPPORTED_BY_PROTOCOL)
+    { }
+
+    explicit cql_metadata_id_wrapper(cql3::cql_metadata_id_type&& metadata_id)
+        : _metadata_id(std::move(metadata_id))
+        , _state(state::SUPPORTED_BY_PROTOCOL_NON_EMPTY)
+    { }
+
+    bool is_supported_by_protocol() const {
+        return _state != state::UNSUPPORTED_BY_PROTOCOL;
+    }
+
+    bool is_non_empty() const {
+        return _state == state::SUPPORTED_BY_PROTOCOL_NON_EMPTY;
+    }
+
+    const cql3::cql_metadata_id_type& get_metadata_id() const;
+};
+
 class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
 private:
     struct transport_stats {
@@ -212,7 +246,7 @@ private:
     class fmt_visitor;
     friend class connection;
     friend std::unique_ptr<cql_server::response> make_result(int16_t stream, messages::result_message& msg,
-            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, bool skip_metadata);
+            const tracing::trace_state_ptr& tr_state, cql_protocol_version_type version, cql_metadata_id_wrapper&& metadata_id, bool skip_metadata);
 
     class connection : public generic_server::connection {
         cql_server& _server;
