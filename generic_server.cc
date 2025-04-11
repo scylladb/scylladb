@@ -17,8 +17,6 @@
 #include <seastar/core/smp.hh>
 #include <utility>
 
-#include "db/config.hh"
-
 namespace generic_server {
 
 class counted_data_source_impl : public data_source_impl {
@@ -235,17 +233,6 @@ future<> connection::shutdown()
     } catch (...) {
     }
     return make_ready_future<>();
-}
-
-config::config(const db::config& cfg)
-    : uninitialized_connections_semaphore_cpu_concurrency(
-            cfg.uninitialized_connections_semaphore_cpu_concurrency)
-{
-}
-
-config::config(uint32_t uninitialized_connections_semaphore_cpu_concurrency)
-    : uninitialized_connections_semaphore_cpu_concurrency(
-            uninitialized_connections_semaphore_cpu_concurrency) {
 }
 
 server::server(const sstring& server_name, logging::logger& logger, config cfg)

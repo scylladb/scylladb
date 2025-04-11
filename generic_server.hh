@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "db/config.hh"
 #include "utils/log.hh"
 
 #include "seastarx.hh"
@@ -83,9 +82,6 @@ public:
 
 struct config {
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
-
-    explicit config(const db::config& cfg);
-    explicit config(uint32_t uninitialized_connections_semaphore_cpu_concurrency);
 };
 
 // A generic TCP socket server.
