@@ -2451,8 +2451,11 @@ future<> system_keyspace::get_compaction_history(compaction_history_consumer con
 }
 
 future<> system_keyspace::update_repair_history(repair_history_entry entry) {
-    sstring req = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)", REPAIR_HISTORY);
+    auto& cfg = _db.get_config();
+    uint32_t repair_history_ttl_seconds = cfg.repair_history_ttl_seconds();
+    sstring req = format("INSERT INTO system.{} (table_uuid, repair_time, repair_uuid, keyspace_name, table_name, range_start, range_end) VALUES (?, ?, ?, ?, ?, ?, ?)  USING TTL {}", REPAIR_HISTORY, repair_history_ttl_seconds);
     co_await execute_cql(req, entry.table_uuid.uuid(), entry.ts, entry.id.uuid(), entry.ks, entry.cf, entry.range_start, entry.range_end).discard_result();
+    slogger.trace("INSERT INTO system.repair_histroy table_uuid {} with ttl {}",entry.table_uuid.uuid(), repair_history_ttl_seconds);
 }
 
 future<> system_keyspace::get_repair_history(::table_id table_id, repair_history_consumer f) {
