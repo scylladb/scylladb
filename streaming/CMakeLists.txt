@@ -14,7 +14,8 @@ target_sources(streaming
     stream_session_state.cc
     stream_summary.cc
     stream_task.cc
-    stream_transfer_task.cc)
+    stream_transfer_task.cc
+    table_check.cc)
 target_include_directories(streaming
   PUBLIC
     ${CMAKE_SOURCE_DIR})
