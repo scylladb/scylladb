@@ -1483,7 +1483,7 @@ public:
 static const column_value resolve_column(const unresolved_identifier& col_ident, const schema& schema) {
     ::shared_ptr<column_identifier> id = col_ident.ident->prepare_column_identifier(schema);
     const column_definition* def = get_column_definition(schema, *id);
-    if (!def || def->is_hidden_from_cql()) {
+    if (!def || def->is_view_virtual()) {
         throw exceptions::unrecognized_entity_exception(*id);
     }
     return column_value(def);

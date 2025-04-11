@@ -1036,7 +1036,7 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
             else {
                 os << "    SELECT ";
                 for (auto& cdef : all_columns()) {
-                    if (cdef.is_hidden_from_cql()) {
+                    if (cdef.is_view_virtual()) {
                         continue;
                     }
                     if (n++ != 0) {
