@@ -833,15 +833,16 @@ future<std::vector<mutation>> prepare_type_drop_announcement(storage_proxy& sp, 
 }
 
 future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
-  return validate(view).then([&sp, view = std::move(view), ts] {
+    co_await validate(view);
     auto& db = sp.local_db();
+
     try {
         auto keyspace = db.find_keyspace(view->ks_name()).metadata();
         if (keyspace->cf_meta_data().contains(view->cf_name())) {
             throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
         }
         mlogger.info("Create new view: {}", view);
-        return seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
+        co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
             auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
             // We don't have a separate on_before_create_view() listener to
             // call. But a view is also a column family, and we need to call
@@ -851,10 +852,10 @@ future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, v
             return include_keyspace(sp, *keyspace, std::move(mutations)).get();
         });
     } catch (const replica::no_such_keyspace& e) {
-        return make_exception_future<std::vector<mutation>>(
-            exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
+        auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.",
+                view->cf_name(), view->ks_name())));
+        co_return coroutine::exception(std::move(ex));
     }
-  });
 }
 
 future<std::vector<mutation>> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
