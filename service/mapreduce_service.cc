@@ -266,7 +266,9 @@ public:
 
     future<query::mapreduce_result> dispatch_to_node(const locator::effective_replication_map& erm, locator::host_id id, query::mapreduce_request req) {
         if (_mapreducer._proxy.is_me(erm, id)) {
-            co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
+            co_return co_await ser::mapreduce_request_rpc_verbs::send_mapreduce_request(
+                &_mapreducer._messaging, id, _mapreducer._abort_outgoing_tasks, req, _tr_info
+            );
         }
 
         _mapreducer._stats.requests_dispatched_to_other_nodes += 1;
@@ -295,8 +297,10 @@ public:
             tracing::trace(_tr_state, "retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
             // Fall through since we cannot co_await in a catch block.
         }
-        co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
-    }
+        co_return co_await ser::mapreduce_request_rpc_verbs::send_mapreduce_request(
+            &_mapreducer._messaging, _mapreducer._proxy.my_host_id(erm), _mapreducer._abort_outgoing_tasks, req, _tr_info
+        );
+   }
 };
 
 locator::token_metadata_ptr mapreduce_service::get_token_metadata_ptr() const noexcept {

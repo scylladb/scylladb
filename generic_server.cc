@@ -296,6 +296,7 @@ future<> server::shutdown() {
         co_await c.shutdown();
         _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
     });
+    co_await on_stop();
     co_await std::move(_listeners_stopped);
 }
 
