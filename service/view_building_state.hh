@@ -96,6 +96,14 @@ struct view_building_state_machine {
     condition_variable event;
 };
 
+struct view_task_result {
+    enum class command_status: uint8_t {
+        fail = 0,
+        success = 1,
+    };
+    service::view_building::view_task_result::command_status status;
+};
+
 view_building_task::task_type task_type_from_string(std::string_view str);
 seastar::sstring task_type_to_sstring(view_building_task::task_type type);
 view_building_task::task_state task_state_from_string(std::string_view str);
