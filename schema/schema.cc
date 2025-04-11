@@ -1036,7 +1036,7 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
             else {
                 os << "    SELECT ";
                 for (auto& cdef : all_columns()) {
-                    if (cdef.is_view_virtual()) {
+                    if (cdef.is_view_virtual() || cdef.is_internal()) {
                         continue;
                     }
                     if (n++ != 0) {
@@ -1051,6 +1051,9 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
     } else {
         os << "TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " (";
         for (auto& cdef : all_columns()) {
+            if (cdef.is_internal()) {
+                continue;
+            }
             if (with_internals && dropped_columns().contains(cdef.name_as_text())) {
                 // If the column has been re-added after a drop, we don't include it right away. Instead, we'll add the
                 // dropped one first below, then we'll issue the DROP and then the actual ADD for this column, thus

@@ -442,7 +442,7 @@ protected:
 };
 
 // Return a list of columns that "SELECT *" should show - these are all
-// columns hidden ones (e.g. "virtual columns" used in materialized views).
+// columns except hidden ones (e.g. internal or view_virtual).
 // The list points to column_definition objects in the given schema_ptr,
 // which can be used only as long as the caller keeps the schema_ptr alive.
 std::vector<const column_definition*> selection::wildcard_columns(schema_ptr schema) {
@@ -453,7 +453,7 @@ std::vector<const column_definition*> selection::wildcard_columns(schema_ptr sch
     return
         columns |
         std::views::filter([](const column_definition& c) {
-            return !c.is_view_virtual();
+            return !c.is_view_virtual() && !c.is_internal();
         }) |
         std::views::transform([](const column_definition& c) {
             return &c;
