@@ -12,13 +12,17 @@
 #include <seastar/core/thread.hh>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
+#include <seastar/testing/on_internal_error.hh>
 #include <seastar/util/defer.hh>
 
+#include "cql3/untyped_result_set.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "schema/schema_builder.hh"
+#include "schema/internal_column_set.hh"
 #include "schema/schema_registry.hh"
 #include "db/extensions.hh"
 #include "db/schema_tables.hh"
@@ -73,6 +77,129 @@ SEASTAR_TEST_CASE(test_new_schema_with_no_structural_change_is_propagated) {
             BOOST_REQUIRE_NE(e.db().local().get_version(), old_node_version);
         });
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_inject_internal_columns) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        auto& mm = e.migration_manager().local();
+        e.execute_cql("create keyspace tests_ks with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create table tests_ks.table1 (pk int primary key, c1 int, c2 int);").get();
+        e.execute_cql("insert into tests_ks.table1 (pk, c1, c2) values (1, 2, 3)").get();
+        const auto test_column_set = internal_column_set("$test_set",
+            {{"$test_set_c1", int32_type}},
+            {{"$test_set_c2", utf8_type}});
+        const auto original_schema = e.db().local().find_schema("tests_ks", "table1");
+        BOOST_REQUIRE_EQUAL(original_schema->get_column_definition("$test_set_c1"), nullptr);
+        BOOST_REQUIRE_EQUAL(original_schema->get_column_definition("$test_set_c2"), nullptr);
+
+        // Check internal_column_set class constructor invariants.
+        {
+            testing::scoped_no_abort_on_internal_error abort_guard{};
+
+            BOOST_REQUIRE_EXCEPTION(
+                internal_column_set("test_set", {{"test_set_c1", int32_type}}, {}),
+                std::runtime_error,
+                [](const std::runtime_error& e) {
+                    return std::string_view(e.what()).starts_with("Column set prefix \"test_set\" must start with the '$' symbol");
+                });
+            BOOST_REQUIRE_EXCEPTION(
+                internal_column_set("$test_set", {}, {}),
+                std::runtime_error,
+                [](const std::runtime_error& e) {
+                    return std::string_view(e.what()).starts_with("Column set \"$test_set\" must contain at least one column");
+                });
+            BOOST_REQUIRE_EXCEPTION(
+                internal_column_set("$test_set", {{"$test_c1", int32_type}}, {}),
+                std::runtime_error,
+                [](const std::runtime_error& e) {
+                    return std::string_view(e.what()).starts_with("Column name \"$test_c1\" must start with the column set prefix \"$test_set\"");
+                });
+        }
+
+        // Check inject_internal_columns adds internal columns to the schema.
+        const auto updated_schema = mm.inject_internal_columns(original_schema, test_column_set).get();
+        BOOST_REQUIRE_EQUAL(updated_schema->id(), original_schema->id());
+        BOOST_REQUIRE_NE(updated_schema->version(), original_schema->version());
+        {
+            const auto col1 = updated_schema->get_column_definition("$test_set_c1");
+            BOOST_REQUIRE_NE(col1, nullptr);
+            BOOST_REQUIRE(static_cast<bool>(col1->is_internal()));
+            BOOST_REQUIRE(col1->type == int32_type);
+
+            const auto col2 = updated_schema->get_column_definition("$test_set_c2");            
+            BOOST_REQUIRE_NE(col2, nullptr);
+            BOOST_REQUIRE(static_cast<bool>(col2->is_internal()));
+            BOOST_REQUIRE(col2->type == utf8_type);
+        }
+
+        // Check that subsequent inject_internal_columns calls return the same schema.
+        {
+            const auto updated_schema2 = mm.inject_internal_columns(original_schema, test_column_set).get();
+            BOOST_REQUIRE_EQUAL(updated_schema2, updated_schema);
+        }
+
+        // Check internal columns are hidden from DESCRIBE output
+        {
+            const auto rs = cql3::untyped_result_set(e.execute_cql("DESC TABLE tests_ks.table1").get());
+            const auto& row = rs.one();
+            const auto create_statement = row.get_as<sstring>("create_statement");
+            BOOST_REQUIRE(create_statement.contains("c1 int"));
+            BOOST_REQUIRE(create_statement.contains("c2 int"));
+            BOOST_REQUIRE(!create_statement.contains("$test_set_c1"));
+            BOOST_REQUIRE(!create_statement.contains("$test_set_c2"));
+        }
+
+        // Check can't inject internal columns into a view.
+        e.execute_cql("create materialized view tests_ks.view1 as select pk, c1 from tests_ks.table1 "
+            "where pk is not null "
+            "primary key (pk)").get();
+        const auto view_schema = e.db().local().find_schema("tests_ks", "view1");
+        {
+            testing::scoped_no_abort_on_internal_error abort_guard{};
+
+            BOOST_REQUIRE_EXCEPTION(
+                mm.inject_internal_columns(view_schema, test_column_set).get(),
+                std::runtime_error,
+                [](const std::runtime_error& e) {
+                    return std::string_view(e.what()).starts_with("Can't inject internal column set \"$test_set\" into view \"tests_ks.view1\"");
+                });
+        }
+
+        // Check internal columns can be accessed by name.
+        {
+            e.execute_cql("update tests_ks.table1 set \"$test_set_c1\" = 10, \"$test_set_c2\" = 'test-str' where pk = 1").get();
+            const auto msg = e.execute_cql("select \"$test_set_c1\", \"$test_set_c2\" from tests_ks.table1 where pk = 1").get();
+            assert_that(msg).is_rows().with_size(1).with_row({
+                {int32_type->decompose(10)}, 
+                {utf8_type->decompose("test-str")}
+            });
+        }
+
+        // Check internal columns are invisible for wildcard selects.
+        {
+            const auto msg = e.execute_cql("select * from tests_ks.table1").get();
+            assert_that(msg).is_rows().with_size(1).with_row({
+                {int32_type->decompose(1)}, 
+                {int32_type->decompose(2)}, 
+                {int32_type->decompose(3)}
+            });
+        }
+
+        // Check that view_virtual columns are not created for internal columns.
+        // Internal columns should not affect the lifetime of rows in the view.
+        {
+            const auto c1_col = view_schema->get_column_definition("c1");
+            BOOST_REQUIRE(c1_col != nullptr);
+            BOOST_REQUIRE(!c1_col->is_view_virtual());
+
+            const auto c2_col = view_schema->get_column_definition("c2");
+            BOOST_REQUIRE(c2_col != nullptr);
+            BOOST_REQUIRE(c2_col->is_view_virtual());
+
+            const auto int_col = view_schema->get_column_definition("$test_set_c1");
+            BOOST_REQUIRE(int_col == nullptr);
+        }
+    }).get();
 }
 
 SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {

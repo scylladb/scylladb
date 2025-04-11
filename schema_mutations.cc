@@ -19,11 +19,13 @@ schema_mutations::schema_mutations(canonical_mutation columnfamilies,
                                    std::optional<canonical_mutation> dropped_columns,
                                    std::optional<canonical_mutation> scylla_tables,
                                    std::optional<canonical_mutation> view_virtual_columns,
-                                   std::optional<canonical_mutation> computed_columns)
+                                   std::optional<canonical_mutation> computed_columns,
+                                   std::optional<canonical_mutation> internal_columns)
     : _columnfamilies(columnfamilies.to_mutation(is_view ? db::schema_tables::views() : db::schema_tables::tables()))
     , _columns(columns.to_mutation(db::schema_tables::columns()))
     , _view_virtual_columns(view_virtual_columns ? mutation_opt{view_virtual_columns.value().to_mutation(db::schema_tables::view_virtual_columns())} : std::nullopt)
     , _computed_columns(computed_columns ? mutation_opt{computed_columns.value().to_mutation(db::schema_tables::computed_columns())} : std::nullopt)
+    , _internal_columns(internal_columns ? mutation_opt{internal_columns.value().to_mutation(db::schema_tables::internal_columns())} : std::nullopt)
     , _indices(indices ? mutation_opt{indices.value().to_mutation(db::schema_tables::indexes())} : std::nullopt)
     , _dropped_columns(dropped_columns ? mutation_opt{dropped_columns.value().to_mutation(db::schema_tables::dropped_columns())} : std::nullopt)
     , _scylla_tables(scylla_tables ? mutation_opt{scylla_tables.value().to_mutation(db::schema_tables::scylla_tables())} : std::nullopt)
@@ -37,6 +39,9 @@ void schema_mutations::copy_to(std::vector<mutation>& dst) const {
     }
     if (_computed_columns) {
         dst.push_back(*_computed_columns);
+    }
+    if (_internal_columns) {
+        dst.push_back(*_internal_columns);
     }
     if (_indices) {
         dst.push_back(*_indices);
@@ -84,6 +89,9 @@ table_schema_version schema_mutations::digest(db::schema_features sf) const {
     if (_computed_columns && !_computed_columns->partition().empty()) {
         db::schema_tables::feed_hash_for_schema_digest(h, *_computed_columns, sf);
     }
+    if (_internal_columns && !_internal_columns->partition().empty()) {
+        db::schema_tables::feed_hash_for_schema_digest(h, *_internal_columns, sf);
+    }
     if (_indices && !_indices->partition().empty()) {
         db::schema_tables::feed_hash_for_schema_digest(h, *_indices, sf);
     }
@@ -122,6 +130,7 @@ bool schema_mutations::operator==(const schema_mutations& other) const {
            && compact(_columns) == compact(other._columns)
            && compact(_view_virtual_columns) == compact(other._view_virtual_columns)
            && compact(_computed_columns) == compact(other._computed_columns)
+           && compact(_internal_columns) == compact(other._internal_columns)
            && compact(_indices) == compact(other._indices)
            && compact(_dropped_columns) == compact(other._dropped_columns)
            && compact(_scylla_tables) == compact(other._scylla_tables)
@@ -131,7 +140,8 @@ bool schema_mutations::operator==(const schema_mutations& other) const {
 bool schema_mutations::live() const {
     return _columnfamilies.live_row_count() > 0 || _columns.live_row_count() > 0 ||
             (_view_virtual_columns && _view_virtual_columns->live_row_count() > 0) ||
-            (_computed_columns && _computed_columns->live_row_count() > 0);
+            (_computed_columns && _computed_columns->live_row_count() > 0) ||
+            (_internal_columns && _internal_columns->live_row_count() > 0);
 }
 
 bool schema_mutations::is_view() const {
@@ -147,6 +157,7 @@ auto fmt::formatter<schema_mutations>::format(const schema_mutations& sm, fmt::f
     out = fmt::format_to(out, " dropped_columns={},\n", sm.dropped_columns_mutation());
     out = fmt::format_to(out, " indices={},\n", sm.indices_mutation());
     out = fmt::format_to(out, " computed_columns={},\n", sm.computed_columns_mutation());
+    out = fmt::format_to(out, " internal_columns={},\n", sm.internal_columns_mutation());
     out = fmt::format_to(out, " view_virtual_columns={},\n", sm.view_virtual_columns_mutation());
     return fmt::format_to(out, "}}");
 }
@@ -155,6 +166,7 @@ schema_mutations& schema_mutations::operator+=(schema_mutations&& sm) {
     _columnfamilies += std::move(sm._columnfamilies);
     _columns += std::move(sm._columns);
     apply(_computed_columns, std::move(sm._computed_columns));
+    apply(_internal_columns, std::move(sm._internal_columns));
     apply(_view_virtual_columns, std::move(sm._view_virtual_columns));
     apply(_indices, std::move(sm._indices));
     apply(_dropped_columns, std::move(sm._dropped_columns));

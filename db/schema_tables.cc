@@ -143,7 +143,8 @@ static computed_columns_map get_computed_columns(const schema_mutations& sm);
 static std::vector<column_definition> create_columns_from_column_rows(
                 const schema_ctxt& ctxt,
                 const query::result_set& rows, const sstring& keyspace,
-                const sstring& table, bool is_super, column_view_virtual is_view_virtual, const computed_columns_map& computed_columns);
+                const sstring& table, bool is_super, column_view_virtual is_view_virtual,
+                column_internal_t is_internal, const computed_columns_map& computed_columns);
 
 
 static std::vector<index_metadata> create_indices_from_index_rows(const query::result_set& rows,
@@ -389,6 +390,10 @@ schema_ptr view_virtual_columns() {
     static thread_local auto schema = columns_schema(VIEW_VIRTUAL_COLUMNS);
     return schema;
 }
+schema_ptr internal_columns() {
+    static thread_local auto schema = columns_schema(INTERNAL_COLUMNS);
+    return schema;
+}
 
 const std::unordered_set<table_id>& schema_tables_holding_schema_mutations() {
     static const std::unordered_set<table_id> table_ids = [] {
@@ -399,6 +404,7 @@ const std::unordered_set<table_id>& schema_tables_holding_schema_mutations() {
                 columns(),
                 view_virtual_columns(),
                 computed_columns(),
+                internal_columns(),
                 dropped_columns(),
                 indexes(),
                 scylla_tables(),
@@ -1599,6 +1605,7 @@ static schema_mutations make_table_deleting_mutations(const sstring& ks, const s
                             make_drop_columns(columns()),
                             make_drop_columns(view_virtual_columns()),
                             make_drop_columns(computed_columns()),
+                            make_drop_columns(internal_columns()),
                             mutation(indexes(), partition_key::from_singular(*indexes(), ks)),
                             make_drop_columns(dropped_columns()),
                             std::move(scylla_tables_m)
@@ -1790,6 +1797,7 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
 
     mutation columns_mutation(columns(), pkey);
     mutation computed_columns_mutation(computed_columns(), pkey);
+    mutation internal_columns_mutation(internal_columns(), pkey);
     mutation dropped_columns_mutation(dropped_columns(), pkey);
     mutation indices_mutation(indexes(), pkey);
 
@@ -1798,7 +1806,8 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
             if (column.is_view_virtual()) {
                 throw std::logic_error("view_virtual column found in non-view table");
             }
-            add_column_to_schema_mutation(table, column, timestamp, columns_mutation);
+            add_column_to_schema_mutation(table, column, timestamp, 
+                column.is_internal() ? internal_columns_mutation : columns_mutation);
             if (column.is_computed()) {
                 add_computed_column_to_schema_mutation(table, column, timestamp, computed_columns_mutation);
             }
@@ -1817,6 +1826,9 @@ static schema_mutations make_table_mutations(schema_ptr table, api::timestamp_ty
                             std::move(columns_mutation),
                             std::nullopt,
                             std::move(computed_columns_mutation),
+                            internal_columns_mutation.partition().empty()
+                                ? std::nullopt
+                                : mutation_opt{std::move(internal_columns_mutation)},
                             std::move(indices_mutation),
                             std::move(dropped_columns_mutation),
                             std::move(scylla_tables_mutation)};
@@ -1902,6 +1914,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
     mutation columns_mutation(columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
     mutation view_virtual_columns_mutation(view_virtual_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
     mutation computed_columns_mutation(computed_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
+    mutation internal_columns_mutation(internal_columns(), partition_key::from_singular(*columns(), old_table->ks_name()));
 
     auto diff = difference(old_table->v3().columns_by_name(), new_table->v3().columns_by_name());
 
@@ -1912,6 +1925,8 @@ static void make_update_columns_mutations(schema_ptr old_table,
         const column_definition& column = *old_table->v3().columns_by_name().at(name);
         if (column.is_view_virtual()) {
             drop_column_from_schema_mutation(view_virtual_columns(), old_table, column.name_as_text(), timestamp, mutations);
+        } else if (column.is_internal()) {
+            drop_column_from_schema_mutation(internal_columns(), old_table, column.name_as_text(), timestamp, mutations);
         } else {
             drop_column_from_schema_mutation(columns(), old_table, column.name_as_text(), timestamp, mutations);
         }
@@ -1925,6 +1940,8 @@ static void make_update_columns_mutations(schema_ptr old_table,
         const column_definition& column = *new_table->v3().columns_by_name().at(name);
         if (column.is_view_virtual()) {
             add_column_to_schema_mutation(new_table, column, timestamp, view_virtual_columns_mutation);
+        } else if (column.is_internal()) {
+            add_column_to_schema_mutation(new_table, column, timestamp, internal_columns_mutation);
         } else {
             add_column_to_schema_mutation(new_table, column, timestamp, columns_mutation);
         }
@@ -1936,6 +1953,9 @@ static void make_update_columns_mutations(schema_ptr old_table,
     mutations.emplace_back(std::move(columns_mutation));
     mutations.emplace_back(std::move(view_virtual_columns_mutation));
     mutations.emplace_back(std::move(computed_columns_mutation));
+    if (!internal_columns_mutation.partition().empty()) {
+        mutations.emplace_back(std::move(internal_columns_mutation));
+    }
 
     // dropped columns
     auto dc_diff = difference(old_table->dropped_columns(), new_table->dropped_columns());
@@ -1974,6 +1994,8 @@ static void make_drop_table_or_view_mutations(schema_ptr schema_table,
     for (auto& column : table_or_view->v3().all_columns()) {
         if (column.is_view_virtual()) {
             drop_column_from_schema_mutation(view_virtual_columns(), table_or_view, column.name_as_text(), timestamp, mutations);
+        } else if (column.is_internal()) {
+            drop_column_from_schema_mutation(internal_columns(), table_or_view, column.name_as_text(), timestamp, mutations);
         } else {
             drop_column_from_schema_mutation(columns(), table_or_view, column.name_as_text(), timestamp, mutations);
         }
@@ -1999,16 +2021,17 @@ std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata>
 
 future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
 {
-    auto&& [cf_m, col_m, vv_col_m, c_col_m, dropped_m, idx_m, st_m] = co_await coroutine::all(
+    auto&& [cf_m, col_m, vv_col_m, c_col_m, int_col_m, dropped_m, idx_m, st_m] = co_await coroutine::all(
         [&] { return read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name); },
         [&] { return read_schema_partition_for_table(proxy, columns(), table.keyspace_name, table.table_name); },
         [&] { return read_schema_partition_for_table(proxy, view_virtual_columns(), table.keyspace_name, table.table_name); },
         [&] { return read_schema_partition_for_table(proxy, computed_columns(), table.keyspace_name, table.table_name); },
+        [&] { return read_schema_partition_for_table(proxy, internal_columns(), table.keyspace_name, table.table_name); },
         [&] { return read_schema_partition_for_table(proxy, dropped_columns(), table.keyspace_name, table.table_name); },
         [&] { return read_schema_partition_for_table(proxy, indexes(), table.keyspace_name, table.table_name); },
         [&] { return read_schema_partition_for_table(proxy, scylla_tables(), table.keyspace_name, table.table_name); }
     );
-    co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
+    co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(int_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
 }
 
 future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
@@ -2230,7 +2253,24 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
             fullRawComparator, */
             cf == cf_type::super,
             column_view_virtual::no,
+            column_internal_t::no,
             computed_columns);
+    if (sm.internal_columns_mutation()) {
+        auto internal_defs = create_columns_from_column_rows(
+            ctxt,
+            query::result_set(*sm.internal_columns_mutation()),
+            ks_name,
+            cf_name,/*,
+            fullRawComparator, */
+            cf == cf_type::super,
+            column_view_virtual::no,
+            column_internal_t::yes,
+            computed_columns);
+        column_defs.reserve(column_defs.size() + internal_defs.size());
+        column_defs.insert(column_defs.end(),
+                std::make_move_iterator(internal_defs.begin()),
+                std::make_move_iterator(internal_defs.end()));
+    }
 
 
     builder.set_is_dense(is_dense);
@@ -2406,6 +2446,7 @@ static std::vector<column_definition> create_columns_from_column_rows(const sche
                                                                AbstractType<?> rawComparator, */
                                                                bool is_super,
                                                                column_view_virtual is_view_virtual,
+                                                               column_internal_t is_internal,
                                                                const computed_columns_map& computed_columns)
 {
     std::vector<column_definition> columns;
@@ -2428,7 +2469,7 @@ static std::vector<column_definition> create_columns_from_column_rows(const sche
             computation = computed_it->second->clone();
         }
 
-        columns.emplace_back(name_bytes, type, kind, position, is_view_virtual, std::move(computation));
+        columns.emplace_back(name_bytes, type, kind, position, is_view_virtual, is_internal, std::move(computation));
     }
     return columns;
 }
@@ -2481,12 +2522,12 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     }
 
     auto computed_columns = get_computed_columns(sm);
-    auto column_defs = create_columns_from_column_rows(ctxt, query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, computed_columns);
+    auto column_defs = create_columns_from_column_rows(ctxt, query::result_set(sm.columns_mutation()), ks_name, cf_name, false, column_view_virtual::no, column_internal_t::no, computed_columns);
     for (auto&& cdef : column_defs) {
         builder.with_column_ordered(cdef);
     }
     if (sm.view_virtual_columns_mutation()) {
-        column_defs = create_columns_from_column_rows(ctxt, query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, computed_columns);
+        column_defs = create_columns_from_column_rows(ctxt, query::result_set(*sm.view_virtual_columns_mutation()), ks_name, cf_name, false, column_view_virtual::yes, column_internal_t::no, computed_columns);
         for (auto&& cdef : column_defs) {
             builder.with_column_ordered(cdef);
         }
@@ -2560,6 +2601,9 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
 
     if (with_columns) {
         for (auto&& column : view->v3().all_columns()) {
+            if (column.is_internal()) {
+                throw std::logic_error("internal column found in view table");
+            }
             if (column.is_view_virtual()) {
                 add_column_to_schema_mutation(view, column, timestamp, view_virtual_columns_mutation);
             } else {
@@ -2584,6 +2628,7 @@ static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type t
                             std::move(columns_mutation),
                             std::move(view_virtual_columns_mutation),
                             std::move(computed_columns_mutation),
+                            std::nullopt,
                             std::move(indices_mutation),
                             std::move(dropped_columns_mutation),
                             std::move(scylla_tables_mutation)};
@@ -2665,6 +2710,9 @@ std::vector<schema_ptr> all_tables(schema_features features) {
     result.emplace_back(view_virtual_columns());
     if (features.contains<schema_feature::COMPUTED_COLUMNS>()) {
         result.emplace_back(computed_columns());
+    }
+    if (features.contains(schema_feature::INTERNAL_COLUMNS)) {
+        result.emplace_back(internal_columns());
     }
     if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
         result.emplace_back(scylla_keyspaces());

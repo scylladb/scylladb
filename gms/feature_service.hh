@@ -168,6 +168,7 @@ public:
     gms::feature tablet_load_stats_v2 { *this, "TABLET_LOAD_STATS_V2"sv };
     gms::feature sstable_compression_dicts { *this, "SSTABLE_COMPRESSION_DICTS"sv };
     gms::feature repair_based_tablet_rebuild { *this, "REPAIR_BASED_TABLET_REBUILD"sv };
+    gms::feature internal_columns { *this, "INTERNAL_COLUMNS"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
