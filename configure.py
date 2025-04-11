@@ -1798,108 +1798,111 @@ def prepare_advanced_optimizations(*, modes, build_modes, args):
             modes[mode]['has_lto'] = True
             modes[mode]['lib_cflags'] += ' -flto=thin -ffat-lto-objects'
 
-        # Absolute path (in case of the initial profile) or path
-        # beginning with $builddir (in case of generated profiles),
-        # for use in ninja dependency rules.
-        # Using absolute paths only would work too, but we use
-        # $builddir for consistency with all other ninja targets.
-        profile_target = None
-        # Absolute path to the profile, for use in compiler flags.
-        # Can't use $builddir here because the flags are also passed
-        # to seastar, which doesn't understand ninja variables.
-        profile_path = None
+        # can't use PGO with coverage
+        # for some reason coverage stuff is added to all builds (not only coverage), not yet sure why, hence minimal changes
+        if not args.coverage:
+            # Absolute path (in case of the initial profile) or path
+            # beginning with $builddir (in case of generated profiles),
+            # for use in ninja dependency rules.
+            # Using absolute paths only would work too, but we use
+            # $builddir for consistency with all other ninja targets.
+            profile_target = None
+            # Absolute path to the profile, for use in compiler flags.
+            # Can't use $builddir here because the flags are also passed
+            # to seastar, which doesn't understand ninja variables.
+            profile_path = None
 
-        if args.use_profile:
-            profile_path = os.path.abspath(args.use_profile)
-            profile_target = profile_path
-        elif args.use_profile is None:
-            # Use the default profile. There is a rule in later part of configure.py
-            # which extracts the default profile from an archive in pgo/profiles,
-            # (stored in git LFS) to build/
+            if args.use_profile:
+                profile_path = os.path.abspath(args.use_profile)
+                profile_target = profile_path
+            elif args.use_profile is None:
+                # Use the default profile. There is a rule in later part of configure.py
+                # which extracts the default profile from an archive in pgo/profiles,
+                # (stored in git LFS) to build/
 
-            default_profile_archive_path = f"pgo/profiles/{platform.machine()}/profile.profdata.xz"
-            default_profile_filename = pathlib.Path(default_profile_archive_path).stem
-
-            # We are checking whether the profile archive is compressed,
-            # instead of just checking for its existence, because of how git LFS works.
-            #
-            # When a file is stored in LFS, the underlying git repository only receives a text file stub
-            # containing some metadata of the actual file. On checkout, LFS filters download the actual
-            # file based on that metadata and substitute it for the stub.
-            # If LFS is disabled or not installed, git will simply check out the stub,
-            # which will be a regular text file.
-            #
-            # By ignoring existing but uncompressed profile files we are accommodating users who don't
-            # have LFS installed yet, or don't want to be forced to use it.
-            #
-            validate_archive = subprocess.run(["file", default_profile_archive_path], capture_output=True)
-            if "compressed data" in validate_archive.stdout.decode():
+                default_profile_archive_path = f"pgo/profiles/{platform.machine()}/profile.profdata.xz"
                 default_profile_filename = pathlib.Path(default_profile_archive_path).stem
-                profile_path = os.path.abspath("build/" + default_profile_filename)
-                profile_target = "$builddir/" + default_profile_filename
-                modes[mode].setdefault('profile_recipe', '')
-                modes[mode]['profile_recipe'] += textwrap.dedent(f"""\
-                    rule xz_uncompress
-                        command = xz --uncompress --stdout $in > $out
-                        description = XZ_UNCOMPRESS $in to $out
-                    build {profile_target}: xz_uncompress {default_profile_archive_path}
-                    """)
+
+                # We are checking whether the profile archive is compressed,
+                # instead of just checking for its existence, because of how git LFS works.
+                #
+                # When a file is stored in LFS, the underlying git repository only receives a text file stub
+                # containing some metadata of the actual file. On checkout, LFS filters download the actual
+                # file based on that metadata and substitute it for the stub.
+                # If LFS is disabled or not installed, git will simply check out the stub,
+                # which will be a regular text file.
+                #
+                # By ignoring existing but uncompressed profile files we are accommodating users who don't
+                # have LFS installed yet, or don't want to be forced to use it.
+                #
+                validate_archive = subprocess.run(["file", default_profile_archive_path], capture_output=True)
+                if "compressed data" in validate_archive.stdout.decode():
+                    default_profile_filename = pathlib.Path(default_profile_archive_path).stem
+                    profile_path = os.path.abspath("build/" + default_profile_filename)
+                    profile_target = "$builddir/" + default_profile_filename
+                    modes[mode].setdefault('profile_recipe', '')
+                    modes[mode]['profile_recipe'] += textwrap.dedent(f"""\
+                        rule xz_uncompress
+                            command = xz --uncompress --stdout $in > $out
+                            description = XZ_UNCOMPRESS $in to $out
+                        build {profile_target}: xz_uncompress {default_profile_archive_path}
+                        """)
+                else:
+                    # Avoid breaking existing pipelines without git-lfs installed.
+                    print(f"WARNING: {default_profile_archive_path} is not an archive. Building without a profile.", file=sys.stderr)
             else:
-                # Avoid breaking existing pipelines without git-lfs installed.
-                print(f"WARNING: {default_profile_archive_path} is not an archive. Building without a profile.", file=sys.stderr)
-        else:
-            # Passing --use-profile="" explicitly disables the default profile.
-            pass
+                # Passing --use-profile="" explicitly disables the default profile.
+                pass
 
-        # pgso (profile-guided size-optimization) adds optsize hints (-Os) to cold code.
-        # We don't want to optimize anything for size, because that's a potential source
-        # of performance regressions, and the benefits are dubious. Let's disable pgso
-        # by default. (Currently is enabled in Clang by default.)
-        #
-        # Value profiling allows the compiler to track not only the outcomes of branches
-        # but also the values of variables at interesting decision points.
-        # Currently Clang uses value profiling for two things: specializing for the most
-        # common sizes of memory ops (e.g. memcpy, memcmp) and specializing for the most
-        # common targets of indirect branches.
-        # It's valuable in general, but our training suite is not realistic and exhaustive
-        # enough to be confident about value profiling. Let's also keep it disabled by
-        # default, conservatively. (Currently it is enabled in Clang by default.)
-        conservative_opts = "" if args.experimental_pgo else "-mllvm -pgso=false -mllvm -enable-value-profiling=false"
+            # pgso (profile-guided size-optimization) adds optsize hints (-Os) to cold code.
+            # We don't want to optimize anything for size, because that's a potential source
+            # of performance regressions, and the benefits are dubious. Let's disable pgso
+            # by default. (Currently is enabled in Clang by default.)
+            #
+            # Value profiling allows the compiler to track not only the outcomes of branches
+            # but also the values of variables at interesting decision points.
+            # Currently Clang uses value profiling for two things: specializing for the most
+            # common sizes of memory ops (e.g. memcpy, memcmp) and specializing for the most
+            # common targets of indirect branches.
+            # It's valuable in general, but our training suite is not realistic and exhaustive
+            # enough to be confident about value profiling. Let's also keep it disabled by
+            # default, conservatively. (Currently it is enabled in Clang by default.)
+            conservative_opts = "" if args.experimental_pgo else "-mllvm -pgso=false -mllvm -enable-value-profiling=false"
 
-        llvm_instr_types = []
-        if args.pgo:
-            llvm_instr_types += [""]
-        if args.cspgo:
-            llvm_instr_types += ["cs-"]
-        for it in llvm_instr_types:
-            submode = copy.deepcopy(modes[mode])
-            submode_name = f'{mode}-{it}pgo'
-            submode['parent_mode'] = mode
+            llvm_instr_types = []
+            if args.pgo:
+                llvm_instr_types += [""]
+            if args.cspgo:
+                llvm_instr_types += ["cs-"]
+            for it in llvm_instr_types:
+                submode = copy.deepcopy(modes[mode])
+                submode_name = f'{mode}-{it}pgo'
+                submode['parent_mode'] = mode
+                if profile_path is not None:
+                    submode['lib_cflags'] += f" -fprofile-use={profile_path}"
+                    submode['cxx_ld_flags'] += f" -fprofile-use={profile_path}"
+                    submode['profile_target'] = profile_target
+                submode['lib_cflags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
+                submode['cxx_ld_flags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
+                # Profile collection depends on java tools because we use cassandra-stress as the load.
+                submode['profile_recipe'] = textwrap.dedent(f"""\
+                    build $builddir/{submode_name}/profiles/prof.profdata: train $builddir/{submode_name}/scylla | dist-tools-tar
+                    build $builddir/{submode_name}/profiles/merged.profdata: merge_profdata $builddir/{submode_name}/profiles/prof.profdata {profile_target or str()}
+                    """)
+                submode['is_profile'] = True
+                profile_path = f"{os.path.realpath(outdir)}/{submode_name}/profiles/merged.profdata"
+                profile_target = f"$builddir/{submode_name}/profiles/merged.profdata"
+
+                profile_modes[submode_name] = submode
+
             if profile_path is not None:
-                submode['lib_cflags'] += f" -fprofile-use={profile_path}"
-                submode['cxx_ld_flags'] += f" -fprofile-use={profile_path}"
-                submode['profile_target'] = profile_target
-            submode['lib_cflags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
-            submode['cxx_ld_flags'] += f" -f{it}profile-generate={os.path.realpath(outdir)}/{submode_name} {conservative_opts}"
-            # Profile collection depends on java tools because we use cassandra-stress as the load.
-            submode['profile_recipe'] = textwrap.dedent(f"""\
-                build $builddir/{submode_name}/profiles/prof.profdata: train $builddir/{submode_name}/scylla | dist-tools-tar
-                build $builddir/{submode_name}/profiles/merged.profdata: merge_profdata $builddir/{submode_name}/profiles/prof.profdata {profile_target or str()}
-                """)
-            submode['is_profile'] = True
-            profile_path = f"{os.path.realpath(outdir)}/{submode_name}/profiles/merged.profdata"
-            profile_target = f"$builddir/{submode_name}/profiles/merged.profdata"
-
-            profile_modes[submode_name] = submode
-
-        if profile_path is not None:
-            modes[mode]['lib_cflags'] += f" -fprofile-use={profile_path} {conservative_opts}"
-            modes[mode]['cxx_ld_flags'] += f" -fprofile-use={profile_path} {conservative_opts}"
-            modes[mode]['profile_target'] = profile_target
-            modes[mode].setdefault('profile_recipe', "")
-            modes[mode]['profile_recipe'] += textwrap.dedent(f"""\
-                build $builddir/{mode}/profiles/merged.profdata: copy {profile_target or profile_path or str()}
-                """)
+                modes[mode]['lib_cflags'] += f" -fprofile-use={profile_path} {conservative_opts}"
+                modes[mode]['cxx_ld_flags'] += f" -fprofile-use={profile_path} {conservative_opts}"
+                modes[mode]['profile_target'] = profile_target
+                modes[mode].setdefault('profile_recipe', "")
+                modes[mode]['profile_recipe'] += textwrap.dedent(f"""\
+                    build $builddir/{mode}/profiles/merged.profdata: copy {profile_target or profile_path or str()}
+                    """)
 
     modes.update(profile_modes)
     build_modes.update(profile_modes)
