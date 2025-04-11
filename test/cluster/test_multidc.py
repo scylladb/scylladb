@@ -10,6 +10,7 @@ import sys
 from typing import List, Union
 
 import pytest
+import time
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.cqlpy import nodetool
@@ -18,7 +19,7 @@ from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, TextType, Column
-from test.pylib.util import unique_name
+from test.pylib.util import unique_name, wait_for
 from test.cluster.conftest import cluster_con
 
 logger = logging.getLogger(__name__)
@@ -435,20 +436,23 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
         for rfs, tablets in valid_keyspaces:
             _ = tg.create_task(create_keyspace(rfs, tablets))
 
+    # Add extra nodes so that RF-invalid keyspaces can have 2 replicas on one rack.
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r3"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc2", "rack": "r4"})
+
     await manager.server_stop_gracefully(s1.server_id)
     await manager.server_update_config(s1.server_id, "rf_rack_valid_keyspaces", "true")
 
-    async def try_fail(rfs: List[int], dc: str, rf: int, rack_count: int):
+    async def try_fail(rfs: List[int], err: str):
         ks = await create_keyspace(rfs, True)
-        err = r"The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
-              f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC '{dc}': RF={rf} vs. rack count={rack_count}."
-        _ = await manager.server_start(s1.server_id, expected_error=err)
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY)")
+        _ = await manager.server_start(s1.server_id, expected_error=err.format(ks, 't'))
         await cql.run_async(f"DROP KEYSPACE {ks}")
 
-    # Test RF-rack-invalid keyspaces.
-    await try_fail([2, 0], "dc1", 2, 3)
-    await try_fail([3, 2], "dc2", 2, 1)
-    await try_fail([4, 1], "dc1", 4, 3)
+    await try_fail([2, 0], "The option `rf_rack_valid_keyspaces` is enabled. All tablets in a keyspace should have one replica per rack in RF racks in each DC. "
+                            "This condition is violated: keyspace '{}' doesn't satisfy it for DC 'dc1'")
+    await try_fail([3, 2], "keyspace '{}' doesn't satisfy it for DC 'dc2': table '{}' has multiple replicas in rack",)
+    await try_fail([4, 1], "keyspace '{}' doesn't satisfy it for DC 'dc1': table '{}' has multiple replicas in rack",)
 
     _ = await manager.server_start(s1.server_id)
 
@@ -464,3 +468,118 @@ async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager
 
     await manager.server_stop_gracefully(s_info.server_id)
     await manager.server_start(s_info.server_id)
+
+@pytest.mark.asyncio
+async def test_cant_remove_node_with_data_from_rf_rack_valid_keyspace(manager: ManagerClient):
+    """
+    This test verifies that Scylla rejects decommissioning a node which contains data from
+    an RF-rack-valid keyspace, even when a node in another rack is available.
+    """
+
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+    s1 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
+    _ = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY)")
+    _ = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+    await manager.decommission_node(s1.server_id, expected_error="Unable to find new replica for tablet")
+
+@pytest.mark.asyncio
+async def test_add_rack_while_rf_rack_valid_keyspace_exists(manager: ManagerClient):
+    """
+    This test verifies that Scylla allows adding a rack to a DC where an RF-rack-valid keyspace exists,
+    and then it allows increasing the RF of that keyspace to match the number of racks in the DC.
+    """
+
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
+    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY)")
+    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+    await cql.run_async("ALTER KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3} ")
+
+@pytest.mark.asyncio
+async def test_decommission_rack_while_rf_rack_valid_keyspace_exists(manager: ManagerClient):
+    """
+    This test verifies that Scylla allows removing a rack in a DC with RF-rack-valid keyspaces,
+    if the rack was added after creating the keyspace and it doesn't contain any data from these keyspaces.
+    """
+
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+    s1 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
+    s2 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1} ")
+    await cql.run_async("CREATE TABLE ks1.t (pk int PRIMARY KEY)")
+    await cql.run_async("CREATE KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
+    await cql.run_async("CREATE TABLE ks2.t (pk int PRIMARY KEY)")
+    s3 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+
+    servers = [s1, s2, s3]
+    async def get_migrations():
+        metrics = await manager.metrics.query(s1.ip_addr)
+        return metrics.get('scylla_load_balancer_migrations_produced')
+
+    migrations_before = await get_migrations()
+
+    async def migrations_increased():
+        migrations = await get_migrations()
+        return migrations > migrations_before
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "tablet_allocator_shuffle", False) for s in servers])
+    await wait_for(migrations_increased, time.time() + 10, 0.1)
+    await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_allocator_shuffle") for s in servers])
+
+    # The keyspace ks2 should still be replicated only on the first two racks, even after the tablet shuffling
+    # The keyspace ks1 should be allowed to be drained from the third rack, as it has RF=1
+    await manager.decommission_node(s3.server_id)
+
+@pytest.mark.asyncio
+async def test_cant_increase_rf_below_rack_count_in_rf_rack_valid_keyspace(manager: ManagerClient):
+    """
+    This test verifies that Scylla rejects increasing the RF of a keyspace to a value below the number of racks in the DC.
+    """
+
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+    s1 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
+    _ = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1} ")
+    await cql.run_async("CREATE TABLE ks1.t (pk int PRIMARY KEY)")
+    await cql.run_async("CREATE KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
+    await cql.run_async("CREATE TABLE ks2.t (pk int PRIMARY KEY)")
+    s3 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+    await cql.run_async("ALTER KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3} ")
+    with pytest.raises(InvalidRequest, match="The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. That condition is violated: keyspace 'ks1' doesn't satisfy it for DC 'dc1': RF=2 vs. rack count=3."):
+        await cql.run_async("ALTER KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
+    with pytest.raises(InvalidRequest, match="The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. That condition is violated: keyspace 'ks2' doesn't satisfy it for DC 'dc1': RF=2 vs. rack count=3."):
+        await cql.run_async("ALTER KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
+
+@pytest.mark.asyncio
+async def test_cant_create_table_in_rf_rack_valid_keyspace_unless_rf_equals_racks(manager: ManagerClient):
+    """
+    This test verifies that Scylla rejects creating a table in an originally RF-rack-valid keyspace
+    if a rack was added and the RF wasn't increased accordingly (if RF was 1, no need to increase RF).
+    """
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+
+    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
+    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1} ")
+    await cql.run_async("CREATE TABLE ks1.t (pk int PRIMARY KEY)")
+    await cql.run_async("CREATE KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
+    await cql.run_async("CREATE TABLE ks2.t (pk int PRIMARY KEY)")
+    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
+    await cql.run_async("CREATE TABLE ks1.t2 (pk int PRIMARY KEY)")
+    with pytest.raises(InvalidRequest, match="The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. That condition is violated: keyspace 'ks2' doesn't satisfy it for DC 'dc1': RF=2 vs. rack count=3."):
+        await cql.run_async(f"CREATE TABLE ks2.t2 (pk int PRIMARY KEY)")
+    await cql.run_async("ALTER KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}")
+    await cql.run_async(f"CREATE TABLE ks2.t2 (pk int PRIMARY KEY)")

@@ -729,6 +729,13 @@ class abstract_replication_strategy;
 /// * The keyspace need not exist. We use its name purely for informational reasons (in error messages).
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr, const abstract_replication_strategy&);
 
+/// A more expensive but less restrictive version of the above function. Here we check
+/// for all tablets in all tables in the keyspace if they are replicated on the same racks,
+/// with one replica per rack (unless the RF for the given DC is 0 or 1).
+///
+/// Because we need to investigate specific tables, the keyspace must exist.
+void validate_rf_rack_valid_replication(const token_metadata_ptr, const replica::keyspace&);
+
 }
 
 template <>

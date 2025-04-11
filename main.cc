@@ -2169,9 +2169,9 @@ sharded<locator::shared_token_metadata> token_metadata;
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
             if (cfg->rf_rack_valid_keyspaces()) {
-                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+                startlog.info("Verifying that all of the keyspaces are replicated on RF racks");
                 db.local().check_rf_rack_validity(token_metadata.local().get());
-                startlog.info("All keyspaces are RF-rack-valid");
+                startlog.info("All keyspaces are replicated on exactly RF racks");
             }
 
             dictionary_service dict_service(
