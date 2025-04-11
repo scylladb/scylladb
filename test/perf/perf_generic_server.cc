@@ -73,7 +73,7 @@ public:
 
     test_server(const test_config& conf)
     : generic_server::server("test_server", plog,
-            generic_server::config(std::numeric_limits<uint32_t>::max()))
+            generic_server::config{utils::updateable_value<uint32_t>(std::numeric_limits<uint32_t>::max())})
     , _conf(conf) {}
 };
 
