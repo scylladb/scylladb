@@ -19,7 +19,7 @@ import pytest
 
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
@@ -27,7 +27,7 @@ async def test_remove_node_add_column(manager: ManagerClient, random_tables: Ran
     """Add a node, remove an original node, add a column"""
     servers = await manager.running_servers()
     table = await random_tables.add_table(ncolumns=5)
-    await manager.server_add()
+    await manager.server_add(property_file=servers[1].property_file())
     await manager.server_stop_gracefully(servers[1].server_id)              # stop     [1]
     await manager.remove_node(servers[0].server_id, servers[1].server_id)   # Remove   [1]
     await check_token_ring_and_group0_consistency(manager)
@@ -53,7 +53,7 @@ async def test_decommission_node_add_column(manager: ManagerClient, random_table
     # 7. If #11780 is not fixed, this will fail the node_ops_verb RPC, causing decommission to fail
     await manager.api.enable_injection(
         decommission_target.ip_addr, 'storage_service_notify_joined_sleep', one_shot=True)
-    bootstrapped_server = await manager.server_add()
+    bootstrapped_server = await manager.server_add(property_file=decommission_target.property_file())
     async def no_joining_nodes():
         joining_nodes = await manager.api.get_joining_nodes(decommission_target.ip_addr)
         return not joining_nodes
