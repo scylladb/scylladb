@@ -2483,6 +2483,9 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
     }
 
     auto all_views = _db.get_views();
+    auto doesnt_use_tablets = [&] (const view_ptr& v) {
+        return !_db.find_keyspace(v->ks_name()).uses_tablets();
+    };
     auto is_new = [&] (const view_ptr& v) {
         // This is a safety check in case this node missed a create MV statement
         // but got a drop table for the base, and another node didn't get the
@@ -2490,7 +2493,7 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
         return _db.column_family_exists(v->view_info()->base_id()) && !loaded_views.contains(v->id())
                 && !vbi.built_views.contains(v->id());
     };
-    for (auto&& view : all_views | std::views::filter(is_new)) {
+    for (auto&& view : all_views | std::views::filter(doesnt_use_tablets) | std::views::filter(is_new)) {
         vbi.bookkeeping_ops.push_back(add_new_view(view, get_or_create_build_step(view->view_info()->base_id())));
     }
 
@@ -2666,7 +2669,15 @@ static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_sou
     }).discard_result();
 }
 
+static bool should_ignore_tablet_keyspace(const replica::database& db, const sstring& ks_name) {
+    return db.features().view_building_coordinator && db.has_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
+}
+
 void view_builder::on_create_view(const sstring& ks_name, const sstring& view_name) {
+    if (should_ignore_tablet_keyspace(_db, ks_name)) {
+        return;
+    }
+
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
@@ -2692,6 +2703,10 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
 }
 
 void view_builder::on_update_view(const sstring& ks_name, const sstring& view_name, bool) {
+    if (should_ignore_tablet_keyspace(_db, ks_name)) {
+        return;
+    }
+
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
         auto view = view_ptr(_db.find_schema(ks_name, view_name));
@@ -2709,6 +2724,10 @@ void view_builder::on_update_view(const sstring& ks_name, const sstring& view_na
 }
 
 void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name) {
+    if (should_ignore_tablet_keyspace(_db, ks_name)) {
+        return;
+    }
+
     vlogger.info0("Stopping to build view {}.{}", ks_name, view_name);
     // Do it in the background, serialized.
     (void)with_semaphore(_sem, 1, [ks_name, view_name, this] {
@@ -3257,7 +3276,9 @@ future<> view_builder::mark_as_built(view_ptr view) {
 future<> view_builder::mark_existing_views_as_built() {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto views = _db.get_views();
-    co_await coroutine::parallel_for_each(views, [this] (view_ptr& view) {
+    co_await coroutine::parallel_for_each(views | std::views::filter([this] (view_ptr& v) {
+        return !should_ignore_tablet_keyspace(_db, v->ks_name());
+    }), [this] (view_ptr& view) {
         return mark_as_built(view);
     });
 }
