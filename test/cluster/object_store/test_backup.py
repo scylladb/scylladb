@@ -248,7 +248,7 @@ async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, s3_serve
     await do_test_backup_abort(manager, s3_server, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)
 
 
-async def do_test_simple_backup_and_restore(manager: ManagerClient, s3_server, do_abort = False):
+async def do_test_simple_backup_and_restore(manager: ManagerClient, s3_server, tmpdir, do_encrypt = False, do_abort = False):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
 
     objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
@@ -257,7 +257,14 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, s3_server, d
            'experimental_features': ['keyspace-storage-options'],
            'task_ttl_in_seconds': 300
            }
-    cmd = ['--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug']
+    if do_encrypt:
+        d = tmpdir / "system_keys"
+        d.mkdir()
+        cfg = cfg | {
+            'system_key_directory': str(d),
+            'user_info_encryption': { 'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory' }
+        }
+    cmd = ['--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug:encryption=debug']
     server = await manager.server_add(config=cfg, cmdline=cmd)
 
     cql = manager.get_cql()
@@ -355,15 +362,20 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, s3_server, d
     assert objects == post_objects
 
 @pytest.mark.asyncio
-async def test_simple_backup_and_restore(manager: ManagerClient, s3_server):
+async def test_simple_backup_and_restore(manager: ManagerClient, s3_server, tmp_path):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, s3_server, False)
+    await do_test_simple_backup_and_restore(manager, s3_server, tmp_path, False, False)
 
 @pytest.mark.asyncio
-async def test_abort_simple_backup_and_restore(manager: ManagerClient, s3_server):
+async def test_abort_simple_backup_and_restore(manager: ManagerClient, s3_server, tmp_path):
     '''check that restoring from backed up snapshot for a keyspace:table works'''
-    await do_test_simple_backup_and_restore(manager, s3_server, True)
+    await do_test_simple_backup_and_restore(manager, s3_server, tmp_path, False, True)
 
+
+@pytest.mark.asyncio
+async def test_simple_backup_and_restore_with_encryption(manager: ManagerClient, s3_server, tmp_path):
+    '''check that restoring from backed up snapshot for a keyspace:table works'''
+    await do_test_simple_backup_and_restore(manager, s3_server, tmp_path, True, False)
 
 # Helper class to parametrize the test below
 class topo:

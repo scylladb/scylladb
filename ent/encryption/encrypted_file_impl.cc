@@ -701,5 +701,56 @@ std::unique_ptr<data_sink_impl> make_encrypted_sink(data_sink sink, shared_ptr<s
     return std::make_unique<encrypted_data_sink>(std::move(sink), std::move(k));
 }
 
+class encrypted_data_source : public data_source_impl, public block_encryption_base {
+    data_source _source;
+    size_t current_position = 0;
+
+public:
+    encrypted_data_source(data_source source, shared_ptr<symmetric_key> k) : block_encryption_base(std::move(k)), _source(std::move(source)) {}
+
+    future<temporary_buffer<char>> get() override {
+        return _source.get().then([this](temporary_buffer<char> buf) {
+            if (buf.empty()) {
+                return buf;
+            }
+
+            const size_t len = buf.size();
+            temporary_buffer<char> output(len);
+            const size_t key_block_size = _key->block_size();
+            size_t decrypted_bytes = 0;
+
+            for (size_t offset = 0; offset < len; offset += block_size) {
+                auto iv = iv_for(current_position + offset);
+                // Determine how many bytes remain in this block
+                const size_t remaining = std::min<uint64_t>(block_size, len - offset);
+
+                // If the remaining bytes form a partial block, align down to a whole block size
+                size_t bytes_to_decrypt = (remaining < block_size) ? align_down(remaining, key_block_size) : block_size;
+
+                _key->transform_unpadded(mode::decrypt, buf.get() + offset, bytes_to_decrypt, output.get_write() + offset, iv.data());
+                decrypted_bytes += bytes_to_decrypt;
+
+                // If we've processed a partial (last) block, exit the loop
+                if (remaining < block_size) {
+                    break;
+                }
+            }
+
+            // Adjust the buffer size to the actual decrypted data length
+            output.trim(decrypted_bytes);
+            current_position += decrypted_bytes;
+            return output;
+        });
+    }
+
+    future<temporary_buffer<char>> skip(uint64_t n) override { return _source.skip(n); }
+
+    future<> close() override { return _source.close(); }
+};
+
+
+std::unique_ptr<data_source_impl> make_encrypted_source(data_source source, shared_ptr<symmetric_key> k) {
+    return std::make_unique<encrypted_data_source>(std::move(source), std::move(k));
+}
 }
 
