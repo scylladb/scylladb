@@ -1720,8 +1720,7 @@ def test_index_non_eq_relation(cql, test_keyspace):
 # With issue #12762, this test used to pass without an index (use_index=False)
 # but failed with an index (use_index=True) - it seems the PER PARTITION LIMIT
 # request was just ignored.
-@pytest.mark.parametrize("use_index", [
-        pytest.param(True, marks=pytest.mark.xfail(reason="#12762")), False])
+@pytest.mark.parametrize("use_index", [True, False])
 def test_index_filtering_scan_and_per_partition_limit(cql, test_keyspace, use_index):
     with new_test_table(cql, test_keyspace, "p int, c int, v int, PRIMARY KEY (p, c)") as table:
         if use_index:
@@ -1735,7 +1734,7 @@ def test_index_filtering_scan_and_per_partition_limit(cql, test_keyspace, use_in
         # use the index when it's available (otherwise the query v=0 won't
         # be efficient), but shouldn't forget also the PER PARTITION LIMIT.
         allow_filtering = '' if use_index else 'ALLOW FILTERING'
-        assert {(0,0,0), (1, 0, 0)} == set(cql.execute(f'SELECT * FROM {table} WHERE v=0 PER PARTITION LIMIT 1 {allow_filtering}'))
+        assert {(0, 0), (1, 0)} == set(cql.execute(f'SELECT p, v FROM {table} WHERE v=0 PER PARTITION LIMIT 1 {allow_filtering}'))
 
 # Similar to above test with PER PARTITION LIMIT, but also adds further
 # filtering which eliminates some result candidates retrieved by the index.

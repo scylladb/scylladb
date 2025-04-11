@@ -758,7 +758,12 @@ indexed_table_select_statement::do_execute_base_query(
     auto cmd = prepare_command_for_base_query(qp, options, state, now, bool(paging_state));
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
 
-    query::result_merger merger(cmd->get_row_limit(), query::max_partitions);
+    const auto per_partition_limit = [&] {
+        std::optional<uint64_t> limit = get_limit(options, _per_partition_limit, true);
+        return limit == query::max_rows ? std::nullopt : limit;
+    }();
+
+    query::result_merger merger(cmd->get_row_limit(), query::max_partitions, per_partition_limit);
     std::vector<primary_key> keys = std::move(primary_keys);
     std::vector<primary_key>::iterator key_it(keys.begin());
     size_t previous_result_size = 0;
@@ -777,7 +782,7 @@ indexed_table_select_statement::do_execute_base_query(
         next_iteration_size = std::min<size_t>({next_iteration_size, keys.size() - already_done, max_base_table_query_concurrency});
         auto key_it_end = key_it + next_iteration_size;
 
-        query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions);
+        query::result_merger oneshot_merger(cmd->get_row_limit(), query::max_partitions, per_partition_limit);
         coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> rresult = co_await utils::result_map_reduce(key_it, key_it_end, coroutine::lambda([&] (auto& key)
                 -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
             auto command = ::make_lw_shared<query::read_command>(*cmd);
