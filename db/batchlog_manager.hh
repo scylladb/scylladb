@@ -69,6 +69,7 @@ private:
 
     gc_clock::time_point _last_replay;
 
+    future<> cleanup_batches();
     future<> replay_all_failed_batches(post_replay_cleanup cleanup);
 public:
     // Takes a QP, not a distributes. Because this object is supposed

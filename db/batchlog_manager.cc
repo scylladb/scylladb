@@ -155,6 +155,12 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     return _write_request_timeout * 2;
 }
 
+future<> db::batchlog_manager::cleanup_batches() {
+    // Replaying batches could have generated tombstones, flush to disk,
+    // where they can be compacted away.
+    return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+}
+
 future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
     typedef db_clock::rep clock_type;
 
@@ -277,9 +283,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 page_size,
                 std::move(batch));
         if (cleanup == post_replay_cleanup::yes) {
-            // Replaying batches could have generated tombstones, flush to disk,
-            // where they can be compacted away.
-            co_await replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+            co_await cleanup_batches();
         }
         blogger.debug("Finished replayAllFailedBatches");
     });
