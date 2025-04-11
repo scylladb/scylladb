@@ -2318,8 +2318,9 @@ future<bool> system_keyspace::cdc_is_rewritten() {
     });
 }
 
-future<cdc::base_streams_state> system_keyspace::read_cdc_streams_state() {
-    static const sstring query = format("SELECT table_id, timestamp, stream_id FROM {}.{}", NAME, CDC_STREAMS_STATE);
+future<cdc::base_streams_state> system_keyspace::read_cdc_streams_state(std::optional<table_id> table) {
+    sstring query = table ? format("SELECT table_id, timestamp, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_STREAMS_STATE, *table)
+                          : format("SELECT table_id, timestamp, stream_id FROM {}.{}", NAME, CDC_STREAMS_STATE);
 
     cdc::base_streams_state st;
     co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
@@ -2336,8 +2337,9 @@ future<cdc::base_streams_state> system_keyspace::read_cdc_streams_state() {
     co_return std::move(st);
 }
 
-future<cdc::streams_history> system_keyspace::read_cdc_streams_history() {
-    static const sstring query = format("SELECT table_id, timestamp, stream_kind, stream_id FROM {}.{}", NAME, CDC_STREAMS_HISTORY);
+future<cdc::streams_history> system_keyspace::read_cdc_streams_history(std::optional<table_id> table) {
+    sstring query = table ? format("SELECT table_id, timestamp, stream_kind, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_STREAMS_HISTORY, *table)
+                          : format("SELECT table_id, timestamp, stream_kind, stream_id FROM {}.{}", NAME, CDC_STREAMS_HISTORY);
 
     cdc::streams_history st;
     co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
@@ -2356,8 +2358,9 @@ future<cdc::streams_history> system_keyspace::read_cdc_streams_history() {
     co_return std::move(st);
 }
 
-future<cdc::pending_streams> system_keyspace::read_cdc_pending_streams() {
-    static const sstring query = format("SELECT table_id, stream_id FROM {}.{}", NAME, CDC_PENDING_STREAMS);
+future<cdc::pending_streams> system_keyspace::read_cdc_pending_streams(std::optional<table_id> table) {
+    sstring query = table ? format("SELECT table_id, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_PENDING_STREAMS, *table)
+                          : format("SELECT table_id, stream_id FROM {}.{}", NAME, CDC_PENDING_STREAMS);
 
     cdc::pending_streams st;
     co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {

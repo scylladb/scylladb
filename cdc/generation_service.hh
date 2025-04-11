@@ -146,6 +146,7 @@ public:
     future<> handle_cdc_generation(cdc::generation_id_v2);
 
     future<> load_cdc_tablet_streams();
+    future<> load_cdc_tablet_streams(std::unordered_set<table_id> changed_tables);
 
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)

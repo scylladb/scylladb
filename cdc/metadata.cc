@@ -204,14 +204,13 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
     return !it->second;
 }
 
-void cdc::metadata::load_streams_state(const cdc::base_streams_state& base_data, const cdc::pending_streams& pending_data, const cdc::streams_history& history_data) {
-    tablet_streams_map m;
-    pending_streams_map pending_streams;
-
+void cdc::metadata::load_streams_state(const cdc::base_streams_state& base_data, const cdc::pending_streams& pending_data, const cdc::streams_history& history_data, const std::vector<table_id>& removed_tables) {
     for (const auto& [table, base_table_state] : base_data) {
+        table_streams m;
+
         auto append_stream = [&m] (utils::UUID ts_uuid, std::vector<cdc::stream_id> stream_set) {
             auto ts = to_ts(db_clock::time_point(utils::UUID_gen::unix_timestamp(ts_uuid)));
-            m[table][ts] = committed_stream_set {ts_uuid, std::move(stream_set)};
+            m[ts] = committed_stream_set {ts_uuid, std::move(stream_set)};
         };
 
         auto stream_cmp = [] (const auto& a, const auto& b) { return a.token() < b.token(); };
@@ -269,10 +268,16 @@ void cdc::metadata::load_streams_state(const cdc::base_streams_state& base_data,
             if (std::ranges::equal(pending_stream, last_stream_set.streams)) {
                 committed_time = last_stream_set.ts;
             }
-            pending_streams[table] = {std::move(pending_stream), committed_time};
+            _pending_streams[table] = {std::move(pending_stream), committed_time};
+        } else {
+            _pending_streams.erase(table);
         }
+
+        _tablet_streams[table] = std::move(m);
     }
 
-    _tablet_streams = std::move(m);
-    _pending_streams = std::move(pending_streams);
+    for (auto table : removed_tables) {
+        _tablet_streams.erase(table);
+        _pending_streams.erase(table);
+    }
 }
