@@ -291,6 +291,9 @@ struct tablet_transition_info {
 // Returns the leaving replica for a given transition.
 std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tablet_transition_info&);
 
+bool has_leaving_replica_left(tablet_transition_stage);
+bool has_pending_replica_left(tablet_transition_stage);
+
 /// Represents intention to move a single tablet replica from src to dst.
 struct tablet_migration_info {
     locator::tablet_transition_kind kind;
@@ -441,6 +444,10 @@ public:
 ///    tablet_info& info = tmap.get_tablet_info(id);
 ///
 /// A tablet_id obtained from an instance of tablet_map is valid for that instance only.
+///
+/// If the table is co-located with another base table, then the tablet map
+/// doesn't have any tablets and it contains only the base_table value as a
+/// reference to the base table that we should refer to for tablet information.
 class tablet_map {
 public:
     using tablet_container = utils::chunked_vector<tablet_info>;
@@ -455,6 +462,7 @@ private:
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
     repair_scheduler_config _repair_scheduler_config;
+    std::optional<table_id> _base_table;
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
@@ -467,6 +475,11 @@ public:
     ///
     /// \param tablet_count The desired tablets to allocate. Must be a power of two.
     explicit tablet_map(size_t tablet_count);
+
+    /// Constructs a tablet map for a co-located child table.
+    ///
+    /// \param base_table The base table that this table is co-located with.
+    explicit tablet_map(table_id base_table);
 
     /// Returns tablet_id of a tablet which owns a given token.
     tablet_id get_tablet_id(token) const;
@@ -507,6 +520,10 @@ public:
 
     /// Returns the id of the first tablet.
     tablet_id first_tablet() const {
+        // may fail if we're trying to read the tablets of a co-located table that has base_table set.
+        // the tablet map of such table doesn't have tablets. we should refer instead to the base table map to
+        // read tablet information.
+        check_tablet_id(tablet_id(0));
         return tablet_id(0);
     }
 
@@ -581,12 +598,15 @@ public:
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
     const locator::repair_scheduler_config& repair_scheduler_config() const;
+
+    std::optional<table_id> base_table() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
     void set_repair_scheduler_config(locator::repair_scheduler_config config);
+    void set_base_table(table_id base_table);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
@@ -597,6 +617,8 @@ public:
 private:
     void check_tablet_id(tablet_id) const;
 };
+
+using table_group_set = utils::small_vector<table_id, 2>;
 
 /// Holds information about all tablets in the cluster.
 ///
@@ -616,17 +638,39 @@ public:
     // See storage_service::replicate_to_all_cores().
     using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
     using table_to_tablet_map = std::unordered_map<table_id, tablet_map_ptr>;
+    using table_group_map = std::unordered_map<table_id, table_group_set>;
 private:
     table_to_tablet_map _tablets;
 
+    table_group_map _colocated_tables;
+
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
+
+    void update_colocated_tables(table_id id, std::optional<table_id> base_table_before, std::optional<table_id> base_table_after, bool is_new, bool is_dropped);
+
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
-    const table_to_tablet_map& all_tables() const { return _tablets; }
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
+
+    // get all tables with their tablet maps, including both base and children tables.
+    // for a child table we get the tablet map of the base table.
+    auto all_tables_ungrouped() const { return _tablets | std::views::keys | std::views::transform([this] (table_id id) { return std::make_pair(id, &get_tablet_map(id)); }); }
+
+    // get all tables by co-location groups. the key is the base table and the value
+    // is the set of all co-located tables in the group (including the base table).
+    const table_group_map& all_table_groups() const { return _colocated_tables; }
+
+    // get all tables and their raw tablet maps. mostly for internal use.
+    // for a child table the raw tablet map consists of just a pointer to the base table, and the
+    // rest of the information needs to be read from the base table map.
+    const table_to_tablet_map& all_tables_raw() const { return _tablets; }
+
+    table_id get_base_table(table_id id) const;
+    bool is_base_table(table_id id) const;
+
 public:
     tablet_metadata() = default;
     // No implicit copy, use copy()
