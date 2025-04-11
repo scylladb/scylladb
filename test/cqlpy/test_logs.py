@@ -118,10 +118,13 @@ def test_log_table_operations(cql, test_keyspace, logfile):
     wait_for_log(logfile, f'Dropping {table}')
 
 
-def test_log_alter_keyspace_operation(cql, this_dc, logfile):
+# The test is marked as Scylla-only because Cassandra doesn't allow for RF=0 in ALL of DCs,
+# which is the case here. We must use it because changing the RF in this test to any other value
+# would result in an error since the keyspace would stop being RF-rack-valid.
+def test_log_alter_keyspace_operation(cql, this_dc, logfile, scylla_only):
     ksdef = f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 1}} AND tablets = {{'initial': 1}};"
     with new_test_keyspace(cql, ksdef) as keyspace:
-        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 2}}")
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': 0}}")
         wait_for_log(logfile, r'Update Keyspace.*name=%s.*tablets={\"initial\":\d+' % keyspace)
 
 

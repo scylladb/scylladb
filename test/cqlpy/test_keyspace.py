@@ -30,7 +30,7 @@ def test_create_keyspace_if_not_exists(cql, this_dc):
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     # It doesn't matter if the second invocation has different parameters,
     # they are ignored.
-    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }")
+    cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
 # The "WITH REPLICATION" part of CREATE KEYSPACE may not be omitted - trying
@@ -101,11 +101,11 @@ def test_create_keyspace_double_with(cql):
 def test_create_keyspace_with_case_sensitive_replication_factor_tag(cql):
     ks = unique_name()
     # lowercase 'replication_factor' should be accepted
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }"):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }"):
         pass
     # 'replication_factor' in any other case than the lowercase should be rejected
     with pytest.raises(ConfigurationException):
-        cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'Replication_factor' : 3 }}")
+        cql.execute(f"CREATE KEYSPACE {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'Replication_factor' : 1 }}")
 
 # Test trying a non-existent keyspace - with or without the IF EXISTS flag.
 # This test demonstrates a change of the exception produced between Cassandra 4.0
@@ -120,9 +120,12 @@ def test_drop_keyspace_nonexistent(cql):
         cql.execute('DROP KEYSPACE nonexistent_keyspace')
 
 # Test trying to ALTER a keyspace.
-def test_alter_keyspace(cql, this_dc):
+# The test is marked as Scylla-only because Cassandra doesn't allow for RF=0 in ALL of DCs,
+# which is the case here. We must use it because changing the RF in this test to any other value
+# would result in an error since the keyspace would stop being RF-rack-valid.
+def test_alter_keyspace(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
-        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 2 }} AND DURABLE_WRITES = false")
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 0 }} AND DURABLE_WRITES = false")
 
 # Test trying to ALTER RF of tablets-enabled KS by more than 1 at a time
 def test_alter_keyspace_rf_by_more_than_1(cql, this_dc):
