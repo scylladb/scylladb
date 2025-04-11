@@ -9,12 +9,15 @@ How to Safely Increase the Replication Factor
 **Audience: ScyllaDB administrators**
 
 
-Issue
------
+Issues
+------
 
 When a Replication Factor (RF) is increased, using the :ref:`ALTER KEYSPACE <alter-keyspace-statement>` command, the data consistency is effectively dropped
 by the difference of the RF_new value and the RF_old value for all pre-existing data.
 Consistency will only be restored after running a repair.
+
+Another issue occurs in keyspaces with tablets enabled and is driver-related. Due to limitations in the current protocol used to pass tablet data to drivers, drivers will not pick
+up new replicas after replication factor is increased. This will cause them to avoid routing requests to those replicas, causing imbalance.
 
 Resolution
 ----------
@@ -26,6 +29,8 @@ As a result, in order to make sure that you can keep on reading the old data wit
 ``CL_new = CL_old + RF_new - RF_old``
 
 After you run a repair, you can decrease the CL. If RF has only been changed in a particular Data Center (DC) only the nodes in that DC have to be repaired.
+
+To resolve the driver-related issue, restart the client applications after the ALTER statement that changes the RF completes successfully.
 
 Example
 =======

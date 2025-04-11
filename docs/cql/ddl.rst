@@ -302,6 +302,7 @@ Modifying a keyspace with tablets enabled is possible and doesn't require any sp
 - The ``ALTER`` statement may take longer than the regular query timeout, and even if it times out, it will continue to execute in the background.
 - The replication strategy cannot be modified, as keyspaces with tablets only support ``NetworkTopologyStrategy``.
 - The ``ALTER`` statement will fail if it would make the keyspace :term:`RF-rack-invalid <RF-rack-valid keyspace>`.
+- After the ``ALTER`` statement that increases the RF finishes, client applications should be restarted. Without a restart, drivers will not know about new replicas, which may cause request imbalance.
 
 .. _drop-keyspace-statement:
 
