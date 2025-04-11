@@ -233,6 +233,7 @@ int tool_app_template::run_async(int argc, char** argv, noncopyable_function<int
     if (_cfg.db_cfg_ext) {
         auto init = app.get_options_description().add_options();
         configurable::append_all(*_cfg.db_cfg_ext->db_cfg, init);
+        _cfg.db_cfg_ext->db_cfg->add_all_default_extensions();
     }
 
     return app.run(argc, argv, [this, &main_func, &app, found_op] {
