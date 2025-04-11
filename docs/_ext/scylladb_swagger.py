@@ -80,9 +80,12 @@ class SwaggerProcessor():
 
 def custom_pathto(app, docname, typ=None, anchor=None):
     current_doc = app.env.docname
-    current_version =  os.environ.get('SPHINX_MULTIVERSION_NAME', '')
+    current_version = os.environ.get('SPHINX_MULTIVERSION_NAME', '')
+    flag = os.environ.get('FLAG', 'manual')
+    
     if current_version:
-        return "/" + current_version + "/" + docname
+        prefix = "/manual/" if flag == 'manual' else "/"
+        return f"{prefix}{current_version}/{docname}"
     return relative_uri(app.builder.get_target_uri(current_doc), docname) + (('#' + anchor) if anchor else '')
 
 def setup(app):
