@@ -312,9 +312,6 @@ public:
         return _computation ? _computation->clone() : nullptr;
     }
     void set_computed(column_computation_ptr computation) { _computation = std::move(computation); }
-    // Columns hidden from CQL cannot be in any way retrieved by the user,
-    // either explicitly or via the '*' operator, or functions, aggregates, etc.
-    bool is_hidden_from_cql() const { return is_view_virtual(); }
     const sstring& name_as_text() const;
     const bytes& name() const;
     sstring name_as_cql_string() const;
