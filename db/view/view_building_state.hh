@@ -106,6 +106,14 @@ struct view_building_state_machine {
     condition_variable event;
 };
 
+struct view_task_result {
+    enum class command_status: uint8_t {
+        success = 0,
+        abort = 1,
+    };
+    db::view::view_task_result::command_status status;
+};
+
 view_building_task::task_type task_type_from_string(std::string_view str);
 seastar::sstring task_type_to_sstring(view_building_task::task_type type);
 view_building_task::task_state task_state_from_string(std::string_view str);
@@ -144,5 +152,20 @@ template <> struct fmt::formatter<db::view::task_map> : fmt::formatter<string_vi
 template <> struct fmt::formatter<db::view::replica_tasks> : fmt::formatter<string_view> {
     auto format(db::view::replica_tasks replica_tasks, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{view_tasks: {}, staging_tasks: {}}}", replica_tasks.view_tasks, replica_tasks.staging_tasks);
+    }
+};
+
+template <> struct fmt::formatter<db::view::view_task_result> : fmt::formatter<string_view> {
+    auto format(db::view::view_task_result result, fmt::format_context& ctx) const {
+        std::string_view res;
+        switch (result.status) {
+            case db::view::view_task_result::command_status::success:
+            res = "success";
+            break;
+        case db::view::view_task_result::command_status::abort:
+            res = "abort";
+            break;
+        }
+        return format_to(ctx.out(), "{}", res);
     }
 };
