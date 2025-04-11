@@ -5990,7 +5990,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         if (!trinfo) {
             throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
         }
-        if (trinfo->stage != locator::tablet_transition_stage::repair) {
+        if (trinfo->stage != locator::tablet_transition_stage::repair && trinfo->stage != locator::tablet_transition_stage::rebuild_repair) {
             throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
         }
         if (trinfo->session_id) {
@@ -5999,11 +5999,20 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
             throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
         }
 
+        tasks::task_info global_tablet_repair_task_info;
+        std::optional<locator::tablet_replica_set> replicas = std::nullopt;
+        if (trinfo->stage == locator::tablet_transition_stage::repair) {
+            global_tablet_repair_task_info = {tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info.tablet_task_id.uuid()}, 0};
+        } else {
+            auto migration_streaming_info = get_migration_streaming_info(get_token_metadata_ptr()->get_topology(), tmap.get_tablet_info(tablet.tablet), *trinfo);
+            replicas = locator::tablet_replica_set{migration_streaming_info.read_from.begin(), migration_streaming_info.read_from.end()};
+        }
+
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
         service::tablet_operation_repair_result result;
         co_await do_with_repair_service(_repair, [&] (repair_service& local_repair) -> future<> {
-            auto time = co_await local_repair.repair_tablet(_address_map, guard, tablet, trinfo->session_id);
+            auto time = co_await local_repair.repair_tablet(_address_map, guard, tablet, trinfo->session_id, std::move(replicas));
             result = service::tablet_operation_repair_result{time};
         });
         co_return result;
@@ -6088,12 +6097,30 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
         auto range = tmap.get_token_range(tablet.tablet);
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
+        locator::tablet_replica_set read_from{streaming_info.read_from.begin(), streaming_info.read_from.end()};
+        if (trinfo->transition == locator::tablet_transition_kind::rebuild_v2) {
+            auto nearest_hosts = read_from | std::views::transform([] (const auto& tr) {
+                return tr.host;
+            }) | std::ranges::to<host_id_vector_replica_set>();
+            tm->get_topology().sort_by_proximity(trinfo->pending_replica->host, nearest_hosts);
+
+            if (!nearest_hosts.empty()) {
+                auto it = std::find_if(read_from.begin(), read_from.end(), [nearest_host = nearest_hosts[0]] (const auto& tr) { return tr.host == nearest_host; });
+                if (it == read_from.end()) {
+                    on_internal_error(slogger, "Nearest replica not found");
+                }
+                read_from = { *it };
+            } else {
+                read_from = {};
+            }
+        }
 
         streaming::stream_reason reason = std::invoke([&] {
             switch (trinfo->transition) {
                 case locator::tablet_transition_kind::migration: return streaming::stream_reason::tablet_migration;
                 case locator::tablet_transition_kind::intranode_migration: return streaming::stream_reason::tablet_migration;
                 case locator::tablet_transition_kind::rebuild: return streaming::stream_reason::rebuild;
+                case locator::tablet_transition_kind::rebuild_v2: return streaming::stream_reason::rebuild;
                 default:
                     throw std::runtime_error(fmt::format("stream_tablet(): Invalid tablet transition: {}", trinfo->transition));
             }
@@ -6121,7 +6148,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                 slogger.info("stream_sstable_files: released");
             });
 
-            for (auto src : streaming_info.read_from) {
+            for (auto src : read_from) {
                 // Use file stream for tablet to stream data
                 auto ops_id = streaming::file_stream_id::create_random_id();
                 auto start_time = std::chrono::steady_clock::now();
@@ -6187,7 +6214,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
                     _gossiper.get_unreachable_host_ids()));
 
             std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint;
-            for (auto r: streaming_info.read_from) {
+            for (auto r: read_from) {
                 ranges_per_endpoint[r.host].emplace_back(range);
             }
             streamer->add_rx_ranges(table.schema()->ks_name(), std::move(ranges_per_endpoint));
@@ -6540,7 +6567,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+            .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.local().features()))
             .build());
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
@@ -6585,7 +6612,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::tablet_transition_kind::rebuild)
+            .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.local().features()))
             .build());
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
