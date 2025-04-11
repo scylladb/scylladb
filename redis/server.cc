@@ -13,6 +13,7 @@
 #include "redis/reply.hh"
 
 #include "db/consistency_level_type.hh"
+#include "db/config.hh"
 
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -30,7 +31,7 @@ namespace redis_transport {
 static logging::logger logging("redis_server");
 
 redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::service& auth_service, const db::config& cfg, redis_server_config config)
-    : server("Redis", logging, generic_server::config(cfg))
+    : server("Redis", logging, generic_server::config{cfg.uninitialized_connections_semaphore_cpu_concurrency})
     , _query_processor(qp)
     , _config(std::move(config))
     , _max_request_size(_config._max_request_size)
