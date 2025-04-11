@@ -265,8 +265,8 @@ async def test_tablet_repair_hosts_filter(manager: ManagerClient, included_host_
 
 async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
     servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
-               await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
-               await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R2'})]
+               await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R2'}),
+               await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R3'})]
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                   "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
