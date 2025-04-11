@@ -32,7 +32,7 @@ import pytest
 from _pytest._code.code import TerminalRepr, ReprFileLocation
 from _pytest._io import TerminalWriter
 
-from test.pylib.cpp.boost.boost_facade import COMBINED_TESTS
+from test import COMBINED_TESTS, BUILD_DIR
 from test.pylib.cpp.facade import CppTestFailure, CppTestFailureList, CppTestFacade
 
 
@@ -122,7 +122,7 @@ class CppFile(pytest.File):
     Represents the C++ test file with all necessary information for test execution
     """
     def __init__(self, *, no_parallel_run: bool = False, modes: list[str], disabled_tests: dict[str, set[str]],
-                 run_id=None, facade: CppTestFacade, arguments: Sequence[str], parameters: list[str] = None, project_root: Path,
+                 run_id=None, facade: CppTestFacade, arguments: Sequence[str], parameters: list[str] = None,
                  env: dict = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.facade = facade
@@ -131,7 +131,6 @@ class CppFile(pytest.File):
         self.disabled_tests = disabled_tests
         self.no_parallel_run = no_parallel_run
         self.parameters = parameters
-        self.project_root = project_root
         self.env = env
         self._arguments = arguments
 
@@ -141,7 +140,7 @@ class CppFile(pytest.File):
             self.env['TMPDIR'] = Path(self.parent.config.getoption('tmpdir'), mode).absolute()
             if test_name in self.disabled_tests[mode]:
                 continue
-            executable = Path(f'{self.project_root}/build/{mode}/test/{self.path.parent.name}/{test_name}')
+            executable = Path(f'{BUILD_DIR}/{mode}/test/{self.path.parent.name}/{test_name}')
             combined, tests = self.facade.list_tests(executable, self.no_parallel_run, mode)
             if combined:
                 executable = executable.parent / COMBINED_TESTS.stem

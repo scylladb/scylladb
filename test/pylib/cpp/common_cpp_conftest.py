@@ -92,7 +92,6 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     )
     run_id = parent.config.getoption('run_id')
     modes = get_modes_to_run(parent.session.config)
-    project_root = Path(parent.session.config.rootpath).parent
     suite_config = read_suite_config(file_path.parent)
     no_parallel_cases = suite_config.get('no_parallel_cases', [])
     disabled_tests = get_disabled_tests(suite_config, modes)
@@ -105,8 +104,8 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     if len(custom_args) > 1:
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, parameters=custom_args,
                                    no_parallel_run=no_parallel_run, modes=modes, disabled_tests=disabled_tests,
-                                   run_id=run_id, facade=facade, project_root=project_root, env=test_env)
+                                   run_id=run_id, facade=facade,  env=test_env)
     else:
         args.extend(custom_args)
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, no_parallel_run=no_parallel_run,
-                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, project_root=project_root, env=test_env)
+                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, env=test_env)
