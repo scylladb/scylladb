@@ -52,9 +52,10 @@ table_id validate_table(const replica::database& db, sstring ks_name, sstring ta
 // containing the description of the respective no_such_column_family error.
 // Returns a vector of all table infos given by the parameter, or
 // if the parameter is not found or is empty, returns a list of all table infos in the keyspace.
-std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, const std::unordered_map<sstring, sstring>& query_params, sstring param_name);
 
 std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_context& ctx, sstring value);
+
+std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context& ctx, const http::request& req, sstring cf_param_name = "cf");
 
 struct scrub_info {
     sstables::compaction_type_options::scrub opts;
