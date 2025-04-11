@@ -95,7 +95,6 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
         SCYLLA_TEST_ENV='yes',
     )
     run_id = parent.config.getoption('run_id')
-    project_root = Path(parent.session.config.rootpath).parent
     modes = get_modes_to_run(parent.session.config)
     suite_config = read_suite_config(file_path.parent)
     no_parallel_cases = suite_config.get('no_parallel_cases', [])
