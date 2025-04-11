@@ -24,6 +24,8 @@
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
 #include "gms/feature_service.hh"
+#include "service/view_building_state.hh"
+#include "utils/UUID_gen.hh"
 #include "utils/assert.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
@@ -834,6 +836,33 @@ future<std::vector<mutation>> prepare_type_drop_announcement(storage_proxy& sp, 
     return include_keyspace(sp, *keyspace.metadata(), std::move(mutations));
 }
 
+static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr view, std::vector<mutation>& out, api::timestamp_type ts) {
+    using namespace service::view_building;
+
+    auto& db = sp.local_db();
+    auto& sys_ks = sp.system_keyspace();
+
+    auto base_id = view->view_info()->base_id();
+    auto& base_cf = db.find_column_family(base_id);
+    auto erm = base_cf.get_effective_replication_map();
+    auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(base_id);
+
+    co_await tablet_map.for_each_tablet([&] (auto tid, const auto& tablet_info) -> future<> {
+        auto last_token = tablet_map.get_last_token(tid);
+        for (auto& replica: tablet_info.replicas) {
+            auto id = utils::UUID_gen::get_time_UUID();
+            view_building_task task {
+                id, view_building_task::task_type::build_range, view_building_task::task_state::idle,
+                base_id, view->id(), replica, last_token
+            };
+
+            auto mut = co_await sys_ks.make_view_building_task_mutation(ts, task);
+            out.push_back(std::move(mut));
+            mlogger.trace("Creating view building task: {} with ID: {} for replica: {}", task, id, replica);
+        }
+    });
+}
+
 future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
     co_await validate(view);
     auto& db = sp.local_db();
@@ -846,6 +875,9 @@ future<std::vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, v
         mlogger.info("Create new view: {}", view);
         co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
             auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
+            if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+                add_view_building_tasks_mutations(sp, view, mutations, ts).get();
+            }
             // We don't have a separate on_before_create_view() listener to
             // call. But a view is also a column family, and we need to call
             // the on_before_create_column_family listener - notably, to
