@@ -2634,41 +2634,25 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
         topology_builder topo(e);
         shared_load_stats& load_stats = topo.get_shared_load_stats();
 
-        std::vector<host_id> hosts;
-
-        uint64_t i4i_2xlarge_cap = 1'875'000'000'000;
-        uint64_t i4i_large_cap = 468'000'000'000;
-
-        auto add_i4i_2xlarge = [&] (endpoint_dc_rack rack) {
-            auto h = topo.add_node(node_state::normal, 7, rack);
-            load_stats.set_capacity(h, i4i_2xlarge_cap);
-            hosts.push_back(h);
-        };
-
-        auto add_i4i_large = [&] (endpoint_dc_rack rack) {
-            auto h = topo.add_node(node_state::normal, 2, rack);
-            load_stats.set_capacity(h, i4i_large_cap);
-            hosts.push_back(h);
-        };
-
         auto rack1 = topo.rack();
         auto rack2 = topo.start_new_rack();
         auto rack3 = topo.start_new_rack();
 
-        add_i4i_2xlarge(rack1);
-        add_i4i_2xlarge(rack2);
-        add_i4i_2xlarge(rack3);
+        topo.add_i4i_2xlarge(rack1);
+        topo.add_i4i_2xlarge(rack2);
+        topo.add_i4i_2xlarge(rack3);
 
         auto& stm = e.shared_token_metadata().local();
 
         auto ks_name = add_keyspace(e, {{topo.dc(), 3}});
         auto table1 = add_table(e, ks_name).get();
 
-        load_stats.set_size(table1, 0.9 * i4i_2xlarge_cap);
+        load_stats.set_size(table1, 0.9 * topo.get_capacity() / 3);
         rebalance_tablets(e, &load_stats);
         testlog.info("Initial cluster ready");
 
         std::unordered_map<host_id, double> initial_utilization;
+        auto& hosts = topo.hosts();
         {
             load_sketch load(stm.get());
             load.populate().get();
@@ -2679,7 +2663,7 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
             }
         }
 
-        add_i4i_large(rack1);
+        topo.add_i4i_large(rack1);
         rebalance_tablets(e, &load_stats);
         testlog.info("Expanded capacity in rack1");
 
@@ -2696,7 +2680,7 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
                              initial_utilization[hosts[2]]);
         }
 
-        add_i4i_large(rack2);
+        topo.add_i4i_large(rack2);
         rebalance_tablets(e, &load_stats);
         testlog.info("Expanded capacity in rack2");
 
@@ -2712,7 +2696,7 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
                              initial_utilization[hosts[2]]);
         }
 
-        add_i4i_large(rack3);
+        topo.add_i4i_large(rack3);
         rebalance_tablets(e, &load_stats);
         testlog.info("Expanded capacity in rack3");
 
@@ -2744,30 +2728,13 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables) {
         topology_builder topo(e);
         shared_load_stats& load_stats = topo.get_shared_load_stats();
 
-        std::vector<host_id> hosts;
-
-        uint64_t i4i_2xlarge_cap = 1'875'000'000'000;
-        uint64_t i4i_large_cap = 468'000'000'000;
-
-        auto add_i4i_2xlarge = [&] (endpoint_dc_rack rack) {
-            auto h = topo.add_node(node_state::normal, 7, rack);
-            load_stats.set_capacity(h, i4i_2xlarge_cap);
-            hosts.push_back(h);
-        };
-
-        auto add_i4i_large = [&] (endpoint_dc_rack rack) {
-            auto h = topo.add_node(node_state::normal, 2, rack);
-            load_stats.set_capacity(h, i4i_large_cap);
-            hosts.push_back(h);
-        };
-
         auto rack1 = topo.rack();
         auto rack2 = topo.start_new_rack();
         auto rack3 = topo.start_new_rack();
 
-        add_i4i_2xlarge(rack1);
-        add_i4i_2xlarge(rack2);
-        add_i4i_2xlarge(rack3);
+        topo.add_i4i_2xlarge(rack1);
+        topo.add_i4i_2xlarge(rack2);
+        topo.add_i4i_2xlarge(rack3);
 
         auto& stm = e.shared_token_metadata().local();
 
@@ -2776,14 +2743,16 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables) {
         load_stats.set_size(table1, 0);
         testlog.info("Initial cluster ready");
 
-        add_i4i_large(rack1);
-        add_i4i_large(rack2);
-        add_i4i_large(rack3);
+        topo.add_i4i_large(rack1);
+        topo.add_i4i_large(rack2);
+        topo.add_i4i_large(rack3);
         rebalance_tablets(e, &load_stats);
         testlog.info("Expanded capacity");
 
         auto ks2_name = add_keyspace(e, {{topo.dc(), 3}}, 128);
         auto table2 = add_table(e, ks2_name).get();
+
+        auto& hosts = topo.hosts();
 
         {
             load_sketch load(stm.get());
@@ -2799,6 +2768,52 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables) {
             }
             // Initial allocation is not capacity-aware so we're still not perfect here.
             // See https://github.com/scylladb/scylladb/issues/23378
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.13);
+        }
+    }).get();
+}
+
+// Reproduces https://github.com/scylladb/scylladb/issues/23631
+SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbalanced) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        topo.add_i4i_2xlarge(rack1);
+        topo.add_i4i_2xlarge(rack2);
+        topo.add_i4i_2xlarge(rack3);
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 512);
+        auto table1 = add_table(e, ks_name).get();
+        load_stats.set_size(table1, topo.get_capacity() * 0.8 / 3);
+        testlog.info("Initial cluster ready");
+
+        topo.add_i4i_large(rack1);
+        topo.add_i4i_large(rack2);
+        topo.add_i4i_large(rack3);
+        testlog.info("Expanded capacity");
+
+        auto ks2_name = add_keyspace(e, {{topo.dc(), 3}});
+        auto table2 = add_table(e, ks2_name).get();
+
+        auto& hosts = topo.hosts();
+
+        {
+            load_sketch load(stm.get());
+            load.populate(std::nullopt, table2).get();
+
+            min_max_tracker<double> node_utilization;
+            for (auto h : hosts) {
+                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                testlog.info("table2: {}: {}", h, u);
+                node_utilization.update(u.value_or(0));
+            }
             BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.13);
         }
     }).get();

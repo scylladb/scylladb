@@ -269,6 +269,10 @@ const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     }
 }
 
+bool tablet_metadata::has_tablet_map(table_id id) const {
+    return _tablets.contains(id);
+}
+
 void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
