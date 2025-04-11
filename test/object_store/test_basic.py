@@ -41,13 +41,21 @@ def create_ks_and_cf(cql, s3_server):
     return ks, cf
 
 
+@pytest.mark.parametrize('mode', ['normal', 'encrypted'])
 @pytest.mark.asyncio
-async def test_basic(manager: ManagerClient, s3_server):
+async def test_basic(manager: ManagerClient, s3_server, tmp_path, mode):
     '''verify ownership table is updated, and tables written to S3 can be read after scylla restarts'''
 
     cfg = {'enable_user_defined_functions': False,
            'object_storage_config_file': str(s3_server.config_file),
            'experimental_features': ['keyspace-storage-options']}
+    if mode == 'encrypted':
+        d = tmp_path / "system_keys"
+        d.mkdir()
+        cfg = cfg | {
+            'system_key_directory': str(d),
+            'user_info_encryption': { 'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory' }
+        }
     server = await manager.server_add(config=cfg)
 
     cql = manager.get_cql()
@@ -95,7 +103,6 @@ async def test_basic(manager: ManagerClient, s3_server):
     res = cql.execute("SELECT * FROM system.sstables;")
     rows = "\n".join(f"{row.owner} {row.status}" for row in res)
     assert not rows, 'Unexpected entries in registry'
-
 
 @pytest.mark.asyncio
 async def test_garbage_collect(manager: ManagerClient, s3_server):
