@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from random import randint
@@ -26,9 +27,13 @@ from test.pylib.suite.base import (
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
+    from collections.abc import Generator
 
     from test.pylib.cpp.item import CppTestFunction
     from test.pylib.suite.base import Test
+
+
+logger = logging.getLogger(__name__)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -65,6 +70,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
 
+    # Pass information about Scylla node from test.py to pytest.
+    parser.addoption("--scylla-log-filename",
+                     help="Path to a log file of a ScyllaDB node (for suites with type: Python)")
+
 
 @pytest.fixture(scope="session")
 def build_mode(request: pytest.FixtureRequest) -> str:
@@ -78,6 +87,20 @@ def build_mode(request: pytest.FixtureRequest) -> str:
     if mode:
         return mode[0]
     return mode
+
+
+@pytest.fixture(autouse=True)
+def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]:
+    """Print out a path to a ScyllaDB log.
+
+    This is a fixture for Python test suites, because they are using a single node clusters created inside test.py,
+    but it is handy to have this information printed to a pytest log.
+    """
+
+    yield
+
+    if scylla_log_filename := request.config.getoption("--scylla-log-filename"):
+        logger.info("ScyllaDB log file: %s", scylla_log_filename)
 
 
 @pytest.fixture(scope="module")
