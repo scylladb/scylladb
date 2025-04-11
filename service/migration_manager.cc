@@ -934,6 +934,35 @@ future<utils::chunked_vector<mutation>> prepare_view_update_announcement(storage
     }
 }
 
+static future<> add_cleanup_view_building_state_drop_view_mutations(storage_proxy& sp, schema_ptr view, utils::chunked_vector<mutation>& out, api::timestamp_type ts) {
+    using namespace db::view;
+    mlogger.info("Cleaning view building state for view {} ({}.{})", view->id(), view->ks_name(), view->cf_name());
+
+    auto& sys_ks = sp.system_keyspace();
+    auto& vb_state_machine = sp.view_building_state_machine();
+
+    // Drop view building tasks - this operation will also automatically abort them if any is already started
+    auto base_id = view->view_info()->base_id();
+    if (vb_state_machine.building_state.tasks_state.contains(base_id)) {
+        for (auto& [_, replica_tasks]: vb_state_machine.building_state.tasks_state.at(base_id)) {
+            if (!replica_tasks.view_tasks.contains(view->id())) {
+                continue;
+            }
+
+            // Abort all view building tasks for this view
+            for (auto& [id, _]: replica_tasks.view_tasks.at(view->id())) {
+                auto mut = co_await sys_ks.make_remove_view_building_task_mutation(ts, id);
+                out.push_back(std::move(mut));
+                mlogger.trace("Aborting view building task with ID: {} because the view is being dropped", id);
+            }
+        }
+    }
+
+    // Remove entries from `system.view_build_status_v2`
+    auto build_status_mut = co_await sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()});
+    out.push_back(std::move(build_status_mut));
+}
+
 future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts) {
     auto& db = sp.local_db();
     try {
@@ -947,6 +976,9 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
         auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
+        if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+            co_await add_cleanup_view_building_state_drop_view_mutations(sp, view, mutations, ts);
+        }
         // notifiers must run in seastar thread
         co_await seastar::async([&] {
             db.get_notifier().before_drop_column_family(*view, mutations, ts);
