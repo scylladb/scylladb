@@ -290,15 +290,12 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 db::consistency_level::ONE,
                 {},
                 page_size,
-                std::move(batch)).then([this, cleanup] {
-            if (cleanup == post_replay_cleanup::no) {
-                return make_ready_future<>();
-            }
+                std::move(batch));
+        if (cleanup == post_replay_cleanup::yes) {
             // Replaying batches could have generated tombstones, flush to disk,
             // where they can be compacted away.
-            return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
-        }).then([&all_replayed] {
-            blogger.debug("Finished replayAllFailedBatches with all_replayed: {}", all_replayed);
-        });
+            co_await replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+        }
+        blogger.debug("Finished replayAllFailedBatches with all_replayed: {}", all_replayed);
     });
 }
