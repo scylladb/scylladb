@@ -10,7 +10,6 @@ import collections
 import logging
 import os
 import pathlib
-import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
 from scripts import coverage
@@ -163,8 +162,10 @@ class PythonTest(Test):
             "--junit-xml={}".format(self.xmlout),
             "-rs",
             "--run_id={}".format(self.id),
-            "--mode={}".format(self.mode)
+            "--mode={}".format(self.mode),
         ]
+        if options.gather_metrics:
+            self.args.append("--gather-metrics")
         self.args.append(f"--alluredir={self.allure_dir}")
         if not options.save_log_on_success:
             self.args.append("--allure-no-capture")
@@ -236,9 +237,3 @@ class PythonTest(Test):
         await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
-
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        super().write_junit_failure_report(xml_res)
-        if self.server_log_filename is not None:
-            system_err = ET.SubElement(xml_res, 'system-err')
-            system_err.text = read_log(self.server_log_filename)

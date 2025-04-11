@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import logging
-import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
 from test.pylib.suite.base import Test, TestSuite, run_test
@@ -60,6 +59,8 @@ class ToolTest(Test):
             "--mode={}".format(self.mode),
             "--run_id={}".format(self.id)
         ]
+        if options.gather_metrics:
+            self.args.append("--gather-metrics")
         self.args.append(f"--alluredir={self.allure_dir}")
         if not options.save_log_on_success:
             self.args.append("--allure-no-capture")
@@ -82,6 +83,3 @@ class ToolTest(Test):
         self.success = await run_test(self, options)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
-
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        super().write_junit_failure_report(xml_res)

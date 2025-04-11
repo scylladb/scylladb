@@ -17,7 +17,6 @@ import re
 import shutil
 import sys
 import time
-import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from importlib import import_module
 from typing import TYPE_CHECKING
@@ -31,7 +30,7 @@ from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
 from test.pylib.ldap_server import start_ldap
 from test.pylib.minio_server import MinioServer
-from test.pylib.resource_gather import get_resource_gather
+from test.pylib.resource_gather import get_resource_gather, setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
@@ -365,17 +364,6 @@ class Test:
             self.log_filename.unlink()
         pass
 
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        assert not self.success
-        xml_fail = ET.SubElement(xml_res, 'failure')
-        xml_fail.text = "Test {} {} failed, check the log at {}".format(
-            self.path,
-            " ".join(self.args),
-            self.log_filename)
-        if self.log_filename.exists():
-            system_out = ET.SubElement(xml_res, 'system-out')
-            system_out.text = read_log(self.log_filename)
-
 
 def init_testsuite_globals() -> None:
     """Create global objects required for a test run."""
@@ -521,10 +509,13 @@ def prepare_dir(dirname: pathlib.Path, pattern: str) -> None:
         p.unlink()
 
 
-def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str]) -> None:
+def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool) -> None:
     prepare_dir(tempdir_base, "*.log")
-    shutil.rmtree(tempdir_base / "ldap_instances", ignore_errors=True)
-    prepare_dir(tempdir_base / "ldap_instances", "*")
+    setup_cgroup(gather_metrics)
+    for directory in ['report', 'ldap_instances']:
+        full_path_directory = tempdir_base / directory
+        shutil.rmtree(full_path_directory, ignore_errors=True)
+        prepare_dir(full_path_directory, '*')
     for mode in modes:
         prepare_dir(tempdir_base / mode, "*.log")
         prepare_dir(tempdir_base / mode, "*.reject")
@@ -538,14 +529,14 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str]) -> None:
 
 
 @universalasync.async_to_sync_wraps
-async def start_3rd_party_services(tempdir_base: pathlib.Path, toxyproxy_byte_limit: int):
+async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
     hosts = HostRegistry()
 
     finalize = start_ldap(
         host=await hosts.lease_host(),
         port=5000,
         instance_root=tempdir_base / 'ldap_instances',
-        toxyproxy_byte_limit=toxyproxy_byte_limit)
+        toxiproxy_byte_limit=toxiproxy_byte_limit)
     async def make_async_finalize():
         finalize()
 
