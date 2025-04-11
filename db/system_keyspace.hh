@@ -574,9 +574,9 @@ public:
     future<bool> cdc_is_rewritten();
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
-    future<cdc::base_streams_state> read_cdc_streams_state();
-    future<cdc::streams_history> read_cdc_streams_history();
-    future<cdc::pending_streams> read_cdc_pending_streams();
+    future<cdc::base_streams_state> read_cdc_streams_state(std::optional<table_id> table = std::nullopt);
+    future<cdc::streams_history> read_cdc_streams_history(std::optional<table_id> table = std::nullopt);
+    future<cdc::pending_streams> read_cdc_pending_streams(std::optional<table_id> table = std::nullopt);
 
     // Load Raft Group 0 id from scylla.local
     future<utils::UUID> get_raft_group0_id();

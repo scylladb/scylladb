@@ -929,6 +929,7 @@ public:
     future<> compression_dictionary_updated_callback_all();
 
     future<> load_cdc_streams();
+    future<> load_cdc_streams(std::unordered_set<table_id> changed_tables);
 
     future<> do_cluster_cleanup();
 

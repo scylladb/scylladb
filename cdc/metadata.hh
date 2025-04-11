@@ -94,7 +94,7 @@ public:
      */
     bool prepare(db_clock::time_point ts);
 
-    void load_streams_state(const base_streams_state& base_data, const pending_streams& pending_data, const streams_history& history_data);
+    void load_streams_state(const base_streams_state& base_data, const pending_streams& pending_data, const streams_history& history_data, const std::vector<table_id>& removed_tables);
 
     const tablet_streams_map& get_all_tablet_streams() const {
         return _tablet_streams;
