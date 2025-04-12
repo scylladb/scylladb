@@ -1000,7 +1000,7 @@ class client::download_source final : public seastar::data_source_impl {
     };
 
     std::optional<external_body> _body;
-    gate _bg;
+    named_gate _bg;
 
     future<external_body> request_body();
 
@@ -1010,6 +1010,7 @@ public:
         , _object_name(std::move(object_name))
         , _as(as)
         , _range(range.value_or(s3::range{0, std::numeric_limits<uint64_t>::max()}))
+        , _bg("s3::client::download_source")
     {
     }
 
