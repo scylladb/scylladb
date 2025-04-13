@@ -19,10 +19,12 @@ class result_merger {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> _partial;
     const uint64_t _max_rows;
     const uint32_t _max_partitions;
+    const std::optional<uint64_t> _per_partition_limit;
 public:
-    explicit result_merger(uint64_t max_rows, uint32_t max_partitions)
+    explicit result_merger(uint64_t max_rows, uint32_t max_partitions, std::optional<uint64_t> per_partition_limit = std::nullopt)
             : _max_rows(max_rows)
             , _max_partitions(max_partitions)
+            , _per_partition_limit(per_partition_limit)
     { }
 
     void reserve(size_t size) {
