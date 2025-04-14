@@ -5,6 +5,7 @@ cluster:
 extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
+    rf_rack_valid_keyspaces: True
 run_first:
     - test_cluster_features
     - test_topology_remove_decom
