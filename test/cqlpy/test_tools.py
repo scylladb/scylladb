@@ -24,6 +24,7 @@ import shutil
 import uuid
 from . import nodetool
 from . import util
+import stat
 from typing import Iterable, Type, Union
 from cassandra.util import Duration
 import yaml
@@ -1379,6 +1380,27 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
             # "system.scylla_local" system tables has a different setting. but in a
             # new installation of scylla, this setting does not exist.
             assert sstable_version == "me", f"unexpected sstable format: {sstable_version}"
+
+def test_create_local_key_file(scylla_path):
+    with tempfile.TemporaryDirectory() as dir:
+        file = os.path.join(dir, "keyfile")
+        subprocess.check_call([scylla_path, "local-file-key-generator", "generate", file])
+        assert os.path.isfile(file)
+        status = os.stat(file)
+        assert (status.st_mode & 0xfff) == (stat.S_IRUSR | stat.S_IWUSR)
+        num_lines = sum(1 for _ in open(file))
+        assert num_lines > 0
+
+def test_create_local_key_file_with_args(scylla_path):
+    with tempfile.TemporaryDirectory() as dir:
+        file = os.path.join(dir, "keyfile")
+        subprocess.check_call([scylla_path, "local-file-key-generator", "generate", "-a", "DESEDE", "-l", "128", "-b", "ECB", file])
+        assert os.path.isfile(file)
+        status = os.stat(file)
+        assert (status.st_mode & 0xfff) == (stat.S_IRUSR | stat.S_IWUSR)
+        for line in open(file):
+            assert re.match(r"DESEDE/ECB/PKCS5Padding:128:\S+", line)
+            break
 
 
 class sstable_query_tester:
