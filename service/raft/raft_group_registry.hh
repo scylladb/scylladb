@@ -17,6 +17,7 @@
 #include "utils/recent_entries_map.hh"
 #include "service/direct_failure_detector/failure_detector.hh"
 #include "service/raft/group0_fwd.hh"
+#include "utils/updateable_value.hh"
 
 namespace db {
 class system_keyspace;
@@ -51,7 +52,7 @@ struct raft_server_for_group {
     raft_rpc& rpc;
     raft_sys_table_storage& persistence;
     std::optional<seastar::future<>> aborted;
-    std::optional<lowres_clock::duration> default_op_timeout;
+    std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
 };
 
 class raft_operation_timeout_error : public std::runtime_error {
@@ -67,7 +68,7 @@ class raft_operation_timeout_error : public std::runtime_error {
 // to calling the original raft methods without timeout.
 // Passing raft_timeout{} means 'use default timeout for this group', which is taken
 // from raft_server_for_group::default_op_timeout. For group0 default_op_timeout
-// is set to 1 minute and can be overridden in tests through the group0-raft-op-timeout-in-ms injection.
+// is set to 1 minute and can be overridden through the group0_raft_op_timeout_in_ms option.
 // A custom timeout can be passed via raft_timeout::value, it will take precedence over
 // the default timeout default_op_timeout.
 // If no default_op_timeout is configured for a group and raft_timeout{} is passed without

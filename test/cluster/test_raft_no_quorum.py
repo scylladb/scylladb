@@ -42,11 +42,8 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
 
     config = {
         'direct_failure_detector_ping_timeout_in_ms': 300,
+        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
-            {
-                'name': 'group0-raft-op-timeout-in-ms',
-                'value': raft_op_timeout
-            },
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
                 'value': '500'
@@ -78,11 +75,8 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
 @skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
 async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_timeout: int) -> None:
     config = {
+        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
-            {
-                'name': 'group0-raft-op-timeout-in-ms',
-                'value': raft_op_timeout
-            },
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
                 'value': '500'
@@ -130,11 +124,8 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
 
     logger.info("adding a third node")
     servers += [await manager.server_add(config={
+        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
-            {
-                'name': 'group0-raft-op-timeout-in-ms',
-                'value': raft_op_timeout
-            },
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
                 'value': '500'
@@ -174,11 +165,8 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
 async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: int) -> None:
     logger.info("starting a first node (the leader)")
     servers = [await manager.server_add(config={
+        'group0_raft_op_timeout_in_ms': raft_op_timeout,
         'error_injections_at_startup': [
-            {
-                'name': 'group0-raft-op-timeout-in-ms',
-                'value': raft_op_timeout
-            },
             {
                 'name': 'raft-group-registry-fd-threshold-in-ms',
                 'value': '500'
