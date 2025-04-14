@@ -89,6 +89,7 @@ public:
     virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
+    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
     virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
@@ -108,6 +109,11 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
 
     SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
     return make_file_data_sink(type == component_type::Data ? std::move(sst._data_file) : std::move(sst._index_file), options);
+}
+
+future<data_source> filesystem_storage::make_data_or_index_source(sstable&, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const {
+    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
+    co_return make_file_data_source(std::move(f), offset, len, std::move(opt));
 }
 
 future<data_sink> filesystem_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
@@ -570,6 +576,7 @@ public:
     virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
     virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
     virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
+    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
     virtual future<> destroy(const sstable& sst) override {
         return make_ready_future<>();
@@ -639,10 +646,43 @@ static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type
     co_return sink;
 }
 
+static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source_creator_fn source_creator, uint64_t offset, uint64_t len) {
+    if (type != component_type::TOC && type != component_type::TemporaryTOC) {
+        for (auto* ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
+            std::exception_ptr p;
+            try {
+                co_return co_await ext->wrap_source(sst, type, std::move(source_creator), offset, len);
+            } catch (...) {
+                p = std::current_exception();
+            }
+            if (p) {
+                std::rethrow_exception(std::move(p));
+            }
+        }
+    }
+    co_return source_creator(offset, len);
+}
+
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
     SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
     return maybe_wrap_sink(sst, type, _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as));
+}
+
+future<data_source>
+s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+    if (offset == 0) {
+        co_return co_await maybe_wrap_source(
+            sst,
+            type,
+            [this, object_name = make_s3_object_name(sst, type)](uint64_t, uint64_t) {
+                return _client->make_chunked_download_source(object_name, s3::full_range, _as);
+            },
+            offset,
+            len);
+    }
+    co_return make_file_data_source(
+        co_await maybe_wrap_file(sst, type, open_flags::ro, _client->make_readable_file(make_s3_object_name(sst, type), _as)), offset, len, std::move(options));
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
