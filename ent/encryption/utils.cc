@@ -15,10 +15,11 @@
 
 using namespace seastar;
 
-encryption::httpclient::httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> creds)
+encryption::httpclient::httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> creds, bool tls_wait_on_close)
     : _host(std::move(host))
     , _port(port)
     , _creds(std::move(creds))
+    , _tls_wait_on_close(tls_wait_on_close)
     , _req(http::request::make(httpd::operation_type::GET, _host, ""))
 {
     _req._version = "1.1";
@@ -62,18 +63,20 @@ seastar::future<> encryption::httpclient::send(const handler_func& f) {
         socket_address _addr;
         shared_ptr<tls::certificate_credentials> _creds;
         sstring _host;
+        bool _tls_wait_on_close;
     public:
-        my_connection_factory(socket_address addr, shared_ptr<tls::certificate_credentials> creds, sstring host)
+        my_connection_factory(socket_address addr, shared_ptr<tls::certificate_credentials> creds, sstring host, bool tls_wait_on_close = true)
             : _addr(std::move(addr))
             , _creds(std::move(creds))
             , _host(std::move(host))
+            , _tls_wait_on_close(tls_wait_on_close)
         {}
         future<connected_socket> make(abort_source* as) override {
             // don't verify host cert name if "host" is just an ip address.
             // typically testing.
             bool is_numeric_host = seastar::net::inet_address::parse_numerical(_host).has_value();
             connected_socket s = co_await (_creds 
-                ? http::experimental::tls_connection_factory(_addr, _creds, is_numeric_host ? sstring{} : _host).make(as) 
+                ? tls::connect(_creds, _addr, tls::tls_options{ .wait_for_eof_on_shutdown = _tls_wait_on_close, .server_name = is_numeric_host ? sstring{} : _host})
                 : http::experimental::basic_connection_factory(_addr).make(as)
             );
             s.set_keepalive(true);
@@ -89,7 +92,7 @@ seastar::future<> encryption::httpclient::send(const handler_func& f) {
         _req._headers[CONTENT_TYPE_HEADER] = "application/x-www-form-urlencoded";
     }
 
-    http::experimental::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _host));
+    http::experimental::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _host, _tls_wait_on_close));
 
     std::exception_ptr p;
     try {

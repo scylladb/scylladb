@@ -28,7 +28,7 @@ namespace encryption {
 
 class httpclient {
 public:
-    httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> = {});
+    httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> = {}, bool tls_wait_on_close = true);
 
     httpclient& add_header(std::string_view key, std::string_view value);
     void clear_headers();
@@ -76,6 +76,7 @@ private:
     std::string _host;
     uint16_t _port;
     seastar::shared_ptr<seastar::tls::certificate_credentials> _creds;
+    bool _tls_wait_on_close;
     request_type _req;
 };
 
