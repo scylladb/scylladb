@@ -113,6 +113,11 @@ sstring get_application_state_gently(const gms::application_state_map& epmap, gm
 }
 } // namespace
 
+template<typename Result>
+concept HasCombineResult = requires(Result r, raft_topology_cmd_result&& res) {
+    { r.combine_result(std::move(res)) } -> std::same_as<void>;
+};
+
 class topology_coordinator : public endpoint_lifecycle_subscriber {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     gms::gossiper& _gossiper;
@@ -386,7 +391,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+    future<raft_topology_cmd_result> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
         rtlogger.debug("send {} command with term {} and index {} to {}",
             cmd.cmd, _term, cmd_index, id);
         _topology_cmd_rpc_tracker.active_dst.emplace(id);
@@ -400,6 +405,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await coroutine::exception(std::make_exception_ptr(
                     std::runtime_error(::format("failed status returned from {}", id))));
         }
+
+        co_return std::move(result);
     };
 
     future<node_to_work_on> exec_direct_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
@@ -412,23 +419,31 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return retake_node(co_await start_operation(), id);
     };
 
-    future<> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
+    template <HasCombineResult Result>
+    future<Result> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
         const auto cmd_index = ++_last_cmd_index;
         _topology_cmd_rpc_tracker.current = cmd.cmd;
         _topology_cmd_rpc_tracker.index = cmd_index;
+        Result global_result;
         auto f = co_await coroutine::as_future(
-                seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index] (raft::server_id id) {
-            return exec_direct_command_helper(id, cmd_index, cmd);
-        }));
+                seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index, &global_result] (raft::server_id id) {
+                    return exec_direct_command_helper(id, cmd_index, cmd)
+                        .then([&global_result] (raft_topology_cmd_result result) {
+                            global_result.combine_result(std::move(result));
+                        });
+                }));
 
         if (f.failed()) {
             co_await coroutine::return_exception(std::runtime_error(
                 ::format("raft topology: exec_global_command({}) failed with {}",
                     cmd.cmd, f.get_exception())));
         }
+
+        co_return std::move(global_result);
     };
 
-    future<group0_guard> exec_global_command(
+    template <HasCombineResult Result>
+    future<std::pair<group0_guard, Result>> exec_global_command_with_result(
             group0_guard guard, const raft_topology_cmd& cmd,
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
@@ -445,10 +460,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (drop_and_retake) {
             release_guard(std::move(guard));
         }
-        co_await exec_global_command_helper(std::move(nodes), cmd);
+        auto result = co_await exec_global_command_helper<Result>(std::move(nodes), cmd);
         if (drop_and_retake) {
             guard = co_await start_operation();
         }
+        co_return std::make_pair(std::move(guard), std::move(result));
+    }
+
+    future<group0_guard> exec_global_command(
+            group0_guard guard, const raft_topology_cmd& cmd,
+            const std::unordered_set<raft::server_id>& exclude_nodes,
+            drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
+
+        struct empty_global_raft_command_result {
+            void combine_result(raft_topology_cmd_result&&) {}
+        };
+
+        auto result = co_await exec_global_command_with_result<empty_global_raft_command_result>(
+                std::move(guard), cmd, exclude_nodes, drop_and_retake);
+        guard = std::move(result.first);
+
         co_return guard;
     }
 
