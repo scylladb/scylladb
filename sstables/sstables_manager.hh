@@ -141,7 +141,7 @@ private:
 
     const abort_source& _abort;
 
-    gate _signal_gate;
+    named_gate _signal_gate;
     signal_type _signal_source;
 
 public:

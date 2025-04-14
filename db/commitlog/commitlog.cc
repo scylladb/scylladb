@@ -519,7 +519,7 @@ private:
     future<> replenish_reserve();
     future<> _reserve_replenisher;
     future<> _background_sync;
-    seastar::gate _gate;
+    seastar::named_gate _gate;
     uint64_t _new_counter = 0;
     uint32_t _frag_id_counter = 0;
     std::optional<size_t> _disk_write_alignment;
@@ -1915,6 +1915,7 @@ db::commitlog::segment_manager::segment_manager(config c)
     , _recycled_segments(std::numeric_limits<size_t>::max())
     , _reserve_replenisher(make_ready_future<>())
     , _background_sync(make_ready_future<>())
+    , _gate(format("commitlog::segment_manager::{}", cfg.commit_log_location))
 {
     SCYLLA_ASSERT(max_size > 0);
     SCYLLA_ASSERT(max_mutation_size < segment::multi_entry_size_magic);

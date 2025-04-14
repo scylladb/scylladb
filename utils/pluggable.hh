@@ -43,6 +43,8 @@ class pluggable {
     utils::phased_barrier _phaser;
 
 public:
+    explicit pluggable(sstring name) : _phaser(format("pluggable::{}", name)) {}
+
     class permit {
         utils::phased_barrier::operation _op;
         T* _service = nullptr;

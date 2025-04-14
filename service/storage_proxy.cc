@@ -241,7 +241,7 @@ class storage_proxy::remote {
     topology_state_machine& _topology_state_machine;
     abort_source _group0_as;
 
-    seastar::gate _truncate_gate;
+    seastar::named_gate _truncate_gate;
 
     netw::connection_drop_slot_t _connection_dropped;
     netw::connection_drop_registration_t _condrop_registration;
@@ -252,6 +252,7 @@ public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
                 raft_group0_client& group0_client, topology_state_machine& tsm)
         : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _group0_client(group0_client), _topology_state_machine(tsm)
+        , _truncate_gate("storage_proxy::remote::truncate_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
     {
@@ -3110,7 +3111,9 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
-    , _cancellable_write_handlers_list(std::make_unique<cancellable_write_handlers_list>()) {
+    , _cancellable_write_handlers_list(std::make_unique<cancellable_write_handlers_list>())
+    , _pending_writes_phaser("storage_proxy::pending_writes")
+{
     namespace sm = seastar::metrics;
     _metrics.add_group(storage_proxy_stats::COORDINATOR_STATS_CATEGORY, {
         sm::make_queue_length("current_throttled_writes", [this] { return _throttled_writes.size(); },
@@ -6847,7 +6850,7 @@ future<> storage_proxy::wait_for_hint_sync_point(const db::hints::sync_point spo
     // If the timer is triggered, it will spawn a discarded future which triggers
     // abort sources on all shards. We need to make sure that this future
     // completes before exiting - we use a gate for that.
-    seastar::gate timer_gate;
+    seastar::named_gate timer_gate("wait_for_hint_sync_point::timer");
     seastar::timer<lowres_clock> t;
     t.set_callback([&timer_gate, &sources] {
         // The gate is waited on at the end of the wait_for_hint_sync_point function

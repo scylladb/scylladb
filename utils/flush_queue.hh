@@ -45,7 +45,7 @@ private:
     map_type _map;
     // embed all ops in a seastar::gate as well
     // so we can effectively block incoming ops
-    seastar::gate _gate;
+    seastar::named_gate _gate;
     bool _chain_exceptions;
 
     template<typename Func>
@@ -84,7 +84,8 @@ private:
     }
 public:
     flush_queue(bool chain_exceptions = false)
-        : _chain_exceptions(chain_exceptions)
+        : _gate("flush_queue")
+        , _chain_exceptions(chain_exceptions)
     {}
     // we are repeatedly using lambdas with "this" captured.
     // allowing moving would not be wise.

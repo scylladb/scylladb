@@ -57,7 +57,7 @@ protected:
     input_stream<char> _read_buf;
     output_stream<char> _write_buf;
     future<> _ready_to_respond = make_ready_future<>();
-    seastar::gate _pending_requests_gate;
+    seastar::named_gate _pending_requests_gate;
     seastar::gate::holder _hold_server;
 
 private:
@@ -107,7 +107,7 @@ class server {
 protected:
     sstring _server_name;
     logging::logger& _logger;
-    seastar::gate _gate;
+    seastar::named_gate _gate;
     future<> _all_connections_stopped = make_ready_future<>();
     uint64_t _total_connections = 0;
     uint64_t _shed_connections = 0;

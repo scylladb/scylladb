@@ -30,7 +30,7 @@ public:
 private:
     static constexpr int bad_column_family_message_period = 10000;
 
-    seastar::gate _pending_writes;
+    seastar::named_gate _pending_writes;
     int64_t _slow_query_last_nanos = 0;
     service::query_state _dummy_query_state;
 

@@ -57,7 +57,7 @@ private:
     std::unordered_map<locator::host_id, serialized_action> _schema_pulls;
     serialized_action _group0_barrier;
     std::vector<gms::feature::listener_registration> _feature_listeners;
-    seastar::gate _background_tasks;
+    seastar::named_gate _background_tasks;
     static const std::chrono::milliseconds migration_delay;
     gms::feature_service& _feat;
     netw::messaging_service& _messaging;

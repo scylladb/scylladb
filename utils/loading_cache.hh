@@ -219,6 +219,7 @@ private:
         : _cfg(std::move(cfg))
         , _logger(logger)
         , _timer([this] { on_timer(); })
+        , _timer_reads_gate("loading_cache::timer_reads")
     {
         static_assert(noexcept(LoadingCacheStats::inc_unprivileged_on_cache_size_eviction()), "LoadingCacheStats::inc_unprivileged_on_cache_size_eviction must be non-throwing");
         static_assert(noexcept(LoadingCacheStats::inc_privileged_on_cache_size_eviction()), "LoadingCacheStats::inc_privileged_on_cache_size_eviction must be non-throwing");
@@ -708,7 +709,7 @@ private:
     logging::logger& _logger;
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
-    seastar::gate _timer_reads_gate;
+    seastar::named_gate _timer_reads_gate;
 };
 
 template<typename Key, typename Tp, int SectionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename LoadingCacheStats, typename Clock, typename Alloc>

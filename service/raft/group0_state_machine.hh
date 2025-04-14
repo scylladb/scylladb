@@ -106,7 +106,7 @@ class group0_state_machine : public raft_state_machine {
     migration_manager& _mm;
     storage_proxy& _sp;
     storage_service& _ss;
-    seastar::gate _gate;
+    seastar::named_gate _gate;
     abort_source _abort_source;
     bool _topology_change_enabled;
     group0_state_id_handler _state_id_handler;

@@ -179,7 +179,8 @@ raft_group0::raft_group0(seastar::abort_source& abort_source,
         db::system_keyspace& sys_ks,
         raft_group0_client& client,
         seastar::scheduling_group sg)
-    : _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client), _sg(sg)
+    : _shutdown_gate("raft_group0::shutdown")
+    , _abort_source(abort_source), _raft_gr(raft_gr), _ms(ms), _gossiper(gs),  _feat(feat), _sys_ks(sys_ks), _client(client), _sg(sg)
     , _status_for_monitoring(status_for_monitoring::normal)
 {
     register_metrics();
@@ -1160,6 +1161,7 @@ future<> persistent_discovery::stop() {
 persistent_discovery::persistent_discovery(discovery_peer my_addr, const peer_list& seeds, cql3::query_processor& qp)
     : _discovery{std::move(my_addr), seeds}
     , _qp{qp}
+    , _gate("raft_group0::persistent_discovery")
 {
     for (auto& addr: seeds) {
         group0_log.debug("discovery: seed peer: id={}, info={}", addr.id, addr.ip_addr);

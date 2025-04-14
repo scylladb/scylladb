@@ -78,6 +78,7 @@ private:
 public:
     memtable_snapshot_source(schema_ptr s)
         : _s(s)
+        , _apply("memtable_snapshot_source::apply")
         , _compactor(seastar::async([this] () noexcept {
             while (!_closed) {
                 std::optional<future<>> f;

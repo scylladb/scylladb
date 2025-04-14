@@ -62,7 +62,7 @@ private:
     std::chrono::milliseconds _delay;
     unsigned _replay_cleanup_after_replays = 100;
     semaphore _sem{1};
-    seastar::gate _gate;
+    seastar::named_gate _gate;
     unsigned _cpu = 0;
     seastar::abort_source _stop;
     future<> _loop_done;

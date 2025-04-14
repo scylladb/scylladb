@@ -2226,7 +2226,9 @@ view_builder::view_builder(replica::database& db, db::system_keyspace& sys_ks, d
         , _qp(qp)
         , _mnotifier(mn)
         , _vug(vug)
-        , _permit(_db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout, {})) {
+        , _permit(_db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "view_builder", db::no_timeout, {}))
+        , _upgrade_phaser("view_builder::upgrade_phaser")
+{
     setup_metrics();
 }
 

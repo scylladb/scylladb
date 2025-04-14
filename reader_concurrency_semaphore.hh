@@ -196,8 +196,8 @@ private:
     std::optional<seastar::metrics::metric_groups> _metrics;
     bool _stopped = false;
     bool _evicting = false;
-    gate _close_readers_gate;
-    gate _permit_gate;
+    named_gate _close_readers_gate;
+    named_gate _permit_gate;
     std::optional<future<>> _execution_loop_future;
     reader_permit::impl* _blessed_permit = nullptr;
 

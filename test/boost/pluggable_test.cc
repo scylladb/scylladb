@@ -29,7 +29,7 @@ public:
 SEASTAR_TEST_CASE(test_pluggable) {
     int counter;
     auto service = make_shared<test_service>(counter);
-    utils::pluggable<test_service> plugin;
+    utils::pluggable<test_service> plugin("test");
 
     auto check_unplugged = [&] {
         BOOST_REQUIRE(!plugin);

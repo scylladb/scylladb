@@ -479,7 +479,7 @@ future<std::vector<task_stats>> task_manager::virtual_task::get_stats() {
     return _impl->get_stats();
 }
 
-task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)) {
+task_manager::module::module(task_manager& tm, std::string name) noexcept : _tm(tm), _name(std::move(name)), _gate(fmt::format("task_manager::module[{}]", _name)) {
     _abort_subscription = _tm.abort_source().subscribe([this] () noexcept {
         abort_source().request_abort();
     });
@@ -501,7 +501,7 @@ abort_source& task_manager::module::abort_source() noexcept {
     return _as;
 }
 
-gate& task_manager::module::async_gate() noexcept {
+named_gate& task_manager::module::async_gate() noexcept {
     return _gate;
 }
 

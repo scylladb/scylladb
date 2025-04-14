@@ -749,7 +749,7 @@ private:
     // Contains the hashes of rows in the _working_row_buffor for all peer nodes
     std::vector<repair_hash_set> _peer_row_hash_sets;
     // Gate used to make sure pending operation of meta data is done
-    seastar::gate _gate;
+    seastar::named_gate _gate;
     sink_source_for_get_full_row_hashes _sink_source_for_get_full_row_hashes;
     sink_source_for_get_row_diff _sink_source_for_get_row_diff;
     sink_source_for_put_row_diff _sink_source_for_put_row_diff;
@@ -843,6 +843,7 @@ public:
             , _same_sharding_config(is_same_sharding_config(cf))
             , _nr_peer_nodes(nr_peer_nodes)
             , _repair_writer(make_repair_writer(_schema, _permit, _reason, _db, rs.get_view_builder(), topo_guard))
+            , _gate(format("repair_meta[{}]", repair_meta_id))
             , _sink_source_for_get_full_row_hashes(_repair_meta_id, _nr_peer_nodes,
                     [&rs] (uint32_t repair_meta_id, std::optional<shard_id> dst_cpu_id_opt, locator::host_id addr) {
                         auto dst_cpu_id = dst_cpu_id_opt.value_or(repair_unspecified_shard);

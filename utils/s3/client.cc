@@ -550,7 +550,7 @@ protected:
     sstring _object_name;
     sstring _upload_id;
     utils::chunked_vector<sstring> _part_etags;
-    gate _bg_flushes;
+    named_gate _bg_flushes;
     std::optional<tag> _tag;
     seastar::abort_source* _as;
 
@@ -567,6 +567,7 @@ protected:
     multipart_upload(shared_ptr<client> cln, sstring object_name, std::optional<tag> tag, seastar::abort_source* as)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
+        , _bg_flushes("s3::client::multipart_upload::bg_flushes")
         , _tag(std::move(tag))
         , _as(as)
     {
@@ -1000,7 +1001,7 @@ class client::download_source final : public seastar::data_source_impl {
     };
 
     std::optional<external_body> _body;
-    gate _bg;
+    named_gate _bg;
 
     future<external_body> request_body();
 
@@ -1010,6 +1011,7 @@ public:
         , _object_name(std::move(object_name))
         , _as(as)
         , _range(range.value_or(s3::range{0, std::numeric_limits<uint64_t>::max()}))
+        , _bg("s3::client::download_source")
     {
     }
 
