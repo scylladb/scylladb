@@ -749,11 +749,14 @@ public:
             plan.merge(std::move(dc_plan));
         }
 
-        // Make plans for repair jobs
-        plan.set_repair_plan(co_await make_repair_plan(plan));
-
         // Merge table-wide resize decisions, may emit new decisions, revoke or finalize ongoing ones.
+        // Note : Resize plans should be generated before repair plans to avoid scheduling repairs when there is pending resize finalization
         plan.merge_resize_plan(co_await make_resize_plan(plan));
+
+        // Skip making repair plans if resize finalizations are pending, since repairs could delay finalization.
+        if (plan.resize_plan().finalize_resize.empty()) {
+            plan.set_repair_plan(co_await make_repair_plan(plan));
+        }
 
         lblogger.info("Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
                 plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count());
