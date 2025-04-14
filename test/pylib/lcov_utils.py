@@ -80,7 +80,7 @@ class LcovRecord(metaclass = MakeLcovRouter):
         self.source_file: Optional[Path] = None
         self.line_hits: dict[int, int] = dict()
 
-        self.function_hits: dict[Tuple(int, str), int] = dict()
+        self.function_hits: dict[Tuple[int, str], int] = dict()
         self.functions_to_lines: dict[str, int] = dict()
         self.branch_hits: dict[Tuple[int, int, int], Optional[int]] = dict()
         self.sealed: bool = False
@@ -237,6 +237,12 @@ class LcovRecord(metaclass = MakeLcovRouter):
     def validate_integrity(self):
         assert (
             len(set(self.functions_to_lines.values()) - set(self.line_hits.keys())) == 0
+        ), (
+            self.source_file,
+            self._test_name,
+            set(self.functions_to_lines.values()),
+            set(self.line_hits.keys()),
+            set(self.functions_to_lines.values()) - set(self.line_hits.keys())
         )
         assert (
             len(
@@ -244,6 +250,12 @@ class LcovRecord(metaclass = MakeLcovRouter):
                 - set(self.line_hits.keys())
             )
             == 0
+        ), (
+            self.source_file,
+            self._test_name,
+            set([x[0] for x in self.branch_hits.keys()]),
+            set(self.line_hits.keys()),
+            set([x[0] for x in self.branch_hits.keys()]) - set(self.line_hits.keys())
         )
 
     def get_lines(self) -> set[int]:
