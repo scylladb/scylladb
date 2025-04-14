@@ -1126,6 +1126,8 @@ public:
     // output device. Default impl will call wrap_file and generate a wrapper object.
     virtual future<data_sink> wrap_sink(const sstable&, component_type, data_sink);
 
+    virtual future<data_source>
+    wrap_source(const sstable&, component_type, sstables::data_source_creator_fn, uint64_t offset, uint64_t len);
     // optionally return a map of attributes for a given sstable,
     // suitable for "describe".
     // This would preferably be interesting info on what/why the extension did
