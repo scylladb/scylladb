@@ -690,7 +690,7 @@ public:
         bool ok = ext_attr->map.contains(encryption_attribute_ds);
         if (ok && type != sstables::component_type::Data) {
             ok = ser::deserialize_from_buffer(ext_attr->map.at(encrypted_components_attribute_ds).value, std::type_identity<uint32_t>{}, 0) &
-                 (1 << static_cast<int>(type)) > 0;
+                 (1 << static_cast<int>(type));
         }
 
         if (!ok) {
@@ -827,6 +827,30 @@ public:
             sink = data_sink(make_encrypted_sink(std::move(sink), std::move(k))); 
         });
         co_return sink;
+    }
+
+    future<data_source> wrap_source(const sstables::sstable& sst, sstables::component_type type, data_source source) override {
+        switch (type) {
+        case sstables::component_type::Scylla:
+        case sstables::component_type::TemporaryTOC:
+        case sstables::component_type::TOC:
+            co_return source;
+        case sstables::component_type::CompressionInfo:
+        case sstables::component_type::CRC:
+        case sstables::component_type::Data:
+        case sstables::component_type::Digest:
+        case sstables::component_type::Filter:
+        case sstables::component_type::Index:
+        case sstables::component_type::Statistics:
+        case sstables::component_type::Summary:
+        case sstables::component_type::TemporaryStatistics:
+        case sstables::component_type::Unknown:
+            auto [id, esx] = get_encryption_schema_extension(sst, type);
+            if (esx) {
+                source = data_source(make_encrypted_source(std::move(source), co_await esx->key_for_read(id)));
+            }
+            co_return source;
+        }
     }
 };
 
