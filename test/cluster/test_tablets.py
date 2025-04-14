@@ -797,12 +797,14 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
     and when there is another down node in the datacenter, leaving no normal token owners.
     """
     servers: dict[str, list[ServerInfo]] = dict()
-    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1_1'},
+        {'dc': 'dc1', 'rack': 'rack1_2'}])
     # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
     extra_node = 0 if with_zero_token_node else 1
     servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
     if with_zero_token_node:
-        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1_1'}))
         servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
 
     cql = manager.get_cql()
@@ -824,7 +826,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
 
         logger.info(f"Replacing {node_to_replace} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
-        await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': 'rack1'})
+        await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
@@ -836,10 +838,12 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
     And then verify that that node can be replaced successfully.
     """
     servers: dict[str, list[ServerInfo]] = dict()
-    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1_1'},
+        {'dc': 'dc1', 'rack': 'rack1_2'}])
     servers['dc2'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc2', 'rack': 'rack2'})
     if with_zero_token_node:
-        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1_1'}))
         servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
 
     cql = manager.get_cql()
@@ -857,7 +861,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
 
         logger.info(f"Replacing {node_to_remove} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
-        await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': 'rack1'})
+        await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
@@ -870,12 +874,14 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
     but other datacenters can be used to rebuild the data.
     """
     servers: dict[str, list[ServerInfo]] = dict()
-    servers['dc1'] = await manager.servers_add(servers_num=2, property_file={'dc': 'dc1', 'rack': 'rack1'})
+    servers['dc1'] = await manager.servers_add(servers_num=2, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1_1'},
+        {'dc': 'dc1', 'rack': 'rack1_2'}])
     # if testing with no zero-token-node, add an additional node to dc2 to maintain raft quorum
     extra_node = 0 if with_zero_token_node else 1
     servers['dc2'] = await manager.servers_add(servers_num=2 + extra_node, property_file={'dc': 'dc2', 'rack': 'rack2'})
     if with_zero_token_node:
-        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        servers['dc1'].append(await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc1', 'rack': 'rack1_1'}))
         servers['dc3'] = [await manager.server_add(config={'join_ring': False}, property_file={'dc': 'dc3', 'rack': 'rack3'})]
 
     cql = manager.get_cql()
@@ -897,11 +903,11 @@ async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient,
         logger.info(f"Replacing {nodes_to_replace[0]} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[0].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True,
                                     ignore_dead_nodes=[replaced_host_id])
-        await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': 'rack1'})
+        await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[0].property_file())
 
         logger.info(f"Replacing {nodes_to_replace[1]} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=nodes_to_replace[1].server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
-        await manager.server_add(replace_cfg=replace_cfg, property_file={'dc': 'dc1', 'rack': 'rack1'})
+        await manager.server_add(replace_cfg=replace_cfg, property_file=nodes_to_replace[1].property_file())
 
         logger.info("Verifying data")
         for node in servers['dc2']:
