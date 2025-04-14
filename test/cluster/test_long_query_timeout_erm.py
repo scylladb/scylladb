@@ -46,7 +46,8 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query, sh
     quickly shutdown nodes, even if query timeout is extremely long.
     """
     logger.info("Start four nodes cluster")
-    servers = await manager.servers_add(4)
+    # FIXME: Adjust this test to run with `rf_rack_valid_keyspaces` set to `True`.
+    servers = await manager.servers_add(4, config={"rf_rack_valid_keyspaces": False})
 
     selected_server = servers[0]
     logger.info(f"Creating a client with selected_server: {selected_server}")

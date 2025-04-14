@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from typing import Any
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import HostID, ServerInfo, ServerNum
@@ -1611,12 +1612,12 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         logger.info("Verify data is not resurrected")
         await assert_empty_table()
 
-async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, nodes_per_rack: int) -> dict[ServerNum, ServerInfo]:
+async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, nodes_per_rack: int, config: dict[str, Any] = None) -> dict[ServerNum, ServerInfo]:
     logger.debug(f"Creating cluster: num_dcs={num_dcs} num_racks={num_racks} nodes_per_rack={nodes_per_rack}")
     servers: dict[ServerNum, ServerInfo] = dict()
     for dc in range(1, num_dcs + 1):
         for rack in range(1, num_racks + 1):
-            rack_servers = await manager.servers_add(nodes_per_rack, property_file={"dc": f"dc{dc}", "rack": f"rack{rack}"})
+            rack_servers = await manager.servers_add(nodes_per_rack, config=config, property_file={"dc": f"dc{dc}", "rack": f"rack{rack}"})
             for s in rack_servers:
                 servers[s.server_id] = s
     logger.debug(f"Created servers={list(servers.values())}")
@@ -1690,7 +1691,12 @@ async def test_decommission_rack_basic(manager: ManagerClient):
     nodes_per_rack = 2
     rf = num_racks - 1
 
-    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack)
+    # We need to disable this option to be able to create a keyspace. This can be ditched
+    # once we've implemented scylladb/scylladb#23426 and we can add new racks with the option enabled.
+    # Then we can create `rf` nodes, create the keyspace, and add another node.
+    config = {"rf_rack_valid_keyspaces": False}
+
+    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
@@ -1726,7 +1732,11 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
     nodes_per_rack = 2
     rf = initial_num_racks
 
-    initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack)
+    # We can't add a new rack if we create a keyspace.
+    # Once scylladb/scylladb#23426 has been implemented, this can be ditched.
+    config = {"rf_rack_valid_keyspaces": False}
+
+    initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.debug("Temporarily disable tablet load balancing")
         node1 = sorted(initial_servers.values(), key=lambda s: s.server_id)[0]
@@ -1736,7 +1746,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
         new_rack = f"rack{num_racks}"
         # copy initial_servers into all_servers, don't just assign it (by reference)
         all_servers: list[ServerInfo] = list(initial_servers.values())
-        new_rack_servers = await manager.servers_add(nodes_per_rack, property_file={"dc": "dc1", "rack": new_rack})
+        new_rack_servers = await manager.servers_add(nodes_per_rack, config=config, property_file={"dc": "dc1", "rack": new_rack})
         all_servers.extend(new_rack_servers)
 
         logger.info("Verify tablet replicas distribution")
