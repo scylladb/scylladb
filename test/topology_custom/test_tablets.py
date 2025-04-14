@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    # This test verifies that Scylla rejects creating a table if there are too few token-owning nodes.
+    # That means that a keyspace must already be in place, but that's impossible with RF-rack-valid
+    # keyspaces being enforced. We could go over this constraint by creating 3 nodes and then
+    # decommissioning one of them before attempting to create a table, but if we decide to constraint
+    # decommission later on, this test will have to be modified again. Let's simply disable the option.
+    cfg = cfg | {'rf_rack_valid_keyspaces': False}
     servers = await manager.servers_add(2, config=cfg)
 
     cql = manager.get_cql()
