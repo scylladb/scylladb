@@ -267,6 +267,11 @@ struct raft_topology_cmd_result {
     command_status status = command_status::fail;
 };
 
+struct barrier_and_get_time_result {
+    raft_topology_cmd_result result;
+    db_clock::time_point local_time;
+};
+
 // This class is used in RPC's signatures to hold the topology_version of the caller.
 // The reason why we wrap the topology_version in this class is that we anticipate
 // other versions to occur in the future, such as the schema version.
