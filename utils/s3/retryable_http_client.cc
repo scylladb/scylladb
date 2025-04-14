@@ -62,7 +62,7 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
             request_ex = aws_exception(aws_error{aws_error_type::UNKNOWN, format("{}", e), retryable::no});
         }
 
-        if (!co_await  _retry_strategy.should_retry(request_ex.error(), retries)) {
+        if (!co_await _retry_strategy.should_retry(request_ex.error(), retries)) {
             break;
         }
         co_await seastar::sleep(_retry_strategy.delay_before_retry(request_ex.error(), retries));
