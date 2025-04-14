@@ -823,6 +823,30 @@ public:
         });
         co_return sink;
     }
+
+    future<data_source> wrap_source(const sstables::sstable& sst, sstables::component_type type, data_source source) override {
+        switch (type) {
+        case sstables::component_type::Scylla:
+        case sstables::component_type::TemporaryTOC:
+        case sstables::component_type::TOC:
+            co_return source;
+        case sstables::component_type::CompressionInfo:
+        case sstables::component_type::CRC:
+        case sstables::component_type::Data:
+        case sstables::component_type::Digest:
+        case sstables::component_type::Filter:
+        case sstables::component_type::Index:
+        case sstables::component_type::Statistics:
+        case sstables::component_type::Summary:
+        case sstables::component_type::TemporaryStatistics:
+        case sstables::component_type::Unknown:
+            co_await wrap_writeonly(
+                sst, type, [&source](shared_ptr<symmetric_key> k) {
+                    source = data_source(make_encrypted_source(std::move(source), std::move(k)));
+                });
+            co_return source;
+        }
+    }
 };
 
 std::string encryption_provider(const sstables::sstable& sst) {
