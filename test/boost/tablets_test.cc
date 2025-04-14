@@ -3573,7 +3573,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         return make_ready_future<>();
     }).get();
 
-    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
+    auto allocated_map = tablet_aware_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count, std::nullopt).get();
 
     BOOST_REQUIRE_EQUAL(allocated_map.tablet_count(), tablet_count);
 
@@ -3618,7 +3618,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id());
         locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count()};
         auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), old_tablets).get();
+        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), old_tablets, std::nullopt).get();
 
         auto const& ts = tmap.tablets();
         BOOST_REQUIRE_EQUAL(ts.size(), tablet_count);

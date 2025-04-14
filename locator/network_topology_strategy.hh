@@ -46,8 +46,9 @@ public:
 
 public: // tablet_aware_replication_strategy
     virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const override;
-    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count) const override;
-    virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets) const override;
+    virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count, std::optional<dc_rack_modification_map> dc_racks) const override;
+    virtual future<dc_rack_modification_map> choose_racks(schema_ptr, token_metadata_ptr, const tablet_map&) const override;;
+    virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets, std::optional<dc_rack_modification_map> dc_racks) const override;
 protected:
     /**
      * calculate endpoints in one pass through the tokens by tracking our
@@ -59,14 +60,14 @@ protected:
     virtual void validate_options(const gms::feature_service&, const locator::topology& topology) const override;
 
 private:
-    future<tablet_replica_set> reallocate_tablets(schema_ptr, token_metadata_ptr, load_sketch&, const tablet_map& cur_tablets, tablet_id tb) const;
+    future<tablet_replica_set> reallocate_tablets(schema_ptr, token_metadata_ptr, load_sketch&, const tablet_map& cur_tablets, tablet_id tb, const std::optional<dc_rack_modification_map>& dc_racks) const;
     future<tablet_replica_set> add_tablets_in_dc(schema_ptr, token_metadata_ptr, load_sketch&, tablet_id,
             std::map<sstring, std::unordered_set<locator::host_id>>& replicas_per_rack,
             const tablet_replica_set& cur_replicas,
-            sstring dc, size_t dc_node_count, size_t dc_rf) const;
+            sstring dc, size_t dc_node_count, size_t dc_rf, const std::optional<dc_rack_modification_map>& dc_racks) const;
     tablet_replica_set drop_tablets_in_dc(schema_ptr, const locator::topology&, load_sketch&, tablet_id,
             const tablet_replica_set& cur_replicas,
-            sstring dc, size_t dc_node_count, size_t dc_rf) const;
+            sstring dc, size_t dc_node_count, size_t dc_rf, const std::optional<dc_rack_modification_map>& dc_racks) const;
 
     // map: data centers -> replication factor
     std::unordered_map<sstring, size_t> _dc_rep_factor;

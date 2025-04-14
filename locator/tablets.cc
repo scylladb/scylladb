@@ -1132,7 +1132,7 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
 }
 
 std::unordered_map<sstring, std::set<sstring>> get_racks_per_dc_used_by_table(const token_metadata_ptr tmptr, schema_ptr s) {
-    std::map<sstring, std::set<sstring>> racks_per_dc;
+    std::unordered_map<sstring, std::set<sstring>> racks_per_dc;
     // Populate the racks_per_dc sets with the racks for each dc of the first tablet in first table.
     auto& first_cf_tablets = tmptr->tablets().get_tablet_map(s->id());
     auto first_tablet_id = first_cf_tablets.first_tablet();

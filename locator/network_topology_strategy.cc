@@ -296,16 +296,79 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
     return do_make_replication_map(table, shared_from_this(), std::move(tm), _rep_factor);
 }
 
-future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count) const {
+future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count, std::optional<dc_rack_modification_map> dc_racks) const {
     auto aligned_tablet_count = 1ul << log2ceil(tablet_count);
     if (tablet_count != aligned_tablet_count) {
         rslogger.info("Rounding up tablet count from {} to {} for table {}.{}", tablet_count, aligned_tablet_count, s->ks_name(), s->cf_name());
         tablet_count = aligned_tablet_count;
     }
-    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count), std::move(dc_racks));
 }
 
-future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
+future<network_topology_strategy::dc_rack_modification_map> network_topology_strategy::choose_racks(schema_ptr s, token_metadata_ptr tm, const tablet_map& tablets) const {
+    static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
+    std::unordered_map<sstring, std::vector<sstring>> curr_racks;
+    // The tablet_map always has tablets (their count is a power of 2), but for a new table it may have no replicas
+    for (auto& replica : tablets.tablets().front().replicas) {
+        auto& node = tm->get_topology().get_node(replica.host);
+        auto& dc_rack = node.dc_rack();
+        auto& dc = dc_rack.dc;
+        auto& rack = dc_rack.rack;
+        curr_racks[dc].emplace_back(rack);
+    }
+    dc_rack_modification_map racks_to_modify;
+    auto allocate_new_racks = [&](const auto& dc, const auto& rf) {
+        auto& dc_racks = curr_racks[dc];
+        auto all_dc_racks = tm->get_datacenter_racks_token_owners_nodes().at(dc)
+            | std::ranges::to<std::map>();
+        std::vector<sstring> available_racks;
+        for (auto& [rack, nodes] : all_dc_racks) {
+            if (std::find(dc_racks.begin(), dc_racks.end(), rack) != dc_racks.end()) {
+                continue;
+            }
+            if (nodes.empty()) {
+                rslogger.debug("choose_racks {}.{}: skipping empty rack={} in dc={}", s->ks_name(), s->cf_name(), rack, dc);
+                continue;
+            }
+            for (const auto& node : nodes) {
+                if (node.get().is_normal()) {
+                    available_racks.emplace_back(rack);
+                    break;
+                }
+            }
+            if (available_racks.back() != rack) {
+                rslogger.debug("choose_racks {}.{}: skipping rack={} in dc={} with no normal nodes", s->ks_name(), s->cf_name(), rack, dc);
+            }
+        }
+
+        if (available_racks.size() + dc_racks.size() < rf) {
+            on_internal_error(tablet_logger, seastar::format("choose_racks {}.{}: not enough racks available for dc={}: available={} rf={} existing={}",
+                s->ks_name(), s->cf_name(), dc, dc_racks.size(), rf, curr_racks[dc]));
+        }
+        std::shuffle(available_racks.begin(), available_racks.end(), rnd_engine);
+        for (size_t i = 0; i < rf - dc_racks.size(); ++i) {
+            racks_to_modify[dc].insert(available_racks[i]);
+        }
+    };
+    auto remove_racks = [&] (const auto& dc, const auto& rf) {
+        auto dc_racks = curr_racks[dc];
+        std::shuffle(dc_racks.begin(), dc_racks.end(), rnd_engine);
+        racks_to_modify[dc] = std::set<sstring>(curr_racks[dc].begin(), curr_racks[dc].begin() + rf);
+    };
+    for (auto& [dc, rf] : _dc_rep_factor) {
+        co_await coroutine::maybe_yield();
+        if (curr_racks[dc].size() < rf) {
+            allocate_new_racks(dc, rf);
+        } else if (curr_racks[dc].size() > rf) {
+            remove_racks(dc, rf);
+        }
+    }
+
+    co_return racks_to_modify;
+
+}
+
+future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets, std::optional<dc_rack_modification_map> dc_racks) const {
     natural_endpoints_tracker::check_enough_endpoints(*tm, _dc_rep_factor);
     load_sketch load(tm);
     co_await load.populate();
@@ -314,7 +377,7 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
 
     for (tablet_id tb : tablets.tablet_ids()) {
         auto tinfo = tablets.get_tablet_info(tb);
-        tinfo.replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
+        tinfo.replicas = co_await reallocate_tablets(s, tm, load, tablets, tb, dc_racks);
         tablets.set_tablet(tb, std::move(tinfo));
     }
 
@@ -322,7 +385,7 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
     co_return tablets;
 }
 
-future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, load_sketch& load, const tablet_map& cur_tablets, tablet_id tb) const {
+future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, load_sketch& load, const tablet_map& cur_tablets, tablet_id tb, const std::optional<dc_rack_modification_map>& dc_racks) const {
     tablet_replica_set replicas;
     // Current number of replicas per dc
     std::unordered_map<sstring, size_t> nodes_per_dc;
@@ -345,9 +408,9 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
             continue;
         }
         if (dc_rf > dc_node_count) {
-            replicas = co_await add_tablets_in_dc(s, tm, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf);
+            replicas = co_await add_tablets_in_dc(s, tm, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf, dc_racks);
         } else {
-            replicas = drop_tablets_in_dc(s, tm->get_topology(), load, tb, replicas, dc, dc_node_count, dc_rf);
+            replicas = drop_tablets_in_dc(s, tm->get_topology(), load, tb, replicas, dc, dc_node_count, dc_rf, dc_racks);
         }
     }
 
@@ -357,7 +420,7 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
 future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_ptr s, token_metadata_ptr tm, load_sketch& load, tablet_id tb,
         std::map<sstring, std::unordered_set<locator::host_id>>& replicas_per_rack,
         const tablet_replica_set& cur_replicas,
-        sstring dc, size_t dc_node_count, size_t dc_rf) const {
+        sstring dc, size_t dc_node_count, size_t dc_rf, const std::optional<dc_rack_modification_map>& dc_racks) const {
     static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
 
     auto replicas = cur_replicas;
@@ -380,6 +443,49 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         sstring rack;
         utils::small_vector<node_load, 3> nodes;
     };
+
+    if (dc_racks) {
+        const auto& racks = dc_racks->at(dc);
+        for (const auto& rack : racks) {
+            if (replicas_per_rack.contains(rack)) {
+                on_internal_error(tablet_logger,
+                        seastar::format("allocate_replica {}.{}: requested rack={} already has replicas in dc={} allocated={} rf={}",
+                                s->ks_name(), s->cf_name(), rack, dc, dc_node_count, dc_rf));
+            }
+            if (!all_dc_racks.contains(rack)) {
+                on_internal_error(tablet_logger,
+                        seastar::format("allocate_replica {}.{}: requested rack={} not found in dc={} allocated={} rf={}",
+                                s->ks_name(), s->cf_name(), rack, dc, dc_node_count, dc_rf));
+            }
+            utils::small_vector<node_load, 3> normal_nodes;
+            for (const auto& node : all_dc_racks.at(rack)) {
+                if (!node.get().is_normal()) {
+                    continue;
+                }
+                const auto& host_id = node.get().host_id();
+                if (replicas_per_rack[rack].insert(host_id).second) {
+                    normal_nodes.emplace_back(host_id, load.get_load(host_id));
+                }
+            }
+            if (normal_nodes.empty()) {
+                on_internal_error(tablet_logger,
+                        seastar::format("allocate_replica {}.{}: requested rack={} has no normal nodes in dc={} allocated={} rf={}",
+                                s->ks_name(), s->cf_name(), rack, dc, dc_node_count, dc_rf));
+            }
+            std::shuffle(normal_nodes.begin(), normal_nodes.end(), rnd_engine);
+            std::stable_sort(normal_nodes.begin(), normal_nodes.end(), node_load_cmp);
+            auto host_id = normal_nodes.back().host;
+            auto replica = tablet_replica{host_id, load.next_shard(host_id)};
+
+            const auto& node = tm->get_topology().get_node(host_id);
+            tablet_logger.trace("allocate_replica {}.{} tablet_id={}: allocated tablet replica={} dc={} rack={}",
+                s->ks_name(), s->cf_name(), tb.id, replica, node.dc_rack().dc, node.dc_rack().rack);
+            replicas_per_rack[rack] = {host_id};
+            replicas.emplace_back(replica);
+        }
+        co_return replicas;
+    }
+
     using candidates_list = std::vector<rack_candidates>;
     candidates_list existing_racks;
 
@@ -499,10 +605,11 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
 
 tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, const locator::topology& topo, load_sketch& load, tablet_id tb,
         const tablet_replica_set& cur_replicas,
-        sstring dc, size_t dc_node_count, size_t dc_rf) const {
+        sstring dc, size_t dc_node_count, size_t dc_rf, const std::optional<dc_rack_modification_map>& dc_racks) const {
     tablet_logger.debug("drop_tablets_in_dc {}.{} tablet_id={}: deallocating tablet replicas in dc={} allocated={} rf={}", s->ks_name(), s->cf_name(), tb.id, dc, dc_node_count, dc_rf);
 
-    // Leave dc_rf replicas in dc, effectively deallocating in reverse order,
+    // If using rf-rack-valid keyspaces, deallocate the specified racks from dc_racks.
+    // Otherwise, leave dc_rf replicas in dc, effectively deallocating in reverse order,
     // to maintain replica pairing between the base table and its materialized views.
     // This may leave racks unbalanced, but that's ok since the tablet load balancer
     // can fix this later.
@@ -510,7 +617,8 @@ tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, c
     filtered.reserve(cur_replicas.size() - (dc_node_count - dc_rf));
     size_t nodes_in_dc = 0;
     for (const auto& tr : cur_replicas) {
-        if (topo.get_node(tr.host).dc_rack().dc != dc || ++nodes_in_dc <= dc_rf) {
+        bool can_use_rack = !dc_racks || !dc_racks->contains(dc) || !dc_racks->at(dc).contains(topo.get_node(tr.host).rack());
+        if (topo.get_node(tr.host).dc_rack().dc != dc || (can_use_rack && ++nodes_in_dc <= dc_rf)) {
             filtered.emplace_back(tr);
         } else {
             load.unload(tr.host, tr.shard);
