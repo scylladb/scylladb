@@ -459,6 +459,43 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return retake_node(std::move(guard), node.id);
     };
 
+    future<std::pair<group0_guard, db_clock::time_point>> exec_global_barrier_and_get_max_local_time(
+            group0_guard guard, const std::unordered_set<raft::server_id>& exclude_nodes,
+            drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
+        rtlogger.info("executing global topology command barrier and get time, excluded nodes: {}", exclude_nodes);
+        auto nodes = boost::range::join(_topo_sm._topology.normal_nodes, _topo_sm._topology.transition_nodes)
+            | std::views::filter([&exclude_nodes] (const std::pair<const raft::server_id, replica_state>& n) {
+                // We must send barrier and barrier_and_drain to the decommissioning node
+                // as it might be accepting or coordinating requests.
+                bool include_decommissioning_node = n.second.state == node_state::decommissioning;
+                return !exclude_nodes.contains(n.first) && (n.second.state == node_state::normal || include_decommissioning_node);
+            })
+            | std::views::keys;
+        if (drop_and_retake) {
+            release_guard(std::move(guard));
+        }
+
+        const auto cmd_index = ++_last_cmd_index;
+        auto max_local_time = co_await map_reduce(nodes, [this, cmd_index] (raft::server_id id) {
+            auto f = _db.get_token_metadata().get_topology().is_me(to_host_id(id)) ?
+                    _raft_topology_cmd_handler(_term, cmd_index, raft_topology_cmd::command::barrier)
+                        .then([] (auto result) { return barrier_and_get_time_result(result, db_clock::now()); })
+                    : ser::storage_service_rpc_verbs::send_barrier_and_get_time_cmd(
+                            &_messaging, to_host_id(id), id, _term, cmd_index);
+            return f.then([id] (auto result) {
+                    if (result.result.status == raft_topology_cmd_result::command_status::fail) {
+                        throw std::runtime_error(::format("failed status returned from {}", id));
+                    }
+                    return result.local_time;
+                });
+        }, db_clock::now(), [] (db_clock::time_point a, db_clock::time_point b) { return std::max(a, b); });
+
+        if (drop_and_retake) {
+            guard = co_await start_operation();
+        }
+        co_return std::make_pair(std::move(guard), max_local_time);
+    }
+
     future<group0_guard> remove_from_group0(group0_guard guard, const raft::server_id& id) {
         rtlogger.info("removing node {} from group 0 configuration...", id);
         release_guard(std::move(guard));
