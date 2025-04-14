@@ -6205,7 +6205,7 @@ class scylla_repairs(gdb.Command):
             gdb.write('    host: {}, shard: {}, state: {}\n'.format(n['node']['id'], n['shard'], n['state']))
 
     def invoke(self, arg, for_tty):
-        parser = argparse.ArgumentParser(description="List runnign repairs which involve this node and shard. See `help scylla repairs` for more information.")
+        parser = argparse.ArgumentParser(description="List running repairs which involve this node and shard. See `help scylla repairs` for more information.")
         parser.add_argument("-m", "--memory", action="store_true", default=False,
                 help="Calculate memory consumption of repairs (can take a long time)")
 
