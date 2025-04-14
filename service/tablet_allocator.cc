@@ -2052,27 +2052,12 @@ public:
 
         auto get_viable_targets = [&] () {
             std::unordered_set<host_id> viable_targets;
-            bool must_be_on_the_same_rack = false;
-            if (_db.get_config().rf_rack_valid_keyspaces()) {
-                auto t = _db.get_tables_metadata().get_table_if_exists(tablet.table);
-                if (!t) {
-                    on_internal_error(lblogger, format("Table with id: {} does not exist", tablet.table));
-                }
-                auto erm = t->get_effective_replication_map();
-                auto& rs = erm->get_replication_strategy();
-
-                // Tablets can only be used with NetworkTopologyStrategy.
-                const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(rs));
-                if (nts.get_replication_factor(src_info.dc()) > 1) {
-                    must_be_on_the_same_rack = true;
-                }
-            }
 
             for (auto&& [id, node] : nodes) {
                 if (node.dc() != src_info.dc() || node.drained) {
                     continue;
                 }
-                if (must_be_on_the_same_rack && node.rack() != src_info.rack()) {
+                if (_db.get_config().rf_rack_valid_keyspaces() && node.rack() != src_info.rack()) {
                     continue;
                 }
                 viable_targets.emplace(id);

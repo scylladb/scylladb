@@ -276,7 +276,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                     locator::replication_strategy_params(ks_md_update->strategy_options(), ks_md_update->initial_tablets()));
 
             try {
-                // There are three things to note here:
+                // There are two things to note here:
                 // 1. We hold a group0_guard, so it's correct to check this here.
                 //    The topology or schema cannot change while we're performing this query.
                 // 2. The replication strategy we use here does NOT represent the actual state
@@ -285,15 +285,10 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 //    strategy we pass to this function, while in reality that means that the RF
                 //    will NOT change. That is not a problem:
                 //    - RF=0 is valid for all DCs, so it won't trigger an exception on its own,
-                //    - the keyspace must've been RF-rack-valid (or at least replicated on RF racks)
-                //      before this change. We check that condition for all keyspaces at startup.
+                //    - the keyspace must've been RF-rack-valid before this change. We check that
+                //      condition for all keyspaces at startup.
                 //    The second hyphen is not really true because currently topological changes can
                 //    disturb it (see scylladb/scylladb#23345), but we ignore that.
-                // 3. If the keyspace was not RF-rack-valid byt only replicated on RF racks, we
-                //    still check that after the change the keyspace is RF-rack-valid, instead of
-                //    checking the replication again. We do that because currently we do not support
-                //    moving from one non RF-rack-valid replication strategy to another. If a keyspace
-                //    is not RF-rack-valid, we only support changing its replication to an RF-rack-valid one.
                 locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
             } catch (const std::exception& e) {
                 // There's no guarantee what the type of the exception will be, so we need to

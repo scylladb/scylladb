@@ -72,30 +72,6 @@ std::vector<column_definition> create_table_statement::get_columns() const
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
 create_table_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
-    const auto tmptr = qp.proxy().get_token_metadata_ptr();
-    const auto& cfg = qp.db().get_config();
-    // FIXME: After adding a new rack, the keyspace is not RF-rack-valid anymore,
-    // but because tablet migrations across racks are blocked, the existing tables
-    // are still limited to RF racks. However, we cannot create new tables
-    // because the tablets will be distributed across all racks. This limitation
-    // should be removed when we add support for specifying the racks that the tables
-    // in a keyspace should be replicated on.
-    if (cfg.rf_rack_valid_keyspaces()) {
-        try {
-            const auto& rs = qp.db().find_keyspace(keyspace()).get_replication_strategy();
-            // As a schema altering statement, we hold a group0_guard here,
-            // so the topology or schema cannot change while we're performing this query.
-            locator::assert_rf_rack_valid_keyspace(keyspace(), tmptr, rs);
-        } catch (const data_dictionary::no_such_keyspace& e) {
-            // We also check this in prepare(), but if we somehow reach here without passing
-            // through prepare(), add the corresponding error message.
-            throw exceptions::invalid_request_exception("Cannot create a table in a non-existent keyspace: " + keyspace());
-        } catch (const std::exception& e) {
-            // There's no guarantee what the type of the exception will be, so we need to
-            // wrap it manually here in a type that can be passed to the user.
-            throw exceptions::invalid_request_exception(e.what());
-        }
-    }
     std::vector<mutation> m;
 
     try {

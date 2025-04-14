@@ -710,8 +710,8 @@ class abstract_replication_strategy;
 /// Verify that the provided keyspace corresponding to the provided replication strategy is RF-rack-valid, i.e.
 /// whether it satisfies the following conditions:
 /// * does NOT use tablets, OR,
-/// * for every DC, the replication factor corresponding to that DC must be an element of the set
-///     {0, 1, the number of racks in that DC with at least one normal node}
+/// * for every DC, the replication factor corresponding to that DC must be less than or equal to the number of racks
+///   in that DC with at least one normal node
 ///   Special case: if the DC is an arbiter DC (i.e. only consists of zero-token nodes), the RF MUST be equal
 ///   to 0 for that DC.
 ///
@@ -735,7 +735,7 @@ void validate_rf_rack_valid_replication_for_table(const token_metadata_ptr, sche
 
 /// A more expensive but less restrictive version of the above function. Here we check
 /// for all tablets in all tables in the keyspace if they are replicated on the same racks,
-/// with one replica per rack (unless the RF for the given DC is 0 or 1).
+/// with one replica per rack.
 ///
 /// Because we need to investigate specific tables, the keyspace must exist.
 void validate_rf_rack_valid_replication(const token_metadata_ptr, const replica::keyspace&);

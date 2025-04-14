@@ -298,6 +298,17 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Man
     # RF = 1 is always OK!
     await alter_ok(ks3, [1, 1])
 
+    # Step 4.
+    # -------
+    # dc1: r1=1, r2=1, r3=1, rzerotoken=1.
+    # dc2: r1=1.
+    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r3"}, config=cfg)
+    # Check if altering the RF below the number of racks works.
+    await alter_ok(ks3, [2, 1])
+    await alter_ok(ks3, [3, 1])
+    await alter_ok(ks3, [2, 1])
+    await alter_ok(ks3, [1, 1])
+
 @pytest.mark.asyncio
 async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     """
@@ -349,6 +360,7 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     valid_keyspaces = [
         create_ok([0, 0]),
         create_ok([1, 0]),
+        create_ok([2, 0]),
         create_ok([3, 0]),
         create_ok(0)
     ]
@@ -357,7 +369,6 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     # because then we can't predict what error will say.
     invalid_keyspaces = [
         create_fail([4, 0], 1, 4, 3),
-        create_fail([2, 0], 1, 2, 3),
         create_fail([0, 1], 2, 1, 0),
         create_fail([0, 2], 2, 2, 0),
         create_fail([0, 3], 2, 3, 0),
@@ -535,51 +546,5 @@ async def test_decommission_rack_while_rf_rack_valid_keyspace_exists(manager: Ma
     await wait_for(migrations_increased, time.time() + 10, 0.1)
     await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_allocator_shuffle") for s in servers])
 
-    # The keyspace ks2 should still be replicated only on the first two racks, even after the tablet shuffling
-    # The keyspace ks1 should be allowed to be drained from the third rack, as it has RF=1
+    # Both keyspaces and ks1 ks2 should still be replicated only on the first two racks, even after the tablet shuffling
     await manager.decommission_node(s3.server_id)
-
-@pytest.mark.asyncio
-async def test_cant_increase_rf_below_rack_count_in_rf_rack_valid_keyspace(manager: ManagerClient):
-    """
-    This test verifies that Scylla rejects increasing the RF of a keyspace to a value below the number of racks in the DC.
-    """
-
-    cfg = {"rf_rack_valid_keyspaces": "true"}
-    s1 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
-    _ = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
-
-    cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1} ")
-    await cql.run_async("CREATE TABLE ks1.t (pk int PRIMARY KEY)")
-    await cql.run_async("CREATE KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
-    await cql.run_async("CREATE TABLE ks2.t (pk int PRIMARY KEY)")
-    s3 = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
-    await cql.run_async("ALTER KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3} ")
-    with pytest.raises(InvalidRequest, match="The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. That condition is violated: keyspace 'ks1' doesn't satisfy it for DC 'dc1': RF=2 vs. rack count=3."):
-        await cql.run_async("ALTER KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
-    with pytest.raises(InvalidRequest, match="The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. That condition is violated: keyspace 'ks2' doesn't satisfy it for DC 'dc1': RF=2 vs. rack count=3."):
-        await cql.run_async("ALTER KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
-
-@pytest.mark.asyncio
-async def test_cant_create_table_in_rf_rack_valid_keyspace_unless_rf_equals_racks(manager: ManagerClient):
-    """
-    This test verifies that Scylla rejects creating a table in an originally RF-rack-valid keyspace
-    if a rack was added and the RF wasn't increased accordingly (if RF was 1, no need to increase RF).
-    """
-    cfg = {"rf_rack_valid_keyspaces": "true"}
-
-    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"})
-    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"})
-
-    cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1} ")
-    await cql.run_async("CREATE TABLE ks1.t (pk int PRIMARY KEY)")
-    await cql.run_async("CREATE KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2} ")
-    await cql.run_async("CREATE TABLE ks2.t (pk int PRIMARY KEY)")
-    await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})
-    await cql.run_async("CREATE TABLE ks1.t2 (pk int PRIMARY KEY)")
-    with pytest.raises(InvalidRequest, match="The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. That condition is violated: keyspace 'ks2' doesn't satisfy it for DC 'dc1': RF=2 vs. rack count=3."):
-        await cql.run_async(f"CREATE TABLE ks2.t2 (pk int PRIMARY KEY)")
-    await cql.run_async("ALTER KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}")
-    await cql.run_async(f"CREATE TABLE ks2.t2 (pk int PRIMARY KEY)")

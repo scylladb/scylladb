@@ -1974,9 +1974,6 @@ public:
     virtual future<> on_effective_service_levels_cache_reloaded() override;
 
     // Verify that the existing keyspaces are all RF-rack-valid.
-    // If that's not the case, but each of the non RF-rack-valid keyspaces is replicated on RF racks
-    // with one replica in each rack, the check still passes but to create new tables in those keyspaces
-    // the RF must be increased to the number of racks in the DC, making the keyspace RF-rack-valid.
     //
     // Preconditions:
     // * the option `rf_rack_valid_keyspaces` in enabled,

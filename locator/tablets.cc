@@ -1115,7 +1115,7 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
 
         // We must not allow for a keyspace to become RF-rack-invalid. Any attempt at that must be rejected.
         // For more context, see: scylladb/scylladb#23276.
-        const bool invalid_rf = rf != normal_rack_count && rf != 1 && rf != 0;
+        const bool invalid_rf = rf > normal_rack_count;
         // Edge case: the DC in question is an arbiter DC and does NOT take part in replication.
         // Any positive RF for that DC is invalid.
         const bool invalid_arbiter_dc = normal_rack_count == 0 && rf > 0;
@@ -1162,9 +1162,6 @@ void validate_rf_rack_valid_replication_for_table(const token_metadata_ptr tmptr
             curr_racks_per_dc[dc].insert(rack);
         }
         for (const auto& [dc, racks] : curr_racks_per_dc) {
-            if (rf_per_dc[dc] < 2) {
-                continue;
-            }
             if (racks_per_dc[dc] != racks) {
                 throw std::invalid_argument(seastar::format(
                         "The option `rf_rack_valid_keyspaces` is enabled. All tablets in a keyspace should have one replica per rack in RF racks in each DC. "
@@ -1201,17 +1198,9 @@ void validate_rf_rack_valid_replication(const token_metadata_ptr tmptr, const re
     }
 
     std::map<sstring, int> rf_per_dc;
-    bool all_dc_rf_lower_than_2 = true;
     for (const auto& [dc, rack_map] : dc_rack_map) {
         tablet_logger.debug("[validate_rf_rack_valid_replication]: Verifying for '{}' / '{}'", ks_name, dc);
         rf_per_dc[dc] = nts.get_replication_factor(dc);
-        if (rf_per_dc[dc] >= 2) {
-            all_dc_rf_lower_than_2 = false;
-        }
-    }
-    if (all_dc_rf_lower_than_2) {
-        tablet_logger.debug("[validate_rf_rack_valid_replication]: Keyspace '{}' has been verified to be RF-rack-valid (RF in all DCs < 2)", ks_name);
-        return;
     }
     if (ks.metadata()->cf_meta_data().empty()) {
         tablet_logger.debug("[validate_rf_rack_valid_replication]: Keyspace '{}' has been verified to be replicated on RF racks (no data to replicate)", ks_name);
