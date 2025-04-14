@@ -3638,6 +3638,9 @@ future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_typ
     co_return co_await make_file_data_sink(std::move(f), file_output_stream_options{});
 }
 
+future<data_source> file_io_extension::wrap_source(const sstable& sst, component_type c, data_source source) {
+    co_return source;
+}
 } // namespace sstables
 
 namespace seastar {
