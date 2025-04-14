@@ -7287,6 +7287,13 @@ void storage_service::init_messaging_service() {
             return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
         });
     });
+    ser::storage_service_rpc_verbs::register_barrier_and_get_time_cmd(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index) {
+        return handle_raft_rpc(dst_id, [term, cmd_index] (auto& ss) {
+            return ss.raft_topology_cmd_handler(term, cmd_index, raft_topology_cmd::command::barrier).then([] (auto result) {
+                return barrier_and_get_time_result { result, db_clock::now() };
+            });
+        });
+    });
     ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
         return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
             check_raft_rpc_scheduling_group(ss._db.local(), ss._feature_service, "raft_pull_snapshot");
