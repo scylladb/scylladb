@@ -3654,6 +3654,9 @@ future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_typ
     co_return co_await make_file_data_sink(std::move(f), file_output_stream_options{});
 }
 
+future<data_source> file_io_extension::wrap_source(const sstable& sst, component_type c, sstables::data_source_creator_fn, uint64_t, uint64_t) {
+    SCYLLA_ASSERT(0 && "You are not supposed to get here, file_io_extension::wrap_source() is not implemented");
+}
 } // namespace sstables
 
 namespace seastar {
