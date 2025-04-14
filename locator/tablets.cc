@@ -1131,8 +1131,8 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
 }
 
-static std::unordered_map<sstring, std::set<sstring>> get_racks_per_dc_used_by_table(const token_metadata_ptr tmptr, schema_ptr s) {
-    std::unordered_map<sstring, std::set<sstring>> racks_per_dc;
+std::unordered_map<sstring, std::set<sstring>> get_racks_per_dc_used_by_table(const token_metadata_ptr tmptr, schema_ptr s) {
+    std::map<sstring, std::set<sstring>> racks_per_dc;
     // Populate the racks_per_dc sets with the racks for each dc of the first tablet in first table.
     auto& first_cf_tablets = tmptr->tablets().get_tablet_map(s->id());
     auto first_tablet_id = first_cf_tablets.first_tablet();
@@ -1152,7 +1152,7 @@ static std::unordered_map<sstring, std::set<sstring>> get_racks_per_dc_used_by_t
     return racks_per_dc;
 }
 
-static void validate_rf_rack_valid_replication_for_table(const token_metadata_ptr tmptr, schema_ptr s, std::unordered_map<sstring, std::set<sstring>>& racks_per_dc, sstring first_cf_name) {
+void validate_rf_rack_valid_replication_for_table(const token_metadata_ptr tmptr, schema_ptr s, std::unordered_map<sstring, std::set<sstring>>& racks_per_dc, sstring first_cf_name) {
     std::optional<tablet_id> curr_tablet_id = tmptr->tablets().get_tablet_map(s->id()).first_tablet();
     for (const auto& tablet : tmptr->tablets().get_tablet_map(s->id()).tablets()) {
         std::map<sstring, std::set<sstring>> curr_racks_per_dc;

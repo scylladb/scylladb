@@ -729,6 +729,10 @@ class abstract_replication_strategy;
 /// * The keyspace need not exist. We use its name purely for informational reasons (in error messages).
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr, const abstract_replication_strategy&);
 
+// Helper methods used by the function below, exposed for testing
+std::unordered_map<sstring, std::set<sstring>> get_racks_per_dc_used_by_table(const token_metadata_ptr, schema_ptr);
+void validate_rf_rack_valid_replication_for_table(const token_metadata_ptr, schema_ptr, std::unordered_map<sstring, std::set<sstring>>&, sstring);
+
 /// A more expensive but less restrictive version of the above function. Here we check
 /// for all tablets in all tables in the keyspace if they are replicated on the same racks,
 /// with one replica per rack (unless the RF for the given DC is 0 or 1).
