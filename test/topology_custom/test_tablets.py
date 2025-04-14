@@ -122,7 +122,7 @@ async def test_reshape_with_tablets(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_rf_change(manager: ManagerClient, direction):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
-    servers = await manager.servers_add(3, config=cfg)
+    servers = await manager.servers_add(2, config=cfg, auto_rack_dc="dc1")
     for s in servers:
         await manager.api.disable_tablet_balancing(s.ip_addr)
 
@@ -131,14 +131,14 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
     this_dc = res[0].data_center
 
     if direction == 'up':
-        rf_from = 2
-        rf_to = 3
+        rf_from = 1
+        rf_to = 2
     if direction == 'down':
-        rf_from = 3
-        rf_to = 2
-    if direction == 'none':
         rf_from = 2
-        rf_to = 2
+        rf_to = 1
+    if direction == 'none':
+        rf_from = 1
+        rf_to = 1
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': {rf_from}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
