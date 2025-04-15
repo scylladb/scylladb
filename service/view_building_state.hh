@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <ranges>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/condition-variable.hh>
 #include <stdexcept>
@@ -79,6 +80,7 @@ struct view_building_state {
     view_building_state(building_tasks tasks_state, std::optional<table_id> processed_base_table);
     view_building_state() = default;
     
+    std::optional<std::reference_wrapper<const view_building_task>> get_task(table_id base_id, locator::tablet_replica replica, utils::UUID id) const;
     std::vector<std::reference_wrapper<const view_building_task>> get_tasks_for_host(table_id base_id, locator::host_id host) const;
 };
 
@@ -135,5 +137,32 @@ template <> struct fmt::formatter<service::view_building::view_building_task> : 
     auto format(service::view_building::view_building_task task, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "view_building_task{{type: {}, state: {}, base_id: {}, view_id: {}, tablet_id: {}}}",
                 task.type, task.state, task.base_id, task.view_id, task.tid);
+    }
+};
+
+template <> struct fmt::formatter<service::view_building::view_task_result> : fmt::formatter<string_view> {
+    auto format(service::view_building::view_task_result result, fmt::format_context& ctx) const {
+        std::string_view res;
+        switch (result.status) {
+        case service::view_building::view_task_result::command_status::fail:
+            res = "fail";
+            break;
+        case service::view_building::view_task_result::command_status::success:
+            res = "success";
+            break;
+        }
+        return format_to(ctx.out(), "{}", res);
+    }
+};
+
+template <> struct fmt::formatter<service::view_building::task_map> : fmt::formatter<string_view> {
+    auto format(service::view_building::task_map task_map, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}", task_map | std::views::keys);
+    }
+};
+
+template <> struct fmt::formatter<service::view_building::replica_tasks> : fmt::formatter<string_view> {
+    auto format(service::view_building::replica_tasks replica_tasks, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{{view_tasks: {}, staging_tasks: {}}}", replica_tasks.view_tasks, replica_tasks.staging_tasks);
     }
 };
