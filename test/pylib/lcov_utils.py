@@ -80,7 +80,7 @@ class LcovRecord(metaclass = MakeLcovRouter):
         self.source_file: Optional[Path] = None
         self.line_hits: dict[int, int] = dict()
 
-        self.function_hits: dict[Tuple(int, str), int] = dict()
+        self.function_hits: dict[Tuple[int, str], int] = dict()
         self.functions_to_lines: dict[str, int] = dict()
         self.branch_hits: dict[Tuple[int, int, int], Optional[int]] = dict()
         self.sealed: bool = False
@@ -237,6 +237,12 @@ class LcovRecord(metaclass = MakeLcovRouter):
     def validate_integrity(self):
         assert (
             len(set(self.functions_to_lines.values()) - set(self.line_hits.keys())) == 0
+        ), (
+            self.source_file,
+            self._test_name,
+            set(self.functions_to_lines.values()),
+            set(self.line_hits.keys()),
+            set(self.functions_to_lines.values()) - set(self.line_hits.keys())
         )
         assert (
             len(
@@ -244,6 +250,12 @@ class LcovRecord(metaclass = MakeLcovRouter):
                 - set(self.line_hits.keys())
             )
             == 0
+        ), (
+            self.source_file,
+            self._test_name,
+            set([x[0] for x in self.branch_hits.keys()]),
+            set(self.line_hits.keys()),
+            set([x[0] for x in self.branch_hits.keys()]) - set(self.line_hits.keys())
         )
 
     def get_lines(self) -> set[int]:
@@ -711,12 +723,15 @@ class LcovFile:
                 [record.write(f) for record in self.records.values()]
 
     def filter_files(self, files_to_keep: List[Path]):
+        print(f'QWERTY filtering files, trying to keep {" ".join(str(q) for q in sorted(files_to_keep))}')
         for key_to_remove in [
             key for key in self.records.keys() if key[1] not in files_to_keep
         ]:
+            print(f'QWERTY removing records {key_to_remove}')
             del self.records[key_to_remove]
 
     def filter_lines(self, file: Path, lines_to_keep: List[int]):
+        print(f'QWERTY filtering lines from file {file}, trying to keep lines {" ".join(str(q) for q in sorted(lines_to_keep))}')
         for record in [
             record for key, record in self.records.items() if key[1] == file
         ]:
@@ -746,6 +761,7 @@ class LcovFile:
         for patched_file in patched_files:
             source_file = Path(patched_file.target_file).relative_to("b/")
             if not source_file in record_by_source:
+                print(f'QWERTY ignoring {patched_file.target_file} -> {source_file}, not in record_by_source structure')
                 continue
             lines_remap = {
                 line.target_line_no: line.diff_line_no
@@ -760,6 +776,7 @@ class LcovFile:
                     self._add_record(record)
 
     def remap_to_patches(self, patch_files: List[Path]):
+        print(f'QWERTY patches {"; ".join(patch_files)}')
         patches = prepare_patches_for_lcov(patch_files)
         prototype = copy.deepcopy(self)
         self.records.clear()
