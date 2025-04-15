@@ -37,6 +37,7 @@ target_sources(db
     view/view_building_state.cc
     view/view_consumer.cc
     view/view_building_worker.cc
+    view/view_building_coordinator.cc
     sstables-format-selector.cc
     snapshot-ctl.cc
     snapshot/backup_task.cc
