@@ -236,7 +236,6 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
 
     gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
     feature_service.enable(feature_service.supported_feature_set()).get();
-    feature_service.views_with_tablets.enable();
 
     sharded<locator::shared_token_metadata> token_metadata;
 

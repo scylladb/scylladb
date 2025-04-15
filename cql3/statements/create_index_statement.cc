@@ -93,9 +93,6 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
     }
 
-    if (!db.features().views_with_tablets && db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
-        throw exceptions::invalid_request_exception(format("Secondary indexes are not supported on base tables with tablets (keyspace '{}')", keyspace()));
-    }
     validate_for_local_index(*schema);
 
     std::vector<::shared_ptr<index_target>> targets;
@@ -415,6 +412,9 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
             // wrap it manually here in a type that can be passed to the user.
             throw exceptions::invalid_request_exception(e.what());
         }
+    } else {
+        throw exceptions::invalid_request_exception("Creating a secondary index in a keyspace using tablets "
+            "requires that Scylla use the `rf_rack_valid_keyspaces` configuration option.");
     }
 
     if (res) {

@@ -135,7 +135,6 @@ public:
     gms::feature native_reverse_queries { *this, "NATIVE_REVERSE_QUERIES"sv };
     gms::feature zero_token_nodes { *this, "ZERO_TOKEN_NODES"sv };
     gms::feature view_build_status_on_group0 { *this, "VIEW_BUILD_STATUS_ON_GROUP0"sv };
-    gms::feature views_with_tablets { *this, "VIEWS_WITH_TABLETS"sv };
     gms::feature group0_limited_voters { *this, "GROUP0_LIMITED_VOTERS"sv };
     gms::feature compaction_history_upgrade { *this, "COMPACTION_HISTORY_UPGRADE"};
 

@@ -467,10 +467,9 @@ async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager
     await manager.server_start(s_info.server_id)
 
 async def verify_create_mv_si_with_racks(manager: ManagerClient, create_schema: Any):
-    cmdline = ["--experimental-features=views-with-tablets"]
     cfg = {"rf_rack_valid_keyspaces": "true"}
 
-    _ = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=[
+    _ = await manager.servers_add(3, config=cfg, property_file=[
         {"dc": "dc1", "rack": "r1_1"},
         {"dc": "dc1", "rack": "r1_2"},
         {"dc": "dc2", "rack": "r2_1"},
@@ -526,7 +525,7 @@ async def verify_create_mv_si_with_racks(manager: ManagerClient, create_schema: 
     #
     # # Scenario 2: [dc1: 3 racks, dc2: 2 racks].
     # # -----------------------------------------
-    # _ = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=[
+    # _ = await manager.servers_add(3, config=cfg, property_file=[
     #     {"dc": "dc1", "rack": "r1_3"},
     #     {"dc": "dc1", "rack": "r1_1"},
     #     {"dc": "dc2", "rack": "r2_2"}])
@@ -546,7 +545,7 @@ async def verify_create_mv_si_with_racks(manager: ManagerClient, create_schema: 
 
     # # Scenario 3: [dc1: 3 racks, dc2: 3 racks].
     # # -----------------------------------------
-    # _ = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc2", "rack": "r2_3"})
+    # _ = await manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r2_3"})
 
     # setups3 = await asyncio.gather(*[
     #     prepare(0, 3),
@@ -559,7 +558,7 @@ async def verify_create_mv_si_with_racks(manager: ManagerClient, create_schema: 
 
     # # Scenario 4: [dc1: 3 racks + 1 zero-token rack, dc2: 3 racks].
     # # -------------------------------------------------------------
-    # _ = await manager.servers_add(2, cmdline=cmdline, config=cfg | {"join_ring": False}, property_file=[
+    # _ = await manager.servers_add(2, config=cfg | {"join_ring": False}, property_file=[
     #     {"dc": "dc1", "rack": "r1_1"},
     #     {"dc": "dc1", "rack": "r1_z"}
     # ])
