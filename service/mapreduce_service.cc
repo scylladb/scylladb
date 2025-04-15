@@ -17,6 +17,7 @@
 
 #include "db/consistency_level.hh"
 #include "dht/sharder.hh"
+#include "exceptions/exceptions.hh"
 #include "gms/gossiper.hh"
 #include "idl/mapreduce_request.dist.hh"
 #include "locator/abstract_replication_strategy.hh"
@@ -257,6 +258,17 @@ class retrying_dispatcher {
     mapreduce_service& _mapreducer;
     tracing::trace_state_ptr _tr_state;
     std::optional<tracing::trace_info> _tr_info;
+
+    future<query::mapreduce_result> dispatch_to_shards_locally(query::mapreduce_request req, std::optional<tracing::trace_info> tr_info) {
+        try {
+            co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
+        } catch (const std::exception& e) {
+            // For remote rpc_calls, the remote exceptions are converted to rpc::remote_verb_error.
+            // This catch behaves similarly for local dispatch_to_shards, to prevent from having two different
+            // behaviours for local and remote calls.
+            std::throw_with_nested(std::runtime_error(e.what()));
+        }
+    }
 public:
     retrying_dispatcher(mapreduce_service& mapreducer, tracing::trace_state_ptr tr_state)
         : _mapreducer(mapreducer),
@@ -266,7 +278,7 @@ public:
 
     future<query::mapreduce_result> dispatch_to_node(const locator::effective_replication_map& erm, locator::host_id id, query::mapreduce_request req) {
         if (_mapreducer._proxy.is_me(erm, id)) {
-            co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
+            co_return co_await dispatch_to_shards_locally(req, _tr_info);
         }
 
         _mapreducer._stats.requests_dispatched_to_other_nodes += 1;
@@ -295,7 +307,7 @@ public:
             tracing::trace(_tr_state, "retrying mapreduce_request={} on a super-coordinator after failing to send it to {} ({})", req, id, e.what());
             // Fall through since we cannot co_await in a catch block.
         }
-        co_return co_await _mapreducer.dispatch_to_shards(req, _tr_info);
+        co_return co_await dispatch_to_shards_locally(req, _tr_info);
     }
 };
 
