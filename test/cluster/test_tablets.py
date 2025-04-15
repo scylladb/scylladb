@@ -938,6 +938,7 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip(reason="flaky, needs to be fixed: https://github.com/scylladb/scylladb/issues/23620")
 async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ManagerClient):
     injection = "repair_writer_impl_create_writer_wait"
     cmdline = [
