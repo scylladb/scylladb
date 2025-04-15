@@ -212,5 +212,6 @@ std::vector<mutation> make_drop_table_streams_mutations(table_id, api::timestamp
 mutation get_insert_pending_stream_mutation(table_id table, const std::vector<stream_id>& streams, api::timestamp_type ts);
 mutation get_delete_pending_streams_mutation(table_id table, api::timestamp_type ts);
 mutation get_open_and_close_streams_mutation(table_id table, const cdc_stream_diff& diff, db_clock::time_point stream_ts, api::timestamp_type ts);
+std::vector<mutation> get_cdc_stream_compaction_mutations(table_id table, db_clock::time_point base_ts, const std::vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts);
 
 } // namespace cdc
