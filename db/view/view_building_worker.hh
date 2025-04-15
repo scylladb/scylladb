@@ -1,0 +1,131 @@
+/*
+ * Copyright 2025-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
+#include <seastar/core/sharded.hh>
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/shared_future.hh>
+#include <unordered_map>
+#include <unordered_set>
+#include "locator/tablets.hh"
+#include "service/view_building_state.hh"
+#include "utils/UUID.hh"
+
+namespace replica {
+class database;
+}
+
+namespace netw {
+class messaging_service;
+}
+
+namespace service {
+class raft_group0_client;
+}
+
+namespace db {
+
+namespace view {
+
+class view_update_generator;
+
+class view_building_worker : public seastar::peering_sharded_service<view_building_worker> {
+    /*
+     * View building coordinator may send multiple tasks at once to be executed together.
+     * This is possible only if all of the tasks:
+     * - are of the same type
+     * - their base_id is the same
+     * - their tablet_id is the same
+     *
+     * Moreover, any of the task can be aborted during execution. When this happens:
+     * - the batch is not aborted unless it was the last alive task
+     * - entry is removed from _tasks_ids
+     *
+     * When _work future is finished, it means all tasks is _tasks_ids are done.
+     */
+    class batch {
+    public:
+        std::unordered_map<utils::UUID, service::view_building::view_building_task> tasks;
+        table_id base_id;
+        locator::tablet_replica replica;
+        
+        bool failed = false;
+        sharded<abort_source> abort_sources;
+        shared_future<> work;
+        condition_variable batch_done_cv;
+
+        batch(view_building_worker& vbw, std::unordered_map<utils::UUID, service::view_building::view_building_task> tasks, table_id base_id, locator::tablet_replica replica);
+        future<> start();
+        future<> abort_task(utils::UUID id);
+        future<> abort();
+
+    private:
+        view_building_worker& _vbw;
+
+        future<> do_work();
+        future<> do_build_range(view_building_worker& local_vbw);
+        future<> do_process_staging(view_building_worker& local_vbw);
+    };
+
+    friend class batch;
+
+    struct local_state {
+        std::optional<table_id> processing_base_table = std::nullopt;
+        std::unordered_map<utils::UUID, shared_ptr<batch>> tasks_map;
+        std::unordered_set<utils::UUID> finished_tasks;
+        std::unordered_set<utils::UUID> failed_tasks;
+
+        // Clears completed/aborted tasks.
+        // Returns a map of tasks per shard to execute.
+        future<std::unordered_map<shard_id, std::vector<service::view_building::view_building_task>>> update(replica::database& db, const service::view_building::view_building_state& vb_state);
+
+        future<> finish_completed_tasks();
+
+        // The state can be aborted if, for example, a view is dropped, then all its tasks
+        // are aborted and the cooridator may choose new base table to process.
+        future<> clear_state();
+    };
+
+    class consumer;
+
+private:
+    replica::database& _db;
+    service::raft_group0_client& _group0_client;
+    view_update_generator& _vug;
+    netw::messaging_service& _messaging;
+    service::view_building::view_building_state_machine& _vb_state_machine;
+    abort_source _as;
+
+    local_state _state;
+    future<> _view_building_state_observer = make_ready_future<>();
+    
+public:
+    view_building_worker(replica::database& db, service::raft_group0_client& group0_client, view_update_generator& vug, netw::messaging_service& ms, service::view_building::view_building_state_machine& vbsm);
+    void start_state_observer();
+
+    future<> drain();
+    future<> stop();
+
+private:
+    future<> run_view_building_state_observer();
+    future<> update_building_state();
+    future<> start_new_tasks(std::unordered_map<shard_id, std::vector<service::view_building::view_building_task>> new_tasks);
+    bool is_shard_free(shard_id shard);
+    
+    dht::token_range get_tablet_token_range(table_id table_id, dht::token last_token);
+
+    void init_messaging_service();
+    future<> uninit_messaging_service();
+    future<std::vector<service::view_building::view_task_result>> get_tasks_results(std::vector<utils::UUID> ids);
+};
+
+}
+
+}
