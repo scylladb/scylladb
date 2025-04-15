@@ -13,9 +13,6 @@
 #include "raft/raft.hh"
 #include "service/topology_state_machine.hh"
 
-#include <seastar/core/coroutine.hh>
-
-
 namespace gms {
 class gossiper;
 class feature_service;
