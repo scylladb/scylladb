@@ -12,6 +12,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include "db/view/view_building_worker.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
@@ -1361,6 +1362,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<db::view::view_builder> view_builder;
+            static sharded<db::view::view_building_worker> view_building_worker;
             static sharded<cdc::generation_service> cdc_generation_service;
 
             db::sstables_format_selector sst_format_selector(db);
@@ -1746,6 +1748,12 @@ sharded<locator::shared_token_metadata> token_metadata;
             view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 view_builder.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting the view building worker");
+            view_building_worker.start(std::ref(db), std::ref(group0_client), std::ref(view_update_generator), std::ref(messaging), std::ref(vbsm)).get();
+            auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [] {
+                view_building_worker.stop().get();
             });
 
             checkpoint(stop_signal, "starting repair service");
@@ -2248,6 +2256,8 @@ sharded<locator::shared_token_metadata> token_metadata;
             view_builder.invoke_on_all([] (db::view::view_builder& vb) {
                 vb.init_virtual_table();
             }).get();
+
+            view_building_worker.invoke_on(0, &db::view::view_building_worker::start_state_observer).get();
 
             const qualified_name qualified_authorizer_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authorizer());
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
