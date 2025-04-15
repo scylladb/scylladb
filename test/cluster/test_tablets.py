@@ -14,7 +14,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name
 from test.cluster.conftest import skip_mode
-from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver
+from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, get_topology_coordinator
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -428,6 +428,108 @@ async def test_read_of_pending_replica_during_migration(manager: ManagerClient, 
 
         rows = await cql.run_async(f"SELECT pk from {ks}.test")
         assert len(list(rows)) == 1
+
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/20073
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_explicit_tablet_movement_during_decommission(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'enable_tablets': True}
+    cmdline = [
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+    ]
+
+    # Launch the cluster with two nodes.
+    server_tasks = [asyncio.create_task(manager.server_add(cmdline=cmdline, config=cfg)) for _ in range(2)]
+    servers = [await task for task in server_tasks]
+
+    # Disable the load balancer so that it does not move tablets behind our back mid-test. This does not disable automatic tablet movement in response to
+    # decommission, but we'll block the latter by injecting a wait-for-message.
+    #
+    # Load balancing being enabled or disabled is a cluster-global property; we can use any node to toggle it.
+    logger.info("Disabling load balancing")
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Populating tablet")
+    # Create a table with just one partition and RF=1, so we have exactly one tablet.
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1};")
+    await cql.run_async("CREATE TABLE test.tabmv_decomm (pk int PRIMARY KEY);")
+    await cql.run_async("INSERT INTO test.tabmv_decomm (pk) VALUES (0)")
+    rows = await cql.run_async("SELECT pk FROM test.tabmv_decomm")
+    assert len(list(rows)) == 1
+
+    logger.info("Identifying source, destination, coordinator and non-coordinator nodes")
+    # Get the sole replica (see RF=1 above) for the sole tablet. (The token value is irrelevant due to there being only one tablet.) We can ask either one of
+    # the nodes.
+    token = 0
+    source_task = asyncio.create_task(get_tablet_replica(manager, servers[0], 'test', 'tabmv_decomm', token))
+
+    # Get the IDs of both nodes.
+    node_id_tasks = [asyncio.create_task(manager.get_host_id(srv.server_id)) for srv in servers]
+
+    # Get the ID of the topology coordinator.
+    crd_task = asyncio.create_task(get_topology_coordinator(manager))
+
+    # Open the logs of both servers.
+    log_tasks = [asyncio.create_task(manager.server_open_log(srv.server_id)) for srv in servers]
+
+    # Collect results (completion order doesn't matter).
+    src_node_id, src_shard = await source_task
+    node_ids = [await task for task in node_id_tasks]
+    crd_id = await crd_task
+    logs = [await task for task in log_tasks]
+
+    # The destination node is the node that is not the source node. We always use shard#0 on the destination.
+    src = node_ids.index(src_node_id)
+    dst = 1 - src
+    dst_shard = 0
+
+    # The coordinator node is one of the two nodes. The non-coordinator node is the other node.
+    crd = node_ids.index(crd_id)
+    ncr = 1 - crd
+
+    # Four variations are possible:
+    #
+    # source  destination  coordinator  non-coordinator
+    # ------  -----------  -----------  ---------------
+    # node#0       node#1       node#0           node#1
+    # node#0       node#1       node#1           node#0
+    # node#1       node#0       node#0           node#1
+    # node#1       node#0       node#1           node#0
+    logger.info(f"src id={servers[src].server_id} ip={servers[src].ip_addr} node={node_ids[src]} shard={src_shard}")
+    logger.info(f"dst id={servers[dst].server_id} ip={servers[dst].ip_addr} node={node_ids[dst]} shard={dst_shard}")
+    logger.info(f"crd id={servers[crd].server_id} ip={servers[crd].ip_addr} node={node_ids[crd]}")
+    logger.info(f"ncr id={servers[ncr].server_id} ip={servers[ncr].ip_addr} node={node_ids[ncr]}")
+
+    logger.info("Decommissioning src")
+    # Inject a wait-for-message into the topology coordinator. We're going to block decommission right after entering the "tablet draining" transition state.
+    await manager.api.enable_injection(servers[crd].ip_addr, "suspend_decommission", one_shot=True)
+
+    # Initiate decommissioning the source node, and wait until the coordinator reaches "tablet draining".
+    crd_log_mark = await logs[crd].mark()
+    decomm_task = asyncio.create_task(manager.decommission_node(servers[src].server_id))
+    await logs[crd].wait_for('entered `tablet draining` transition state', from_mark=crd_log_mark)
+
+    logger.info("Moving tablet from src to dst")
+    # Move the tablet from the source node to the destination node. Ask the non-coordinator node to do it, as the coordinator node is suspended. Wait until the
+    # storage service on the non-coordinator node confirms it has seen the topology state machine as busy, and that it has kept the transition state intact.
+    ncr_log_mark = await logs[ncr].mark()
+    move_task = asyncio.create_task(manager.api.move_tablet(servers[ncr].ip_addr, "test", "tabmv_decomm",
+                                                            node_ids[src], src_shard, node_ids[dst], dst_shard, token))
+    await logs[ncr].wait_for(r'transit_tablet\([^)]+\): topology busy, keeping transition state', from_mark=ncr_log_mark)
+
+    logger.info("Completing decommissioning and tablet movement")
+    # Resume decommissioning.
+    await manager.api.message_injection(servers[crd].ip_addr, "suspend_decommission")
+
+    # Complete both the decommissioning and the explicit tablet movement (completion order does not matter).
+    #
+    # Completion of "decomm_task" shows that the decommission flow doesn't get stuck.
+    await decomm_task
+    await move_task
 
 
 # This test checks that --enable-tablets option and the TABLETS parameters of the CQL CREATE KEYSPACE
