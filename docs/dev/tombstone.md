@@ -162,7 +162,7 @@ In the range [(0, 150), (0, 200)] the two range tombstones overlap, so one of th
 Range tombstone change objects always have a position which is *before* or *after* a certain key, never a position where they are *at* a key.
 This becomes evident when looking at the `position_weight` column in the mutation dump.
 Range tombstone changes always have a position weight of either `1` or `-1`.
-Regular rows alwas have a position weight of `0`.
+Regular rows always have a position weight of `0`.
 Position weight is relevant when comparing two positions which have the same clustering key.
 In this case the position weight is the tie-breaker: comparing the position weight of the two respective positions will determine the comparison result.
 
