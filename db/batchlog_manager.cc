@@ -28,11 +28,13 @@
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"
 #include "db/schema_tables.hh"
+#include "db/config.hh"
 #include "message/messaging_service.hh"
 #include "cql3/untyped_result_set.hh"
 #include "service_permit.hh"
 #include "cql3/query_processor.hh"
 #include "replica/database.hh"
+#include "readers/compacting.hh"
 
 static logging::logger blogger("batchlog_manager");
 
@@ -158,7 +160,56 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
 future<> db::batchlog_manager::cleanup_batches() {
     // Replaying batches could have generated tombstones, flush to disk,
     // where they can be compacted away.
-    return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+    if (!_qp.proxy().get_db().local().get_config().batchlog_cleanup_with_memtable_rollover()) {
+        return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+    }
+    return _qp.proxy().get_db().invoke_on_all([] (replica::database& db) -> future<> {
+        auto& table = db.find_column_family(system_keyspace::NAME, system_keyspace::BATCHLOG);
+
+        auto permit = co_await db.get_reader_concurrency_semaphore().obtain_permit(table.schema(), "batchlog_memtable_rollover",
+                mutation_reader::default_max_buffer_size_in_bytes(), db::no_timeout, {});
+        const auto gc_time = gc_clock::now();
+
+        semaphore concurrency_sem{1};
+
+        struct {
+            uint64_t total_partitions = 0;
+            uint64_t rolled_over_partitions = 0;
+        } stats;
+
+        co_await table.parallel_foreach_compaction_group([&db, &table, permit, gc_time, &concurrency_sem, &stats] (replica::compaction_group& cg) -> future<> {
+            auto sem_units = get_units(concurrency_sem, 1);
+
+            auto& mt_list = cg.memtables();
+            auto old = mt_list->back();
+            mt_list->add_memtable();
+
+            old->region().ground_evictable_occupancy();
+
+            stats.total_partitions += old->partition_count();
+
+            auto schema = table.schema();
+            auto reader = old->make_mutation_reader(schema, permit, query::full_partition_range, schema->full_slice());
+            reader = make_compacting_reader(std::move(reader), gc_time, can_always_purge, tombstone_gc_state(nullptr));
+
+            co_await with_closeable(std::move(reader), [&db, &stats, schema] (auto& rd) mutable {
+                return consume_partitions(rd, [&db, &stats, schema = std::move(schema)] (mutation&& m) -> future<stop_iteration> {
+                    ++stats.rolled_over_partitions;
+                    auto fm = freeze(m);
+                    co_await db.apply(schema, fm, {}, db::commitlog_force_sync::no, db::no_timeout);
+                    co_return stop_iteration::no;
+                });
+            });
+
+            if (auto cl = db.commitlog(); cl) {
+                cl->discard_completed_segments(schema->id(), old->get_and_discard_rp_set());
+            }
+
+            mt_list->erase(old);
+        });
+
+        blogger.debug("batchlog cleanup: rolled over {}/{} partitions", stats.rolled_over_partitions, stats.total_partitions);
+    });
 }
 
 future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
