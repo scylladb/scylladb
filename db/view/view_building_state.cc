@@ -73,6 +73,29 @@ seastar::sstring task_state_to_sstring(view_building_task::task_state state) {
     }
 }
 
+std::vector<std::reference_wrapper<const view_building_task>> view_building_state::get_tasks_for_host(table_id base_id, locator::host_id host) const {
+    if (!tasks_state.contains(base_id)) {
+        return {};
+    }
+
+    std::vector<std::reference_wrapper<const view_building_task>> host_tasks;
+    for (auto& [replica, replica_tasks]: tasks_state.at(base_id)) {
+        if (replica.host != host) {
+            continue;
+        }
+
+        for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
+            for (auto& [_, task]: view_tasks) {
+                host_tasks.emplace_back(task);
+            }
+        }
+        for (auto& [_, task]: replica_tasks.staging_tasks) {
+            host_tasks.emplace_back(task);
+        }
+    }
+    return host_tasks;
+}
+
 }
 
 }

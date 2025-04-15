@@ -86,6 +86,8 @@ struct view_building_state {
 
     view_building_state(building_tasks tasks_state, std::optional<table_id> processed_base_table);
     view_building_state() = default;
+    
+    std::vector<std::reference_wrapper<const view_building_task>> get_tasks_for_host(table_id base_id, locator::host_id host) const;
 };
 
 // Represents global state of tablet-based views.
