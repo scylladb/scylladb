@@ -49,6 +49,7 @@ public:
     static const sstring KW_SPECULATIVE_RETRY;
     static const sstring KW_BF_FP_CHANCE;
     static const sstring KW_MEMTABLE_FLUSH_PERIOD;
+    static const sstring KW_MEMTABLE_COMPACT_FLUSHED_DATA;
     static const sstring KW_SYNCHRONOUS_UPDATES;
 
     static const sstring KW_COMPACTION;
