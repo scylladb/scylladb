@@ -21,7 +21,6 @@
 #include "utils/enum_option.hh"
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
-#include "utils/updateable_value.hh"
 #include "utils/s3/creds.hh"
 #include "utils/error_injection.hh"
 #include "utils/dict_trainer.hh"
