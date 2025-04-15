@@ -1807,16 +1807,16 @@ api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& 
     return min_live_ts;
 }
 
-future<> memtable_list::flush() {
+future<> memtable_list::flush(std::optional<db::replay_position> rp) noexcept {
     if (!may_flush()) {
         return make_ready_future<>();
     } else if (!_flush_coalescing) {
         promise<> flushed;
         future<> ret = _flush_coalescing.emplace(flushed.get_future());
         _dirty_memory_manager->start_extraneous_flush();
-        _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
+        _dirty_memory_manager->get_flush_permit().then([this, rp] (auto permit) {
             _flush_coalescing.reset();
-            return _dirty_memory_manager->flush_one(*this, std::move(permit)).finally([this] {
+            return _dirty_memory_manager->flush_one(*this, std::move(permit), rp).finally([this] {
                 _dirty_memory_manager->finish_extraneous_flush();
             });
         }).forward_to(std::move(flushed));
