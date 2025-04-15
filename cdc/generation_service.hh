@@ -157,6 +157,7 @@ public:
 
     future<> commit_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, db_clock::time_point stream_ts, api::timestamp_type ts);
     future<> close_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, cql3::query_processor& qp, api::timestamp_type ts);
+    future<> compact_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, api::timestamp_type ts);
 
     future<std::vector<cdc::stream_id>> generate_new_streams(table_id table, const locator::tablet_map& new_tablet_map);
 
