@@ -81,6 +81,19 @@ You need to run the tool **on every node in the cluster**.
    :ref:`Send files to ScyllaDB support <report-problem-send-files-to-support>` 
    section.
 
+ScyllaDB Doctor Automation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+ScyllaDB provides an extension for automating ScyllaDB Doctor to run on
+the entire cluster and collect ScyllaDB Doctor reports from all cluster nodes.
+It may be especially useful for troubleshooting large clusters, as it saves you
+the time and effort of running ScyllaDB Doctor manually on every node.
+
+To automate ScyllaDB Doctor:
+
+#. Download the extension at https://downloads.scylladb.com/downloads/scylla-doctor/automation/scylla-doctor-ansible.tgz.
+#. Follow the instructions at https://downloads.scylladb.com/downloads/scylla-doctor/automation/README.md.
+
 .. _report-scylla-problem-core-dump:
 
 Core Dump
