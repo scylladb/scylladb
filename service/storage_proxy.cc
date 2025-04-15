@@ -4507,6 +4507,8 @@ future<> storage_proxy::send_batchlog_replay_to_all_replicas(utils::chunked_vect
             return batchlog_replay_mutation(std::move(m));
         }) | std::ranges::to<utils::chunked_vector<batchlog_replay_mutation>>();
 
+    utils::get_local_injector().inject("storage_proxy_fail_replay_batch", [] { throw std::runtime_error("Error injection: failing to send batch"); });
+
     return mutate_internal(std::move(ms), db::consistency_level::EACH_QUORUM, nullptr, empty_service_permit(), timeout, db::write_type::BATCH)
             .then(utils::result_into_future<result<>>);
 }

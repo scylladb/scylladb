@@ -101,6 +101,10 @@ public:
     gc_clock::time_point get_last_replay() const {
         return _last_replay;
     }
+
+    const stats& stats() const {
+        return _stats;
+    }
 private:
     future<> batchlog_replay_loop();
 };
