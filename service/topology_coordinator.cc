@@ -1186,12 +1186,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return _topo_sm._topology.get_excluded_nodes().contains(server_id);
     }
 
-    void generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
+    future<> generate_migration_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const tablet_migration_info& mig) {
         const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(mig.tablet.table);
         auto last_token = tmap.get_last_token(mig.tablet.tablet);
         if (tmap.get_tablet_transition_info(mig.tablet.tablet)) {
             rtlogger.warn("Tablet already in transition, ignoring migration: {}", mig);
-            return;
+            co_return;
         }
         auto migration_task_info = mig.kind == locator::tablet_transition_kind::migration ? locator::tablet_task_info::make_migration_request()
             : locator::tablet_task_info::make_intranode_migration_request();
@@ -1204,6 +1204,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_transition(last_token, mig.kind)
                 .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
                 .build());
+        co_return;
     }
 
     void generate_repair_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
@@ -1230,26 +1231,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .build());
     }
 
-    void generate_resize_update(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
-            // FIXME: indent.
-            auto s = _db.find_schema(table_id);
-            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
-            // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
-            resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
-            rtlogger.debug("Generating resize decision for table {} of type {} and sequence number {}",
-                           table_id, resize_decision.type_name(), resize_decision.sequence_number);
-            out.emplace_back(
-                replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
-                    .set_resize_decision(std::move(resize_decision), _feature_service)
-                    .build());
+    future<> generate_resize_update(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
+        auto s = _db.find_schema(table_id);
+        const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+        // Sequence number is monotonically increasing, globally. Therefore, it can be used to identify a decision.
+        resize_decision.sequence_number = tmap.resize_decision().next_sequence_number();
+        rtlogger.debug("Generating resize decision for table {} of type {} and sequence number {}",
+                        table_id, resize_decision.type_name(), resize_decision.sequence_number);
+        out.emplace_back(
+            replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
+                .set_resize_decision(std::move(resize_decision), _feature_service)
+                .build());
+        co_return;
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
         if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
             // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
             for (const tablet_migration_info& mig : plan.migrations()) {
-                co_await coroutine::maybe_yield();
-                generate_migration_update(out, guard, mig);
+                co_await generate_migration_update(out, guard, mig);
             }
         }
 
@@ -1260,8 +1260,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-            co_await coroutine::maybe_yield();
-            generate_resize_update(out, guard, table_id, resize_decision);
+            co_await generate_resize_update(out, guard, table_id, resize_decision);
         }
     }
 
@@ -1747,7 +1746,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 _feature_service));
 
             // Clears the resize decision for a table.
-            generate_resize_update(updates, guard, table_id, locator::resize_decision{});
+            co_await generate_resize_update(updates, guard, table_id, locator::resize_decision{});
         }
 
         updates.emplace_back(
