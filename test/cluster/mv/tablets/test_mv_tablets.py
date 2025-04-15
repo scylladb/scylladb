@@ -8,7 +8,7 @@
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
@@ -369,3 +369,68 @@ async def test_mv_tablet_split(manager: ManagerClient):
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'tv', True)
         assert tablet_count > 1
+
+@pytest.mark.parametrize("mv_type", ["mv", "index"])
+@pytest.mark.asyncio
+async def test_try_start_with_tablet_mv_index(manager: ManagerClient, mv_type: str):
+    """
+    This test verifies that Scylla refuses to start if all of the following conditions are satisfied:
+
+    1. There exists a materialized view using tablets.
+    2. The `rf_rack_valid_keyspaces` configuration option is disabled.
+
+    For more context, see: scylladb/scylladb#23030.
+    """
+    s, _, _ = await manager.servers_add(3, cmdline=["--experimental-features=views-with-tablets"],
+                                        config={"rf_rack_valid_keyspaces": True}, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+
+    async def create_schema(ks: str, table: str) -> str:
+        mv = unique_name()
+        cql = manager.get_cql()
+        if mv_type == "mv":
+            await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.{mv} AS SELECT * FROM {ks}.{table} "
+                                f"WHERE p IS NOT NULL AND v IS NOT NULL PRIMARY KEY(v, p)")
+        else:
+            await cql.run_async(f"CREATE INDEX {mv} ON {ks}.{table} (v)")
+        return f"{ks}.{mv}"
+
+    async def drop_schema(mv: str) -> None:
+        if mv_type == "mv":
+            await cql.run_async(f"DROP MATERIALIZED VIEW IF EXISTS {mv}")
+        else:
+            await cql.run_async(f"DROP INDEX IF EXISTS {mv}")
+
+    async def prepare_mv(tablets: bool) -> str:
+        tablets = str(tablets).lower()
+        ks, table = [unique_name() for _ in range(2)]
+
+        await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 3}} "
+                            f"AND tablets = {{'enabled': {tablets}}}")
+        await cql.run_async(f"CREATE TABLE {ks}.{table} (p int PRIMARY KEY, v int)")
+        return await create_schema(ks, table)
+
+    # Tablet & vnode schema.
+    tmv, _ = await asyncio.gather(*[prepare_mv(True), prepare_mv(False)])
+
+    async def try_start(value: bool, should_fail: bool):
+        mv_name = tmv if mv_type == "mv" else f"{tmv}_index"
+        err = r"Materialized views/secondary indexes with tablets can only be used with the option `rf_rack_valid_keyspaces` " \
+              rf"enabled. That condition is violated for `{mv_name}` because the option is disabled."
+        err = err if should_fail else None
+        await manager.server_update_config(server_id=s.server_id, key="rf_rack_valid_keyspaces", value=value)
+        await manager.server_start(server_id=s.server_id, expected_error=err)
+
+    # Scenario 0. Try to restart the node with `rf_rack_valid_keyspaces: True`. This is just a sanity check
+    #             verifying that nothing unexpected happens. Since we've already created the view and have NOT
+    #             made any changes in the config, the node should start without any issues.
+    await manager.server_stop_gracefully(s.server_id)
+    await try_start(True, False)
+
+    # Scenario 1. Try to start the node with the option disabled. It should fail because we have an MV using tablets.
+    await manager.server_stop_gracefully(s.server_id)
+    await try_start(False, True)
+
+    # Scenario 2. We get rid of the tablet MV and the node starts successfully.
+    await drop_schema(tmv)
+    await try_start(False, False)

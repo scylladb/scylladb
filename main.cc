@@ -2187,6 +2187,10 @@ sharded<locator::shared_token_metadata> token_metadata;
                 startlog.info("All keyspaces are RF-rack-valid");
             }
 
+            // Make sure that if there are existing materialized views and indexes that use tablets,
+            // then the `rf_rack_valid_keyspaces` configuration option is enabled.
+            db.local().check_tablet_mvs_indexes();
+
             dictionary_service dict_service(
                 dict_sampler,
                 sys_ks.local(),

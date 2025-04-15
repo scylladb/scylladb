@@ -7,11 +7,12 @@ import asyncio
 import logging
 import sys
 
-from typing import List, Union
+from typing import Any, List, Union
 
 import pytest
 from cassandra.policies import WhiteListRoundRobinPolicy
 
+from test.cluster.util import new_materialized_view
 from test.cqlpy import nodetool
 from cassandra import ConsistencyLevel
 from cassandra.protocol import InvalidRequest
@@ -464,3 +465,133 @@ async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager
 
     await manager.server_stop_gracefully(s_info.server_id)
     await manager.server_start(s_info.server_id)
+
+async def verify_create_mv_si_with_racks(manager: ManagerClient, create_schema: Any):
+    cmdline = ["--experimental-features=views-with-tablets"]
+    cfg = {"rf_rack_valid_keyspaces": "true"}
+
+    _ = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1_1"},
+        {"dc": "dc1", "rack": "r1_2"},
+        {"dc": "dc2", "rack": "r2_1"},
+    ])
+
+    cql = manager.get_cql()
+
+    # Create a keyspace and table with replication: {dc1: rf1, dc2: rf2} and tablets on.
+    async def prepare(rf1: int, rf2: int) -> tuple[str, str]:
+        ks = unique_name()
+        t = unique_name()
+
+        await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {rf1}, 'dc2': {rf2}}} AND tablets = {{'enabled': true}}")
+        await cql.run_async(f"CREATE TABLE {ks}.{t} (p int PRIMARY KEY, v int)")
+
+        return (ks, t)
+
+    async def test_scenario(good: list[Any], bad: list[Any], dc: int | None = None, rf: int | None = None, rack_count: int | None = None):
+        async def try_pass(ks: str, table: str) -> None:
+            await create_schema(ks, table)
+
+        async def try_fail(ks: str, table: str, dc: int, rf: int, rack_count: int) -> None:
+            err = "The option `rf_rack_valid_keyspaces` is enabled. It requires that all keyspaces are RF-rack-valid. " \
+                f"That condition is violated: keyspace '{ks}' doesn't satisfy it for DC 'dc{dc}': RF={rf} vs. rack count={rack_count}."
+            with pytest.raises(InvalidRequest, match=err):
+                await try_pass(ks, table)
+
+        good = [try_pass(ks, t) for ks, t in good]
+        bad = [try_fail(ks, t, dc, rf, rack_count) for ks, t in bad]
+
+        await asyncio.gather(*[*good, *bad])
+
+    # Scenario 1: [dc1: 2 racks, dc2: 1 rack].
+    # ----------------------------------------
+    setups1 = await asyncio.gather(*[
+        prepare(0, 0),
+        prepare(0, 1),
+        prepare(1, 0),
+        prepare(1, 1),
+        prepare(2, 0),
+        prepare(2, 1)
+    ])
+
+    # All of the created keyspaces are RF-rack-valid, so creating views in them should proceed without an issue.
+    await test_scenario(setups1, [])
+
+    # Valid in the next scenario.
+    valid_setups1 = setups1[:-2]
+    # Invalid in the next scenario.
+    invalid_setups1 = setups1[-2:]
+
+    # FIXME: Uncomment the scenarios below when scylladb/scylladb#23426 has been implemented.
+    #
+    # # Scenario 2: [dc1: 3 racks, dc2: 2 racks].
+    # # -----------------------------------------
+    # _ = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=[
+    #     {"dc": "dc1", "rack": "r1_3"},
+    #     {"dc": "dc1", "rack": "r1_1"},
+    #     {"dc": "dc2", "rack": "r2_2"}])
+
+    # setups2 = await asyncio.gather(*[
+    #     prepare(3, 0),
+    #     prepare(3, 1),
+    #     prepare(3, 2),
+    #     prepare(1, 2),
+    #     prepare(0, 2)
+    # ])
+
+    # await test_scenario(valid_setups1 + setups2, invalid_setups1, dc=1, rf=2, rack_count=3)
+
+    # valid_setups2 = valid_setups1 + setups2[:-3]
+    # invalid_setups2 = setups2[-3:]
+
+    # # Scenario 3: [dc1: 3 racks, dc2: 3 racks].
+    # # -----------------------------------------
+    # _ = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc2", "rack": "r2_3"})
+
+    # setups3 = await asyncio.gather(*[
+    #     prepare(0, 3),
+    #     prepare(1, 3),
+    #     prepare(3, 3)])
+
+    # await test_scenario(valid_setups2 + setups3, invalid_setups2, dc=2, rf=2, rack_count=3)
+
+    # valid_setups3 = valid_setups2 + setups3
+
+    # # Scenario 4: [dc1: 3 racks + 1 zero-token rack, dc2: 3 racks].
+    # # -------------------------------------------------------------
+    # _ = await manager.servers_add(2, cmdline=cmdline, config=cfg | {"join_ring": False}, property_file=[
+    #     {"dc": "dc1", "rack": "r1_1"},
+    #     {"dc": "dc1", "rack": "r1_z"}
+    # ])
+
+    # await test_scenario(valid_setups3, [])
+
+@pytest.mark.asyncio
+async def test_create_mv_with_racks(manager: ManagerClient):
+    """
+    This test verifies that creating a materialized view is only possible in RF-rack-valid keyspaces.
+    For more context, see: scylladb/scylladb#23030.
+    """
+
+    async def create_mv(ks: str, table: str):
+        async with new_materialized_view(manager, f"{ks}.{table}", "*", "p, v", "p IS NOT NULL AND v IS NOT NULL"):
+            pass
+
+    await verify_create_mv_si_with_racks(manager, create_mv)
+
+@pytest.mark.asyncio
+async def test_create_si_with_racks(manager: ManagerClient):
+    """
+    This test verifies that creating a secondary index is only possible in RF-rack-valid keyspaces.
+    For more context, see: scylladb/scylladb#23030.
+    """
+
+    async def create_si(ks: str, table: str):
+        si = unique_name()
+        cql = manager.get_cql()
+        try:
+            await cql.run_async(f"CREATE INDEX {si} ON {ks}.{table}(v)")
+        finally:
+            await cql.run_async(f"DROP INDEX IF EXISTS {ks}.{si}")
+
+    await verify_create_mv_si_with_racks(manager, create_si)

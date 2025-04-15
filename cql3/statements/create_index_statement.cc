@@ -10,6 +10,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
+#include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
 #include "types/types.hh"
@@ -395,6 +396,26 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
 
     ::shared_ptr<event::schema_change> ret;
     std::vector<mutation> m;
+
+    const auto& cfg = qp.db().get_config();
+    // Even when RF-rack-valid keyspaces are enforced, we have no guarantee the invariant will be preserved.
+    // It may happen that, for instance, a new rack is added after creating a keyspace, which will make it
+    // RF-rack-invalid. That's why we need to ensure here that the keyspace we're creating the view in
+    // really is RF-rack-valid. If not, we must reject this schema change.
+    if (cfg.rf_rack_valid_keyspaces()) {
+        const auto tmptr = qp.proxy().get_token_metadata_ptr();
+        const auto& rs = qp.db().find_keyspace(keyspace()).get_replication_strategy();
+
+        try {
+            // It's safe to perform the check here. This function is called by
+            // `schema_altering_statement::prepare_schema_mutations()`, which holds a Raft guard.
+            locator::assert_rf_rack_valid_keyspace(keyspace(), tmptr, rs);
+        } catch (const std::exception& e) {
+            // There's no guarantee what the type of the exception will be, so we need to
+            // wrap it manually here in a type that can be passed to the user.
+            throw exceptions::invalid_request_exception(e.what());
+        }
+    }
 
     if (res) {
         m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
