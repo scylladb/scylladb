@@ -1622,6 +1622,12 @@ stop_iteration writer::consume_end_of_partition() {
 void writer::consume_end_of_stream() {
     _cfg.monitor->on_data_write_completed();
 
+    // Check if the sstable is empty and mark it for deletion if so.
+    if (!_first_key) {
+        _sst.mark_for_deletion();
+        return;
+    }
+
   if (_sst._components->summary) {
     seal_summary(_sst._components->summary, std::optional<key>(_first_key), std::optional<key>(_last_key), _index_sampling_state).get();
   }
