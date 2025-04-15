@@ -1207,7 +1207,7 @@ std::vector<canonical_mutation> storage_service::build_mutation_from_join_params
             .set("topology_request", topology_request::join);
     }
     node_builder.set("request_id", params.request_id);
-    topology_request_tracking_mutation_builder rtbuilder(params.request_id, _db.local().features().topology_requests_type_column);
+    topology_request_tracking_mutation_builder rtbuilder(params.request_id, _feature_service.topology_requests_type_column);
     rtbuilder.set("initiating_host", params.host_id.uuid())
              .set("done", false);
     rtbuilder.set("request_type", params.replaced_id ? topology_request::replace : topology_request::join);
@@ -3752,7 +3752,7 @@ future<> storage_service::raft_decommission() {
         builder.with_node(raft_server.id())
                .set("topology_request", topology_request::leave)
                .set("request_id", guard.new_group0_state_id());
-        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _db.local().features().topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service.topology_requests_type_column);
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
         rtbuilder.set("request_type", topology_request::leave);
@@ -4120,7 +4120,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
         builder.add_ignored_nodes(ignored_ids).with_node(id)
                .set("topology_request", topology_request::remove)
                .set("request_id", guard.new_group0_state_id());
-        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _db.local().features().topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service.topology_requests_type_column);
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
         rtbuilder.set("request_type", topology_request::remove);
@@ -4939,7 +4939,7 @@ future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
                .set("topology_request", topology_request::rebuild)
                .set("rebuild_option", source_dc)
                .set("request_id", guard.new_group0_state_id());
-        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _db.local().features().topology_requests_type_column);
+        topology_request_tracking_mutation_builder rtbuilder(guard.new_group0_state_id(), _feature_service.topology_requests_type_column);
         rtbuilder.set("initiating_host",_group0->group0_server().id().uuid())
                  .set("done", false);
         rtbuilder.set("request_type", topology_request::rebuild);
@@ -6638,7 +6638,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
                                                              : locator::tablet_transition_kind::migration)
-            .set_migration_task_info(last_token, std::move(migration_task_info), _db.local().features())
+            .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
             .build());
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
@@ -6682,7 +6682,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.local().features()))
+            .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
             .build());
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
@@ -6727,7 +6727,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-            .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.local().features()))
+            .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
             .build());
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
