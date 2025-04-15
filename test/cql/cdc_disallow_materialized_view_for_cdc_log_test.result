@@ -1,0 +1,14 @@
+> -- Error messages contain a keyspace name. Make the output stable.
+> -- CDC and tablets are not working together yet, turn them off.
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> 
+> create table ks.tb1 (pk int primary key, v int) with cdc = {'enabled': true};
+OK
+> 
+> create materialized view ks.tb1_mv as select * from ks.tb1_scylla_cdc_log where v is not null primary key (v);
+Error from server: code=2200 [Invalid query] message="Materialized views cannot be created on CDC Log tables"
+> DROP KEYSPACE ks;
+OK

@@ -1,0 +1,20 @@
+#
+# cassandra-rackdc.properties
+#
+# The lines may include white spaces at the beginning and the end.
+# The rack and data center names may also include white spaces.
+# All trailing and leading white spaces will be trimmed.
+#  
+# dc=my_data_center
+# rack=my_rack
+# prefer_local=<false | true>
+#
+# This file includes an error: double declaration of "dc" pattern.
+#
+prefer_local=false
+ dc=  my_data_center 
+ dc= my_data_center 
+ rack=my_rack   
+
+
+ 

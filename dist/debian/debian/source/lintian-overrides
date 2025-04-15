@@ -1,0 +1,2 @@
+scylla-server source: source-is-missing
+scylla-server binary: postrm-does-not-call-updaterc.d-for-init.d-script

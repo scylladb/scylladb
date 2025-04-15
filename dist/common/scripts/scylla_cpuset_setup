@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2018-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import sys
+import argparse
+from scylla_util import *
+
+if __name__ == '__main__':
+    if not is_container() and os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Configure cpuset configuration for Scylla.')
+    parser.add_argument('--cpuset',
+                        help='CPUs to use (in cpuset(7) format; default: all))')
+    parser.add_argument('--smp',
+                        help='number of threads (default: one per CPU)')
+    args = parser.parse_args()
+    if not args.cpuset and not args.smp:
+        parser.print_help()
+        sys.exit(1)
+
+    cpuset = smp = None
+    try:
+        cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
+        line = cfg.get('CPUSET')
+        cpuset_args = parser.parse_args(line.split())
+        cpuset = cpuset_args.cpuset
+        smp = cpuset_args.smp
+    except:
+        pass
+    if cpuset != args.cpuset or smp != args.smp:
+        if os.path.exists('/etc/scylla.d/perftune.yaml'):
+            os.remove('/etc/scylla.d/perftune.yaml')
+
+        cfg.set('CPUSET', '{cpuset}{smp}'.format( \
+                cpuset='--cpuset {} '.format(args.cpuset) if args.cpuset else '', \
+                smp='--smp {} '.format(args.smp) if args.smp else '' \
+                ))
+        cfg.commit()

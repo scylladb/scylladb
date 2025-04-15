@@ -1,0 +1,15 @@
+version: 1
+applications:
+  - frontend:
+      phases:
+        build:
+          commands:
+            - make setupenv
+            - make dirhtml
+      artifacts:
+        baseDirectory: _build/dirhtml
+        files:
+          - '**/*'
+      cache:
+        paths: []
+    appRoot: docs

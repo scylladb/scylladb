@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2018-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import sys
+import shutil
+from scylla_util import *
+from subprocess import run, DEVNULL
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+
+    if not shutil.which('mkfs.xfs'):
+        pkg_install('xfsprogs')
+
+    os.makedirs('/var/tmp/mnt', exist_ok=True)
+    run('dd if=/dev/zero of=/var/tmp/kernel-check.img bs=1M count=300', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
+    run('mkfs.xfs /var/tmp/kernel-check.img', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
+    run('mount /var/tmp/kernel-check.img /var/tmp/mnt -o loop', shell=True, check=True, stdout=DEVNULL, stderr=DEVNULL)
+    ret = run('iotune --fs-check --evaluation-directory /var/tmp/mnt --default-log-level error', shell=True).returncode
+    run('umount /var/tmp/mnt', shell=True, check=True)
+    shutil.rmtree('/var/tmp/mnt')
+    os.remove('/var/tmp/kernel-check.img')
+    if ret == 0:
+        print('This is a supported kernel version.')
+    else:
+        print('Please upgrade to a newer kernel version.')
+        print(' see https://docs.scylladb.com/troubleshooting/error_messages/kb_fs_not_qualified_aio/ for details')
+    sys.exit(ret)

@@ -1,0 +1,119 @@
+#!/bin/sh
+
+USAGE=$(cat <<-END
+Usage: $(basename "$0") [-h|--help] [-o|--output-dir PATH] [--date-stamp DATE] -- generate Scylla version and build information files.
+
+Options:
+  -h|--help show this help message.
+  -o|--output-dir PATH specify destination path at which the version files are to be created.
+  -d|--date-stamp DATE manually set date for release parameter
+  -v|--verbose also print out the version number
+
+By default, the script will attempt to parse 'version' file
+in the current directory, which should contain a string of
+'\$version-\$release' form.
+
+Otherwise, it will call 'git log' on the source tree (the
+directory, which contains the script) to obtain current
+commit hash and use it for building the version and release
+strings.
+
+The script assumes that it's called from the Scylla source
+tree.
+
+The files created are:
+  SCYLLA-VERSION-FILE
+  SCYLLA-RELEASE-FILE
+  SCYLLA-PRODUCT-FILE
+
+By default, these files are created in the 'build'
+subdirectory under the directory containing the script.
+The destination directory can be overridden by
+using '-o PATH' option.
+END
+)
+
+DATE=""
+PRINT_VERSION=false
+
+while [ $# -gt 0 ]; do
+	opt="$1"
+	case $opt in
+		-h|--help)
+			echo "$USAGE"
+			exit 0
+			;;
+		-o|--output-dir)
+			OUTPUT_DIR="$2"
+			shift
+			shift
+			;;
+		--date-stamp)
+			DATE="$2"
+			shift
+			shift
+			;;
+		-v|--verbose)
+			PRINT_VERSION=true
+			shift
+			;;
+		*)
+			echo "Unexpected argument found: $1"
+			echo
+			echo "$USAGE"
+			exit 1
+			;;
+	esac
+done
+
+SCRIPT_DIR="$(dirname "$0")"
+
+if [ -z "$OUTPUT_DIR" ]; then
+	OUTPUT_DIR="$SCRIPT_DIR/build"
+fi
+
+if [ -z "$DATE" ]; then
+  DATE=$(date --utc +%Y%m%d)
+fi
+
+# Default scylla product/version tags
+PRODUCT=scylla
+VERSION=2025.2.0-dev
+
+if test -f version
+then
+	SCYLLA_VERSION=$(cat version | awk -F'-' '{print $1}')
+	SCYLLA_RELEASE=$(cat version | awk -F'-' '{print $2}')
+else
+	SCYLLA_VERSION=$VERSION
+	if [ -z "$SCYLLA_RELEASE" ]; then
+		GIT_COMMIT=$(git -C "$SCRIPT_DIR" log --pretty=format:'%h' -n 1 --abbrev=12)
+		# For custom package builds, replace "0" with "counter.yourname",
+		# where counter starts at 1 and increments for successive versions.
+		# This ensures that the package manager will select your custom
+		# package over the standard release.
+		# Do not use any special characters like - or _ in the name above!
+		# These characters either have special meaning or are illegal in
+		# version strings.
+		SCYLLA_BUILD=0
+		SCYLLA_RELEASE=$SCYLLA_BUILD.$DATE.$GIT_COMMIT
+	elif [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
+		echo "setting SCYLLA_RELEASE only makes sense in clean builds" 1>&2
+		exit 1
+	fi
+fi
+
+if [ -f "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" ]; then
+	GIT_COMMIT_FILE=$(cat "$OUTPUT_DIR/SCYLLA-RELEASE-FILE" | rev | cut -d . -f 1 | rev)
+	if [ "$GIT_COMMIT" = "$GIT_COMMIT_FILE" ]; then
+		exit 0
+	fi
+fi
+
+if $PRINT_VERSION; then
+	echo "$SCYLLA_VERSION-$SCYLLA_RELEASE"
+fi
+mkdir -p "$OUTPUT_DIR"
+echo "$SCYLLA_VERSION" > "$OUTPUT_DIR/SCYLLA-VERSION-FILE"
+echo "$SCYLLA_RELEASE" > "$OUTPUT_DIR/SCYLLA-RELEASE-FILE"
+echo "$PRODUCT" > "$OUTPUT_DIR/SCYLLA-PRODUCT-FILE"

@@ -1,0 +1,52 @@
+name: License Header Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [master]
+
+env:
+  HEADER_CHECK_LINES: 10
+  LICENSE: "LicenseRef-ScyllaDB-Source-Available-1.0"
+  CHECKED_EXTENSIONS: ".cc .hh .py"
+
+jobs:
+  check-license-headers:
+    name: Check License Headers
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          # Get list of added files comparing with base branch
+          echo "files=$(git diff --name-only --diff-filter=A ${{ github.event.pull_request.base.sha }} ${{ github.sha }} | tr '\n' ' ')" >> $GITHUB_OUTPUT
+
+      - name: Check license headers
+        if: steps.changed-files.outputs.files != ''
+        run: |
+          .github/scripts/check-license.py \
+            --files ${{ steps.changed-files.outputs.files }} \
+            --license "${{ env.LICENSE }}" \
+            --check-lines "${{ env.HEADER_CHECK_LINES }}" \
+            --extensions ${{ env.CHECKED_EXTENSIONS }}
+
+      - name: Comment on PR if check fails
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const license = '${{ env.LICENSE }}';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `❌ License header check failed. Please ensure all new files include the header within the first ${{ env.HEADER_CHECK_LINES }} lines:\n\`\`\`\n${license}\n\`\`\`\nSee action logs for details.`
+            });

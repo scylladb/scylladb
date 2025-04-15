@@ -1,0 +1,53 @@
+name: Build with the latest Seastar
+
+on:
+  schedule:
+    # 5AM everyday
+    - cron: '0 5 * * *'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_DIR: build
+
+jobs:
+  read-toolchain:
+    uses: ./.github/workflows/read-toolchain.yaml
+  build-with-the-latest-seastar:
+    needs:
+      - read-toolchain
+    runs-on: ubuntu-latest
+    container: ${{ needs.read-toolchain.outputs.image }}
+    strategy:
+      matrix:
+        build_type:
+          - Debug
+          - RelWithDebInfo
+          - Dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: |
+          rm -rf seastar
+      - uses: actions/checkout@v4
+        with:
+          repository: scylladb/seastar
+          submodules: true
+          path: seastar
+      - name: Generate the building system
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+          cmake                                         \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_C_COMPILER=clang                    \
+            -DCMAKE_CXX_COMPILER=clang++                \
+            -G Ninja                                    \
+            -B $BUILD_DIR                               \
+            -S .
+      - run: |
+          cmake --build $BUILD_DIR --target scylla

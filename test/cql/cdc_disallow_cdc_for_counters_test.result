@@ -1,0 +1,23 @@
+> -- Error messages contain a keyspace name. Make the output stable.
+> -- CDC and tablets are not working together yet, turn them off.
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
+> create table ks.tb1 (pk int primary key, c1 counter) with cdc = {'enabled': true};
+Error from server: code=2200 [Invalid query] message="Cannot create CDC log for table ks.tb1. Counter support not implemented"
+> 
+> create table ks.tb2 (pk int primary key, c1 counter);
+OK
+> alter table ks.tb2 with cdc = {'enabled': true};
+Error from server: code=2200 [Invalid query] message="Cannot create CDC log for table ks.tb2. Counter support not implemented"
+> 
+> create table ks.tb3 (pk int primary key) with cdc = {'enabled': true};
+OK
+> alter table ks.tb3 add (c1 counter);
+<Error from server: code=2300 [Query invalid because of configuration issue] message="Cannot add a counter column (c1) in a non counter column family">
+> DROP KEYSPACE ks;
+OK

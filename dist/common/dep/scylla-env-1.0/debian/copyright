@@ -1,0 +1,12 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: ScyllaDB
+Upstream-Contact: http://www.scylladb.com/
+Source: https://github.com/scylladb/scylla
+
+Files: *
+Copyright: Copyright (c) 2016-present ScyllaDB
+License: ScyllaDB-Source-Available-1.0
+
+Files: debian/*
+Copyright: Copyright (c) 2016-present ScyllaDB
+License: ScyllaDB-Source-Available-1.0

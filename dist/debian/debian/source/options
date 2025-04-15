@@ -1,0 +1,3 @@
+extend-diff-ignore = ^.gitorderfile$
+extend-diff-ignore = ^seastar/.gitorderfile$
+extend-diff-ignore = ^build/

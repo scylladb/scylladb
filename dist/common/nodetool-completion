@@ -1,0 +1,271 @@
+# Apache Cassandra
+# Copyright 2009- The Apache Software Foundation
+#
+# This product includes software developed by The Apache Software
+# Foundation (http://www.apache.org/).
+#
+# Modified by ScyllaDB
+# Copyright (C) 2024-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
+have nodetool && have cqlsh &&
+{
+
+    show_keyspaces()
+    {
+        local ks=$(get_keyspaces)
+        COMPREPLY=( $(compgen -W "$ks" -- "$1") )
+    }
+
+    get_keyspaces()
+    {
+        [ -z "$keyspaces" ] && keyspaces=$(echo "DESCRIBE KEYSPACES" | cqlsh | grep -E -v '^$')
+        echo $keyspaces
+    }
+
+    show_datacenters()
+    {
+        cur=$1
+        set|grep -q ^dcs || dcs=$(echo "select data_center from system.peers;"|cqlsh |tail -n +4|sort|uniq|awk '{if(length($1)>1) print $1}'|xargs)
+        COMPREPLY=( $(compgen -W "$dcs" -- "$cur") )
+    }
+
+    show_cfs()
+    {
+        local cur prev cfs
+        prev=$1
+        cur=$2
+        cfs=$(get_cfs $1 $2)
+        COMPREPLY=( $(compgen -W "$cfs" -- "$cur") )
+    }
+
+    get_cfs()
+    {
+        local prev
+        prev=$1
+        [ -z "${cf[$prev]}" ] && cf[$prev]=$(echo "DESCRIBE COLUMNFAMILIES" | cqlsh -k ${prev} | grep -E -v '^$')
+        echo ${cf[$prev]}
+    }
+
+    show_last_cfs()
+    {
+        local cur cfs re
+        cur=$1
+        re=$(echo ${COMP_WORDS[@]:3:$(($COMP_CWORD - 3))} | sed -e 's/ /\\|/g')
+        cfs=$(get_cfs ${COMP_WORDS[2]} | sed -e "s/$re//g")
+        COMPREPLY=( $(compgen -W "$cfs" -- "${cur}") )
+    }
+
+    _nodetool()
+    {
+        local cur prev ks
+        COMPREPLY=()
+        _get_comp_words_by_ref cur prev
+
+        local shopt='
+            bootstrap
+            compactionhistory
+            compactionstats
+            decommission
+            describecluster
+            disablebackup
+            disablebinary
+            disablegossip
+            disablehandoff
+            disablehintsfordc
+            disablethrift
+            drain
+            enablebackup
+            enablebinary
+            enablegossip
+            enablehandoff
+            enablethrift
+            enablehintsfordc
+            failuredetector
+            gcstats
+            getcompactionthroughput
+            getconcurrentcompactors
+            getinterdcstreamthroughput
+            getlogginglevels
+            getstreamthroughput
+            gettimeout
+            gettraceprobability
+            gossipinfo
+            help
+            invalidatecountercache
+            invalidatekeycache
+            invalidaterowcache
+            join
+            listsnapshots
+            pausehandoff
+            proxyhistograms
+            rangekeysample
+            refreshsizeestimates
+            reloadlocalschema
+            reloadtriggers
+            replaybatchlog
+            resetlocalschema
+            resumehandoff
+            ring
+            setconcurrentcompactors
+            sethintedhandoffthrottlekb
+            setinterdcstreamthroughput
+            setlogginglevel
+            settimeout
+            status
+            statusbackup
+            statusbinary
+            statusthrift
+            statusgossip
+            statushandoff
+            stopdaemon
+            tablestats
+            tpstats
+            version
+            '
+
+        local lngopt='
+            assassinate
+            backup
+            cleanup
+            clearsnapshot
+            compact
+            describering
+            disableautocompaction
+            enableautocompaction
+            flush
+            garbagecollect
+            getcompactionthreshold
+            getendpoints
+            getsstables
+            info
+            move
+            netstats
+            rebuild
+            rebuild_index
+            refresh
+            relocatesstables
+            removenode
+            repair
+            restore
+            scrub
+            setcachecapacity
+            setcachekeystosave
+            setcompactionthreshold
+            setcompactionthroughput
+            setstreamthroughput
+            settraceprobability
+            snapshot
+            stop
+            tablehistograms
+            toppartitions
+            truncatehints
+            upgradesstables
+            verify
+            viewbuildstatus
+	    '
+
+        local optwks='
+            cleanup
+            clearsnapshot
+            compact
+            describering
+            flush
+            garbagecollect
+            getcompactionthreshold
+            getendpoints
+            getsstables
+            rebuild_index
+            refresh
+            relocatesstables
+            repair
+            scrub
+            setcompactionthreshold
+            snapshot
+            tablehistograms
+            toppartitions
+            verify
+            viewbuildstatus
+            '
+
+        local optwcfs='
+            cleanup
+            compact
+            disableautocompaction
+            enableautocompaction
+            flush
+            garbagecollect
+            relocatesstables
+            repair
+            scrub
+            toppartitions
+            upgradesstables
+            verify
+            '
+
+        if [[ $COMP_CWORD -eq 1 ]] ; then
+            COMPREPLY=( $(compgen -W "${lngopt} ${shopt}" -- "${cur}") )
+        elif [[ $(echo "${lngopt}"|grep -E -c "\b${prev}\b") -gt 0 ]] ; then
+            if echo $optwks|grep -q "\b$prev\b" ; then
+                show_keyspaces "${cur}"
+            else
+                case "${prev}" in
+                    removenode)
+                        # we don't want to lose time using nodetool status a 2nd time
+                        # in case of force or status
+                        if [[ "${cur}" =~ ^(f|s) ]] ; then
+                            COMPREPLY=( $(compgen -W "status force" -- "${cur}") )
+                        else
+                            [ -z "$IDS" ] && IDS=$(nodetool status|grep %|awk '{print $7}'|xargs)
+                            COMPREPLY=( $(compgen -W "status force $IDS" -- "${cur}") )
+                        fi
+                        return 0
+                        ;;
+                    stop)
+                        COMPREPLY=( $(compgen -W "COMPACTION VALIDATION CLEANUP SCRUB VERIFY INDEX_BUILD" -- "${cur}") )
+                        return 0
+                        ;;
+                    info)
+                        COMPREPLY=( $(compgen -W "-T --tokens" -- "${cur}") )
+                        return 0
+                        ;;
+                    rebuild|disablehintsfordc|enablehintsfordc)
+                        show_datacenters "${cur}"
+                        return 0
+                        ;;
+                    upgradesstables)
+                        ks=$(get_keyspaces)
+                        COMPREPLY=( $(compgen -W "-a --include-all-sstables $ks" -- "${cur}") )
+                        return 0
+                        ;;
+                esac
+            fi
+        elif [[ $COMP_CWORD -eq 3 ]] ; then
+            case "${COMP_WORDS[1]}" in
+                cleanup|compact|flush|garbagecollect|getcompactionthreshold|getendpoints|getsstables|rebuild_index|refresh|relocatesstables|repair|scrub|setcompactionthreshold|tablehistograms|toppartitions|verify)
+                    show_cfs ${prev} ${cur}
+                    return 0
+                    ;;
+                upgradesstables)
+                    if [[ ! ${prev} == -* ]]; then
+                        show_cfs ${prev} ${cur}
+                    fi
+                    return 0
+                    ;;
+                snapshot)
+                    COMPREPLY=( $(compgen -W "-cf" -- "${cur}") )
+                    return 0
+                    ;;
+            esac
+        elif [[ "${optwcfs}" == *${COMP_WORDS[1]}* ]] ; then
+            show_last_cfs ${cur}
+        elif [[ $COMP_CWORD -eq 4 && ${COMP_WORDS[1]} == "snapshot" ]] ; then
+            show_cfs ${COMP_WORDS[2]} ${cur}
+        elif [[ $COMP_CWORD -eq 5 && ${COMP_WORDS[1]} == "snapshot" ]] ; then
+            COMPREPLY=( $(compgen -W "-t" -- "${cur}") )
+        fi
+    }
+    complete -F _nodetool nodetool
+}

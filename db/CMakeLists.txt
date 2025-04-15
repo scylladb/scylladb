@@ -1,0 +1,57 @@
+add_library(db STATIC)
+target_sources(db
+  PRIVATE
+    consistency_level.cc
+    system_keyspace.cc
+    virtual_table.cc
+    virtual_tables.cc
+    system_distributed_keyspace.cc
+    size_estimates_virtual_reader.cc
+    schema_applier.cc
+    schema_tables.cc
+    cql_type_parser.cc
+    legacy_schema_migrator.cc
+    commitlog/commitlog.cc
+    commitlog/commitlog_replayer.cc
+    commitlog/commitlog_entry.cc
+    data_listeners.cc
+    functions/function.cc
+    hints/internal/hint_endpoint_manager.cc
+    hints/internal/hint_sender.cc
+    hints/internal/hint_storage.cc
+    hints/manager.cc
+    hints/resource_manager.cc
+    hints/host_filter.cc
+    hints/sync_point.cc
+    config.cc
+    extensions.cc
+    heat_load_balance.cc
+    large_data_handler.cc
+    marshal/type_parser.cc
+    batchlog_manager.cc
+    tags/utils.cc
+    view/view.cc
+    view/view_update_generator.cc
+    view/row_locking.cc
+    sstables-format-selector.cc
+    snapshot-ctl.cc
+    snapshot/backup_task.cc
+    rate_limiter.cc
+    per_partition_rate_limit_options.cc
+    row_cache.cc
+    tablet_options.cc)
+target_include_directories(db
+  PUBLIC
+    ${CMAKE_SOURCE_DIR})
+target_link_libraries(db
+  PUBLIC
+    mutation
+    Seastar::seastar
+    xxHash::xxhash
+    absl::headers
+  PRIVATE
+    data_dictionary
+    cql3)
+
+check_headers(check-headers db
+  GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

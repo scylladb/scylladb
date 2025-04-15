@@ -1,0 +1,227 @@
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
+> CREATE TABLE t (pk INT PRIMARY KEY, l LIST<INT>);
+OK
+> UPDATE t SET l = [-1] + l WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++------+
+| l    |
+|------|
+| [-1] |
++------+
+> UPDATE t SET l = [-3,-2] + l WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++--------------+
+| l            |
+|--------------|
+| [-3, -2, -1] |
++--------------+
+> UPDATE t SET l = [-4] + l WHERE pk = 0 IF EXISTS;
++-------------+------+--------------+
+| [applied]   |   pk | l            |
+|-------------+------+--------------|
+| True        |    0 | [-3, -2, -1] |
++-------------+------+--------------+
+> SELECT l FROM t WHERE pk = 0;
++------------------+
+| l                |
+|------------------|
+| [-4, -3, -2, -1] |
++------------------+
+> UPDATE t SET l = [-6, -5] + l WHERE pk = 0 IF EXISTS;
++-------------+------+------------------+
+| [applied]   |   pk | l                |
+|-------------+------+------------------|
+| True        |    0 | [-4, -3, -2, -1] |
++-------------+------+------------------+
+> SELECT l FROM t WHERE pk = 0;
++--------------------------+
+| l                        |
+|--------------------------|
+| [-6, -5, -4, -3, -2, -1] |
++--------------------------+
+> UPDATE t SET l = l + [1] WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++-----------------------------+
+| l                           |
+|-----------------------------|
+| [-6, -5, -4, -3, -2, -1, 1] |
++-----------------------------+
+> UPDATE t SET l = l + [2,3] WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++-----------------------------------+
+| l                                 |
+|-----------------------------------|
+| [-6, -5, -4, -3, -2, -1, 1, 2, 3] |
++-----------------------------------+
+> UPDATE t SET l = l + [4] WHERE pk = 0 IF EXISTS;
++-------------+------+-----------------------------------+
+| [applied]   |   pk | l                                 |
+|-------------+------+-----------------------------------|
+| True        |    0 | [-6, -5, -4, -3, -2, -1, 1, 2, 3] |
++-------------+------+-----------------------------------+
+> SELECT l FROM t WHERE pk = 0;
++--------------------------------------+
+| l                                    |
+|--------------------------------------|
+| [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4] |
++--------------------------------------+
+> UPDATE t SET l = l + [5,6] WHERE pk = 0 IF EXISTS;
++-------------+------+--------------------------------------+
+| [applied]   |   pk | l                                    |
+|-------------+------+--------------------------------------|
+| True        |    0 | [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4] |
++-------------+------+--------------------------------------+
+> SELECT l FROM t WHERE pk = 0;
++--------------------------------------------+
+| l                                          |
+|--------------------------------------------|
+| [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6] |
++--------------------------------------------+
+> BEGIN BATCH
+>     UPDATE t SET l = l + [7] WHERE pk = 0
+>     UPDATE t SET l = [-7] + l WHERE pk = 0
+>     UPDATE t SET l = l + [8, 9] WHERE pk = 0
+>     UPDATE t SET l = l + [10] WHERE pk = 0
+>     UPDATE t SET l = [-9, -8] + l WHERE pk = 0
+>     UPDATE t SET l = [-10] + l WHERE pk = 0
+> APPLY BATCH;
+OK
+> SELECT l FROM t WHERE pk = 0;
++--------------------------------------------------------------------------+
+| l                                                                        |
+|--------------------------------------------------------------------------|
+| [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] |
++--------------------------------------------------------------------------+
+> -- LWT batch
+> BEGIN BATCH
+>     UPDATE t SET l = [-11] + l WHERE pk = 0 IF EXISTS
+>     UPDATE t SET l = [-13, -12] + l WHERE pk = 0 IF EXISTS
+>     UPDATE t SET l = [-14] + l WHERE pk = 0 IF EXISTS
+>     UPDATE t SET l = l + [11] WHERE pk = 0 IF EXISTS
+>     UPDATE t SET l = l + [12, 13] WHERE pk = 0 IF EXISTS
+>     UPDATE t SET l = l + [14] WHERE pk = 0 IF EXISTS
+> APPLY BATCH;
++-------------+------+--------------------------------------------------------------------------+
+| [applied]   |   pk | l                                                                        |
+|-------------+------+--------------------------------------------------------------------------|
+| True        |    0 | [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] |
+| True        |    0 | [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] |
+| True        |    0 | [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] |
+| True        |    0 | [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] |
+| True        |    0 | [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] |
+| True        |    0 | [-10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] |
++-------------+------+--------------------------------------------------------------------------+
+> SELECT l FROM t WHERE pk = 0;
++--------------------------------------------------------------------------------------------------------------+
+| l                                                                                                            |
+|--------------------------------------------------------------------------------------------------------------|
+| [-14, -13, -12, -11, -10, -9, -8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] |
++--------------------------------------------------------------------------------------------------------------+
+> 
+> DROP TABLE t;
+OK
+> -- test custom timestamps
+> -- Scylla, unlike Cassandra, takes custom timestamps into account
+> -- in list append/prepend operations
+> CREATE TABLE t (pk INT PRIMARY KEY, l LIST<INT>);
+OK
+> 
+> -- Even though it's an append, since the timestamp is in the past,
+> -- the result is going to be a prepend
+> UPDATE t USING TIMESTAMP 1607100000000000 SET l = l + [-3] WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++------+
+| l    |
+|------|
+| [-3] |
++------+
+> -- append with the same timestamp has an undefined behavior:
+> -- the list key, which is a TIMEUUID, is generated by the coordinator,
+> -- so depends on the coordinator spoof node address. If the coordinator
+> -- happens to be the same, then it generated an identical timestamp, and
+> -- then the the value is reset or skipped, depending on whether it's
+> -- larger or not lexicographically. But if the coordinator is different,
+> -- the value will be appended.
+> -- UPDATE t USING TIMESTAMP 1607100000000000 SET l = l + [-5] WHERE pk = 0;
+> -- SELECT l FROM t WHERE pk = 0;
+> UPDATE t USING TIMESTAMP 1607100000000001 SET l = l + [-2] WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++----------+
+| l        |
+|----------|
+| [-3, -2] |
++----------+
+> -- if a timestamp grows, the new value is after the previous one in the list
+> UPDATE t USING TIMESTAMP 1607100000000002 SET l = l + [-1] WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++--------------+
+| l            |
+|--------------|
+| [-3, -2, -1] |
++--------------+
+> -- And if it goes back, it's prepended
+> UPDATE t USING TIMESTAMP 1607099999999999 SET l = l + [-4] WHERE pk = 0;
+OK
+> SELECT l FROM t WHERE pk = 0;
++------------------+
+| l                |
+|------------------|
+| [-4, -3, -2, -1] |
++------------------+
+> -- The batch has both list append and prepend.
+> -- The relative order of appends and prepends in the batch
+> -- is correct, but since batch timestamp is lower
+> -- than anything that is already in the list cell
+> -- all appends and prepends of the batch end up
+> -- preceding all previous values of the list.
+> BEGIN BATCH USING TIMESTAMP 1607099999999998
+>     UPDATE t SET l = [-5] + l WHERE pk = 0
+>     UPDATE t SET l = [-7, -6] + l WHERE pk = 0
+>     UPDATE t SET l = [-8] + l WHERE pk = 0
+>     UPDATE t SET l = l + [0] WHERE pk = 0
+>     UPDATE t SET l = l + [1, 2] WHERE pk = 0
+>     UPDATE t SET l = l + [3] WHERE pk = 0
+> APPLY BATCH;
+OK
+> SELECT l FROM t WHERE pk = 0;
++----------------------------------------------+
+| l                                            |
+|----------------------------------------------|
+| [-8, -7, -6, -5, 0, 1, 2, 3, -4, -3, -2, -1] |
++----------------------------------------------+
+> -- try a very low timestamp
+> BEGIN BATCH USING TIMESTAMP 1000
+>     UPDATE t SET l = [-8] + l WHERE pk = 0
+>     UPDATE t SET l = [-10, -9] + l WHERE pk = 0
+>     UPDATE t SET l = [-11] + l WHERE pk = 0
+>     UPDATE t SET l = l + [4] WHERE pk = 0
+>     UPDATE t SET l = l + [5, 6] WHERE pk = 0
+>     UPDATE t SET l = l + [7] WHERE pk = 0
+> APPLY BATCH;
+Error from server: code=2200 [Invalid query] message="List prepend custom timestamp must be greater than Jan 1 2010 00:00:00"
+> SELECT l FROM t WHERE pk = 0;
++----------------------------------------------+
+| l                                            |
+|----------------------------------------------|
+| [-8, -7, -6, -5, 0, 1, 2, 3, -4, -3, -2, -1] |
++----------------------------------------------+
+> 
+> DROP TABLE t;
+OK
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

@@ -1,0 +1,54 @@
+type: boost
+extra_scylla_cmdline_options:
+    - '--reactor-backend linux-aio'
+# A list of long tests, which should be started early
+run_first:
+    - index_with_paging_test
+    - schema_changes_test
+    - sstable_conforms_to_mutation_source_test
+    - secondary_index_test
+    - mutation_reader_test
+    - multishard_combining_reader_as_mutation_source_test
+    - database_test
+    - cql_function_test
+    - memtable_test
+# These test cannot work in case-by-case mode because
+# some test-cases depend on each other
+no_parallel_cases:
+    - logalloc_test
+    - logalloc_standard_allocator_segment_pool_backend_test
+# Enable compaction groups on tests except on a few, listed below
+all_can_run_compaction_groups_except:
+    - exceptions_optimized_test
+    - rate_limiter_test
+    - exceptions_fallback_test
+    - top_k_test
+    - reusable_buffer_test
+# Custom command line arguments for some of the tests
+custom_args:
+    mutation_reader_test:
+        - '-c3 -m2G'
+    sstable_test:
+        - '-c1 -m2G'
+    sstable_datafile_test:
+        - '-c1 -m2G'
+    sstable_compaction_test:
+        - '-c1 -m2G --logger-log-level compaction=debug --logger-log-level compaction_manager=debug'
+    sstable_3_x_test:
+        - '-c1 -m2G'
+    cql_query_test:
+        - '-c2 -m2G --fail-on-abandoned-failed-futures=true'
+    reader_concurrency_semaphore_test:
+        - '-c1 -m256M'
+    multishard_mutation_query_test:
+        - '-c2 -m3G'
+    cache_algorithm_test:
+        - '-c1 -m256M'
+    commitlog_cleanup_test:
+        - '-c1 -m2G'
+    bloom_filter_test:
+        - '-c1'
+    s3_test:
+        - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace'
+run_in_debug:
+    - logalloc_standard_allocator_segment_pool_backend_test

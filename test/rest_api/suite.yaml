@@ -1,0 +1,12 @@
+type: Python
+pool_size: 10
+
+skip_in_release:
+    - test_task_manager
+    - test_compaction_task
+
+extra_scylla_cmdline_options:
+  - '--experimental-features=udf'
+  - '--enable-tablets=true'
+  - '--experimental-features=views-with-tablets'
+  - '--tablets-initial-scale-factor=1'

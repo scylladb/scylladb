@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import shutil
+import subprocess
+import re
+
+import run   # run.py in this directory
+
+def find_cassandra():
+    # By default, we assume 'cassandra' is in the user's path. A specific
+    # cassandra script can be chosen by setting the CASSANDRA variable.
+    cassandra = os.getenv('CASSANDRA', 'cassandra')
+    cassandra_path = shutil.which(cassandra)
+    if cassandra_path is None:
+        print("Error: Can't find {}. Please set the CASSANDRA environment variable to the path of the Cassandra startup script.".format(cassandra))
+        exit(1)
+    return cassandra_path
+
+cassandra = find_cassandra()
+
+# By default, the Cassandra startup script simply looks for "java" in the
+# path, and in an ideal world, this should have just worked.
+# However, Cassandra 3 and 4 only support Java versions 8 and 11, and
+# Cassandra 5 only supports Java 11 and 17, and your Linux distribution
+# might have one of those installed but not as the default "java" command.
+# So find_java() tries to find a supported version elsewhere on your system.
+# See https://github.com/scylladb/scylla/issues/10946
+# https://issues.apache.org/jira/browse/CASSANDRA-16895
+def java_major_version(java):
+    out = subprocess.check_output([java, '-version'], stderr=subprocess.STDOUT).decode('UTF-8')
+    version = re.search(r'"(\d+)\.(\d+).*"', out).groups()
+    major = int(version[0])
+    minor = int(version[1])
+    if major == 1:
+        # Return 8 for Java 1.8
+        return minor
+    else:
+        return major
+
+def find_java():
+    # Look for the Java in one of several places known to host the Java
+    # executable, and return the first one that works and has the appropriate
+    # version. The first attempt is just "java" in the path, which is
+    # preferred if has the right version.
+    for java in ['/usr/lib/jvm/jre-11/bin/java', '/usr/lib/jvm/jre-1.8.0/bin/java', 'java']:
+        try:
+            version = java_major_version(java)
+            # FIXME: Since Cassandra 5, it now supports Java 17 but not
+            # Java 8, so this logic should be fixed. For now if you have
+            # Java 11 installed, all Cassandra versions will work.
+            if version == 8 or version == 11:
+                return java
+        except:
+            pass
+    print("WARNING: find_java() couldn't find Java 8 or 11. Trying default 'java' anyway.")
+
+java = find_java()
+
+def run_cassandra_cmd(pid, dir):
+    global cassandra
+    ip = run.pid_to_ip(pid)
+    # Unfortunately, Cassandra doesn't take command-line parameters. We need
+    # to write a configuration file, and feed it to Cassandra using
+    # environment variables. Some of the parameters we did not deliberately
+    # want to override - they just don't have a default and we must set them.
+    confdir = os.path.join(dir, 'conf')
+    os.mkdir(confdir)
+    with open(os.path.join(confdir, 'cassandra.yaml'), 'w') as f:
+        print('hints_directory: ' + dir + '/hints\n' +
+              'data_file_directories:\n    - ' + dir + '/data\n' +
+              'commitlog_directory: ' + dir + '/commitlog\n' +
+              'saved_caches_directory: ' + dir + '/data/saved_caches\n' +
+              'commitlog_sync: periodic\n' +
+              'commitlog_sync_period_in_ms: 10000\n' +
+              'partitioner: org.apache.cassandra.dht.Murmur3Partitioner\n' +
+              'endpoint_snitch: SimpleSnitch\n' +
+              'seed_provider:\n    - class_name: org.apache.cassandra.locator.SimpleSeedProvider\n      parameters:\n          - seeds: "' + ip + '"\n' +
+              'listen_address: ' + ip + '\n' +
+              'start_native_transport: true\n' +
+              'auto_snapshot: false\n' +
+              'enable_sasi_indexes: true\n' +
+              'enable_user_defined_functions: true\n' +
+              'authenticator: PasswordAuthenticator\n' +
+              'authorizer: CassandraAuthorizer\n' +
+              'permissions_update_interval_in_ms: 100\n' +
+              'permissions_validity_in_ms: 100\n' +
+              'enable_materialized_views: true\n', file=f)
+    print('Booting Cassandra on ' + ip + ' in ' + dir + '...')
+    logsdir = os.path.join(dir, 'logs')
+    os.mkdir(logsdir)
+    # Cassandra creates some subdirectories on its own, but one it doesn't...
+    os.mkdir(os.path.join(dir, 'hints'))
+    env = { 'CASSANDRA_CONF': confdir,
+            'CASSANDRA_LOG_DIR': logsdir,
+            'CASSANDRA_INCLUDE': '',
+            # Unfortunately, Cassandra's JMX cannot listen only on a specific
+            # interface. To allow tests to use JMX (nodetool), we need to
+            # have it listen on 0.0.0.0 :-( This is insecure, but arguably
+            # can be forgiven for test environments. The following JVM_OPTS
+            # configures that:
+            'JVM_OPTS': '-Dcassandra.jmx.remote.port=7199',
+          }
+    # By default, Cassandra's startup script runs "java". We can override this
+    # choice with the JAVA_HOME environment variable based on the Java we
+    # found earlier in find_java().
+    if java and java.startswith('/'):
+        env['JAVA_HOME'] = os.path.dirname(os.path.dirname(java))
+        print('JAVA_HOME: ' + env['JAVA_HOME'])
+    # On JVM 11, Cassandra requires a bunch of configuration options in
+    # conf/jvm11-server.options, or it fails loading classes because of JPMS.
+    # The following options were copied from Cassandra's jvm11-server.options.
+    # Note that Cassandra's cassandra.in.sh script requires that the "-"
+    # appears as the first character of each line:
+    with open(os.path.join(confdir, 'jvm11-server.options'), 'w') as f:
+        print('-Djdk.attach.allowAttachSelf=true\n'
+              '--add-exports java.base/jdk.internal.misc=ALL-UNNAMED\n'
+              '--add-exports java.base/jdk.internal.ref=ALL-UNNAMED\n'
+              '--add-exports java.base/sun.nio.ch=ALL-UNNAMED\n'
+              '--add-exports java.management.rmi/com.sun.jmx.remote.internal.rmi=ALL-UNNAMED\n'
+              '--add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED\n'
+              '--add-exports java.rmi/sun.rmi.server=ALL-UNNAMED\n'
+              '--add-exports java.sql/java.sql=ALL-UNNAMED\n'
+              '--add-opens java.base/java.lang.module=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.loader=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.ref=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.reflect=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.math=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.module=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.util.jar=ALL-UNNAMED\n'
+              '--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED\n',
+              file=f)
+    return ([cassandra, '-f'], env)
+
+# Same as run_cassandra_cmd, just use SSL encryption for the CQL port (same
+# port number as default - replacing the unencrypted server).
+def run_cassandra_ssl_cmd(pid, dir):
+    (cmd, env) = run_cassandra_cmd(pid, dir)
+    run.setup_ssl_certificate(dir)
+    # Cassandra needs a single "keystore" instead of the separate crt and key
+    # generated by run.setup_ssl_certificate().
+    os.system(f'openssl pkcs12 -export -in {dir}/scylla.crt -inkey {dir}/scylla.key -password pass:hello -out {dir}/keystore.p12')
+    with open(os.path.join(dir, 'conf', 'cassandra.yaml'), 'a') as f:
+        print('client_encryption_options:\n' +
+              '  enabled: true\n' +
+              '  optional: false\n' +
+              '  keystore: ' + dir + '/keystore.p12\n' +
+              '  keystore_password: hello\n' +
+              '  store_type: PKCS12\n',
+              file=f)
+    # The command and environment variables to run Cassandra are the same,
+    return (cmd, env)
+
+print('Cassandra is: ' + cassandra + '.')
+
+if '--ssl' in sys.argv:
+    cmd = run_cassandra_ssl_cmd
+    check_cql = run.check_ssl_cql
+else:
+    cmd = run_cassandra_cmd
+    check_cql = run.check_cql
+
+pid = run.run_with_temporary_dir(cmd)
+ip = run.pid_to_ip(pid)
+
+run.wait_for_services(pid, [lambda: check_cql(ip)])
+success = run.run_pytest(sys.path[0], ['--host', ip] + sys.argv[1:])
+
+run.summary = 'Cassandra tests pass' if success else 'Cassandra tests failure'
+
+exit(0 if success else 1)
+
+# Note that the run.cleanup_all() function runs now, just like on any exit
+# for any reason in this script. It will delete the temporary files and
+# announce the failure or success of the test (printing run.summary).

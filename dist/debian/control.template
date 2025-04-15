@@ -1,0 +1,109 @@
+Source: %{product}-server
+Maintainer: Takuya ASADA <syuu@scylladb.com>
+Homepage: http://scylladb.com
+Section: database
+Priority: optional
+X-Python3-Version: >= 3.4
+Standards-Version: 3.9.5
+Rules-Requires-Root: no
+
+Package: %{product}-conf
+Architecture: any
+Description: Scylla database main configuration file
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+Replaces: %{product}-server (<< 1.1), scylla-enterprise-conf (<< 2025.1.0~)
+Conflicts: %{product}-server (<< 1.1)
+Breaks: scylla-enterprise-conf (<< 2025.1.0~)
+
+Package: %{product}-server
+Architecture: any
+Depends: ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version})
+Replaces: %{product}-tools (<<5.5), scylla-enterprise-tools (<< 2024.2.0~), scylla-enterprise-server (<< 2025.1.0~)
+Breaks: %{product}-tools (<<5.5), scylla-enterprise-tools (<< 2024.2.0~), scylla-enterprise-server (<< 2025.1.0~)
+Description: Scylla database server binaries
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+
+Package: %{product}-server-dbg
+Section: debug
+Priority: extra
+Architecture: any
+Depends: %{product}-server (= ${binary:Version}), ${misc:Depends}
+Replaces: scylla-enterprise-server-dbg (<< 2025.1.0~)
+Breaks: scylla-enterprise-server-dbg (<< 2025.1.0~)
+Description: debugging symbols for %{product}-server
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+ This package contains the debugging symbols for %{product}-server.
+
+Package: %{product}-kernel-conf
+Architecture: any
+Depends: procps
+Replaces: scylla-enterprise-kernel-conf (<< 2025.1.0~)
+Breaks: scylla-enterprise-kernel-conf (<< 2025.1.0~)
+Description: Scylla kernel tuning configuration
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+
+Package: %{product}-node-exporter
+Architecture: any
+Replaces: scylla-enterprise-node-exporter (<< 2025.1.0~)
+Conflicts: prometheus-node-exporter
+Breaks: scylla-enterprise-node-exporter (<< 2025.1.0~)
+Description: Prometheus exporter for machine metrics
+ Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
+
+Package: %{product}
+Section: metapackages
+Architecture: any
+Depends: %{product}-server (= ${binary:Version})
+ , %{product}-kernel-conf (= ${binary:Version})
+ , %{product}-node-exporter (= ${binary:Version})
+ , %{product}-cqlsh (= ${binary:Version})
+Replaces: scylla-enterprise (<< 2025.1.0~)
+Breaks: scylla-enterprise (<< 2025.1.0~)
+Description: Scylla database metapackage
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+
+Package: scylla-enterprise-conf
+Depends: %{product}-conf (= ${binary:Version})
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+
+Package: scylla-enterprise-server
+Depends: %{product}-server (= ${binary:Version})
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+
+Package: scylla-enterprise
+Depends: %{product} (= ${binary:Version})
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+
+Package: scylla-enterprise-kernel-conf
+Depends: %{product}-kernel-conf (= ${binary:Version})
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+
+Package: scylla-enterprise-node-exporter
+Depends: %{product}-node-exporter (= ${binary:Version})
+Architecture: all
+Priority: optional
+Section: oldlibs
+Description: transitional package
+ This is a transitional package. It can safely be removed.
+ 

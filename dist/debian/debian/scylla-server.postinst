@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -e
+
+if [ "$1" = configure ]; then
+    getent passwd scylla || NOUSR=1
+    getent group scylla || NOGRP=1
+
+    # this handles both case group is not exist || group already exists
+    if [ $NOUSR ]; then
+        adduser --system \
+                --quiet \
+                --home /var/lib/scylla \
+                --no-create-home \
+                --disabled-password \
+                --group scylla
+    # only group is not exist, create it and add user to the group
+    elif [ $NOGRP ]; then
+        addgroup --system scylla
+        adduser scylla scylla
+    fi
+    chown -R scylla:scylla /var/lib/scylla
+    chown -R scylla:scylla /var/lib/scylla-housekeeping
+fi
+
+ln -sfT /etc/scylla /var/lib/scylla/conf
+
+/opt/scylladb/scripts/scylla_post_install.sh
+
+#DEBHELPER#

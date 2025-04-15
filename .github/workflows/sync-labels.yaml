@@ -1,0 +1,49 @@
+name: Sync labels
+
+on:
+  pull_request_target:
+    types: [opened, labeled, unlabeled]
+    branches: [master, next]
+  issues:
+    types: [labeled, unlabeled]
+
+jobs:
+  label-sync:
+    if: ${{ github.repository == 'scylladb/scylladb' }}
+    name:  Synchronize labels between PR and the issue(s) fixed by it
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/scripts/sync_labels.py
+          sparse-checkout-cone-mode: false
+
+      - name: Install dependencies
+        run: sudo apt-get install -y python3-github
+
+      - name: Pull request opened event
+        if: ${{ github.event.action == 'opened' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python .github/scripts/sync_labels.py --repo ${{ github.repository }} --number ${{ github.event.number }} --action ${{ github.event.action }}
+
+      - name: Pull request labeled or unlabeled event
+        if: github.event_name == 'pull_request_target' && startsWith(github.event.label.name, 'backport/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python .github/scripts/sync_labels.py --repo ${{ github.repository }} --number ${{ github.event.number }} --action ${{ github.event.action }} --label ${{ github.event.label.name }}
+
+      - name: Issue labeled or unlabeled event
+        if: github.event_name == 'issues' && startsWith(github.event.label.name, 'backport/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python .github/scripts/sync_labels.py --repo ${{ github.repository }} --number ${{ github.event.issue.number }} --action ${{ github.event.action }} --is_issue --label ${{ github.event.label.name }}

@@ -1,0 +1,75 @@
+> -- Error messages contain a keyspace name. Make the output stable.
+> -- CDC and tablets are not working together yet, turn them off.
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> 
+> CREATE TABLE ks.tbl_cdc_lwt (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {'enabled':true, 'preimage':true};
+OK
+> 
+> -- (0) successful insert
+> INSERT INTO ks.tbl_cdc_lwt (pk, ck, val) VALUES (1, 1, 111) IF NOT EXISTS;
++-------------+------+------+-------+
+| [applied]   | pk   | ck   | val   |
+|-------------+------+------+-------|
+| True        | null | null | null  |
++-------------+------+------+-------+
+> -- (1) unsuccessful insert
+> INSERT INTO ks.tbl_cdc_lwt (pk, ck, val) VALUES (1, 1, 222) IF NOT EXISTS;
++-------------+------+------+-------+
+| [applied]   |   pk |   ck |   val |
+|-------------+------+------+-------|
+| False       |    1 |    1 |   111 |
++-------------+------+------+-------+
+> -- (2) successful update
+> UPDATE ks.tbl_cdc_lwt set val = 333 WHERE pk = 1 and ck = 1 IF EXISTS;
++-------------+------+------+-------+
+| [applied]   |   pk |   ck |   val |
+|-------------+------+------+-------|
+| True        |    1 |    1 |   111 |
++-------------+------+------+-------+
+> -- (3) unsuccessful update
+> UPDATE ks.tbl_cdc_lwt set val = 444 WHERE pk = 888 and ck = 777 IF EXISTS;
++-------------+------+------+-------+
+| [applied]   | pk   | ck   | val   |
+|-------------+------+------+-------|
+| False       | null | null | null  |
++-------------+------+------+-------+
+> -- (4) successful row delete
+> DELETE FROM ks.tbl_cdc_lwt WHERE pk = 1 AND ck = 1 IF EXISTS;
++-------------+------+------+-------+
+| [applied]   |   pk |   ck |   val |
+|-------------+------+------+-------|
+| True        |    1 |    1 |   333 |
++-------------+------+------+-------+
+> -- (5) unsuccessful row delete
+> DELETE FROM ks.tbl_cdc_lwt WHERE pk = 1 AND ck = 1 IF EXISTS;
++-------------+------+------+-------+
+| [applied]   | pk   | ck   | val   |
+|-------------+------+------+-------|
+| False       | null | null | null  |
++-------------+------+------+-------+
+> 
+> SELECT "cdc$batch_seq_no", "cdc$operation", ck, pk, val FROM ks.tbl_cdc_lwt_scylla_cdc_log;
++--------------------+-----------------+------+------+-------+
+|   cdc$batch_seq_no |   cdc$operation |   ck |   pk | val   |
+|--------------------+-----------------+------+------+-------|
+|                  0 |               2 |    1 |    1 | 111   |
+|                  0 |               0 |    1 |    1 | 111   |
+|                  1 |               1 |    1 |    1 | 333   |
+|                  0 |               0 |    1 |    1 | 333   |
+|                  1 |               3 |    1 |    1 | null  |
++--------------------+-----------------+------+------+-------+
+> 
+> -- there should be 5 rows in total: (0) + preimg(0) + (2) + preimg(2) + (4)
+> SELECT count(*) FROM ks.tbl_cdc_lwt_scylla_cdc_log;
++---------+
+|   count |
+|---------|
+|       5 |
++---------+
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

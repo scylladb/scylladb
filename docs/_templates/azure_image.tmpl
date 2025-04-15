@@ -1,0 +1,19 @@
+.. -*- mode: rst -*-
+
+{{version}}
+{{ '-' * version|length }}
+
+.. collapse:: View image details
+  {% if latest %}:open:{% endif %}
+
+  .. list-table::
+    :header-rows: 1
+
+    * - Gallery Image Definition
+      - Gallery Image Version
+      - Public Gallery Name
+  {% for row in data[1:] %}
+    * - {{ row[0] }}
+      - {{ row[1] }}
+      - {{ row[2] }}
+  {% endfor %}

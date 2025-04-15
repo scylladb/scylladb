@@ -1,0 +1,42 @@
+[package]
+name = "rust_combined"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+inc = { path = "inc", version = "0.1.0" }
+wasmtime_bindings = { path = "wasmtime_bindings", version = "0.1.0" }
+
+[lib]
+crate-type = ["staticlib"]
+
+# The profiles below are Scylla specific. The cargo profile "rust-xyz" should
+# be used together with the ninja "xyz" mode.
+[profile.rust-dev]
+inherits = "dev"
+opt-level = 2
+debug = false
+overflow-checks = false
+debug-assertions = false
+strip = "symbols"
+
+[profile.rust-debug]
+inherits = "dev"
+opt-level = 1
+incremental = false
+
+[profile.rust-sanitize]
+inherits = "dev"
+opt-level = "s"
+incremental = false
+
+[profile.rust-release]
+inherits = "release"
+debug = true
+incremental = false
+
+[profile.rust-coverage]
+inherits = "dev"
+opt-level = 1
+incremental = false

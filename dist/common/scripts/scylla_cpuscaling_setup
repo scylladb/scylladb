@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2018-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import sys
+import argparse
+import shlex
+import distro
+from scylla_util import *
+
+UNIT_DATA= '''
+[Unit]
+Description=Scylla cpupower service
+After=syslog.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/sysconfig/scylla-cpupower
+ExecStart=/usr/bin/cpupower $CPUPOWER_START_OPTS
+ExecStop=/usr/bin/cpupower $CPUPOWER_STOP_OPTS
+
+[Install]
+WantedBy=multi-user.target
+'''[1:-1]
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='CPU scaling setup script for Scylla.')
+    parser.add_argument('--force', dest='force', action='store_true',
+                        help='force running setup even CPU scaling unsupported')
+    args = parser.parse_args()
+
+    if not args.force and not os.path.exists('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'):
+        print('This computer doesn\'t supported CPU scaling configuration.')
+        sys.exit(0)
+    if not is_debian_variant():
+        if not shutil.which('cpupower'):
+            pkg_install('cpupowerutils')
+    else:
+        if not shutil.which('cpufreq-set'):
+            pkg_install('cpufrequtils')
+    if is_debian_variant():
+        try:
+            ondemand = systemd_unit('ondemand')
+            ondemand.disable()
+        except:
+            pass
+        cfg = sysconfig_parser('/etc/default/cpufrequtils')
+        cfg.set('GOVERNOR', 'performance')
+        cfg.commit()
+        cpufreq = systemd_unit('cpufrequtils.service')
+        cpufreq.enable()
+        cpufreq.restart()
+    elif is_gentoo():
+        cfg = sysconfig_parser('/etc/conf.d/cpupower')
+        cfg.set('START_OPTS', '-g performance')
+        cfg.set('STOP_OPTS', '-g ondemand')
+        cfg.commit()
+        cpufreq = systemd_unit('cpupower-frequency-set.service')
+        cpufreq.enable()
+        cpufreq.restart()
+    elif is_arch():
+        cfg = sysconfig_parser('/etc/default/cpupower')
+        cfg.set('governor', 'performance')
+        cfg.commit()
+        cpupwr = systemd_unit('cpupower.service')
+        cpupwr.enable()
+        cpupwr.restart()
+    elif is_amzn2() or is_suse_variant():
+        cfg = sysconfig_parser('/etc/sysconfig/scylla-cpupower')
+        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
+        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
+        cfg.commit()
+        with open('/etc/systemd/system/scylla-cpupower.service', 'w') as f:
+            f.write(UNIT_DATA)
+        systemd_unit.reload()
+        cpupwr = systemd_unit('scylla-cpupower.service')
+        cpupwr.enable()
+        cpupwr.restart()
+    elif is_redhat_variant():
+        cfg = sysconfig_parser('/etc/sysconfig/cpupower')
+        cfg.set('CPUPOWER_START_OPTS', 'frequency-set -g performance')
+        cfg.set('CPUPOWER_STOP_OPTS', 'frequency-set -g ondemand')
+        cfg.commit()
+        cpupwr = systemd_unit('cpupower.service')
+        cpupwr.enable()
+        cpupwr.restart()
+    else:
+        print("Unsupported distribution, skipping setup..")
+        sys.exit(0)

@@ -1,0 +1,9 @@
+> -- regression test for #10642
+> CREATE KEYSPACE reproducer WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
+OK
+> CREATE TABLE reproducer.varchar(pk int, ck int, PRIMARY KEY(pk, ck));
+OK
+> CREATE TABLE reproducer.text(pk int, ck int, PRIMARY KEY(pk, ck));
+OK
+> DROP KEYSPACE reproducer;
+OK

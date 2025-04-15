@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright (C) 2017-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import re
+from scylla_util import *
+import resource
+import subprocess
+import argparse
+import yaml
+import logging
+import sys
+import scylla_blocktune as blocktune
+
+
+# Regular expression helpers
+# non-advancing comment matcher
+_nocomment = r"^\s*(?!#)"
+# non-capturing grouping
+_scyllaeq = r"(?:\s*|=)"
+_cpuset = r"(?:\s*--cpuset" + _scyllaeq + r"(?P<cpuset>\d+(?:[-,]\d+)*))"
+_smp = r"(?:\s*--smp" + _scyllaeq + r"(?P<smp>\d+))"
+
+
+def _reopt(s):
+    return s + r"?"
+
+class scylla_cpuinfo:
+    """Class containing information about how Scylla sees CPUs in this machine.
+    Information that can be probed include in which hyperthreads Scylla is configured
+    to run, how many total threads exist in the system, etc"""
+
+    def __parse_cpuset(self):
+        f = open(etcdir() + "/scylla.d/cpuset.conf", "r")
+        pattern = re.compile(_nocomment + r"CPUSET=\s*\"" + _reopt(_cpuset) + _reopt(_smp) + r"\s*\"")
+        grp = [pattern.match(x) for x in f.readlines() if pattern.match(x)]
+        if not grp:
+            d = {"cpuset": None, "smp": None}
+        else:
+            # if more than one, use last
+            d = grp[-1].groupdict()
+        actual_set = set()
+        if d["cpuset"]:
+            groups = d["cpuset"].split(",")
+            for g in groups:
+                ends = [int(x) for x in g.split("-")]
+                actual_set = actual_set.union(set(range(ends[0], ends[-1] + 1)))
+            d["cpuset"] = actual_set
+        if d["smp"]:
+            d["smp"] = int(d["smp"])
+        self._cpu_data = d
+
+    def __system_cpus(self):
+        cur_proc = -1
+        f = open("/proc/cpuinfo", "r")
+        results = {}
+        for line in f:
+            if line == '\n':
+                continue
+            key, value = [x.strip() for x in line.split(":")]
+            if key == "processor":
+                cur_proc = int(value)
+                results[cur_proc] = {}
+            results[cur_proc][key] = value
+        return results
+
+    def __init__(self):
+        self.__parse_cpuset()
+        self._cpu_data["system"] = self.__system_cpus()
+
+    def system_cpuinfo(self):
+        """Returns parsed information about CPUs in the system"""
+        return self._cpu_data["system"]
+
+    def system_nr_threads(self):
+        """Returns the number of threads available in the system"""
+        return len(self._cpu_data["system"])
+
+    def system_nr_cores(self):
+        """Returns the number of cores available in the system"""
+        return len(set([x['core id'] for x in list(self._cpu_data["system"].values())]))
+
+    def cpuset(self):
+        """Returns the current cpuset Scylla is configured to use. Returns None if no constraints exist"""
+        return self._cpu_data["cpuset"]
+
+    def smp(self):
+        """Returns the explicit smp configuration for Scylla, returns None if no constraints exist"""
+        return self._cpu_data["smp"]
+
+    def nr_shards(self):
+        """How many shards will Scylla use in this machine"""
+        if self._cpu_data["smp"]:
+            return self._cpu_data["smp"]
+        elif self._cpu_data["cpuset"]:
+            return len(self._cpu_data["cpuset"])
+        else:
+            return len(self._cpu_data["system"])
+
+def configure_iotune_open_fd_limit(shards_count):
+    try:
+        fd_limits = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError) as e:
+        logging.warning("Could not get the limit of count of open file descriptors!")
+        logging.warning("iotune will proceed with the default limit. This may cause problems.")
+        return
+
+    precalculated_fds_count = (10 * shards_count) + 500
+    soft_limit, hard_limit = fd_limits
+
+    if hard_limit == resource.RLIM_INFINITY:
+        # If there is no hard limit, then ensure that soft limit allows enough FDs.
+        soft_limit = max(soft_limit, precalculated_fds_count)
+    else:
+        # If hard_limit is greater than precalculated_fds_count, then set it as soft and as hard limit.
+        required_fds_count = max(hard_limit, precalculated_fds_count)
+        soft_limit = max(soft_limit, required_fds_count)
+        hard_limit = max(hard_limit, required_fds_count)
+
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft_limit, hard_limit))
+    except (OSError, ValueError) as e:
+        logging.error(e)
+        logging.error("Could not set the limit of open file descriptors for iotune!")
+        logging.error(f"Required FDs count: {precalculated_fds_count}, default limit: {fd_limits}!")
+        sys.exit(1)
+
+def run_iotune():
+            if "SCYLLA_CONF" in os.environ:
+                conf_dir = os.environ["SCYLLA_CONF"]
+            else:
+                conf_dir = etcdir() + "/scylla"
+            cfg = yaml.safe_load(open(os.path.join(conf_dir, "scylla.yaml")))
+            default_path = cfg.get('workdir') or datadir()
+            if not "data_file_directories" in cfg:
+                cfg["data_file_directories"] = [os.path.join(default_path, 'data')]
+            data_dirs = cfg["data_file_directories"]
+
+            for t in [ "commitlog", "hints", "view_hints", "saved_caches" ]:
+                key = "%s_directory" % t
+                if key in cfg:
+                    data_dirs += [ cfg[key] ]
+                elif os.path.isdir(os.path.join(default_path, t)):
+                    data_dirs += [ os.path.join(default_path, t) ]
+
+            iotune_args = []
+            for data_dir in data_dirs:
+                if os.path.exists(data_dir) == False:
+                    logging.error("%s was not found. Please check the configuration and run scylla_io_setup again.\n", data_dir)
+                    sys.exit(1)
+                if os.path.isdir(data_dir) == False:
+                    logging.error("%s is not a directory. Please check the configuration and run scylla_io_setup again.\n", data_dir)
+                    sys.exit(1)
+                st = os.statvfs(data_dir)
+                avail = st.f_bavail * st.f_frsize
+                rec = 10000000000
+                if avail < rec:
+                    logging.error("Filesystem at %s has only %d bytes available; that is less than the recommended 10 GB. Please free up space and run scylla_io_setup again.\n", data_dir, avail)
+                    sys.exit(1)
+                blocktune.tune_fs(data_dir, '2')
+                iotune_args += [ "--evaluation-directory", data_dir ]
+
+            if cpudata.cpuset():
+                iotune_args += [ "--cpuset", ",".join(map(str, cpudata.cpuset())) ]
+            elif cpudata.smp():
+                iotune_args += [ "--smp", str(cpudata.smp()) ]
+
+            configure_iotune_open_fd_limit(cpudata.nr_shards())
+
+            try:
+                subprocess.check_call([bindir() + "/iotune",
+                                       "--format", "envfile",
+                                       "--options-file", etcdir() + "/scylla.d/io.conf",
+                                       "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
+            except Exception as e:
+                logging.error(e)
+                logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
+                              "This is a non-supported setup, and performance is expected to be very bad.\n"
+                              "For better performance, placing your data on XFS-formatted directories is required.\n"
+                              "To override this error, enable developer mode as follow:\n"
+                              "sudo %s/scylla_dev_mode_setup --developer-mode 1", data_dirs, scriptsdir())
+                sys.exit(1)
+
+if __name__ == "__main__":
+    if not is_nonroot() and not is_container() and os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='IO Setup script for Scylla.')
+    # keep --ami just for compatibility
+    parser.add_argument('--ami', dest='ami', action='store_true',
+                        help='configure AWS AMI')
+    args = parser.parse_args()
+
+    cpudata = scylla_cpuinfo()
+    if not is_developer_mode():
+        run_iotune()
+        os.chmod(etcdir() + '/scylla.d/io_properties.yaml', 0o644)
+        os.chmod(etcdir() + '/scylla.d/io.conf', 0o644)

@@ -1,0 +1,63 @@
+> -- Error messages contain a keyspace name. Make the output stable.
+> -- CDC and tablets are not working together yet, turn them off.
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> 
+> create table ks.t (pk int, ck int, vs int static, vc int, primary key (pk, ck)) with cdc = {'enabled': true, 'preimage': true};
+OK
+> 
+> -- generates 2 rows: preimage(static), delta(static)
+> update ks.t set vs = 0 where pk = 0;
+OK
+> -- generates 2 rows: preimage(static), delta(static)
+> update ks.t set vs = 1 where pk = 0;
+OK
+> 
+> -- generates 4 rows: preimage(static), preimage(clustering), delta(static), delta(clustering)
+> update ks.t set vs = 2, vc = 2 where pk = 0 and ck = 0;
+OK
+> -- generates 4 rows: preimage(static), preimage(clustering), delta(static), delta(clustering)
+> update ks.t set vs = 3, vc = 3 where pk = 0 and ck = 0;
+OK
+> select "cdc$batch_seq_no", "cdc$operation", ck, vs, vc from ks.t_scylla_cdc_log where pk = 0 allow filtering;
++--------------------+-----------------+------+------+------+
+|   cdc$batch_seq_no |   cdc$operation | ck   | vs   | vc   |
+|--------------------+-----------------+------+------+------|
+|                  0 |               1 | null | 0    | null |
+|                  0 |               0 | null | 0    | null |
+|                  1 |               1 | null | 1    | null |
+|                  0 |               0 | null | 1    | null |
+|                  1 |               1 | null | 2    | null |
+|                  2 |               1 | 0    | null | 2    |
+|                  0 |               0 | null | 2    | null |
+|                  1 |               0 | 0    | null | 2    |
+|                  2 |               1 | null | 3    | null |
+|                  3 |               1 | 0    | null | 3    |
++--------------------+-----------------+------+------+------+
+> 
+> -- generates 2 rows: preimage(clustering), delta(clustering)
+> update ks.t set vc = 4 where pk = 1 and ck = 0;
+OK
+> -- generates 2 rows: preimage(clustering), delta(clustering)
+> update ks.t set vc = 5 where pk = 1 and ck = 0;
+OK
+> select "cdc$batch_seq_no", "cdc$operation", ck, vs, vc from ks.t_scylla_cdc_log where pk = 1 and ck = 0 allow filtering;
++--------------------+-----------------+------+------+------+
+|   cdc$batch_seq_no |   cdc$operation |   ck | vs   |   vc |
+|--------------------+-----------------+------+------+------|
+|                  0 |               1 |    0 | null |    4 |
+|                  0 |               0 |    0 | null |    4 |
+|                  1 |               1 |    0 | null |    5 |
++--------------------+-----------------+------+------+------+
+> 
+> -- there should be 13 rows in total
+> select count(*) from ks.t_scylla_cdc_log;
++---------+
+|   count |
+|---------|
+|      13 |
++---------+
+> DROP KEYSPACE ks;
+OK

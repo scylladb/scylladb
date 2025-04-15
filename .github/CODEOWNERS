@@ -1,0 +1,104 @@
+# AUTH
+auth/* @nuivall @ptrsmrn
+
+# CACHE
+row_cache* @tgrabiec
+*mutation* @tgrabiec
+test/boost/mvcc* @tgrabiec
+
+# CDC
+cdc/* @kbr-scylla @elcallio @piodul
+test/cql/cdc_* @kbr-scylla @elcallio @piodul
+test/boost/cdc_* @kbr-scylla @elcallio @piodul
+
+# COMMITLOG / BATCHLOG
+db/commitlog/* @elcallio @eliransin
+db/batch* @elcallio
+
+# COORDINATOR
+service/storage_proxy* @gleb-cloudius
+
+# COMPACTION
+compaction/* @raphaelsc
+
+# CQL TRANSPORT LAYER
+transport/*
+
+# CQL QUERY LANGUAGE
+cql3/* @tgrabiec @nuivall @ptrsmrn
+
+# COUNTERS
+counters* @nuivall @ptrsmrn
+tests/counter_test* @nuivall @ptrsmrn
+
+# DOCS
+docs/* @annastuchlik @tzach
+docs/alternator @annastuchlik @tzach @nyh
+
+# GOSSIP
+gms/* @tgrabiec @asias @kbr-scylla
+
+# DOCKER
+dist/docker/*
+
+# LSA
+utils/logalloc* @tgrabiec
+
+# MATERIALIZED VIEWS
+db/view/* @nyh @piodul
+cql3/statements/*view* @nyh @piodul
+test/boost/view_* @nyh @piodul
+
+# PACKAGING
+dist/* @syuu1228
+
+# REPAIR
+repair/* @tgrabiec @asias
+
+# SCHEMA MANAGEMENT
+db/schema_tables* @tgrabiec
+db/legacy_schema_migrator* @tgrabiec
+service/migration* @tgrabiec
+schema* @tgrabiec
+
+# SECONDARY INDEXES
+index/* @nyh @piodul
+cql3/statements/*index* @nyh @piodul
+test/boost/*index* @nyh @piodul
+
+# SSTABLES
+sstables/* @tgrabiec @raphaelsc
+
+# STREAMING
+streaming/* @tgrabiec @asias
+service/storage_service.* @tgrabiec @asias
+
+# ALTERNATOR
+alternator/* @nyh
+test/alternator/* @nyh
+
+# HINTED HANDOFF
+db/hints/* @piodul @vladzcloudius @eliransin
+
+# REDIS
+redis/* @syuu1228
+test/redis/* @syuu1228
+
+# READERS
+reader_* @denesb
+querier* @denesb
+test/boost/mutation_reader_test.cc @denesb
+test/boost/querier_cache_test.cc @denesb
+
+# PYTEST-BASED CQL TESTS
+test/cqlpy/* @nyh
+
+# RAFT
+raft/* @kbr-scylla @gleb-cloudius @kostja
+test/raft/* @kbr-scylla @gleb-cloudius @kostja
+
+# HEAT-WEIGHTED LOAD BALANCING
+db/heat_load_balance.* @nyh @gleb-cloudius
+
+# Tools
+tools/* @denesb

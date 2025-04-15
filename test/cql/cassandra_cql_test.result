@@ -1,0 +1,1191 @@
+> -- 
+> -- Modified by ScyllaDB
+> -- from Cassandra cassandra-dtest/cql_test.py
+> --
+> --
+> --------------------------------------------------------------------------------
+> --
+> -- Copyright (C) 2016-present ScyllaDB
+> -- 
+> -- Modified by ScyllaDB
+> -- 
+> -- SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
+> 
+> -- setup
+> CREATE KEYSPACE ks1 WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
+>         AND DURABLE_WRITES = true;
+OK
+> ALTER KEYSPACE ks1 WITH replication = { 'class' : 'NetworkTopologyStrategy', 'datacenter1' : 1 };
+OK
+> SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'ks1';
++-----------------+------------------+--------------------------+
+| keyspace_name   | durable_writes   | replication              |
+|-----------------+------------------+--------------------------|
+| ks1             | True             | ['class', 'datacenter1'] |
++-----------------+------------------+--------------------------+
+> USE ks1;
+OK
+> 
+> -- test_table
+> CREATE TABLE test1 (k int PRIMARY KEY, v1 int);
+OK
+> ALTER TABLE test1 ADD v2 int;
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (0, 0, 0);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (1, 1, 1);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (2, 2, 2);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (3, 3, 3);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (4, 4, 4);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (5, 5, 5);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (6, 6, 6);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (7, 7, 7);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (8, 8, 8);
+OK
+> INSERT INTO test1 (k, v1, v2) VALUES (9, 9, 9);
+OK
+> SELECT * FROM test1;
++-----+------+------+
+|   k |   v1 |   v2 |
+|-----+------+------|
+|   5 |    5 |    5 |
+|   1 |    1 |    1 |
+|   8 |    8 |    8 |
+|   0 |    0 |    0 |
+|   2 |    2 |    2 |
+|   4 |    4 |    4 |
+|   7 |    7 |    7 |
+|   6 |    6 |    6 |
+|   9 |    9 |    9 |
+|   3 |    3 |    3 |
++-----+------+------+
+> -- TRUNCATE TABLE test1;
+> -- SELECT * FROM test1;
+> DROP TABLE test1;
+OK
+> 
+> -- test_table_compact_storage
+> CREATE TABLE test2 (k int, c1 int, v1 int, PRIMARY KEY (k, c1)) WITH COMPACT STORAGE;
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (0, 0, 0);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (1, 1, 1);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (2, 2, 2);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (3, 3, 3);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (4, 4, 4);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (5, 5, 5);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (6, 6, 6);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (7, 7, 7);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (8, 8, 8);
+OK
+> INSERT INTO test2 (k, c1, v1) VALUES (9, 9, 9);
+OK
+> -- TRUNCATE TABLE test2;
+> -- SELECT * FROM test2;
+> DROP TABLE test2;
+OK
+> 
+> -- test_index
+> CREATE TABLE test3 (k int PRIMARY KEY, v1 int, v2 int);
+OK
+> CREATE INDEX testidx ON test3 (v1);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (0, 0, 0);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (1, 1, 1);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (2, 2, 2);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (3, 3, 3);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (4, 4, 4);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (5, 5, 5);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (6, 6, 6);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (7, 7, 7);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (8, 8, 8);
+OK
+> INSERT INTO test3 (k, v1, v2) VALUES (9, 9, 9);
+OK
+> 
+> -- test_type
+> CREATE TYPE address_t (street text, city text, zip_code int);
+OK
+> CREATE TABLE test4 (id int PRIMARY KEY, address frozen<address_t>);
+OK
+> ALTER TYPE address_t ADD phones set<text>;
+OK
+> DROP TABLE test4;
+OK
+> DROP TYPE address_t;
+OK
+> 
+> -- test_statements
+> CREATE TABLE test7 (kind text, time int, v1 int, v2 int, PRIMARY KEY(kind, time));
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 0, 0, 0);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 1, 1, 1);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 2, 2, 2);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 3, 3, 3);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 4, 4, 4);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 5, 5, 5);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 6, 6, 6);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 7, 7, 7);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 8, 8, 8);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev1', 9, 9, 9);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 0, 0, 0);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 1, 1, 1);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 2, 2, 2);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 3, 3, 3);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 4, 4, 4);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 5, 5, 5);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 6, 6, 6);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 7, 7, 7);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 8, 8, 8);
+OK
+> INSERT INTO test7 (kind, time, v1, v2) VALUES ('ev2', 9, 9, 9);
+OK
+> 
+> SELECT COUNT(*) FROM test7 WHERE kind = 'ev1';
++---------+
+|   count |
+|---------|
+|      10 |
++---------+
+> SELECT COUNT(*) FROM test7 WHERE kind IN ('ev1', 'ev2');
++---------+
+|   count |
+|---------|
+|      20 |
++---------+
+> SELECT COUNT(*) FROM test7 WHERE kind IN ('ev1', 'ev2') AND time=0;
++---------+
+|   count |
+|---------|
+|       2 |
++---------+
+> SELECT * FROM test7 WHERE kind = 'ev1';
++--------+--------+------+------+
+| kind   |   time |   v1 |   v2 |
+|--------+--------+------+------|
+| ev1    |      0 |    0 |    0 |
+| ev1    |      1 |    1 |    1 |
+| ev1    |      2 |    2 |    2 |
+| ev1    |      3 |    3 |    3 |
+| ev1    |      4 |    4 |    4 |
+| ev1    |      5 |    5 |    5 |
+| ev1    |      6 |    6 |    6 |
+| ev1    |      7 |    7 |    7 |
+| ev1    |      8 |    8 |    8 |
+| ev1    |      9 |    9 |    9 |
++--------+--------+------+------+
+> SELECT * FROM test7 WHERE kind = 'ev2';
++--------+--------+------+------+
+| kind   |   time |   v1 |   v2 |
+|--------+--------+------+------|
+| ev2    |      0 |    0 |    0 |
+| ev2    |      1 |    1 |    1 |
+| ev2    |      2 |    2 |    2 |
+| ev2    |      3 |    3 |    3 |
+| ev2    |      4 |    4 |    4 |
+| ev2    |      5 |    5 |    5 |
+| ev2    |      6 |    6 |    6 |
+| ev2    |      7 |    7 |    7 |
+| ev2    |      8 |    8 |    8 |
+| ev2    |      9 |    9 |    9 |
++--------+--------+------+------+
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=0;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=1;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=2;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=3;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=4;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=5;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=6;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=7;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=8;
+OK
+> UPDATE test7 SET v1 = 0, v2 = 0 where kind = 'ev1' AND time=9;
+OK
+> SELECT * FROM test7 WHERE kind = 'ev1';
++--------+--------+------+------+
+| kind   |   time |   v1 |   v2 |
+|--------+--------+------+------|
+| ev1    |      0 |    0 |    0 |
+| ev1    |      1 |    0 |    0 |
+| ev1    |      2 |    0 |    0 |
+| ev1    |      3 |    0 |    0 |
+| ev1    |      4 |    0 |    0 |
+| ev1    |      5 |    0 |    0 |
+| ev1    |      6 |    0 |    0 |
+| ev1    |      7 |    0 |    0 |
+| ev1    |      8 |    0 |    0 |
+| ev1    |      9 |    0 |    0 |
++--------+--------+------+------+
+> DELETE FROM test7 WHERE kind = 'ev1';
+OK
+> SELECT * FROM test7 WHERE kind = 'ev1';
++--------+--------+------+------+
+| kind   | time   | v1   | v2   |
+|--------+--------+------+------|
++--------+--------+------+------+
+> SELECT COUNT(*) FROM test7 WHERE kind = 'ev1';
++---------+
+|   count |
+|---------|
+|       0 |
++---------+
+> DROP TABLE test7;
+OK
+> 
+> -- test_partition_key_allow_filtering(self):
+> CREATE TABLE IF NOT EXISTS test_filter (
+>     k1  int,
+>     k2  int,
+>     ck1 int,
+>     v   int,
+>     PRIMARY KEY ((k1, k2), ck1));
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 0, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 1, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 2, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 0, 3, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 0, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 1, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 2, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (0, 1, 3, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 0, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 1, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 2, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 0, 3, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 0, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 1, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 2, 0);
+OK
+> INSERT INTO test_filter (k1, k2, ck1, v) VALUES (1, 1, 3, 0);
+OK
+> SELECT * FROM test_filter WHERE k1 = 0 ALLOW FILTERING;
++------+------+-------+-----+
+|   k1 |   k2 |   ck1 |   v |
+|------+------+-------+-----|
+|    0 |    0 |     0 |   0 |
+|    0 |    0 |     1 |   0 |
+|    0 |    0 |     2 |   0 |
+|    0 |    0 |     3 |   0 |
+|    0 |    1 |     0 |   0 |
+|    0 |    1 |     1 |   0 |
+|    0 |    1 |     2 |   0 |
+|    0 |    1 |     3 |   0 |
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k1 = 2 ALLOW FILTERING;
++------+------+-------+-----+
+| k1   | k2   | ck1   | v   |
+|------+------+-------+-----|
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k1 <=0 AND k2 > 1 ALLOW FILTERING;
++------+------+-------+-----+
+| k1   | k2   | ck1   | v   |
+|------+------+-------+-----|
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k2 <= 0 ALLOW FILTERING;
++------+------+-------+-----+
+|   k1 |   k2 |   ck1 |   v |
+|------+------+-------+-----|
+|    0 |    0 |     0 |   0 |
+|    0 |    0 |     1 |   0 |
+|    0 |    0 |     2 |   0 |
+|    0 |    0 |     3 |   0 |
+|    1 |    0 |     0 |   0 |
+|    1 |    0 |     1 |   0 |
+|    1 |    0 |     2 |   0 |
+|    1 |    0 |     3 |   0 |
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k1 <= 0 AND k2 = 0 ALLOW FILTERING;
++------+------+-------+-----+
+|   k1 |   k2 |   ck1 |   v |
+|------+------+-------+-----|
+|    0 |    0 |     0 |   0 |
+|    0 |    0 |     1 |   0 |
+|    0 |    0 |     2 |   0 |
+|    0 |    0 |     3 |   0 |
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k2 = 1 ALLOW FILTERING;
++------+------+-------+-----+
+|   k1 |   k2 |   ck1 |   v |
+|------+------+-------+-----|
+|    0 |    1 |     0 |   0 |
+|    0 |    1 |     1 |   0 |
+|    0 |    1 |     2 |   0 |
+|    0 |    1 |     3 |   0 |
+|    1 |    1 |     0 |   0 |
+|    1 |    1 |     1 |   0 |
+|    1 |    1 |     2 |   0 |
+|    1 |    1 |     3 |   0 |
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k2 = 2 ALLOW FILTERING;
++------+------+-------+-----+
+| k1   | k2   | ck1   | v   |
+|------+------+-------+-----|
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k1 = 0 AND ck1=0 ALLOW FILTERING;
++------+------+-------+-----+
+|   k1 |   k2 |   ck1 |   v |
+|------+------+-------+-----|
+|    0 |    0 |     0 |   0 |
+|    0 |    1 |     0 |   0 |
++------+------+-------+-----+
+> SELECT * FROM test_filter WHERE k1 = 0 AND k2=1 AND ck1=0 ALLOW FILTERING;
++------+------+-------+-----+
+|   k1 |   k2 |   ck1 |   v |
+|------+------+-------+-----|
+|    0 |    1 |     0 |   0 |
++------+------+-------+-----+
+> SELECT count(*) FROM test_filter WHERE k2 = 0 ALLOW FILTERING;
++---------+
+|   count |
+|---------|
+|       8 |
++---------+
+> SELECT count(*) FROM test_filter WHERE k2 = 1 ALLOW FILTERING;
++---------+
+|   count |
+|---------|
+|       8 |
++---------+
+> SELECT count(*) FROM test_filter WHERE k2 = 2 ALLOW FILTERING;
++---------+
+|   count |
+|---------|
+|       0 |
++---------+
+> SELECT * FROM test_filter WHERE k1 = 0;
+Error from server: code=2200 [Invalid query] message="Cannot execute this query as it might involve data filtering and thus may have unpredictable performance. If you want to execute this query despite the performance unpredictability, use ALLOW FILTERING"
+> SELECT * FROM test_filter WHERE k1 = 0 AND k2 > 0;
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
+> SELECT * FROM test_filter WHERE k1 >= 0 AND k2 in (0,1,2);
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
+> SELECT * FROM test_filter WHERE k2 > 0;
+Error from server: code=2200 [Invalid query] message="Only EQ and IN relation are supported on the partition key (unless you use the token() function or ALLOW FILTERING)"
+> DROP TABLE test_filter;
+OK
+> 
+> -- test_lwt_with_static_columns
+> CREATE TABLE lwt_with_static (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+OK
+> UPDATE lwt_with_static SET s = 1 WHERE a = 1 IF s = NULL;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT * FROM lwt_with_static;
++-----+------+-----+------+
+|   a | b    |   s | d    |
+|-----+------+-----+------|
+|   1 | null |   1 | null |
++-----+------+-----+------+
+> UPDATE lwt_with_static SET s = 2 WHERE a = 2 IF EXISTS;
++-------------+------+------+------+------+
+| [applied]   | a    | b    | s    | d    |
+|-------------+------+------+------+------|
+| False       | null | null | null | null |
++-------------+------+------+------+------+
+> SELECT * FROM lwt_with_static WHERE a = 1;
++-----+------+-----+------+
+|   a | b    |   s | d    |
+|-----+------+-----+------|
+|   1 | null |   1 | null |
++-----+------+-----+------+
+> INSERT INTO lwt_with_static (a, s) VALUES (2, 2) IF NOT EXISTS;
++-------------+------+------+------+------+
+| [applied]   | a    | b    | s    | d    |
+|-------------+------+------+------+------|
+| True        | null | null | null | null |
++-------------+------+------+------+------+
+> SELECT * FROM lwt_with_static WHERE a = 2;
++-----+------+-----+------+
+|   a | b    |   s | d    |
+|-----+------+-----+------|
+|   2 | null |   2 | null |
++-----+------+-----+------+
+> BEGIN BATCH
+> INSERT INTO lwt_with_static (a, b, d) values (3, 3, 'a')
+> UPDATE lwt_with_static SET s = 3 WHERE a = 3 IF s = null
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s    |
+|-------------+------+------+------|
+| True        | null | null | null |
+| True        | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM lwt_with_static WHERE a = 3;
++-----+-----+-----+-----+
+|   a |   b |   s | d   |
+|-----+-----+-----+-----|
+|   3 |   3 |   3 | a   |
++-----+-----+-----+-----+
+> --        # LWT applies before INSERT
+> BEGIN BATCH
+> INSERT INTO lwt_with_static (a, b, d) values (4, 4, 'a')
+> UPDATE lwt_with_static SET s = 4 WHERE a = 4 IF s = null
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s    |
+|-------------+------+------+------|
+| True        | null | null | null |
+| True        | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM lwt_with_static WHERE a = 4;
++-----+-----+-----+-----+
+|   a |   b |   s | d   |
+|-----+-----+-----+-----|
+|   4 |   4 |   4 | a   |
++-----+-----+-----+-----+
+> 
+> -- test_conditional_updates_on_static_columns_with_null_values(self):
+> CREATE TABLE conditional_updates_on_static_columns_with_null (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+OK
+> INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (1, 1);
+OK
+> INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (2, 2);
+OK
+> INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (3, 3);
+OK
+> INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (4, 4);
+OK
+> INSERT INTO conditional_updates_on_static_columns_with_null (a, b) VALUES (5, 5);
+OK
+> -- sub _validate_non_existing_or_null_values
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 1 WHERE a = 1 IF s = NULL;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT a, s, d FROM conditional_updates_on_static_columns_with_null WHERE a = 1;
++-----+-----+------+
+|   a |   s | d    |
+|-----+-----+------|
+|   1 |   1 | null |
++-----+-----+------+
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 2 WHERE a = 2 IF s IN (10,20,NULL);
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT a, s, d FROM conditional_updates_on_static_columns_with_null WHERE a = 2;
++-----+-----+------+
+|   a |   s | d    |
+|-----+-----+------|
+|   2 |   2 | null |
++-----+-----+------+
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 4 WHERE a = 4 IF s != 4;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT a, s, d FROM conditional_updates_on_static_columns_with_null WHERE a = 4;
++-----+-----+------+
+|   a |   s | d    |
+|-----+-----+------|
+|   4 |   4 | null |
++-----+-----+------+
+> 
+> UPDATE conditional_updates_on_static_columns_with_null  SET s = 30 WHERE a = 3 IF s IN (10,20,30);
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 3;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   3 |   3 | null | null |
++-----+-----+------+------+
+> 
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s > 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   5 |   5 | null | null |
++-----+-----+------+------+
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s < 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   5 |   5 | null | null |
++-----+-----+------+------+
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s >= 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   5 |   5 | null | null |
++-----+-----+------+------+
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s <= 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   5 |   5 | null | null |
++-----+-----+------+------+
+> UPDATE conditional_updates_on_static_columns_with_null SET s = 50 WHERE a = 5 IF s = 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_null WHERE a = 5;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   5 |   5 | null | null |
++-----+-----+------+------+
+> 
+> -- test_conditional_updates_on_static_columns_with_non_existing_values
+> --         conditional_updates_on_static_columns_with_ne
+> CREATE TABLE conditional_updates_on_static_columns_with_ne (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+OK
+> 
+> -- sub _validate_non_existing_or_null_values
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 1 WHERE a = 1 IF s = NULL;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT a, s, d FROM conditional_updates_on_static_columns_with_ne WHERE a = 1;
++-----+-----+------+
+|   a |   s | d    |
+|-----+-----+------|
+|   1 |   1 | null |
++-----+-----+------+
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 2 WHERE a = 2 IF s IN (10,20,NULL);
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT a, s, d FROM conditional_updates_on_static_columns_with_ne WHERE a = 2;
++-----+-----+------+
+|   a |   s | d    |
+|-----+-----+------|
+|   2 |   2 | null |
++-----+-----+------+
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 4 WHERE a = 4 IF s != 4;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT a, s, d FROM conditional_updates_on_static_columns_with_ne WHERE a = 4;
++-----+-----+------+
+|   a |   s | d    |
+|-----+-----+------|
+|   4 |   4 | null |
++-----+-----+------+
+> 
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 30 WHERE a = 3 IF s IN (10,20,30);
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 3;
++-----+-----+-----+-----+
+| a   | b   | s   | d   |
+|-----+-----+-----+-----|
++-----+-----+-----+-----+
+> 
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s > 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
++-----+-----+-----+-----+
+| a   | b   | s   | d   |
+|-----+-----+-----+-----|
++-----+-----+-----+-----+
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s < 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
++-----+-----+-----+-----+
+| a   | b   | s   | d   |
+|-----+-----+-----+-----|
++-----+-----+-----+-----+
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s >= 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
++-----+-----+-----+-----+
+| a   | b   | s   | d   |
+|-----+-----+-----+-----|
++-----+-----+-----+-----+
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s <= 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
++-----+-----+-----+-----+
+| a   | b   | s   | d   |
+|-----+-----+-----+-----|
++-----+-----+-----+-----+
+> UPDATE conditional_updates_on_static_columns_with_ne SET s = 50 WHERE a = 5 IF s = 3;
++-------------+------+
+| [applied]   | s    |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_updates_on_static_columns_with_ne WHERE a = 5;
++-----+-----+-----+-----+
+| a   | b   | s   | d   |
+|-----+-----+-----+-----|
++-----+-----+-----+-----+
+> 
+> -- test_conditional_updates_on_static_columns_with_null_values_batch(self):
+> CREATE TABLE lwt_on_static_columns_with_null_batch (a int, b int, s int static, d text, PRIMARY KEY (a, b));
+OK
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (1, 1);
+OK
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (2, 2);
+OK
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (3, 3);
+OK
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (4, 4);
+OK
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (5, 5);
+OK
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b) VALUES (6, 6);
+OK
+> 
+> --    sub _validate_non_existing_or_null_values_batch
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, d) values (2, 2, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch  SET s = 2 WHERE a = 2 IF s = null
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| True        |   2 | 2    | null |
+| True        |   2 | null | null |
++-------------+-----+------+------+
+> 
+> SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 2;
++-----+-----+-----+-----+
+|   a |   b |   s | d   |
+|-----+-----+-----+-----|
+|   2 |   2 |   2 | a   |
++-----+-----+-----+-----+
+> 
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (4, 4, 4, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 5 WHERE a = 4 IF s = null
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| True        |   4 | 4    | null |
+| True        |   4 | null | null |
++-------------+-----+------+------+
+> 
+> SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 4;
++-----+-----+-----+-----+
+|   a |   b |   s | d   |
+|-----+-----+-----+-----|
+|   4 |   4 |   5 | a   |
++-----+-----+-----+-----+
+> 
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (5, 5, 5, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 6 WHERE a = 5 IF s IN (1,2,null)
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| True        |   5 | 5    | null |
+| True        |   5 | null | null |
++-------------+-----+------+------+
+> 
+> SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 5;
++-----+-----+-----+-----+
+|   a |   b |   s | d   |
+|-----+-----+-----+-----|
+|   5 |   5 |   6 | a   |
++-----+-----+-----+-----+
+> 
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (7, 7, 7, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 8 WHERE a = 7 IF s != 7
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s    |
+|-------------+------+------+------|
+| True        | null | null | null |
+| True        | null | null | null |
++-------------+------+------+------+
+> 
+> SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 7;
++-----+-----+-----+-----+
+|   a |   b |   s | d   |
+|-----+-----+-----+-----|
+|   7 |   7 |   8 | a   |
++-----+-----+-----+-----+
+> 
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s > 5
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s < 5
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s >= 5
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s <= 5
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (3, 3, 40, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 30 WHERE a = 3 IF s = 5
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   3 | 3    | null |
+| False       |   3 | null | null |
++-------------+-----+------+------+
+> 
+> SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 3;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   3 |   3 | null | null |
++-----+-----+------+------+
+> 
+> BEGIN BATCH
+> INSERT INTO lwt_on_static_columns_with_null_batch (a, b, s, d) values (6, 6, 70, 'a')
+> UPDATE lwt_on_static_columns_with_null_batch SET s = 60 WHERE a = 6 IF s IN (1,2,3)
+> APPLY BATCH;
++-------------+-----+------+------+
+| [applied]   |   a | b    | s    |
+|-------------+-----+------+------|
+| False       |   6 | 6    | null |
+| False       |   6 | null | null |
++-------------+-----+------+------+
+> 
+> SELECT * FROM lwt_on_static_columns_with_null_batch WHERE a = 6;
++-----+-----+------+------+
+|   a |   b | s    | d    |
+|-----+-----+------+------|
+|   6 |   6 | null | null |
++-----+-----+------+------+
+> 
+> -- test_conditional_deletes_on_static_columns_with_null_values
+> CREATE TABLE conditional_deletes_on_static_with_null (a int, b int, s1 int static, s2 int static, v int, PRIMARY KEY (a, b));
+OK
+> INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (1, 1, 1, null, 1);
+OK
+> INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (2, 2, 2, null, 2);
+OK
+> INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (3, 3, 3, null, 3);
+OK
+> INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (4, 4, 4, null, 4);
+OK
+> INSERT INTO conditional_deletes_on_static_with_null (a, b, s1, s2, v) VALUES (5, 5, 5, null, 5);
+OK
+> 
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 1 IF s2 = null;
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 1;
++-----+-----+------+------+-----+
+|   a |   b | s1   | s2   |   v |
+|-----+-----+------+------+-----|
+|   1 |   1 | null | null |   1 |
++-----+-----+------+------+-----+
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 2 IF s2 IN (10,20,30);
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 2;
++-----+-----+------+------+-----+
+|   a |   b |   s1 | s2   |   v |
+|-----+-----+------+------+-----|
+|   2 |   2 |    2 | null |   2 |
++-----+-----+------+------+-----+
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 3 IF s2 IN (null,20,30);
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 3;
++-----+-----+------+------+-----+
+|   a |   b | s1   | s2   |   v |
+|-----+-----+------+------+-----|
+|   3 |   3 | null | null |   3 |
++-----+-----+------+------+-----+
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 4 IF s2 != 4;
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| True        | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 4;
++-----+-----+------+------+-----+
+|   a |   b | s1   | s2   |   v |
+|-----+-----+------+------+-----|
+|   4 |   4 | null | null |   4 |
++-----+-----+------+------+-----+
+> 
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 > 3;
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
++-----+-----+------+------+-----+
+|   a |   b |   s1 | s2   |   v |
+|-----+-----+------+------+-----|
+|   5 |   5 |    5 | null |   5 |
++-----+-----+------+------+-----+
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 < 3;
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
++-----+-----+------+------+-----+
+|   a |   b |   s1 | s2   |   v |
+|-----+-----+------+------+-----|
+|   5 |   5 |    5 | null |   5 |
++-----+-----+------+------+-----+
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 >= 3;
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
++-----+-----+------+------+-----+
+|   a |   b |   s1 | s2   |   v |
+|-----+-----+------+------+-----|
+|   5 |   5 |    5 | null |   5 |
++-----+-----+------+------+-----+
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 <= 3;
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
++-----+-----+------+------+-----+
+|   a |   b |   s1 | s2   |   v |
+|-----+-----+------+------+-----|
+|   5 |   5 |    5 | null |   5 |
++-----+-----+------+------+-----+
+> DELETE s1 FROM conditional_deletes_on_static_with_null WHERE a = 5 IF s2 = 3;
++-------------+------+
+| [applied]   | s2   |
+|-------------+------|
+| False       | null |
++-------------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null WHERE a = 5;
++-----+-----+------+------+-----+
+|   a |   b |   s1 | s2   |   v |
+|-----+-----+------+------+-----|
+|   5 |   5 |    5 | null |   5 |
++-----+-----+------+------+-----+
+> 
+> -- test_conditional_deletes_on_static_columns_with_null_values_batch(self):
+> CREATE TABLE conditional_deletes_on_static_with_null_batch (a int, b int, s1 int static, s2 int static, v int, PRIMARY KEY (a, b));
+OK
+> 
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch  (a, b, s1, v) values (2, 2, 2, 2)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch  WHERE a = 2 IF s2 = null
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| True        | null | null | null |
+| True        | null | null | null |
++-------------+------+------+------+
+> 
+> SELECT * FROM conditional_deletes_on_static_with_null_batch  WHERE a = 2;
++-----+-----+------+------+-----+
+|   a |   b | s1   | s2   |   v |
+|-----+-----+------+------+-----|
+|   2 |   2 | null | null |   2 |
++-----+-----+------+------+-----+
+> 
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 < 5
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| False       | null | null | null |
+| False       | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
++-----+-----+------+------+-----+
+| a   | b   | s1   | s2   | v   |
+|-----+-----+------+------+-----|
++-----+-----+------+------+-----+
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 < 5
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| False       | null | null | null |
+| False       | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
++-----+-----+------+------+-----+
+| a   | b   | s1   | s2   | v   |
+|-----+-----+------+------+-----|
++-----+-----+------+------+-----+
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 >= 5
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| False       | null | null | null |
+| False       | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
++-----+-----+------+------+-----+
+| a   | b   | s1   | s2   | v   |
+|-----+-----+------+------+-----|
++-----+-----+------+------+-----+
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 <= 5
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| False       | null | null | null |
+| False       | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
++-----+-----+------+------+-----+
+| a   | b   | s1   | s2   | v   |
+|-----+-----+------+------+-----|
++-----+-----+------+------+-----+
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (3, 3, 3, 3)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 3 IF s2 = 5
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| False       | null | null | null |
+| False       | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch   WHERE a = 3;
++-----+-----+------+------+-----+
+| a   | b   | s1   | s2   | v   |
+|-----+-----+------+------+-----|
++-----+-----+------+------+-----+
+> -- none
+> 
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (6, 6, 6, 6)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 6 IF s2 IN (1,2,3)
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| False       | null | null | null |
+| False       | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch    WHERE a = 6;
++-----+-----+------+------+-----+
+| a   | b   | s1   | s2   | v   |
+|-----+-----+------+------+-----|
++-----+-----+------+------+-----+
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (4, 4, 4, 4)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 4 IF s2 = null
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| True        | null | null | null |
+| True        | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch     WHERE a = 4;
++-----+-----+------+------+-----+
+|   a |   b | s1   | s2   |   v |
+|-----+-----+------+------+-----|
+|   4 |   4 | null | null |   4 |
++-----+-----+------+------+-----+
+> 
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) VALUES (5, 5, 5, 5)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 5 IF s1 IN (1,2,null)
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s1   |
+|-------------+------+------+------|
+| True        | null | null | null |
+| True        | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch      WHERE a = 5;
++-----+-----+------+------+-----+
+|   a |   b | s1   | s2   |   v |
+|-----+-----+------+------+-----|
+|   5 |   5 | null | null |   5 |
++-----+-----+------+------+-----+
+> 
+> BEGIN BATCH
+> INSERT INTO conditional_deletes_on_static_with_null_batch (a, b, s1, v) values (7, 7, 7, 7)
+> DELETE s1 FROM conditional_deletes_on_static_with_null_batch WHERE a = 7 IF s2 != 7
+> APPLY BATCH;
++-------------+------+------+------+
+| [applied]   | a    | b    | s2   |
+|-------------+------+------+------|
+| True        | null | null | null |
+| True        | null | null | null |
++-------------+------+------+------+
+> SELECT * FROM conditional_deletes_on_static_with_null_batch       WHERE a = 7;
++-----+-----+------+------+-----+
+|   a |   b | s1   | s2   |   v |
+|-----+-----+------+------+-----|
+|   7 |   7 | null | null |   7 |
++-----+-----+------+------+-----+
+> DROP KEYSPACE ks1;
+OK

@@ -1,0 +1,12 @@
+# This file contains regx patterns that should be
+# excluded from coverage reports. The file exists for easy
+# synchronization between different runs of coverage or different
+# frameworks running tests for unified coverage report.
+# The format is simple:
+# 1. lines that start with # are comments and should be ignored
+# 2. empty lines should be ignored
+# 3. every other line contains a single regx pattern of files to exclude
+# Note if the string should start with '#' simply put (#) instead.
+
+(.*/)?seastar/.*
+(.*/)?test/.*

@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2017-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import sys
+import yaml
+import argparse
+import subprocess
+
+from scylla_util import parse_scylla_dirs_with_default
+
+
+def find_mount_point(path):
+    path = os.path.abspath(path)
+    while not os.path.ismount(path):
+        path = os.path.dirname(path)
+    return path
+
+def main():
+    parser = argparse.ArgumentParser(description='Run fstrim on Scylla data partitions.')
+    parser.add_argument('-c', '--config', dest='config', action='store',
+                        default='/etc/scylla/scylla.yaml',
+                        help='path to scylla.yaml')
+    args = parser.parse_args()
+    cfg = parse_scylla_dirs_with_default(conf=args.config)
+    mountpoints = set()
+    for d in cfg['data_file_directories']:
+        mountpoints.add(find_mount_point(d))
+
+    mountpoints.add(find_mount_point(cfg['commitlog_directory']))
+    mountpoints.add(find_mount_point(cfg['schema_commitlog_directory']))
+    # workaround of #2649
+    subprocess.call(["/opt/scylladb/scripts/scylla-blocktune", "--set-nomerges", "1"])
+    for d in mountpoints:
+        print("Running fstrim on {} ...".format(d))
+        res = subprocess.call(["fstrim", d])
+        if res != 0:
+            print("{} doesn't support TRIM.".format(d))
+    subprocess.call(["/opt/scylladb/scripts/scylla-blocktune", "--set-nomerges", "2"])
+
+if __name__ == "__main__":
+    main()

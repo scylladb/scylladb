@@ -1,0 +1,19 @@
+.. -*- mode: rst -*-
+
+{{title}}
+{{ '-' * title|length }}
+
+{% if data  %}
+{% for key, value in data.items() %}
+.. _metricsprop_{{ key }}:
+
+.. metrics_option:: {{ key }}
+  :type: {{value[0]}}
+  :source: {{value[4]}}
+  :component: {{value[2]}}
+  :key: {{value[3]}}
+
+  {{value[1] | readable_desc_rst}}
+
+{% endfor %}
+{% endif %}

@@ -1,0 +1,29 @@
+name: Mark PR as Ready When Conflicts Label is Removed
+
+on:
+  pull_request_target:
+    types:
+      - unlabeled
+
+env:
+  DEFAULT_BRANCH: 'master'
+
+jobs:
+  mark-ready:
+    if: github.event.label.name == 'conflicts'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.DEFAULT_BRANCH }}
+          token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          fetch-depth: 1
+      - name: Mark pull request as ready for review
+        run:  gh pr ready "${{ github.event.pull_request.number }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}

@@ -1,0 +1,23 @@
+type: Python
+pool_size: 6
+run_first:
+    - test_streams
+    - test_scan
+    - test_tracing
+    - test_ttl
+extra_scylla_config_options:
+  {
+    experimental_features: [
+                             udf,
+                             alternator-streams,
+                             keyspace-storage-options
+    ],
+    alternator_port: 8000,
+    query_tombstone_page_limit: 1000,
+    alternator_write_isolation: only_rmw_uses_lwt,
+    alternator_enforce_authorization: True,
+    alternator_timeout_in_ms: 30000,
+    alternator_ttl_period_in_seconds: 0.5,
+    alternator_streams_time_window_s: 0,
+    tablets_mode_for_new_keyspaces: enabled
+  }

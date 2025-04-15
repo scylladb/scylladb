@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2018-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import sys
+import argparse
+from scylla_util import *
+
+if __name__ == '__main__':
+    if not is_nonroot() and not is_container() and os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Modify Scylla running mode.')
+    parser.add_argument('--developer-mode', type=int, required=True,
+                        help='enable/disable developer mode')
+    args = parser.parse_args()
+
+    if args.developer_mode == 0:
+        with open(etcdir()+'/scylla.d/dev-mode.conf', 'w') as f:
+            f.close()
+    else:
+        cfg = sysconfig_parser(etcdir()+'/scylla.d/dev-mode.conf')
+        cfg.set('DEV_MODE', '--developer-mode=1')
+        cfg.commit()

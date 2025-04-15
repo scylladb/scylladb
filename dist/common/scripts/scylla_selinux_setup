@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Copyright 2018-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+import os
+import sys
+import subprocess
+from scylla_util import *
+from subprocess import run
+
+if __name__ == '__main__':
+    if os.getuid() > 0:
+        print('Requires root permission.')
+        sys.exit(1)
+
+    if not is_redhat_variant():
+        print("scylla_selinux_setup only supports Red Hat variants")
+        sys.exit(0)
+
+    res = out('sestatus')
+    if res.split(None)[2] != 'disabled':
+        run('setenforce 0', shell=True, check=True)
+        cfg = sysconfig_parser('/etc/sysconfig/selinux')
+        cfg.set('SELINUX', 'disabled')
+        cfg.commit()

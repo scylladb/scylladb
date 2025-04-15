@@ -1,0 +1,11 @@
+[Unit]
+Description=Scylla fstrim
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/scylladb/scripts/scylla_fstrim
+Slice=scylla-helper.slice
+
+[Install]
+WantedBy=multi-user.target

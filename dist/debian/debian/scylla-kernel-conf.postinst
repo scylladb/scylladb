@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -e
+
+KVER=$(uname -r)
+
+if [[ $KVER =~ 3\.13\.0\-([0-9]+)-generic ]]; then
+    echo "kernel $KVER detected, skip running sysctl..."
+else
+    # expect failures in virtualized environments
+    sysctl -p/usr/lib/sysctl.d/99-scylla-vm.conf || :
+    sysctl -p/usr/lib/sysctl.d/99-scylla-inotify.conf || :
+    sysctl -p/usr/lib/sysctl.d/99-scylla-aio.conf || :
+    sysctl -p/usr/lib/sysctl.d/99-scylla-filemax.conf || :
+fi
+
+/opt/scylladb/kernel_conf/post_install.sh
+
+#DEBHELPER#

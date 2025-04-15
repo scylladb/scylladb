@@ -1,0 +1,12 @@
+Source: scylla-env
+Maintainer: Takuya ASADA <syuu@scylladb.com>
+Section: misc
+Priority: optional
+Standards-Version: 1.0
+Build-Depends: debhelper (>= 9)
+
+Package: scylla-env
+Architecture: all
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: language tool for constructing recognizers, compilers etc
+ A language tool that provides a framework for constructing recognizers, interpreters, compilers, and translators from grammatical descriptions containing actions in a variety of target languages.

@@ -1,0 +1,27 @@
+> -- Error messages contain a keyspace name. Make the output stable.
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}
+>     AND TABLETS = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
+> create table tb1 (pk int primary key, c1 counter) with default_time_to_live = 100;
+Error from server: code=2200 [Invalid query] message="Cannot set default_time_to_live on a table with counters"
+> 
+> create table tb2 (pk int primary key, c1 counter);
+OK
+> alter table tb2 with default_time_to_live = 100;
+Error from server: code=2200 [Invalid query] message="Cannot set default_time_to_live on a table with counters"
+> 
+> create table tb3 (pk int primary key) with default_time_to_live = 100;
+OK
+> alter table tb3 add (c1 counter);
+<Error from server: code=2300 [Query invalid because of configuration issue] message="Cannot add a counter column (c1) in a non counter column family">
+> 
+> create table tb4 (pk int, ck int, cs counter static, primary KEY (pk, ck)) with default_time_to_live = 100;
+Error from server: code=2200 [Invalid query] message="Cannot set default_time_to_live on a table with counters"
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

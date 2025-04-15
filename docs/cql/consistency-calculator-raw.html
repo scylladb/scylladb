@@ -1,0 +1,109 @@
+    <style>
+        .calculator {
+            width: fit-content;
+        }
+        .form-inline {
+            display: flex;
+            flex-flow: row wrap;
+        }
+        .form-inline label {
+            margin: 5px 10px 5px 0;
+        }
+        .form-inline input {
+            padding: 10px;
+            margin: 5px 10px 5px 0;
+        }
+    </style>
+    <div class="calculator">
+        <form class="form-inline" action="">
+            <div class="input">
+                <label for="nodes">Nodes</label><input style="width: 8ch;" type="number" min="1" value="3" name="nodes" id="nodes">
+            </div>
+            <div class="input">
+                <label for="replication-factor">Replication factor</label><input style="width: 8ch;" min="1" value="3" type="number" name="replication-factor" id="replication-factor">
+            </div>
+            <div class="input">
+                <label for="read-consistency">Read consistency level</label><select name="read-consistency" id="read-consistency">
+                    <option value="ONE">ONE</option>
+                    <option value="TWO">TWO</option>
+                    <option value="THREE">THREE</option>
+                    <option value="QUORUM">QUORUM</option>
+                    <option value="ALL">ALL</option>
+                </select>
+            </div>
+            <div class="input">
+                <label for="write-consistency">Write consistency level</label><select name="write-consistency" id="write-consistency">
+                    <option value="ONE">ONE</option>
+                    <option value="TWO">TWO</option>
+                    <option value="THREE">THREE</option>
+                    <option value="QUORUM">QUORUM</option>
+                    <option value="ALL">ALL</option>
+                </select>
+            </div>
+        </form>
+        <div class="results"></div>
+    </div>
+    <br/>
+    <br/>
+
+    <script>
+        function consistency(c, rf) {
+            switch(c) {
+                case "ONE":
+                    return 1;
+                case "TWO":
+                    return 2;
+                case "THREE":
+                    return 3;
+                case "QUORUM":
+                    return Math.floor(rf / 2) + 1;
+                case "ALL":
+                    return rf;
+            }
+        }
+
+        function calculate() {
+            const nodes = Number.parseInt(document.querySelector("#nodes").value);
+            const readConsistency = document.querySelector("#read-consistency").value;
+            const writeConsistency = document.querySelector("#write-consistency").value;
+            const replicationFactor = Number.parseInt(document.querySelector("#replication-factor").value);
+            const writeConsistencyN = consistency(writeConsistency, replicationFactor);
+            const readConsistencyN = consistency(readConsistency, replicationFactor);
+
+            
+            const resultsDiv = document.querySelector(".results");
+            
+            if (nodes < replicationFactor) {
+                resultsDiv.textContent = "Replication factor must be smaller or equal to the number of nodes";
+                resultsDiv.classList.add("warning", "admonition");
+            } else if (writeConsistencyN > replicationFactor || readConsistencyN > replicationFactor) {
+                resultsDiv.textContent = "Consistency level must be lower than replication factor";
+                resultsDiv.classList.add("warning", "admonition");
+            } else {
+                const msg = [];
+                msg.push("<ul>")
+                if (writeConsistencyN + readConsistencyN > replicationFactor) {
+                    msg.push("<li>Your reads are <b>consistent</b></li>");
+                } else {
+                    msg.push("<li>Your reads are <b>eventually consistent</b></li>");
+                }
+                msg.push(`<li>You can lose ${replicationFactor - readConsistencyN} nodes without failing reads</li>`);
+                msg.push(`<li>You can lose ${writeConsistencyN - 1} nodes without data loss</li>`);
+                msg.push(`<li>Each node holds ~ ${Math.round(replicationFactor / nodes * 100)}% of your data</li>`);
+                msg.push("</ul>")
+                
+                resultsDiv.classList.remove("warning", "admonition");
+                resultsDiv.innerHTML = msg.join("<br/>"); 
+            }
+        }
+
+        document.querySelectorAll(".input input").forEach((element) => {
+            element.addEventListener("input", calculate);
+        })
+
+        document.querySelectorAll(".input select").forEach((element) => {
+            element.addEventListener("input", calculate);
+        })
+
+        calculate();
+    </script>

@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "scylla"
+description = "ScyllaDB Documentation"
+version = "0.1.0"
+authors = ["ScyllaDB Contributors"]
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pygments = "^2.18.0"
+redirects_cli ="^0.1.3"
+sphinx-scylladb-theme = "^1.8.6"
+sphinx-sitemap = "^2.6.0"
+sphinx-autobuild = "^2024.4.19"
+Sphinx = "^7.3.7"
+sphinx-multiversion-scylla = "^0.3.1"
+sphinxcontrib-datatemplates = "^0.9.2"
+sphinx-scylladb-markdown = "^0.1.2"
+sphinx_collapse ="^0.1.3"
+
+[build-system]
+requires = ["poetry>=1.8"]
+build-backend = "poetry.masonry.api"

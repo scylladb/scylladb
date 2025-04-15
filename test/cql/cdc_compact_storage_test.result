@@ -1,0 +1,66 @@
+> -- CDC and tablets are not working together yet, turn them off.
+> CREATE KEYSPACE ks
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+>     tablets = {'enabled': false};
+OK
+> USE ks;
+OK
+> 
+> create table tb2 (pk int, ck int, v int, PRIMARY KEY (pk, ck)) with compact storage and cdc = {'enabled': true, 'preimage': true, 'postimage': true};
+OK
+> -- Should add 2 rows (postimage + delta).
+> insert into tb2 (pk, ck, v) VALUES (2, 22, 111) USING TTL 2222;
+OK
+> select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck, v from tb2_scylla_cdc_log;
++--------------------+-----------------+-----------+------+------+-----+
+|   cdc$batch_seq_no |   cdc$operation | cdc$ttl   |   pk |   ck |   v |
+|--------------------+-----------------+-----------+------+------+-----|
+|                  0 |               1 | 2222      |    2 |   22 | 111 |
+|                  1 |               9 | null      |    2 |   22 | 111 |
++--------------------+-----------------+-----------+------+------+-----+
+> -- Should add 3 rows (preimage + postimage + delta).
+> insert into tb2 (pk, ck, v) VALUES (2, 22, 1111) USING TTL 2223;
+OK
+> select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck, v from tb2_scylla_cdc_log;
++--------------------+-----------------+-----------+------+------+------+
+|   cdc$batch_seq_no |   cdc$operation | cdc$ttl   |   pk |   ck |    v |
+|--------------------+-----------------+-----------+------+------+------|
+|                  0 |               1 | 2222      |    2 |   22 |  111 |
+|                  1 |               9 | null      |    2 |   22 |  111 |
+|                  0 |               0 | null      |    2 |   22 |  111 |
+|                  1 |               1 | 2223      |    2 |   22 | 1111 |
+|                  2 |               9 | null      |    2 |   22 | 1111 |
++--------------------+-----------------+-----------+------+------+------+
+> create table tb3 (pk int, ck int, PRIMARY KEY (pk, ck)) with compact storage and cdc = {'enabled': true, 'preimage': true, 'postimage': true};
+OK
+> -- Should add 2 rows (postimage + delta).
+> insert into tb3 (pk, ck) VALUES (2, 22) USING TTL 2222;
+OK
+> select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck from tb3_scylla_cdc_log;
++--------------------+-----------------+-----------+------+------+
+|   cdc$batch_seq_no |   cdc$operation | cdc$ttl   |   pk |   ck |
+|--------------------+-----------------+-----------+------+------|
+|                  0 |               1 | 2222      |    2 |   22 |
+|                  1 |               9 | null      |    2 |   22 |
++--------------------+-----------------+-----------+------+------+
+> -- Should add 3 rows (preimage + postimage + delta).
+> insert into tb3 (pk, ck) VALUES (2, 22) USING TTL 2223;
+OK
+> select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck from tb3_scylla_cdc_log;
++--------------------+-----------------+-----------+------+------+
+|   cdc$batch_seq_no |   cdc$operation | cdc$ttl   |   pk |   ck |
+|--------------------+-----------------+-----------+------+------|
+|                  0 |               1 | 2222      |    2 |   22 |
+|                  1 |               9 | null      |    2 |   22 |
+|                  0 |               0 | null      |    2 |   22 |
+|                  1 |               1 | 2223      |    2 |   22 |
+|                  2 |               9 | null      |    2 |   22 |
++--------------------+-----------------+-----------+------+------+
+> drop table tb2;
+OK
+> drop table tb3;
+OK
+> 
+> -- cleanup
+> DROP KEYSPACE ks;
+OK

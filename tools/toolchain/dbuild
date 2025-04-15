@@ -1,0 +1,272 @@
+#!/bin/bash
+
+if [[ -f ~/.config/scylladb/dbuild ]]; then
+    . ~/.config/scylladb/dbuild
+fi
+
+function die () {
+    msg="$1"
+    if [[ -n "$msg" ]]; then
+        echo "$(basename $0): $msg." 1>&2
+    fi
+    cat <<EOF 1>&2
+
+Run \`$0 --help' to print the full help message.
+EOF
+    exit 1
+}
+
+command_exists() {
+    type -p "$1" > /dev/null
+}
+
+if command_exists podman ; then
+  tool=${DBUILD_TOOL-podman}
+elif command_exists docker ; then
+  tool=${DBUILD_TOOL-docker}
+else
+  die "Please make sure you install either podman or docker on this machine to run dbuild"
+fi
+
+here="$(realpath $(dirname "$0"))"
+toplevel="$(realpath "$here/../..")"
+group_args=()
+docker_args=()
+image="$(<"$here/image")"
+
+for gid in $(id -G); do
+    group_args+=(--group-add "$gid")
+done
+
+interactive=
+
+function help () {
+    cat <<EOF 1>&2
+NAME
+    $(basename $0) - Run a command in scylla's frozen toolchain docker build image.
+
+SYNOPSIS
+    $0 [OPTIONS --] [command [arg ...]]
+
+DESCRIPTION
+    $(basename $0) is used mainly to build scylla in a docker image containing
+    a frozen version of the toolchain.
+
+    When no command is provided, $(basename $0) runs an interactive shell in
+    the docker instance.  The image to use is taken by default from "$(dirname $0)/image".
+    It may be overriden using the --image option.
+
+    When providing docker options, the options list must be terminated with \`--'.
+
+OPTIONS
+   -h | --help
+       Print this help message.
+
+   --image [IMAGE]
+       Use the specified docker IMAGE.
+       If omitted, list the available images using \`docker image ls'
+
+   -i | --interactive
+       Run an interactive session.
+
+   See \`docker help run' for available options.
+
+ENVIRONMENT
+
+    SCYLLADB_DBUILD this variable, which can be a string or a bash
+                    array, is prepended to the parmeters passed to
+                    docker. This can be used to mount the ccache
+                    directory (~/.ccache) and set up environment
+                    variables (e.g. CCACHE_PREFIX)
+
+    If the file ~/.config/scylladb/dbuild exists, it is sourced. This can
+    be used to set up the SCYLLADB_DBUILD environment variable.
+EOF
+    exit 0
+}
+
+if [[ $# -eq 0 ]]; then
+    interactive=y
+    docker_args=(-it)
+elif [[ "$1" = -* ]]; then
+    while [[ "$1" != "--" && $# != 0 ]]; do
+        case "$1" in
+            -h|--help)
+                help
+                ;;
+            --image)
+                image="$2"
+                shift 2
+                if [[ -z "$image" ]]; then
+                    die "Expected docker image identifier to follow the --image option"
+                fi
+                if ! $tool image inspect "$image" >/dev/null && ! $tool image pull "$image"; then
+                    die
+                fi
+                continue
+                ;;
+            --*)
+                if [[ "$1" = --interactive || "$1" = --interactive=true ]]; then
+                    interactive=y
+                fi
+                ;;
+            -*)
+                if [[ "$1" = -*i* ]]; then
+                    interactive=y
+                fi
+                ;;
+            *)
+                ;;
+        esac
+        docker_args+=("$1")
+        shift
+    done
+    if [[ "$1" != "--" ]]; then
+        die "Expected '--' to terminate docker flag list"
+    fi
+    shift
+fi
+
+if [[ $# != 0 ]]; then
+    args=("$@")
+else
+    args=(/bin/bash -i)
+fi
+
+MAVEN_LOCAL_REPO="$HOME/.m2"
+
+mkdir -p "$MAVEN_LOCAL_REPO"
+
+if [[ -z "$CARGO_HOME" ]]; then
+    export CARGO_HOME="$HOME/.cargo"
+    mkdir -p "$CARGO_HOME"
+fi
+
+is_podman="$($tool --help | grep -o podman)"
+
+docker_common_args=()
+
+docker_common_args+=("${SCYLLADB_DBUILD[@]}")
+
+if [ -z "$is_podman" ]; then
+    unset TMP_PASSWD
+    docker_common_args+=(
+       -u "$(id -u):$(id -g)"
+       "${group_args[@]}"
+       -v /etc/passwd:/etc/passwd:ro
+       -v /etc/group:/etc/group:ro
+       --pids-limit -1
+       )
+else
+    docker_common_args+=(
+        --userns keep-id)
+    # --pids-limit is not supported on podman with cgroupsv1
+    # detection code from
+    #   https://unix.stackexchange.com/questions/617764/how-do-i-check-if-system-is-using-cgroupv1
+    if grep -q 'cgroup2.*/sys/fs/cgroup ' /proc/mounts; then
+        docker_common_args+=(
+            --pids-limit -1
+            --annotation run.oci.keep_original_groups=1
+        )
+    fi
+    # if --pids-limit is not supported, add
+    #    [containers]
+    #    pids_limit = 0
+    #
+    # to /etc/containers/containers.conf
+fi
+
+if [ "$PWD" != "$toplevel" ]; then
+     docker_common_args+=(-v "$toplevel:$toplevel")
+fi
+
+# podman cannot relabel system directories like /tmp, but it can
+# relable directories we own, so we map a temporary directory to /tmp
+
+tmpdir=$(mktemp -d)
+
+if [ -e ~/.gdbinit ]; then
+    docker_common_args+=(-v "$HOME/.gdbinit:$HOME/.gdbinit:ro")
+fi
+
+# By default use "unlimited" as the hard limit
+hard_limit=$(ulimit -Hn)
+if [[ "${OSTYPE}" == "darwin"* ]]; then
+  # Docker-on-osx cannot parse "unlimited" as hard limit value, hence set to a high value
+  hard_limit=1024000
+fi
+
+if [[ -n "$interactive" || -t 0 ]]; then
+    docker_common_args+=("--tty")
+fi
+
+docker_common_args+=(
+       --security-opt seccomp=unconfined \
+       --security-opt label=disable \
+       --network host \
+       --cap-add SYS_PTRACE \
+       --privileged \
+       --ulimit nofile=$(ulimit -Sn):$hard_limit \
+       -v "$PWD:$PWD" \
+       -v "$tmpdir:/tmp" \
+       -v "$MAVEN_LOCAL_REPO:$MAVEN_LOCAL_REPO" \
+       -v /etc/localtime:/etc/localtime:ro \
+       --env CARGO_HOME \
+       -v "${CARGO_HOME}:${CARGO_HOME}" \
+       -w "$PWD" \
+       -e HOME="$HOME" \
+       "${docker_args[@]}" \
+       "$image" \
+       "${args[@]}"
+)
+cleanup() {
+    rm -rf "$tmpdir"
+    if [ -v TMP_PASSWD ]; then
+        rm -f "$TMP_PASSWD"
+    fi
+}
+
+if [[ -n "$interactive" || -n "$is_podman" ]]; then
+    # If --interactive was given on the command line, we can't run in detached mode
+    # as it will be impossible to interact with the container.
+
+    # We also avoid detached mode with podman, which doesn't need it
+    # (it does not proxy SIGTERM) and doesn't work well with it.
+    $tool run --rm "${docker_common_args[@]}"
+    ret=$?
+    cleanup
+    exit $ret
+fi
+
+container=$(
+    $tool run \
+       "--detach=true" \
+       "${docker_common_args[@]}"
+)
+
+kill_it() {
+    if [[ -n "$container" ]]; then
+        $tool rm -f "$container" > /dev/null
+        container=
+    fi
+    cleanup
+}
+
+trap kill_it SIGTERM SIGINT SIGHUP EXIT
+
+$tool logs --follow "$container"
+
+if [[ -n "$container" ]]; then
+    exitcode="$($tool wait "$container")"
+else
+    exitcode=99
+fi
+
+kill_it
+
+trap - SIGTERM SIGINT SIGHUP EXIT
+
+# after "docker kill", docker wait will not print anything
+[[ -z "$exitcode" ]] && exitcode=1
+
+exit "$exitcode"

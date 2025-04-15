@@ -1,0 +1,46 @@
+#!/bin/bash -e
+#
+#  Copyright (C) 2017-present ScyllaDB
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+trap 'echo "error $? in $0 line $LINENO"' ERR
+
+print_usage() {
+    echo "scylla_offline_installer.sh -- --skip-setup"
+    echo "  --skip-setup skip running scylla_setup"
+    exit 1
+}
+
+SKIP_SETUP=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        "--skip-setup")
+            SKIP_SETUP=1
+            shift 1
+            ;;
+        *)
+            print_usage
+            ;;
+    esac
+done
+
+echo "Install Scylla offline package..."
+
+if [ "$(id -u)" != "0" ]; then
+    echo "Error: root user required"
+    exit 1
+fi
+cat << EOS > /etc/yum.repos.d/scylla_offline.repo
+[scylla]
+name=scylla_offline
+baseurl=file://$(pwd)
+EOS
+yum install --nogpgcheck -y scylla sudo ntp ntpdate net-tools kernel-tools
+rm -f /etc/yum.repos.d/scylla_offline.repo
+if [ $SKIP_SETUP -eq 0 ]; then
+    /opt/scylladb/scripts/scylla_setup
+fi
+
+echo "Scylla offline package installation finished."

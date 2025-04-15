@@ -1,0 +1,18 @@
+[Unit]
+Description=Slice used to run Scylla. Maximum priority for IO and CPU
+Before=slices.target
+
+[Slice]
+MemoryAccounting=true
+IOAccounting=true
+CPUAccounting=true
+# Systemd deprecated settings BlockIOWeight and CPUShares. But they are still the ones used in RHEL7
+# Newer SystemD wants IOWeight and CPUWeight instead. Luckily both newer and older SystemD seem to
+# ignore the unwanted option so safest to get both. Using just the old versions would work too but
+# seems less future proof. Using just the new versions does not work at all for RHEL7/
+BlockIOWeight=1000
+IOWeight=1000
+MemorySwapMax=0
+CPUShares=1000
+CPUWeight=1000
+

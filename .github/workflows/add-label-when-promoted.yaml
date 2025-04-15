@@ -1,0 +1,80 @@
+name: Check if commits are promoted
+
+on:
+  push:
+    branches:
+      - master
+      - branch-*.*
+      - enterprise
+  pull_request_target:
+    types: [labeled, unlabeled]
+    branches: [master, next, enterprise]
+
+jobs:
+  check-commit:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Set Default Branch
+        id: set_branch
+        run: |
+          if [[ "${{ github.repository }}" == *enterprise* ]]; then
+            echo "DEFAULT_BRANCH=enterprise" >> $GITHUB_ENV
+          else
+            echo "DEFAULT_BRANCH=master" >> $GITHUB_ENV
+          fi
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.DEFAULT_BRANCH }}
+          token: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+          fetch-depth: 0  # Fetch all history for all tags and branches
+      - name: Set up Git identity
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git config --global merge.conflictstyle diff3
+      - name: Install dependencies
+        run: sudo apt-get install -y python3-github python3-git
+      - name: Run python script
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: python .github/scripts/label_promoted_commits.py  --commits ${{ github.event.before }}..${{ github.sha }} --repository ${{ github.repository }} --ref ${{ github.ref }}
+      - name: Run auto-backport.py when promotion completed
+        if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', env.DEFAULT_BRANCH) }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --commits ${{ github.event.before }}..${{ github.sha }}
+      - name: Check if a valid backport label exists and no backport_error
+        id: check_label
+        run: |
+          labels_json='${{ toJson(github.event.pull_request.labels) }}'
+          echo "Checking labels: $(echo "$labels_json" | jq -r '.[].name')"
+
+          # Check if a valid backport label exists
+          if echo "$labels_json" | jq -e 'any(.[] | .name; test("backport/[0-9]+\\.[0-9]+$"))' > /dev/null; then
+            # Ensure scylladbbot/backport_error is NOT present
+            if ! echo "$labels_json" | jq -e '.[] | select(.name == "scylladbbot/backport_error")' > /dev/null; then
+              echo "A matching backport label was found and no backport_error label exists."
+              echo "ready_for_backport=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              echo "The label 'scylladbbot/backport_error' is present, invalidating backport."
+            fi
+          else
+            echo "No matching backport label found."
+          fi
+          echo "ready_for_backport=false" >> "$GITHUB_OUTPUT"
+      - name: Run auto-backport.py when PR is closed
+        if: ${{ github.event_name == 'pull_request_target' && steps.check_label.outputs.ready_for_backport == 'true' && github.event.pull_request.state == 'closed' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
+        run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --pull-request ${{ github.event.pull_request.number }} --head-commit ${{ github.event.pull_request.base.sha }} --github-event ${{ github.event.action }}

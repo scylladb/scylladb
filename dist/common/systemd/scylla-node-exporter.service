@@ -1,0 +1,17 @@
+[Unit]
+Description=Prometheus exporter for machine metrics
+
+[Service]
+Type=simple
+User=scylla
+Group=scylla
+EnvironmentFile=/etc/sysconfig/scylla-node-exporter
+ExecStart=/opt/scylladb/node_exporter/node_exporter $SCYLLA_NODE_EXPORTER_ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStopSec=20
+SendSIGKILL=no
+Restart=always
+Slice=scylla-helper.slice
+
+[Install]
+WantedBy=multi-user.target

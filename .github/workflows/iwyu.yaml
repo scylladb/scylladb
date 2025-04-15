@@ -1,0 +1,104 @@
+name: iwyu
+
+on:
+  pull_request:
+    branches:
+      - master
+
+env:
+  BUILD_TYPE: RelWithDebInfo
+  BUILD_DIR: build
+  CLEANER_OUTPUT_PATH: build/clang-include-cleaner.log
+  # the "idl" subdirectory does not contain C++ source code. the .hh files in it are
+  # supposed to be processed by idl-compiler.py, so we don't check them using the cleaner
+  CLEANER_DIRS: test/unit exceptions alternator api auth cdc compaction db dht gms index lang message mutation mutation_writer node_ops raft redis replica service
+  SEASTAR_BAD_INCLUDE_OUTPUT_PATH: build/seastar-bad-include.log
+
+permissions: {}
+
+# cancel the in-progress run upon a repush
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  read-toolchain:
+    uses: ./.github/workflows/read-toolchain.yaml
+  clang-include-cleaner:
+    name: "Analyze #includes in source files"
+    needs:
+      - read-toolchain
+    runs-on: ubuntu-latest
+    container: ${{ needs.read-toolchain.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: |
+          sudo dnf -y install clang-tools-extra
+      - name: Generate compilation database
+        run: |
+          cmake                                         \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
+            -DCMAKE_C_COMPILER=clang                    \
+            -DCMAKE_CXX_COMPILER=clang++                \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON          \
+            -G Ninja                                    \
+            -B $BUILD_DIR                               \
+            -S .
+      - run: |
+          cmake                       \
+          --build $BUILD_DIR          \
+          --target wasmtime_bindings
+      - name: Build headers
+        run: |
+          swagger_targets=''
+          for f in api/api-doc/*.json; do
+            if test "${f#*.}" = json; then
+              name=$(basename "$f" .json)
+              if test $name != swagger20_header; then
+                swagger_targets+=" scylla_swagger_gen_$name"
+              fi
+            fi
+          done
+          cmake                                         \
+            --build build                               \
+             --target seastar_http_request_parser       \
+             --target idl-sources                       \
+             --target $swagger_targets
+      - run: |
+          echo "::add-matcher::.github/clang-include-cleaner.json"
+      - name: clang-include-cleaner
+        run: |
+          for d in $CLEANER_DIRS; do
+            find $d -name '*.cc' -o -name '*.hh'          \
+              -exec echo {} \;                            \
+              -exec clang-include-cleaner                 \
+                --ignore-headers=seastarx.hh              \
+                --print=changes                           \
+                -p $BUILD_DIR                             \
+                {} \; | tee --append $CLEANER_OUTPUT_PATH
+          done
+      - run: |
+          echo "::remove-matcher owner=clang-include-cleaner::"
+      - run: |
+          echo "::add-matcher::.github/seastar-bad-include.json"
+      - name: check for seastar includes
+        run: |
+          git -c safe.directory="$PWD"    \
+            grep -nE '#include +"seastar/' \
+            | tee "$SEASTAR_BAD_INCLUDE_OUTPUT_PATH"
+      - run: |
+          echo "::remove-matcher owner=seastar-bad-include::"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Logs
+          path: |
+            ${{ env.CLEANER_OUTPUT_PATH }}
+            ${{ env.SEASTAR_BAD_INCLUDE_OUTPUT_PATH }}
+      - name: fail if seastar headers are included as an internal library
+        run: |
+          if [ -s "$SEASTAR_BAD_INCLUDE_OUTPUT_PATH" ]; then
+            echo "::error::Found #include \"seastar/ in the source code. Use angle brackets instead."
+            exit 1
+          fi
