@@ -35,7 +35,8 @@ target_sources(service
     topology_mutation.cc
     topology_state_machine.cc
     vector_store_client.cc
-    view_building_state.cc)
+    view_building_state.cc
+    view_building_coordinator.cc)
 target_include_directories(service
   PUBLIC
     ${CMAKE_SOURCE_DIR})
