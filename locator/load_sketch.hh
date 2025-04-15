@@ -120,8 +120,10 @@ public:
         co_await utils::clear_gently(_nodes);
 
         if (only_table) {
-            auto& tmap = _tm->tablets().get_tablet_map(*only_table);
-            co_await populate_table(tmap, host, only_dc);
+            if (_tm->tablets().has_tablet_map(*only_table)) {
+                auto& tmap = _tm->tablets().get_tablet_map(*only_table);
+                co_await populate_table(tmap, host, only_dc);
+            }
         } else {
             for (auto&& [table, tmap]: _tm->tablets().all_tables()) {
                 co_await populate_table(*tmap, host, only_dc);
