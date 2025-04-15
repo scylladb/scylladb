@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <ranges>
 #include <seastar/core/condition-variable.hh>
 #include "db/view/view_build_status.hh"
 #include "locator/host_id.hh"
@@ -77,6 +78,7 @@ struct view_building_state {
     view_building_state(building_tasks tasks_state, std::optional<table_id> processed_base_table);
     view_building_state() = default;
     
+    std::optional<std::reference_wrapper<const view_building_task>> get_task(table_id base_id, locator::tablet_replica replica, utils::UUID id) const;
     std::vector<std::reference_wrapper<const view_building_task>> get_tasks_for_host(table_id base_id, locator::host_id host) const;
 };
 
