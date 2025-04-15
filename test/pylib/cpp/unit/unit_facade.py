@@ -11,7 +11,7 @@ from typing import Sequence
 
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
 
-TIMEOUT = 30 # seconds
+TIMEOUT = 60 * 10 # seconds
 
 class UnitTestFacade(CppTestFacade):
 

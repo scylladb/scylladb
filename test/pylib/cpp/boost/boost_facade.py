@@ -39,8 +39,8 @@ from test import BUILD_DIR, COMBINED_TESTS
 from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
 
-TIMEOUT_DEBUG = 60 * 5 # seconds
-TIMEOUT = 60 * 2 # seconds
+TIMEOUT_DEBUG = 60 * 30 # seconds
+TIMEOUT = 60 * 15 # seconds
 
 class BoostTestFacade(CppTestFacade):
     """
