@@ -1363,4 +1363,77 @@ future<> generation_service::close_cdc_streams(std::vector<canonical_mutation>& 
     }
 }
 
+std::vector<mutation> get_cdc_stream_compaction_mutations(table_id table, utils::UUID base_ts, const std::vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts) {
+    std::vector<mutation> muts;
+
+    auto gc_now = gc_clock::now();
+    auto tombstone_ts = ts - 1;
+
+    {
+        // write the base base stream set to cdc_streams_state
+        auto s = db::system_keyspace::cdc_streams_state();
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        m.partition().apply(tombstone(tombstone_ts, gc_now));
+        m.set_static_cell("timestamp", data_value(base_ts), ts);
+
+        for (auto sid : base_stream_set) {
+            auto ck = clustering_key::from_single_value(*s, sid.to_bytes());
+            m.partition().apply_insert(*s, ck, ts);
+        }
+        muts.emplace_back(std::move(m));
+    }
+
+    {
+        // remove all entries from cdc_streams_history up to the new base
+        auto s = db::system_keyspace::cdc_streams_history();
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        auto range = query::clustering_range::make_ending_with({
+                clustering_key_prefix::from_single_value(*s, timeuuid_type->decompose(base_ts)), true});
+        auto bv = bound_view::from_range(range);
+        m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{ts, gc_now}});
+        muts.emplace_back(std::move(m));
+    }
+
+    return muts;
+}
+
+future<> generation_service::compact_cdc_streams(std::vector<canonical_mutation>& muts, api::timestamp_type ts) {
+    constexpr auto default_compaction_age = std::chrono::duration_cast<db_clock::duration>(std::chrono::minutes(60));
+
+    auto compaction_age = utils::get_local_injector().is_enabled("short_cdc_stream_compaction_age") ? std::chrono::seconds(1) : default_compaction_age;
+    auto ts_upper_bound = db_clock::now() - compaction_age;
+
+    const auto& pending_streams = _cdc_metadata.get_pending_streams();
+
+    for (const auto& [table, table_streams] : _cdc_metadata.get_all_tablet_streams()) {
+        if (pending_streams.contains(table)) {
+            continue;
+        }
+        auto first_nonobsolete_it = table_streams.begin();
+        while (first_nonobsolete_it != table_streams.end() && std::next(first_nonobsolete_it) != table_streams.end()) {
+            auto it_tp = db_clock::time_point(utils::UUID_gen::unix_timestamp(first_nonobsolete_it->second.ts));
+            if (it_tp <= ts_upper_bound) {
+                first_nonobsolete_it++;
+            } else {
+                break;
+            }
+        }
+
+        if (first_nonobsolete_it == table_streams.begin()) {
+            // no streams to compact
+            continue;
+        }
+
+        auto table_muts = get_cdc_stream_compaction_mutations(table, first_nonobsolete_it->second.ts, first_nonobsolete_it->second.streams, ts);
+        for (auto&& m : table_muts) {
+            muts.emplace_back(std::move(m));
+        }
+        co_await coroutine::maybe_yield();
+    }
+}
+
 } // namespace cdc
