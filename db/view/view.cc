@@ -10,9 +10,11 @@
 
 #include <chrono>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
@@ -55,6 +57,7 @@
 #include "mutation/mutation_partition.hh"
 #include "seastar/core/on_internal_error.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
 #include "timestamp.hh"
@@ -75,6 +78,7 @@
 #include "delete_ghost_rows_visitor.hh"
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
+#include "idl/view.dist.hh"
 
 using namespace std::chrono_literals;
 

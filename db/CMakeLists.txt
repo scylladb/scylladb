@@ -36,6 +36,7 @@ target_sources(db
     view/row_locking.cc
     view/view_building_state.cc
     view/view_consumer.cc
+    view/view_building_worker.cc
     sstables-format-selector.cc
     snapshot-ctl.cc
     snapshot/backup_task.cc

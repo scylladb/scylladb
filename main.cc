@@ -12,6 +12,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include "db/view/view_building_worker.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
@@ -1370,6 +1371,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<db::view::view_builder> view_builder;
+            static sharded<db::view::view_building_worker> view_building_worker;
             static sharded<cdc::generation_service> cdc_generation_service;
 
             db::sstables_format_selector sst_format_selector(db);
@@ -1755,6 +1757,12 @@ sharded<locator::shared_token_metadata> token_metadata;
             view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
             auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
                 view_builder.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting the view building worker");
+            view_building_worker.start(std::ref(db), std::ref(sys_ks), std::ref(mm_notifier), std::ref(group0_client), std::ref(view_update_generator), std::ref(messaging), std::ref(vbsm)).get();
+            auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [] {
+                view_building_worker.stop().get();
             });
 
             checkpoint(stop_signal, "starting repair service");
@@ -2390,6 +2398,12 @@ sharded<locator::shared_token_metadata> token_metadata;
             }
             auto drain_view_builder = defer_verbose_shutdown("draining view builders", [&] {
                 view_builder.invoke_on_all(&db::view::view_builder::drain).get();
+            });
+
+            checkpoint(stop_signal, "starting view building worker's state observer");
+            view_building_worker.local().start_state_observer();
+            auto drain_view_buiding_worker = defer_verbose_shutdown("draining view building worker", [&] {
+                view_building_worker.invoke_on_all(&db::view::view_building_worker::drain).get();
             });
 
             api::set_server_view_builder(ctx, view_builder, gossiper).get();
