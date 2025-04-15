@@ -61,24 +61,19 @@ class UnitTestFacade(CppTestFacade):
             resource_gather.remove_cgroup()
             allure.attach(out, name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
-                'working_dir: {working_dir}\n'
-                'Internal Error: calling {executable} '
-                'for test {test_id} failed (returncode={returncode}):\n'
-                'output:{stdout}\n'
-                'command to repeat:{command}'
+                f'working_dir: {os.getcwd()}\n'
+                f'Internal Error: calling {executable} '
+                f'for test {test_name} failed with error ({p.returncode if p.returncode is not None else "timeout reached"}):\n'
+                f'output:{stdout_file_path.absolute()}\n'
+                f'command to repeat:{" ".join(p.args)}'
             )
             failure = CppTestFailure(
                 file_name.name,
                 line_num=0,
-                contents=msg.format(
-                    working_dir=os.getcwd(),
-                    executable=executable,
-                    test_id=test_name,
-                    stdout=stdout_file_path.absolute(),
-                    command=' '.join(p.args),
-                    returncode=p.returncode,
-                ),
+                contents=msg
             )
             return [failure], out
+
+        stdout_file_path.unlink(missing_ok=True)
 
         return None, out

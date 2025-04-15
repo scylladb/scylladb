@@ -154,32 +154,24 @@ class BoostTestFacade(CppTestFacade):
         if not test_passed:
             allure.attach(out, name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
-                'working_dir: {working_dir}\n'
-                'Internal Error: calling {executable} '
-                'for test {test_id} failed (return_code={return_code}):\n'
-                'output file:{stdout}\n'
-                'log:{log}\n'
-                'report:{report}\n'
-                'command to repeat:{command}'
+                f'working_dir: {os.getcwd()}\n'
+                f'Internal Error: calling {executable} '
+                f'for test {test_name} failed with error ({p.returncode if p.returncode is not None else "timeout reached"}):\n'
+                f'output file:{stdout_file_path.absolute()}\n'
+                f'log:{log}\n'
+                f'report:{report}\n'
+                f'command to repeat:{" ".join(p.args)}'
             )
             failure = CppTestFailure(
                 file_name.name,
                 line_num=results[0].line_num if results is not None else 'N/A',
-                contents=msg.format(
-                    working_dir=os.getcwd(),
-                    executable=executable,
-                    test_id=test_name,
-                    stdout=stdout_file_path.absolute(),
-                    log=log,
-                    report=report,
-                    command=' '.join(p.args),
-                    return_code=p.returncode,
-                ),
+                contents=msg,
             )
             return [failure], out
 
         report_xml.unlink(missing_ok=True)
         log_xml.unlink(missing_ok=True)
+        stdout_file_path.unlink(missing_ok=True)
 
         if results:
             return results, out
