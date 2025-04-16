@@ -134,6 +134,44 @@ std::vector<std::reference_wrapper<const view_building_task>> view_building_stat
     return host_tasks;
 }
 
+std::map<locator::tablet_id, std::vector<view_building_task>> view_building_state::collect_tasks_by_tablet_id(table_id base_table_id) const {
+    if (!tasks_state.contains(base_table_id)) {
+        return {};
+    }
+
+    std::map<locator::tablet_id, std::vector<view_building_task>> map;
+    auto merge_maps = [&] (std::map<locator::tablet_id, std::vector<view_building_task>>&& other) {
+        for (auto&& [tid, tasks]: std::move(other)) {
+            auto& tasks_vec = map[tid];
+            tasks_vec.insert(tasks_vec.end(), std::make_move_iterator(tasks.begin()), std::make_move_iterator(tasks.end()));
+        }
+    };
+
+    for (auto& [replica, _]: tasks_state.at(base_table_id)) {
+        merge_maps(collect_tasks_by_tablet_id(base_table_id, replica));
+    }
+
+    return map;
+}
+
+std::map<locator::tablet_id, std::vector<view_building_task>> view_building_state::collect_tasks_by_tablet_id(table_id base_table_id, const locator::tablet_replica& replica) const {
+    if (!tasks_state.contains(base_table_id) || !tasks_state.at(base_table_id).contains(replica)) {
+        return {};
+    }
+    
+    std::map<locator::tablet_id, std::vector<view_building_task>> tasks;
+    auto& replica_tasks = tasks_state.at(base_table_id).at(replica);
+    for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
+        for (auto& [_, task]: view_tasks) {
+            tasks[task.tid].push_back(task);
+        }
+    }
+    for (auto& [_, task]: replica_tasks.staging_tasks) {
+        tasks[task.tid].push_back(task);
+    }
+    return tasks;
+}
+
 }
 
 }
