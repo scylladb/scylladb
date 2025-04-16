@@ -380,19 +380,6 @@ std::vector<utils::UUID> view_building_coordinator::get_started_tasks(locator::t
     }) | std::ranges::to<std::vector>();
 }
 
-static std::map<dht::token, std::vector<view_building_task>> collect_tasks_by_last_token(const replica_tasks& replica_tasks) {
-    std::map<dht::token, std::vector<view_building_task>> tasks;
-    for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
-        for (auto& [_, task]: view_tasks) {
-            tasks[task.last_token].push_back(task);
-        }
-    }
-    for (auto& [_, task]: replica_tasks.staging_tasks) {
-        tasks[task.last_token].push_back(task);
-    }
-    return tasks;
-}
-
 // Returns list of tasks which can be started together.
 // A task can be started if corresponding tablet is not in migration process.
 // All returned tasks can be executed together, meaning that their type, base_id, table_id and replica are the same.
@@ -416,7 +403,7 @@ std::vector<utils::UUID> view_building_coordinator::select_tasks_for_replica(loc
     }
 
     auto& tablet_map = _db.get_token_metadata().tablets().get_tablet_map(*_vb_sm.building_state.currently_processed_base_table);
-    for (auto& [token, tasks]: collect_tasks_by_last_token(base_tasks[replica])) {
+    for (auto& [token, tasks]: _vb_sm.building_state.collect_tasks_by_last_token(*_vb_sm.building_state.currently_processed_base_table, replica)) {
         auto tid = tablet_map.get_tablet_id(token);
         if (tablet_map.get_tablet_transition_info(tid)) {
             vbc_logger.debug("Tablet {} on replica {} is in transition.", tid, replica);
