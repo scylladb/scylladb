@@ -759,6 +759,43 @@ future<std::vector<mutation>> prepare_aggregate_drop_announcement(storage_proxy&
     return include_keyspace(sp, *keyspace.metadata(), std::move(mutations));
 }
 
+static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_proxy& sp, lw_shared_ptr<keyspace_metadata> ks_meta, std::vector<mutation>& out, api::timestamp_type ts) {
+    using namespace service::view_building;
+    mlogger.info("Cleaning view building state for all views in keyspace {} ", ks_meta->name());
+
+    auto& sys_ks = sp.system_keyspace();
+    auto& vb_state_machine = sp.view_building_state_machine();
+
+    auto drop_all_tasks_in_task_map = [&] (const view_building::task_map& task_map) -> future<> {
+        for (auto& [id, _]: task_map) {
+            auto mut = co_await sys_ks.make_remove_view_building_task_mutation(ts, id);
+            out.push_back(std::move(mut));
+            mlogger.trace("Aborting view building task with ID: {} because the keyspace is being dropped", id);
+        }
+    };
+
+    // Drop view building tasks - this operation will also automatically abort them if any is already started
+    for (auto& table: ks_meta->tables()) {
+        auto tid = table->id();
+        if (!vb_state_machine.building_state.tasks_state.contains(tid)) {
+            continue;
+        }
+
+        for (auto [_, replica_tasks]: vb_state_machine.building_state.tasks_state.at(tid)) {
+            for (auto& [_, views_tasks]: replica_tasks.view_tasks) {
+                co_await drop_all_tasks_in_task_map(views_tasks);
+            }
+            co_await drop_all_tasks_in_task_map(replica_tasks.staging_tasks);
+        }
+    }
+
+    for (auto& view: ks_meta->views()) {
+        // Remove entries from `system.view_build_status_v2`
+        auto build_status_mut = co_await sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()});
+        out.push_back(std::move(build_status_mut));
+    }
+}
+
 future<std::vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& sp, const sstring& ks_name, api::timestamp_type ts) {
     auto& db = sp.local_db();
     if (!db.has_keyspace(ks_name)) {
@@ -769,6 +806,9 @@ future<std::vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& 
     return seastar::async([&sp, &keyspace, ts, ks_name] {
         auto& db = sp.local_db();
         auto mutations = db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
+        if (sp.features().view_building_coordinator && keyspace.uses_tablets()) {
+            add_cleanup_view_building_state_drop_keyspace_mutations(sp, keyspace.metadata(), mutations, ts).get();
+        }
         db.get_notifier().before_drop_keyspace(ks_name, mutations, ts);
         return mutations;
     });
