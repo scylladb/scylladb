@@ -31,7 +31,8 @@ namespace db::snapshot {
 
 backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
                                    snapshot_ctl& ctl,
-                                   shared_ptr<s3::client> client,
+                                   sharded<sstables::storage_manager>& sstm,
+                                   sstring endpoint,
                                    sstring bucket,
                                    sstring prefix,
                                    sstring ks,
@@ -40,7 +41,9 @@ backup_task_impl::backup_task_impl(tasks::task_manager::module_ptr module,
                                    bool move_files) noexcept
     : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
     , _snap_ctl(ctl)
-    , _client(std::move(client))
+    , _sstm(sstm)
+    , _endpoint(std::move(endpoint))
+    , _client(_sstm.local().get_endpoint_client(_endpoint))
     , _bucket(std::move(bucket))
     , _prefix(std::move(prefix))
     , _snapshot_dir(std::move(snapshot_dir))

@@ -40,6 +40,8 @@ namespace snapshot {
 
 class backup_task_impl : public tasks::task_manager::task::impl {
     snapshot_ctl& _snap_ctl;
+    sharded<sstables::storage_manager>& _sstm;
+    sstring _endpoint;
     shared_ptr<s3::client> _client;
     sstring _bucket;
     sstring _prefix;
@@ -94,7 +96,8 @@ protected:
 public:
     backup_task_impl(tasks::task_manager::module_ptr module,
                      snapshot_ctl& ctl,
-                     shared_ptr<s3::client> cln,
+                     sharded<sstables::storage_manager>& sstm,
+                     sstring endpoint,
                      sstring bucket,
                      sstring prefix,
                      sstring ks,
