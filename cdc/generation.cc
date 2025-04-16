@@ -1290,6 +1290,19 @@ mutation get_open_and_close_streams_mutation(table_id table, const cdc_stream_di
     return m;
 }
 
+future<std::vector<cdc::stream_id>> generation_service::change_streams(locator::token_metadata_ptr tm, table_id table, const locator::tablet_map& new_tablet_map) {
+    std::vector<cdc::stream_id> new_streams;
+    // check if it's a CDC table. if not, return empty vector.
+    if (_cdc_metadata.get_all_tablet_streams().contains(table)) {
+        new_streams.reserve(new_tablet_map.tablet_count());
+        auto tokens = co_await new_tablet_map.get_sorted_tokens();
+        for (const auto& t : tokens) {
+            new_streams.emplace_back(cdc::stream_id(t, 0));
+        }
+    }
+    co_return std::move(new_streams);
+}
+
 future<> generation_service::commit_cdc_streams(std::vector<canonical_mutation>& muts, db_clock::time_point stream_ts, api::timestamp_type ts) {
     auto stream_uuid = utils::UUID_gen::get_random_time_UUID_from_micros(stream_ts.time_since_epoch());
     api::timestamp_type new_ts = std::chrono::duration_cast<api::timestamp_clock::duration>(stream_ts.time_since_epoch()).count();
