@@ -110,6 +110,8 @@ struct topology {
     enum class transition_state: uint16_t {
         join_group0,
         commit_cdc_generation,
+        commit_cdc_streams,
+        close_cdc_streams,
         tablet_draining,
         write_both_read_old,
         write_both_read_new,
@@ -265,6 +267,7 @@ struct raft_topology_cmd_result {
         success
     };
     command_status status = command_status::fail;
+    std::optional<db_clock::time_point> local_time;
 };
 
 // This class is used in RPC's signatures to hold the topology_version of the caller.

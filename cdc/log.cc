@@ -602,6 +602,7 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
         });
     }
     b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
+    b.with_column(log_meta_column_name_bytes("closed_time"), timestamp_type, column_kind::static_column);
     b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("operation"), data_type_for<operation_native_type>());

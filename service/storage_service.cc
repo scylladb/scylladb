@@ -752,6 +752,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                     [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
+                case topology::transition_state::commit_cdc_streams:
+                    [[fallthrough]];
+                case topology::transition_state::close_cdc_streams:
+                    [[fallthrough]];
                 case topology::transition_state::tablet_draining:
                     [[fallthrough]];
                 case topology::transition_state::write_both_read_old:
@@ -1190,6 +1194,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, _view_building_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
+                    _cdc_gens.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service,
@@ -6143,6 +6148,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
     } catch (...) {
         rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, std::current_exception());
     }
+
+    result.local_time = db_clock::now();
 
     rtlogger.info("topology cmd rpc {} completed with status={} index={}",
         cmd.cmd, (result.status == raft_topology_cmd_result::command_status::success) ? "succeeded" : "failed", cmd_index);
