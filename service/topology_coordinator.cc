@@ -946,6 +946,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 auto views = ks.metadata()->views();
                 tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
                 for (const auto& table_or_mv : tables_with_mvs) {
+                    locator::tablet_map old_tablets{unimportant_init_tablet_count};
                     try {
                         if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
                             // Apply the transition only on base tables.
@@ -953,7 +954,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             // the base table will coordinate the transition for the entire group.
                             continue;
                         }
-                        locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table_or_mv->id());
+                        old_tablets = tmptr->tablets().get_tablet_map(table_or_mv->id());
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, old_tablets);
@@ -977,6 +978,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         ));
                         co_await coroutine::maybe_yield();
                     });
+                    co_await _vb_coordinator->generate_rf_change_updates(updates, guard, table_or_mv->id(), old_tablets, new_tablet_map);
                 }
             } else {
                 error = "Can't ALTER keyspace " + ks_name + ", keyspace doesn't exist";
@@ -1220,7 +1222,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_transition(last_token, mig.kind)
                 .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
                 .build());
-        co_return;
+        co_await _vb_coordinator->generate_tablet_migration_updates(out, guard, last_token, mig);
     }
 
     void generate_repair_update(std::vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
@@ -1258,7 +1260,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
                 .set_resize_decision(std::move(resize_decision), _feature_service)
                 .build());
-        co_return;
+        co_await _vb_coordinator->generate_tablet_resize_updates(out, guard, tmap, table_id, resize_decision);
     }
 
     future<> generate_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
