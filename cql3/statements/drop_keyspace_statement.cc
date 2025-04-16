@@ -49,7 +49,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
     ::shared_ptr<cql_transport::event::schema_change> ret;
 
     try {
-        auto muts = co_await service::prepare_keyspace_drop_announcement(qp.db().real_database(), _keyspace, mc.write_timestamp());
+        auto muts = co_await service::prepare_keyspace_drop_announcement(qp.proxy(), _keyspace, mc.write_timestamp());
         mc.add_mutations(std::move(muts));
 
         using namespace cql_transport;
