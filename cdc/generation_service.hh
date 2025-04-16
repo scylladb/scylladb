@@ -13,6 +13,10 @@
 #include "cdc/generation_id.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace db {
 class system_distributed_keyspace;
 class system_keyspace;
@@ -147,6 +151,9 @@ public:
 
     future<> load_cdc_tablet_streams();
     future<> load_cdc_tablet_streams(std::unordered_set<table_id> changed_tables);
+
+    future<> commit_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, db_clock::time_point stream_ts, api::timestamp_type ts);
+    future<> close_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, cql3::query_processor& qp, api::timestamp_type ts);
 
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
