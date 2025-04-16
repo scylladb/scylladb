@@ -18,7 +18,7 @@
 #include "mutation/mutation_fragment.hh"
 #include "readers/mutation_reader.hh"
 #include "test/lib/mutation_source_test.hh"
-#include "readers/reversing_v2.hh"
+#include "readers/reversing.hh"
 #include "readers/delegating.hh"
 #include "readers/multi_range.hh"
 #include "replica/memtable.hh"

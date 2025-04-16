@@ -54,7 +54,7 @@
 #include "locator/tablets.hh"
 
 #include "utils/error_injection.hh"
-#include "readers/reversing_v2.hh"
+#include "readers/reversing.hh"
 #include "readers/empty.hh"
 #include "readers/multi_range.hh"
 #include "readers/combined.hh"

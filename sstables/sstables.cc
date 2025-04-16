@@ -77,7 +77,7 @@
 #include "tombstone_gc.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
-#include "readers/reversing_v2.hh"
+#include "readers/reversing.hh"
 #include "readers/forwardable.hh"
 
 #include "release.hh"

@@ -27,7 +27,7 @@
 #include "readers/mutation_source.hh"
 #include "readers/nonforwardable.hh"
 #include "readers/queue.hh"
-#include "readers/reversing_v2.hh"
+#include "readers/reversing.hh"
 #include "readers/upgrading_consumer.hh"
 #include "tombstone_gc.hh"
 #include <seastar/core/coroutine.hh>
