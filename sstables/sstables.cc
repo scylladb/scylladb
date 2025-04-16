@@ -82,6 +82,9 @@
 
 #include "release.hh"
 #include "utils/build_id.hh"
+#include "utils/io-wrappers.hh"
+
+#include <boost/lexical_cast.hpp>
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -145,16 +148,6 @@ read_monitor_generator& default_read_monitor_generator() {
 future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) const noexcept {
   try {
     auto f = _storage->open_component(*this, type, flags, options, _manager.config().enable_sstable_data_integrity_check());
-
-    if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto * ext : _manager.config().extensions().sstable_file_io_extensions()) {
-            f = with_file_close_on_failure(std::move(f), [ext, this, type, flags] (file f) {
-               return ext->wrap_file(const_cast<sstable&>(*this), type, f, flags).then([f](file nf) mutable {
-                   return nf ? nf : std::move(f);
-               });
-            });
-        }
-    }
 
     f = with_file_close_on_failure(std::move(f), [&error_handler] (file f) {
         return make_checked_file(error_handler, std::move(f));
@@ -3635,6 +3628,18 @@ generation_type::from_string(const std::string& s) {
         int64_t lsb = decode_base36(match[4]);
         return generation_type{utils::UUID_gen::get_time_UUID_raw(timestamp, lsb)};
     }
+}
+
+future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_type c, data_sink sink) {
+    file dummy = create_noop_file();
+    auto f = co_await wrap_file(sst, c, std::move(dummy), open_flags::wo);
+
+    if (!f) {
+        co_return sink;
+    }
+    co_await f.close();
+    f = co_await wrap_file(sst, c, create_file_for_sink(std::move(sink)), open_flags::wo);
+    co_return co_await make_file_data_sink(std::move(f), file_output_stream_options{});
 }
 
 } // namespace sstables
