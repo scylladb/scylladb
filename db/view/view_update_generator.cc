@@ -19,7 +19,7 @@
 #include "readers/evictable.hh"
 #include "dht/partition_filter.hh"
 #include "utils/pretty_printers.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
 

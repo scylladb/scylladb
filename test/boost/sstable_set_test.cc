@@ -21,7 +21,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_utils.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 
 BOOST_AUTO_TEST_SUITE(sstable_set_test)
 

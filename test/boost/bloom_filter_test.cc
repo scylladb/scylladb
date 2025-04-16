@@ -14,7 +14,7 @@
 #include "test/lib/sstable_utils.hh"
 
 #include "db/config.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/error_injection.hh"
 

@@ -22,7 +22,7 @@
 
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 
 static schema_builder new_table() {

@@ -18,7 +18,7 @@
 #include "mutation/mutation_rebuilder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
@@ -31,7 +31,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "readers/empty.hh"
 #include "readers/generating_v2.hh"
 #include "readers/combined.hh"

@@ -16,7 +16,7 @@
 #include "db/config.hh"
 #include "index/secondary_index_manager.hh"
 #include "sstables/sstable_writer.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "tools/schema_loader.hh"
 #include "view_info.hh"
 

@@ -35,7 +35,7 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/test_utils.hh"
 
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "readers/from_fragments.hh"
 #include "readers/forwardable.hh"
 #include "readers/compacting.hh"

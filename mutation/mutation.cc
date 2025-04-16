@@ -16,7 +16,7 @@
 #include "types/tuple.hh"
 #include "dht/i_partitioner.hh"
 #include "reader_concurrency_semaphore.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 
 logging::logger mlog("mutation");
 

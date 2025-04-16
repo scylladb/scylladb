@@ -30,7 +30,7 @@
 #include "test/lib/fragment_scatterer.hh"
 #include "test/lib/test_utils.hh"
 
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 
 #include <boost/range/join.hpp>
 

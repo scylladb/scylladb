@@ -69,7 +69,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "readers/from_fragments.hh"
 #include "readers/combined.hh"
 #include "utils/assert.hh"

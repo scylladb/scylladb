@@ -53,7 +53,7 @@
 #include "utils/assert.hh"
 #include "mutation/mutation_rebuilder.hh"
 
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "readers/forwardable.hh"
 #include "readers/from_fragments.hh"
 #include "readers/mutation_fragment_v1_stream.hh"

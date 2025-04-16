@@ -36,7 +36,7 @@
 #include "test/lib/simple_schema.hh"
 #include "test/lib/test_utils.hh"
 
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "readers/evictable.hh"
 
 BOOST_AUTO_TEST_SUITE(view_build_test)

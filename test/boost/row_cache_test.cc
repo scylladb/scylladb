@@ -39,7 +39,7 @@
 #include "utils/throttle.hh"
 
 #include <fmt/ranges.h>
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "readers/delegating_impl.hh"
 #include "readers/empty.hh"
 #include <seastar/testing/thread_test_case.hh>

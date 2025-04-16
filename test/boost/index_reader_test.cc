@@ -13,7 +13,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/make_random_string.hh"
 
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 
 using namespace sstables;
 
