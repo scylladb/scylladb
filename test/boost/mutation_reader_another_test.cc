@@ -19,7 +19,7 @@
 #include "readers/mutation_reader.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "readers/reversing_v2.hh"
-#include "readers/delegating_v2.hh"
+#include "readers/delegating.hh"
 #include "readers/multi_range.hh"
 #include "replica/memtable.hh"
 #include "db/row_cache.hh"

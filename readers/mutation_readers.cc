@@ -15,7 +15,7 @@
 #include "mutation/range_tombstone_assembler.hh"
 #include "mutation/range_tombstone_splitter.hh"
 #include "readers/combined.hh"
-#include "readers/delegating_v2.hh"
+#include "readers/delegating.hh"
 #include "readers/delegating_impl.hh"
 #include "readers/empty_v2.hh"
 #include "readers/mutation_reader.hh"
