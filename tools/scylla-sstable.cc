@@ -31,7 +31,7 @@
 #include "gms/feature_service.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/combined.hh"
-#include "readers/generating_v2.hh"
+#include "readers/generating.hh"
 #include "schema/schema_builder.hh"
 #include "sstables/index_reader.hh"
 #include "sstables/sstables_manager.hh"

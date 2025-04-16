@@ -33,7 +33,7 @@
 
 #include "readers/from_mutations.hh"
 #include "readers/empty.hh"
-#include "readers/generating_v2.hh"
+#include "readers/generating.hh"
 #include "readers/combined.hh"
 
 BOOST_AUTO_TEST_SUITE(mutation_writer_test)

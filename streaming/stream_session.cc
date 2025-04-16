@@ -29,7 +29,7 @@
 #include "replica/database.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "consumer.hh"
-#include "readers/generating_v2.hh"
+#include "readers/generating.hh"
 #include "service/topology_guard.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
