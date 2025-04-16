@@ -1332,6 +1332,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    future<bool> generate_new_cdc_streams(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, const locator::tablet_map& new_tablet_map) {
+        auto tm = get_token_metadata_ptr();
+        auto new_streams = co_await _cdc_gens.generate_new_streams(table_id, new_tablet_map);
+        if (new_streams.size() > 0) {
+            auto mut = co_await cdc::get_insert_pending_stream_mutation(table_id, new_streams, guard.write_timestamp());
+            out.emplace_back(std::move(mut));
+            co_return true;
+        }
+        co_return false;
+    }
+
     // When "drain" is true, we migrate tablets only as long as there are nodes to drain
     // and then change the transition state to write_both_read_old. Also, while draining,
     // we ignore pending topology requests which normally interrupt load balancing.
@@ -1884,6 +1895,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
+        bool has_new_cdc_streams = false;
 
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
@@ -1921,13 +1933,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
                 });
             }
+
+            for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
+                if (co_await generate_new_cdc_streams(updates, guard, table_id, new_tablet_map)) {
+                    has_new_cdc_streams = true;
+                }
+            }
         }
 
-        updates.emplace_back(
-            topology_mutation_builder(guard.write_timestamp())
-                .del_transition_state()
-                .set_version(_topo_sm._topology.version + 1)
-                .build());
+        auto builder = topology_mutation_builder(guard.write_timestamp())
+            .set_version(_topo_sm._topology.version + 1);
+        if (has_new_cdc_streams) {
+            builder.set_transition_state(topology::transition_state::commit_cdc_streams);
+        } else {
+            builder.del_transition_state();
+        }
+        updates.emplace_back(builder.build());
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet split finalization"));
     }
 

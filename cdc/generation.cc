@@ -1424,4 +1424,17 @@ future<> generation_service::close_cdc_streams(utils::chunked_vector<canonical_m
     }
 }
 
+future<std::vector<cdc::stream_id>> generation_service::generate_new_streams(table_id table, const locator::tablet_map& new_tablet_map) {
+    std::vector<cdc::stream_id> new_streams;
+    // check if it's a CDC table. if not, return empty vector.
+    if (_cdc_metadata.get_all_tablet_streams().contains(table)) {
+        new_streams.reserve(new_tablet_map.tablet_count());
+        for (auto tid : new_tablet_map.tablet_ids()) {
+            new_streams.emplace_back(new_tablet_map.get_last_token(tid), 0);
+            co_await coroutine::maybe_yield();
+        }
+    }
+    co_return std::move(new_streams);
+}
+
 } // namespace cdc
