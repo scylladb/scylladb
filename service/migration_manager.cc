@@ -694,7 +694,7 @@ future<std::vector<mutation>> prepare_column_family_update_announcement(storage_
 
         auto mutations = co_await seastar::async([&] {
             // Can call notifier when it creates new indexes, so needs to run in Seastar thread
-            return db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts);
+            return db::schema_tables::make_update_table_mutations(sp, keyspace, old_schema, cfm, ts);
         });
         for (auto&& view : view_updates) {
             auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
@@ -841,7 +841,9 @@ future<std::vector<mutation>> prepare_column_family_drop_announcement(storage_pr
         std::vector<mutation> drop_si_mutations;
         if (!schema->all_indices().empty()) {
             auto builder = schema_builder(schema).without_indexes();
-            drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), ts);
+            drop_si_mutations = co_await seastar::async([&] {
+                return db::schema_tables::make_update_table_mutations(sp, keyspace, schema, builder.build(), ts);
+            });
         }
         auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
         mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
