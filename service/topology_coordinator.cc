@@ -939,7 +939,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
                                         .set_new_replicas(last_token, tablet_info.replicas)
                                         .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
-                                        .set_transition(last_token, locator::choose_rebuild_transition_kind(_db.features()))
+                                        .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
                                         .build()
                         ));
                         co_await coroutine::maybe_yield();
@@ -1183,7 +1183,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_new_replicas(last_token, locator::get_new_replicas(tmap.get_tablet_info(mig.tablet.tablet), mig))
                 .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
                 .set_transition(last_token, mig.kind)
-                .set_migration_task_info(last_token, std::move(migration_task_info), _db.features())
+                .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
                 .build());
     }
 
@@ -1221,7 +1221,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                            table_id, resize_decision.type_name(), resize_decision.sequence_number);
             out.emplace_back(
                 replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
-                    .set_resize_decision(std::move(resize_decision), _db.features())
+                    .set_resize_decision(std::move(resize_decision), _feature_service)
                     .build());
     }
 
@@ -1515,7 +1515,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         _tablets.erase(gid);
                         updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
-                                .del_migration_task_info(last_token, _db.features())
+                                .del_migration_task_info(last_token, _feature_service)
                                 .build());
                     }
                     break;
@@ -1528,7 +1528,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         updates.emplace_back(get_mutation_builder()
                                 .del_transition(last_token)
                                 .set_replicas(last_token, trinfo.next)
-                                .del_migration_task_info(last_token, _db.features())
+                                .del_migration_task_info(last_token, _feature_service)
                                 .build());
                     }
                 }
@@ -1722,7 +1722,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 s->ks_name(),
                 s->cf_name(),
                 guard.write_timestamp(),
-                _db.features()));
+                _feature_service));
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
@@ -3021,7 +3021,7 @@ future<bool> topology_coordinator::maybe_start_tablet_resize_finalization(group0
     }
 
     auto resize_finalization_transition_state = [this] {
-        return _db.features().tablet_merge ? topology::transition_state::tablet_resize_finalization : topology::transition_state::tablet_split_finalization;
+        return _feature_service.tablet_merge ? topology::transition_state::tablet_resize_finalization : topology::transition_state::tablet_split_finalization;
     };
 
     std::vector<canonical_mutation> updates;
