@@ -780,13 +780,15 @@ future<utils::chunked_vector<mutation>> prepare_aggregate_drop_announcement(stor
     return include_keyspace(sp, *keyspace.metadata(), std::move(mutations));
 }
 
-future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(replica::database& db, const sstring& ks_name, api::timestamp_type ts) {
+future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& sp, const sstring& ks_name, api::timestamp_type ts) {
+    auto& db = sp.local_db();
     if (!db.has_keyspace(ks_name)) {
         throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    return seastar::async([&db, &keyspace, ts, ks_name] {
+    return seastar::async([&sp, &keyspace, ts, ks_name] {
+        auto& db = sp.local_db();
         auto mutations = db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
         db.get_notifier().before_drop_keyspace(ks_name, mutations, ts);
         return mutations;

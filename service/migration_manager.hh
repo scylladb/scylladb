@@ -252,7 +252,7 @@ future<utils::chunked_vector<mutation>> prepare_aggregate_drop_announcement(stor
 
 future<utils::chunked_vector<mutation>> prepare_update_type_announcement(storage_proxy& sp, user_type updated_type, api::timestamp_type ts);
 
-future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(replica::database& db, const sstring& ks_name, api::timestamp_type ts);
+future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& sp, const sstring& ks_name, api::timestamp_type ts);
 
 class drop_views_tag;
 using drop_views = bool_class<drop_views_tag>;
