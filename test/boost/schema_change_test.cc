@@ -204,7 +204,7 @@ SEASTAR_TEST_CASE(test_concurrent_column_addition) {
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 auto&& keyspace = e.db().local().find_keyspace(s0->ks_name()).metadata();
-                auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s0, s2,
+                auto muts = db::schema_tables::make_update_table_mutations(e.get_storage_proxy().local(), keyspace, s0, s2,
                         group0_guard.write_timestamp());
                 mm.announce(std::move(muts), std::move(group0_guard), "").get();
             }
@@ -370,7 +370,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
             // Drop v1
             {
                 auto group0_guard = mm.start_group0_operation().get();
-                auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s1, s2,
+                auto muts = db::schema_tables::make_update_table_mutations(e.get_storage_proxy().local(), keyspace, s1, s2,
                     group0_guard.write_timestamp());
                 mm.announce(std::move(muts), std::move(group0_guard), "").get();
             }
@@ -388,7 +388,7 @@ SEASTAR_TEST_CASE(test_combined_column_add_and_drop) {
                         .build();
 
                 auto group0_guard = mm.start_group0_operation().get();
-                auto muts = db::schema_tables::make_update_table_mutations(e.db().local(), keyspace, s3, s4,
+                auto muts = db::schema_tables::make_update_table_mutations(e.get_storage_proxy().local(), keyspace, s3, s4,
                     group0_guard.write_timestamp());
                 mm.announce(std::move(muts), std::move(group0_guard), "").get();
             }
