@@ -772,7 +772,7 @@ future<> client::multipart_upload::finalize_upload() {
 
     unsigned parts_xml_len = prepare_multipart_upload_parts(_part_etags);
     if (parts_xml_len == 0) {
-        co_await coroutine::return_exception(std::runtime_error("couldn't upload parts"));
+        co_await coroutine::return_exception(std::runtime_error("Failed to parse ETag list. Aborting multipart upload."));
     }
 
     s3l.trace("POST upload completion {} parts (upload id {})", _part_etags.size(), _upload_id);
