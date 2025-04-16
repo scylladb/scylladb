@@ -13,7 +13,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/make_random_string.hh"
 
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 
 using namespace sstables;
 
@@ -22,7 +22,7 @@ SEASTAR_TEST_CASE(test_abort_during_index_read) {
         simple_schema ss;
         auto schema_ptr = ss.schema();
         auto mut = mutation(schema_ptr, ss.make_pkey());
-        auto mut_reader = make_mutation_reader_from_mutations_v2(schema_ptr, env.make_reader_permit(), std::move(mut));
+        auto mut_reader = make_mutation_reader_from_mutations(schema_ptr, env.make_reader_permit(), std::move(mut));
         auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer());
 
         struct dummy_index_consumer {
@@ -73,7 +73,7 @@ SEASTAR_TEST_CASE(test_promoted_index_parsing_page_crossing_and_retries) {
         std::sort(keys.begin(), keys.end(), less);
 
         env.manager().set_promoted_index_block_size(1); // force entry for each row
-        auto mut_reader = make_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut));
+        auto mut_reader = make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut));
         auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer());
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
@@ -186,7 +186,7 @@ SEASTAR_TEST_CASE(test_no_data_file_read_on_missing_clustering_keys_with_dense_i
         }
 
         env.manager().set_promoted_index_block_size(1); // force entry for each row
-        auto mut_reader = make_mutation_reader_from_mutations_v2(s, env.make_reader_permit(), std::move(mut));
+        auto mut_reader = make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut));
         auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer());
 
         tests::reader_concurrency_semaphore_wrapper semaphore;

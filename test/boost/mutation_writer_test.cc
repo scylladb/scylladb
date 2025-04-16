@@ -18,7 +18,7 @@
 #include "mutation/mutation_rebuilder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "mutation_writer/timestamp_based_splitting_writer.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
@@ -31,9 +31,9 @@
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
 
-#include "readers/from_mutations_v2.hh"
-#include "readers/empty_v2.hh"
-#include "readers/generating_v2.hh"
+#include "readers/from_mutations.hh"
+#include "readers/empty.hh"
+#include "readers/generating.hh"
 #include "readers/combined.hh"
 
 BOOST_AUTO_TEST_SUITE(mutation_writer_test)
@@ -67,7 +67,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                     auto shard = s->get_sharder().shard_for_reads(m.token());
                     shards_before[shard]++;
                 }
-                auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
+                auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations(gen.schema(), make_reader_permit(e), muts) : make_empty_mutation_reader(s, make_reader_permit(e));
                 auto close_source_reader = deferred_close(source_reader);
                 auto& sharder = s->get_sharder();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s, sharder,
@@ -129,7 +129,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
         auto test_random_streams = [&e] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
             auto muts = gen(partition_nr);
             schema_ptr s = gen.schema();
-            auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations_v2(s, make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
+            auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations(s, make_reader_permit(e), muts) : make_empty_mutation_reader(s, make_reader_permit(e));
             auto close_source_reader = deferred_close(source_reader);
             int mf_produced = 0;
             auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {
@@ -142,7 +142,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             auto& sharder = s->get_sharder();
             try {
                 distribute_reader_and_consume_on_shards(s, sharder,
-                    make_generating_reader_v2(s, make_reader_permit(e), std::move(get_next_mutation_fragment)),
+                    make_generating_reader(s, make_reader_permit(e), std::move(get_next_mutation_fragment)),
                     [&sharder, error] (mutation_reader reader) mutable {
                         if (error) {
                           return reader.close().then([] {
@@ -386,7 +386,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
         });
     };
 
-    segregate_by_timestamp(make_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+    segregate_by_timestamp(make_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
 
     testlog.debug("Data split into {} buckets: {}", buckets.size(), buckets | std::views::keys | std::ranges::to<std::vector>());
 
@@ -395,7 +395,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer) {
 
 static void assert_that_segregator_produces_correct_data(const bucket_map_t& buckets, std::vector<mutation>& muts, reader_permit permit, tests::random_schema& random_schema) {
     auto bucket_readers = buckets | std::views::values |
-            std::views::transform([&random_schema, &permit] (std::vector<mutation> muts) { return make_mutation_reader_from_mutations_v2(random_schema.schema(), permit, std::move(muts)); }) |
+            std::views::transform([&random_schema, &permit] (std::vector<mutation> muts) { return make_mutation_reader_from_mutations(random_schema.schema(), permit, std::move(muts)); }) |
             std::ranges::to<std::vector>();
     auto reader = make_combined_reader(random_schema.schema(), permit, std::move(bucket_readers), streamed_mutation::forwarding::no,
             mutation_reader::forwarding::no);
@@ -461,7 +461,7 @@ SEASTAR_THREAD_TEST_CASE(test_timestamp_based_splitting_mutation_writer_abort) {
     };
 
     try {
-        segregate_by_timestamp(make_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+        segregate_by_timestamp(make_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
     } catch (const test_bucket_writer::expected_exception&) {
         BOOST_TEST_PASSPOINT();
     } catch (const seastar::broken_promise&) {
@@ -531,7 +531,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
             }
         });
         for (auto muts : output_mutations) {
-            readers.emplace_back(make_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), std::move(muts)));
+            readers.emplace_back(make_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), std::move(muts)));
         }
         auto rd = assert_that(make_combined_reader(random_schema.schema(), semaphore.make_permit(), std::move(readers)));
         for (const auto& mut : input_mutations) {
@@ -544,7 +544,7 @@ SEASTAR_THREAD_TEST_CASE(test_partition_based_splitting_mutation_writer) {
     for (const size_t max_memory : {1'000, 10'000, 1'000'000, 10'000'000, 100'000'000}) {
         testlog.info("Segregating with in-memory method (max_memory={})", max_memory);
         mutation_writer::segregate_by_partition(
-                make_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations),
+                make_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), shuffled_input_mutations),
                 mutation_writer::segregate_config{max_memory},
                 consumer).get();
         testlog.info("Done segregating with in-memory method (max_memory={}): input segregated into {} buckets", max_memory, output_mutations.size());
@@ -586,7 +586,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_group_based_splitting_mutation_writer) {
         });
     };
 
-    segregate_by_token_group(make_mutation_reader_from_mutations_v2(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
+    segregate_by_token_group(make_mutation_reader_from_mutations(random_schema.schema(), semaphore.make_permit(), muts), classify_fn, std::move(consumer)).get();
 
     testlog.info("Data split into {} buckets: {}", buckets.size(), buckets | std::views::keys | std::ranges::to<std::vector>());
 

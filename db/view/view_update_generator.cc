@@ -19,7 +19,7 @@
 #include "readers/evictable.hh"
 #include "dht/partition_filter.hh"
 #include "utils/pretty_printers.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "service/storage_proxy.hh"
 #include "db/config.hh"
 
@@ -415,7 +415,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             table,
             base,
             std::move(views),
-            make_mutation_reader_from_mutations_v2(std::move(m_schema), std::move(permit), std::move(m)),
+            make_mutation_reader_from_mutations(std::move(m_schema), std::move(permit), std::move(m)),
             std::move(existings),
             now);
 

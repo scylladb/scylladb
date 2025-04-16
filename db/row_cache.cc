@@ -20,8 +20,8 @@
 #include <sys/sdt.h>
 #include "read_context.hh"
 #include "real_dirty_memory_accounter.hh"
-#include "readers/delegating_v2.hh"
-#include "readers/forwardable_v2.hh"
+#include "readers/delegating.hh"
+#include "readers/forwardable.hh"
 #include "readers/nonforwardable.hh"
 #include "cache_mutation_reader.hh"
 #include "partition_snapshot_reader.hh"
@@ -858,7 +858,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
                     streamed_mutation::forwarding::no);
         } else {
             tracing::trace(ts, "Partition {} is not found in cache", pos);
-            return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
+            return make_empty_mutation_reader(std::move(schema), std::move(permit));
         }
     });
 }

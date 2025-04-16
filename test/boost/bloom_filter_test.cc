@@ -14,7 +14,7 @@
 #include "test/lib/sstable_utils.hh"
 
 #include "db/config.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/error_injection.hh"
 
@@ -223,7 +223,7 @@ SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimate) {
                  actual_partition_count * 2, // too large estimate
              }) {
             // create sstable with the estimated partition count
-            auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations_v2(schema, env.make_reader_permit(), mutations),
+            auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations(schema, env.make_reader_permit(), mutations),
                                          env.manager().configure_writer(), sstables::get_highest_sstable_version(), estimated_partition_count);
 
             // Verify that the filter was rebuilt into the optimal size

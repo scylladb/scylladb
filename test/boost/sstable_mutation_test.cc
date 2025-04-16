@@ -35,7 +35,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/log.hh"
 
-#include "readers/from_fragments_v2.hh"
+#include "readers/from_fragments.hh"
 
 using namespace sstables;
 using namespace std::chrono_literals;

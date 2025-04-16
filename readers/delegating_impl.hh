@@ -1,12 +1,11 @@
 /*
- * Copyright (C) 2022-present ScyllaDB
+ * Copyright (C) 2025-present ScyllaDB
  */
 
 /*
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#pragma once
 #include "readers/mutation_reader.hh"
 
 class delegating_reader_v2 : public mutation_reader::impl {
@@ -62,6 +61,4 @@ public:
         return _underlying_holder ? _underlying_holder->close() : make_ready_future<>();
     }
 };
-mutation_reader make_delegating_reader(mutation_reader&);
-
 

@@ -28,7 +28,7 @@
 #include <seastar/core/thread.hh>
 #include "schema/schema_builder.hh"
 #include "partition_slice_builder.hh"
-#include "readers/from_mutations_v2.hh"
+#include "readers/from_mutations.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "readers/mutation_source.hh"
 
@@ -62,7 +62,7 @@ static mutation_source make_source(std::vector<mutation> mutations) {
                 SCYLLA_ASSERT(m.schema() == s);
             }
         }
-        return make_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd);
+        return make_mutation_reader_from_mutations(s, std::move(permit), mutations, slice, fwd);
     });
 }
 

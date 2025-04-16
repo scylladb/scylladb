@@ -59,8 +59,8 @@
 #include "mutation/mutation_partition.hh"
 #include "mutation/async_utils.hh"
 #include "clustering_key_filter.hh"
-#include "readers/from_mutations_v2.hh"
-#include "readers/from_fragments_v2.hh"
+#include "readers/from_mutations.hh"
+#include "readers/from_fragments.hh"
 
 using namespace std::chrono_literals;
 
@@ -2872,7 +2872,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
         mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
     }
 
-    auto reader = make_mutation_reader_from_mutations_v2(schema.shared_from_this(), std::move(permit), mutations);
+    auto reader = make_mutation_reader_from_mutations(schema.shared_from_this(), std::move(permit), mutations);
     auto close_reader = deferred_close(reader);
     auto get_max_purgeable = can_always_purge;
     auto consumer = compact_for_compaction_v2<survived_compacted_fragments_consumer, purged_compacted_fragments_consumer>(

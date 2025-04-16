@@ -23,7 +23,7 @@ namespace query {
 
 // Reader optimized for a single mutation.
 mutation_reader
-make_mutation_reader_from_mutations_v2(
+make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
     mutation m,
@@ -32,7 +32,7 @@ make_mutation_reader_from_mutations_v2(
 
 // Reader optimized for a single mutation.
 mutation_reader
-make_mutation_reader_from_mutations_v2(
+make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
     mutation m,
@@ -40,7 +40,7 @@ make_mutation_reader_from_mutations_v2(
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 // All mutations should have the same schema.
-mutation_reader make_mutation_reader_from_mutations_v2(
+mutation_reader make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
     std::vector<mutation>,
@@ -48,20 +48,20 @@ mutation_reader make_mutation_reader_from_mutations_v2(
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
 // All mutations should have the same schema.
-inline mutation_reader make_mutation_reader_from_mutations_v2(
+inline mutation_reader make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
     std::vector<mutation> ms,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no) {
     if (ms.size() == 1) {
-        return make_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(ms.back()), fwd);
+        return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(ms.back()), fwd);
     }
-    return make_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, fwd);
+    return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, fwd);
 }
 
 // All mutations should have the same schema.
 mutation_reader
-make_mutation_reader_from_mutations_v2(
+make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
     std::vector<mutation> ms,
@@ -71,14 +71,14 @@ make_mutation_reader_from_mutations_v2(
 
 // All mutations should have the same schema.
 inline mutation_reader
-make_mutation_reader_from_mutations_v2(
+make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
     std::vector<mutation> ms,
     const query::partition_slice& slice,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no) {
     if (ms.size() == 1) {
-        return make_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(ms.back()), slice, fwd);
+        return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(ms.back()), slice, fwd);
     }
-    return make_mutation_reader_from_mutations_v2(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, slice, fwd);
+    return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(ms), query::full_partition_range, slice, fwd);
 }
