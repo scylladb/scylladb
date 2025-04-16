@@ -2395,12 +2395,12 @@ future<> database::stop() {
     co_await _dirty_memory_manager.shutdown();
     dblog.info("Shutting down memtable controller");
     co_await _memtable_controller.shutdown();
+    dblog.info("Stopping querier cache");
+    co_await _querier_cache.stop();
     dblog.info("Closing user sstables manager");
     co_await _user_sstables_manager->close();
     dblog.info("Closing system sstables manager");
     co_await _system_sstables_manager->close();
-    dblog.info("Stopping querier cache");
-    co_await _querier_cache.stop();
     dblog.info("Stopping concurrency semaphores");
     co_await _reader_concurrency_semaphores_group.stop();
     co_await _view_update_read_concurrency_semaphores_group.stop();
