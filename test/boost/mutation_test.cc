@@ -60,7 +60,7 @@
 #include "mutation/async_utils.hh"
 #include "clustering_key_filter.hh"
 #include "readers/from_mutations_v2.hh"
-#include "readers/from_fragments_v2.hh"
+#include "readers/from_fragments.hh"
 
 using namespace std::chrono_literals;
 

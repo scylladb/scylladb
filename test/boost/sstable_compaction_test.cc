@@ -70,7 +70,7 @@
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
 #include "readers/from_mutations_v2.hh"
-#include "readers/from_fragments_v2.hh"
+#include "readers/from_fragments.hh"
 #include "readers/combined.hh"
 #include "utils/assert.hh"
 #include "utils/pretty_printers.hh"

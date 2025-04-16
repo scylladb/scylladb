@@ -55,7 +55,7 @@
 
 #include "readers/from_mutations_v2.hh"
 #include "readers/forwardable.hh"
-#include "readers/from_fragments_v2.hh"
+#include "readers/from_fragments.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "readers/generating_v2.hh"
 #include "readers/empty.hh"

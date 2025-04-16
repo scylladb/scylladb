@@ -49,7 +49,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "readers/from_mutations_v2.hh"
-#include "readers/from_fragments_v2.hh"
+#include "readers/from_fragments.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/exception_utils.hh"
 

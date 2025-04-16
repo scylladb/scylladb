@@ -62,7 +62,7 @@
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/labels.hh"
 #include "query-result-writer.hh"
-#include "readers/from_fragments_v2.hh"
+#include "readers/from_fragments.hh"
 #include "readers/evictable.hh"
 #include "readers/multishard.hh"
 #include "readers/filtering.hh"
