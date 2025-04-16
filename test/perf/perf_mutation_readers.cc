@@ -154,14 +154,14 @@ future<> combined::consume_all(mutation_reader mr) const
 PERF_TEST_F(combined, one_mutation)
 {
     std::vector<mutation_reader> mrs;
-    mrs.emplace_back(make_mutation_reader_from_mutations_v2(schema().schema(), permit(), one_row_stream()[0]));
+    mrs.emplace_back(make_mutation_reader_from_mutations(schema().schema(), permit(), one_row_stream()[0]));
     return consume_all(make_combined_reader(schema().schema(), permit(), std::move(mrs)));
 }
 
 PERF_TEST_F(combined, one_row)
 {
     std::vector<mutation_reader> mrs;
-    mrs.emplace_back(make_mutation_reader_from_mutations_v2(schema().schema(), permit(), one_row_stream()));
+    mrs.emplace_back(make_mutation_reader_from_mutations(schema().schema(), permit(), one_row_stream()));
     return consume_all(make_combined_reader(schema().schema(), permit(), std::move(mrs)));
 }
 
@@ -169,7 +169,7 @@ PERF_TEST_F(combined, single_active)
 {
     std::vector<mutation_reader> mrs;
     mrs.reserve(4);
-    mrs.emplace_back(make_mutation_reader_from_mutations_v2(schema().schema(), permit(), single_stream()));
+    mrs.emplace_back(make_mutation_reader_from_mutations(schema().schema(), permit(), single_stream()));
     for (auto i = 0; i < 3; i++) {
         mrs.emplace_back(make_empty_mutation_reader(schema().schema(), permit()));
     }
@@ -181,7 +181,7 @@ PERF_TEST_F(combined, many_overlapping)
     std::vector<mutation_reader> mrs;
     mrs.reserve(4);
     for (auto i = 0; i < 4; i++) {
-        mrs.emplace_back(make_mutation_reader_from_mutations_v2(schema().schema(), permit(), single_stream()));
+        mrs.emplace_back(make_mutation_reader_from_mutations(schema().schema(), permit(), single_stream()));
     }
     return consume_all(make_combined_reader(schema().schema(), permit(), std::move(mrs)));
 }
@@ -191,7 +191,7 @@ PERF_TEST_F(combined, disjoint_interleaved)
     return consume_all(make_combined_reader(schema().schema(), permit(),
         disjoint_interleaved_streams()
             | std::views::transform([this] (auto&& ms) {
-                return schema().schema(), make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(ms));
+                return schema().schema(), make_mutation_reader_from_mutations(schema().schema(), permit(), std::move(ms));
               })
             | std::ranges::to<std::vector<mutation_reader>>()
     ));
@@ -202,7 +202,7 @@ PERF_TEST_F(combined, disjoint_ranges)
     return consume_all(make_combined_reader(schema().schema(), permit(),
         disjoint_ranges_streams()
             | std::views::transform([this] (auto&& ms) {
-                return make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(ms));
+                return make_mutation_reader_from_mutations(schema().schema(), permit(), std::move(ms));
               })
             | std::ranges::to<std::vector<mutation_reader>>()
     ));
@@ -213,7 +213,7 @@ PERF_TEST_F(combined, overlapping_partitions_disjoint_rows)
     return consume_all(make_combined_reader(schema().schema(), permit(),
             overlapping_partitions_disjoint_rows_streams()
             | std::views::transform([this] (auto&& ms) {
-                return make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(ms));
+                return make_mutation_reader_from_mutations(schema().schema(), permit(), std::move(ms));
               })
             | std::ranges::to<std::vector<mutation_reader>>()
     ));
@@ -284,7 +284,7 @@ PERF_TEST_F(clustering_combined, ranges_generic)
     return consume_all(make_combined_reader(schema().schema(), permit(),
         almost_disjoint_clustering_ranges()
             | std::views::transform([this] (auto&& mb) {
-                return make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(mb.m));
+                return make_mutation_reader_from_mutations(schema().schema(), permit(), std::move(mb.m));
               })
             | std::ranges::to<std::vector<mutation_reader>>()
     ));
@@ -294,7 +294,7 @@ PERF_TEST_F(clustering_combined, ranges_specialized)
 {
     auto rbs = almost_disjoint_clustering_ranges() | std::views::transform([this] (auto&& mb) {
             return reader_bounds{
-                make_mutation_reader_from_mutations_v2(schema().schema(), permit(), std::move(mb.m)),
+                make_mutation_reader_from_mutations(schema().schema(), permit(), std::move(mb.m)),
                 std::move(mb.lower), std::move(mb.upper)};
         }) | std::ranges::to<std::vector<reader_bounds>>();
     auto q = std::make_unique<simple_position_reader_queue>(*schema().schema(), std::move(rbs));

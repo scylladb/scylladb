@@ -245,7 +245,7 @@ future<> size_estimates_mutation_reader::get_next_partition() {
         ++_current_partition;
         std::vector<mutation> ms;
         ms.emplace_back(std::move(mutations));
-        auto reader = make_mutation_reader_from_mutations_v2(_schema, _permit, std::move(ms), _fwd);
+        auto reader = make_mutation_reader_from_mutations(_schema, _permit, std::move(ms), _fwd);
         auto close_partition_reader = _partition_reader ? _partition_reader->close() : make_ready_future<>();
         return close_partition_reader.then([this, reader = std::move(reader)] () mutable {
             _partition_reader = std::move(reader);

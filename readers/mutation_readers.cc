@@ -847,7 +847,7 @@ public:
 
 // Reader optimized for a single mutation.
 mutation_reader
-make_mutation_reader_from_mutations_v2(
+make_mutation_reader_from_mutations(
         schema_ptr s,
         reader_permit permit,
         mutation m,
@@ -903,7 +903,7 @@ make_mutation_reader_from_mutations_v2(
 
 // Reader optimized for a single mutation.
 mutation_reader
-make_mutation_reader_from_mutations_v2(
+make_mutation_reader_from_mutations(
         schema_ptr s,
         reader_permit permit,
         mutation m,
@@ -913,11 +913,11 @@ make_mutation_reader_from_mutations_v2(
     auto sliced_mutation = reversed
         ? slice_mutation(s->make_reversed(), std::move(m), query::reverse_slice(*s, slice))
         : slice_mutation(s, std::move(m), slice);
-    return make_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(sliced_mutation), fwd, reversed);
+    return make_mutation_reader_from_mutations(std::move(s), std::move(permit), std::move(sliced_mutation), fwd, reversed);
 }
 
 mutation_reader
-make_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr,
+make_mutation_reader_from_mutations(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr,
         const query::partition_slice& query_slice, streamed_mutation::forwarding fwd) {
     class reader final : public reader_from_mutation_base {
         std::vector<mutation> _mutations;
@@ -999,7 +999,7 @@ make_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::
 }
 
 mutation_reader
-make_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
+make_mutation_reader_from_mutations(schema_ptr s, reader_permit permit, std::vector<mutation> mutations, const dht::partition_range& pr, streamed_mutation::forwarding fwd) {
     if (mutations.size() == 1) {
         dht::ring_position_comparator cmp{*s};
         auto& m = mutations.back();
@@ -1008,12 +1008,12 @@ make_mutation_reader_from_mutations_v2(schema_ptr s, reader_permit permit, std::
             return make_empty_mutation_reader(std::move(s), std::move(permit));
         }
         if (!pr.after(dk, cmp)) {
-            return make_mutation_reader_from_mutations_v2(std::move(s), std::move(permit), std::move(m), fwd);
+            return make_mutation_reader_from_mutations(std::move(s), std::move(permit), std::move(m), fwd);
         }
         // fallthrough to multi-partition reader
         // since it may be fast_forwarded to include this mutation.
     }
-    return make_mutation_reader_from_mutations_v2(s, std::move(permit), std::move(mutations), pr, s->full_slice(), fwd);
+    return make_mutation_reader_from_mutations(s, std::move(permit), std::move(mutations), pr, s->full_slice(), fwd);
 }
 
 static mutation_reader

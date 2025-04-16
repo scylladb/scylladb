@@ -319,7 +319,7 @@ SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
             auto sst = env.make_sstable(schema, version);
 
             {
-                auto mr = make_mutation_reader_from_mutations_v2(schema, env.make_reader_permit(), mutations);
+                auto mr = make_mutation_reader_from_mutations(schema, env.make_reader_permit(), mutations);
                 auto close_mr = deferred_close(mr);
 
                 const auto cfg = env.manager().configure_writer();

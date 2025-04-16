@@ -164,7 +164,7 @@ public:
         , _cache(is_user_semaphore ? std::move(is_user_semaphore) : [] (const reader_concurrency_semaphore&) { return true; }, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
         , _mutation_source([this] (schema_ptr schema, reader_permit permit, const dht::partition_range& range) {
-            auto rd = make_mutation_reader_from_mutations_v2(schema, std::move(permit), _mutations, range);
+            auto rd = make_mutation_reader_from_mutations(schema, std::move(permit), _mutations, range);
             rd.set_max_buffer_size(max_reader_buffer_size);
             return rd;
         }) {

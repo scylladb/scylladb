@@ -62,7 +62,7 @@ static mutation_source make_source(std::vector<mutation> mutations) {
                 SCYLLA_ASSERT(m.schema() == s);
             }
         }
-        return make_mutation_reader_from_mutations_v2(s, std::move(permit), mutations, slice, fwd);
+        return make_mutation_reader_from_mutations(s, std::move(permit), mutations, slice, fwd);
     });
 }
 
