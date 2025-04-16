@@ -1341,9 +1341,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
         return replica_state.shard_count == local_shard_count
             && replica_state.ignore_msb == local_ignore_msb
             && replica_state.release_version == local_release_version
-            && replica_state.supported_features == local_supported_features
-            && replica_state.datacenter == _snitch.local()->get_datacenter()
-            && replica_state.rack == _snitch.local()->get_rack();
+            && replica_state.supported_features == local_supported_features;
     };
 
     // We avoid performing a read barrier if we're sure that our metadata stored in topology
@@ -1394,9 +1392,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
                .set("shard_count", local_shard_count)
                .set("ignore_msb", local_ignore_msb)
                .set("release_version", local_release_version)
-               .set("supported_features", local_supported_features)
-               .set("datacenter", _snitch.local()->get_datacenter())
-               .set("rack", _snitch.local()->get_rack());
+               .set("supported_features", local_supported_features);
 
         topology_change change{{builder.build()}};
         group0_command g0_cmd = _group0->client().prepare_command(
