@@ -544,6 +544,21 @@ future<> client::delete_object(sstring object_name, seastar::abort_source* as) {
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
+sstring parse_multipart_copy_upload_etag(sstring& body) {
+    auto doc = std::make_unique<rapidxml::xml_document<>>();
+    try {
+        doc->parse<0>(body.data());
+    } catch (const rapidxml::parse_error& e) {
+        s3l.warn("cannot parse multipart copy upload response: {}", e.what());
+        // The caller is supposed to check the etag to be empty
+        // and handle the error the way it prefers
+        return "";
+    }
+    auto root_node = doc->first_node("CopyPartResult");
+    auto etag_node = root_node->first_node("ETag");
+    return etag_node->value();
+}
+
 class client::multipart_upload {
 protected:
     shared_ptr<client> _client;
@@ -609,21 +624,6 @@ sstring parse_multipart_upload_id(sstring& body) {
     auto root_node = doc->first_node("InitiateMultipartUploadResult");
     auto uploadid_node = root_node->first_node("UploadId");
     return uploadid_node->value();
-}
-
-sstring parse_multipart_copy_upload_etag(sstring& body) {
-    auto doc = std::make_unique<rapidxml::xml_document<>>();
-    try {
-        doc->parse<0>(body.data());
-    } catch (const rapidxml::parse_error& e) {
-        s3l.warn("cannot parse multipart copy upload response: {}", e.what());
-        // The caller is supposed to check the etag to be empty
-        // and handle the error the way it prefers
-        return "";
-    }
-    auto root_node = doc->first_node("CopyPartResult");
-    auto etag_node = root_node->first_node("ETag");
-    return etag_node->value();
 }
 
 static constexpr std::string_view multipart_upload_complete_header =
