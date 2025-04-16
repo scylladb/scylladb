@@ -14,6 +14,7 @@ using namespace seastar;
 class mutation_source;
 class position_in_partition;
 class mutation_reader;
+class reader_permit;
 
 namespace streamed_mutation {
     class forwarding_tag;
