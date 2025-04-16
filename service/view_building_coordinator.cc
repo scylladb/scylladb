@@ -12,6 +12,7 @@
 #include <ranges>
 #include <seastar/core/abort_source.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "service/view_building_coordinator.hh"
 #include "db/view/view_build_status.hh"
 #include "locator/tablets.hh"
@@ -495,6 +496,218 @@ future<> view_building_coordinator::stop() {
     co_await coroutine::parallel_for_each(std::move(_remote_work), [] (auto&& remote_work) -> future<> {
         co_await remote_work.second.get_future();
     });
+}
+
+future<> view_building_coordinator::generate_tablet_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, dht::token last_token, const locator::tablet_migration_info& mig) {
+    return ::service::view_building::generate_tablet_migration_updates(_sys_ks, _vb_sm, out, guard.write_timestamp(), mig.tablet.table, last_token, mig.src, mig.dst);
+}
+
+future<> generate_tablet_migration_updates(db::system_keyspace& sys_ks, const view_building_state_machine& vb_sm,
+        std::vector<canonical_mutation>& out, api::timestamp_type write_timestamp, table_id table_id, dht::token last_token,
+        const locator::tablet_replica& src, const locator::tablet_replica& dst) {
+    vbc_logger.debug("Generating updates for tablet migration for table {}", table_id);
+    if (!vb_sm.building_state.tasks_state.contains(table_id)) {
+        vbc_logger.debug("No view building tasks for table {} - skipping tablet migration updates generation", table_id);
+        co_return;
+    }
+
+    auto& base_tasks = vb_sm.building_state.tasks_state.at(table_id);
+    if (!base_tasks.contains(src)) {
+        vbc_logger.debug("No view building tasks for table {} and replica {} - skipping tablet migration updates generation", table_id, src);
+        co_return;
+    }
+
+    auto update_task = [&] (view_building_task task) -> future<> { // intentionally pass task as value to create a copy
+        auto old_id = task.id;
+        auto old_replica = task.replica;
+        // Update task's replica and create new ID and set state to IDLE
+        task.id = utils::UUID_gen::get_time_UUID();
+        task.replica = dst;
+        task.state = view_building_task::task_state::idle;
+
+        auto del_mut = co_await sys_ks.make_remove_view_building_task_mutation(write_timestamp, old_id);
+        auto add_mut = co_await sys_ks.make_view_building_task_mutation(write_timestamp, task);
+        out.emplace_back(std::move(del_mut));
+        out.emplace_back(std::move(add_mut));
+
+        vbc_logger.debug("Task {} was migrated from {} to {}. New task ID is: {}", old_id, old_replica, task.replica, task.id);
+    };
+
+    auto& replica_tasks = base_tasks.at(src);
+    // Migrate build_range tasks
+    for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
+        for (auto& [_, task]: view_tasks) {
+            if (task.last_token == last_token) {
+                co_await update_task(task);
+            }
+        }
+    }
+    // Migrate process_staging tasks
+    for (auto& [_, task]: replica_tasks.staging_tasks) {
+        if (task.last_token == last_token) {
+            co_await update_task(task);
+        }
+    }
+}
+
+future<> view_building_coordinator::generate_tablet_resize_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const locator::tablet_map& tmap, table_id table_id, locator::resize_decision resize_decision) {
+    if (resize_decision.is_none()) {
+        co_return;
+    }
+    vbc_logger.debug("Generating updates for tablet resize for table {}", table_id);
+    if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
+        vbc_logger.debug("No view building tasks for table {} - skipping tablet migration updates generation", table_id);
+        co_return;
+    }
+
+    auto new_tablets_size = resize_decision.is_split() ? tmap.tablet_count() * 2 : tmap.tablet_count() / 2;
+    locator::tablet_map new_tablet_map(new_tablets_size);
+
+    // Task with tablet id `n` is split into 2 tasks with tablet ids `2n` and `2n+1`
+    auto split_task = [&, this] (view_building_task task) -> future<> { // intentionally pass task as value to create a copy
+        auto old_id = task.id;
+        auto old_last_token = task.last_token;
+        auto new_tid = locator::tablet_id{tmap.get_tablet_id(task.last_token).id * 2};
+
+        task.id = utils::UUID_gen::get_time_UUID();
+        task.state = view_building_task::task_state::idle;
+        task.last_token = new_tablet_map.get_last_token(new_tid);
+        auto task2 = task;
+        task2.id = utils::UUID_gen::get_time_UUID();
+        task2.last_token = new_tablet_map.get_last_token(locator::tablet_id{new_tid.id + 1});
+
+        auto del_mut = co_await _sys_ks.make_remove_view_building_task_mutation(guard.write_timestamp(), old_id);
+        auto add_mut = co_await _sys_ks.make_view_building_task_mutation(guard.write_timestamp(), task);
+        auto add2_mut = co_await _sys_ks.make_view_building_task_mutation(guard.write_timestamp(), task2);
+        out.emplace_back(std::move(del_mut));
+        out.emplace_back(std::move(add_mut));
+        out.emplace_back(std::move(add2_mut));
+
+        vbc_logger.debug("Task {} (last_token: {}) was split into task {} (last_token: {}) and task {} (last_token: {})", old_id, old_last_token, task.id, old_last_token, task2.id, old_last_token);
+    };
+
+    // Task with tablet id `n` is updated to new task with tablet id `n/2` (integer division).
+    // If task with tablet id `n/2` is already created (information is stored in `created_tablet_ids`), only old task is removed.
+    auto merge_task = [&, this] (std::unordered_set<locator::tablet_id>& created_tablet_ids, view_building_task task) -> future<> { // intentionally pass task as value to create a copy
+        auto del_mut = co_await _sys_ks.make_remove_view_building_task_mutation(guard.write_timestamp(), task.id);
+        out.emplace_back(std::move(del_mut));
+
+        auto old_id = task.id;
+        auto old_last_token = task.last_token;
+        auto new_tid = locator::tablet_id(tmap.get_tablet_id(task.last_token).id / 2);
+        if (!created_tablet_ids.contains(new_tid)) {
+            created_tablet_ids.insert(new_tid);
+            task.id = utils::UUID_gen::get_time_UUID();
+            task.state = view_building_task::task_state::idle;
+            task.last_token = new_tablet_map.get_last_token(new_tid);
+
+            auto add_mut = co_await _sys_ks.make_view_building_task_mutation(guard.write_timestamp(), task);
+            out.emplace_back(std::move(add_mut));
+
+            vbc_logger.debug("Task {} (last_token: {}) was merged into task {} (last_token: {})", old_id, old_last_token, task.id, task.last_token);
+        } else {
+            vbc_logger.debug("Task {} (last_token: {}) was removed during tablet merge. Task ending at token {} was already created.", old_id, old_last_token, task.last_token);
+        }
+    };
+
+    auto resize_task_map = [&] (const task_map& task_map) -> future<> {
+        std::unordered_set<locator::tablet_id> new_tasks_tablet_ids;
+        for (auto& [_, task]: task_map) {
+            if (resize_decision.is_split()) {
+                co_await split_task(task);
+            } else {
+                co_await merge_task(new_tasks_tablet_ids, task);
+            }
+        }
+    };
+
+    for (auto& [_, replica_tasks]: _vb_sm.building_state.tasks_state.at(table_id)) {
+        // Resize build_range tasks
+        for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
+            co_await resize_task_map(view_tasks);
+        }
+        // Migrate process_staging tasks
+        co_await resize_task_map(replica_tasks.staging_tasks);
+    }
+}
+
+future<> view_building_coordinator::generate_rf_change_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, const locator::tablet_map& old_map, const locator::tablet_map& new_map) {
+    vbc_logger.debug("Generating keyspace RF change updates for table {}", table_id);
+    if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
+        vbc_logger.debug("No view building tasks for table {} - skipping keyspace RF change updates generation", table_id);
+        co_return;
+    }
+
+    auto tasks_by_last_token = _vb_sm.building_state.collect_tasks_by_last_token(table_id);
+    for (auto tid: old_map.tablet_ids()) {
+        auto last_token = old_map.get_last_token(tid);
+        auto old_replicas = old_map.get_tablet_info(tid).replicas;
+        auto new_replicas = new_map.get_tablet_info(tid).replicas;
+        
+        co_await generate_tablet_replicas_change_updates(_sys_ks, tasks_by_last_token[last_token], out, guard.write_timestamp(), table_id, tid, old_replicas, new_replicas);
+    }
+}
+
+future<> generate_tablet_replicas_change_updates(db::system_keyspace& sys_ks, std::vector<view_building_task> tasks_for_tablet_id,
+        std::vector<canonical_mutation>& out, api::timestamp_type write_timestamp,
+        table_id table_id, locator::tablet_id tid, const locator::tablet_replica_set& old_replicas, const locator::tablet_replica_set& new_replicas) {
+    vbc_logger.debug("Generating updates for replica set change for table {} and tablet id {}", table_id, tid);
+    if (tasks_for_tablet_id.empty()) {
+        vbc_logger.debug("No tasks for tablet {} - skipping replica set change updates generation", tid);
+        co_return;
+    }
+
+    // ...and filter out staging tasks
+    auto group_by_view_id = [] (const std::vector<view_building_task>& tasks) -> std::unordered_map<::table_id, std::vector<view_building_task>> {
+        std::unordered_map<::table_id, std::vector<view_building_task>> map;
+        for (auto& t: tasks | std::views::filter([] (const view_building_task& t) {
+            return t.type == view_building_task::task_type::build_range;
+        })) {
+            map[*t.view_id].push_back(t);
+        }
+        return map;
+    };
+    
+    auto abandoning_replicas = locator::substract_sets(old_replicas, new_replicas);
+    auto pending_replicas = locator::substract_sets(new_replicas, old_replicas);
+    
+    // We shouldn't have pending replicas and abandoning replicas at the same time
+    if (abandoning_replicas.empty() && pending_replicas.empty()) {
+        vbc_logger.debug("No tablet replicas change - skipping replica set change updates generation", tid);
+        co_return;
+    }
+    if (abandoning_replicas.empty() == pending_replicas.empty()) {
+        on_internal_error(vbc_logger, fmt::format("Both abandoning and pending replicas are present for table {} and tablet id {}. Abandoning: {}, pending: {}",
+            table_id, tid, abandoning_replicas, pending_replicas));
+    }
+
+    if (!abandoning_replicas.empty()) {
+        // RF decrease: Remove task for abandoning replicas.
+        for (auto& task: tasks_for_tablet_id) {
+            if (abandoning_replicas.contains(task.replica)) {
+                auto mut = co_await sys_ks.make_remove_view_building_task_mutation(write_timestamp, task.id);
+                out.emplace_back(std::move(mut));
+                vbc_logger.debug("Aborting task {} for abandoning replica {}", task.id, task.replica);
+            }
+        }
+    } else if (!pending_replicas.empty()) {
+        // RF increase: Filter out staging tasks and group by remaining by view_id.
+        //              If a view has any unfinished task for this tablet id, create a task for each new replica.
+        //              This might be optimized out depending on how data on the new replicas is built.
+        //              If all tablet replicas are built for the view, we're sure new view's replicas will also get correct data.
+        auto tasks_per_view = group_by_view_id(tasks_for_tablet_id);
+        for (auto& [_, tasks_for_view]: tasks_per_view) {
+            auto task = tasks_for_view.front();
+            for (auto& new_replica: pending_replicas) {
+                task.id = utils::UUID_gen::get_time_UUID();
+                task.state = view_building_task::task_state::idle;
+                task.replica = new_replica;
+                auto mut = co_await sys_ks.make_view_building_task_mutation(write_timestamp, task);
+                out.emplace_back(std::move(mut));
+                vbc_logger.debug("Creating new task {} for pending replica {}", task.id, task.replica);
+            }
+        }
+    }
 }
 
 }

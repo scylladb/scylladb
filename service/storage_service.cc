@@ -11,6 +11,7 @@
 
 #include "storage_service.hh"
 #include <seastar/core/shard_id.hh>
+#include "service/view_building_coordinator.hh"
 #include "service/view_building_state.hh"
 #include "utils/disk_space_monitor.hh"
 #include "compaction/task_manager_module.hh"
@@ -6769,6 +6770,10 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
             .build());
 
+        if (_feature_service.view_building_coordinator) {
+            co_await view_building::generate_tablet_migration_updates(_sys_ks.local(), _view_building_state_machine, updates, write_timestamp, table, last_token, src, dst);
+        }
+
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
 
         co_return std::make_tuple(std::move(updates), std::move(reason));
@@ -6812,6 +6817,13 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
             .build());
+        
+        if (_feature_service.view_building_coordinator && _view_building_state_machine.building_state.tasks_state.contains(table)) {
+            auto tablet_tasks = _view_building_state_machine.building_state.collect_tasks_by_last_token(table)[last_token];
+            if (!tablet_tasks.empty()) {
+                co_await view_building::generate_tablet_replicas_change_updates(_sys_ks.local(), std::move(tablet_tasks), updates, write_timestamp, table, tid, tinfo.replicas, new_replicas);
+            }
+        }
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
 
@@ -6857,6 +6869,13 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
             .build());
+        
+        if (_feature_service.view_building_coordinator && _view_building_state_machine.building_state.tasks_state.contains(table)) {
+            auto tablet_tasks = _view_building_state_machine.building_state.collect_tasks_by_last_token(table)[last_token];
+            if (!tablet_tasks.empty()) {
+                co_await view_building::generate_tablet_replicas_change_updates(_sys_ks.local(), std::move(tablet_tasks), updates, write_timestamp, table, tid, tinfo.replicas, new_replicas);
+            }
+        }
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
 
