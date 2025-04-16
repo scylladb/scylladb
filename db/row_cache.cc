@@ -21,7 +21,7 @@
 #include "read_context.hh"
 #include "real_dirty_memory_accounter.hh"
 #include "readers/delegating.hh"
-#include "readers/forwardable_v2.hh"
+#include "readers/forwardable.hh"
 #include "readers/nonforwardable.hh"
 #include "cache_mutation_reader.hh"
 #include "partition_snapshot_reader.hh"

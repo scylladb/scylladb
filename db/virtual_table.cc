@@ -12,7 +12,7 @@
 #include "readers/queue.hh"
 #include "readers/reversing_v2.hh"
 #include "readers/filtering.hh"
-#include "readers/forwardable_v2.hh"
+#include "readers/forwardable.hh"
 #include "readers/slicing_filtering.hh"
 #include "dht/i_partitioner.hh"
 

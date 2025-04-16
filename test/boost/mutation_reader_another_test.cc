@@ -37,7 +37,7 @@
 
 #include "readers/from_mutations_v2.hh"
 #include "readers/from_fragments_v2.hh"
-#include "readers/forwardable_v2.hh"
+#include "readers/forwardable.hh"
 #include "readers/compacting.hh"
 #include "readers/nonforwardable.hh"
 
