@@ -4281,7 +4281,7 @@ SEASTAR_THREAD_TEST_CASE(test_generating_reader_v2) {
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) {
             auto underlying = make_mutation_reader_from_mutations(schema, permit, squash_mutations(muts), range, slice);
-            auto rd = make_next_partition_adaptor(make_generating_reader_v2(schema, permit, closing_holder(std::move(underlying))));
+            auto rd = make_next_partition_adaptor(make_generating_reader(schema, permit, closing_holder(std::move(underlying))));
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(rd));
             }

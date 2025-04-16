@@ -2637,7 +2637,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto ifile = open_file_dma(input_file, open_flags::ro).get();
     auto istream = make_file_input_stream(std::move(ifile));
     auto parser = json_mutation_stream_parser{schema, permit, std::move(istream)};
-    auto reader = make_generating_reader_v2(schema, permit, std::move(parser));
+    auto reader = make_generating_reader(schema, permit, std::move(parser));
     auto writer_cfg = manager.configure_writer("scylla-sstable");
     writer_cfg.validation_level = validation_level;
     auto local = data_dictionary::make_local_options(output_dir);

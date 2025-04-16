@@ -142,7 +142,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
             auto& sharder = s->get_sharder();
             try {
                 distribute_reader_and_consume_on_shards(s, sharder,
-                    make_generating_reader_v2(s, make_reader_permit(e), std::move(get_next_mutation_fragment)),
+                    make_generating_reader(s, make_reader_permit(e), std::move(get_next_mutation_fragment)),
                     [&sharder, error] (mutation_reader reader) mutable {
                         if (error) {
                           return reader.close().then([] {
