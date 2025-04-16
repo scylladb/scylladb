@@ -947,7 +947,7 @@ sstable_set_impl::create_single_key_sstable_reader(
     auto selected_sstables = filter_sstable_for_reader(select(pr), *schema, pos, predicate);
     auto num_sstables = selected_sstables.size();
     if (!num_sstables) {
-        return make_empty_flat_reader_v2(schema, permit);
+        return make_empty_mutation_reader(schema, permit);
     }
     auto readers = filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
         | std::views::transform([&] (const shared_sstable& sstable) {
@@ -1012,7 +1012,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
     auto it = std::find_if(_sstables->begin(), _sstables->end(), [&] (const sst_entry& e) { return sst_filter(*e.second); });
     if (it == _sstables->end()) {
         // No sstables contain data for the queried partition.
-        return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
+        return make_empty_mutation_reader(std::move(schema), std::move(permit));
     }
 
     auto& stats = *cf->cf_stats();
@@ -1235,7 +1235,7 @@ compound_sstable_set::create_single_key_sstable_reader(
     auto non_empty_set_count = std::distance(sets.begin(), it);
 
     if (!non_empty_set_count) {
-        return make_empty_flat_reader_v2(schema, permit);
+        return make_empty_mutation_reader(schema, permit);
     }
     // optimize for common case where only 1 set is populated, avoiding the expensive combined reader
     if (non_empty_set_count == 1) {
@@ -1284,7 +1284,7 @@ private:
         // and replace it by an empty reader.
         if (dht::ring_position_tri_compare(*_schema, pos, last_pos_in_reader) > 0) {
             co_await _reader->close();
-            _reader = make_empty_flat_reader_v2(_schema, _permit);
+            _reader = make_empty_mutation_reader(_schema, _permit);
             _sst = nullptr;
         }
     }
@@ -1372,7 +1372,7 @@ sstable_set::make_local_shard_sstable_reader(
             (shared_sstable& sst, const dht::partition_range& pr) mutable {
         SCYLLA_ASSERT(!sst->is_shared());
         if (!predicate(*sst)) {
-            return make_empty_flat_reader_v2(s, permit);
+            return make_empty_mutation_reader(s, permit);
         }
         auto reader = sst->make_reader(s, permit, pr, slice, trace_state, fwd, fwd_mr, monitor_generator(sst), integrity);
         // Auto-closed sstable reader is only enabled in the context of fast-forward to partition ranges

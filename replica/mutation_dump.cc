@@ -420,7 +420,7 @@ future<mutation_reader> make_partition_mutation_dump_reader(
         auto& topo = erm->get_topology();
         const auto endpoints = erm->get_replicas_for_reading(dk.token());
         if (std::ranges::find(endpoints, topo.this_node()->host_id()) == endpoints.end()) {
-            co_return make_empty_flat_reader_v2(output_schema, std::move(permit));
+            co_return make_empty_mutation_reader(output_schema, std::move(permit));
         }
     }
 

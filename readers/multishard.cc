@@ -388,7 +388,7 @@ mutation_reader evictable_reader_v2::recreate_reader() {
         // read a single partition) but still, let's make sure we handle it
         // correctly.
         if (_pr->is_singular() && !partition_range_is_inclusive) {
-            return make_empty_flat_reader_v2(_schema, _permit);
+            return make_empty_mutation_reader(_schema, _permit);
         }
 
         _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());

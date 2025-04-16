@@ -414,7 +414,7 @@ SEASTAR_TEST_CASE(test_combining_two_readers_with_one_reader_empty) {
         mutation m1(s, partition_key::from_single_value(*s, "key1"));
         m1.set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v1")), 1);
 
-        assert_that(make_combined_reader(s, permit, make_mutation_reader_from_mutations_v2(s, permit, m1), make_empty_flat_reader_v2(s, permit)))
+        assert_that(make_combined_reader(s, permit, make_mutation_reader_from_mutations_v2(s, permit, m1), make_empty_mutation_reader(s, permit)))
             .produces(m1)
             .produces_end_of_stream();
     });
@@ -425,7 +425,7 @@ SEASTAR_TEST_CASE(test_combining_two_empty_readers) {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
-        assert_that(make_combined_reader(s, permit, make_empty_flat_reader_v2(s, permit), make_empty_flat_reader_v2(s, permit)))
+        assert_that(make_combined_reader(s, permit, make_empty_mutation_reader(s, permit), make_empty_mutation_reader(s, permit)))
             .produces_end_of_stream();
     });
 }
@@ -436,7 +436,7 @@ SEASTAR_TEST_CASE(test_combining_one_empty_reader) {
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
         auto s = make_schema();
-        v.push_back(make_empty_flat_reader_v2(s, permit));
+        v.push_back(make_empty_mutation_reader(s, permit));
         assert_that(make_combined_reader(s, permit, std::move(v), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
             .produces_end_of_stream();
     });
@@ -694,7 +694,7 @@ public:
         }
         --_remaining;
         std::vector<mutation_reader> ret;
-        ret.push_back(make_empty_flat_reader_v2(_schema, _permit));
+        ret.push_back(make_empty_mutation_reader(_schema, _permit));
         return ret;
     }
     virtual std::vector<mutation_reader> fast_forward_to(const dht::partition_range& pr) override {
@@ -1663,7 +1663,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
-            return make_empty_flat_reader_v2(s, std::move(permit));
+            return make_empty_mutation_reader(s, std::move(permit));
         };
 
         assert_that(make_multishard_combining_reader_v2(
@@ -1966,7 +1966,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
-            return make_empty_flat_reader_v2(s, std::move(permit));
+            return make_empty_mutation_reader(s, std::move(permit));
         };
 
         assert_that(make_multishard_combining_reader_v2_for_tests(
@@ -2005,7 +2005,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             shards_touched[this_shard_id()] = true;
-            return make_empty_flat_reader_v2(s, std::move(permit));
+            return make_empty_mutation_reader(s, std::move(permit));
         };
 
         env.execute_cql(s.cql()).get();
@@ -2856,7 +2856,7 @@ mutation_reader create_evictable_reader_and_evict_after_first_buffer(
                 rd.set_max_buffer_size(_max_buffer_size);
                 return rd;
             }
-            return make_empty_flat_reader_v2(_schema, std::move(permit));
+            return make_empty_mutation_reader(_schema, std::move(permit));
         }
     };
     auto ms = mutation_source(factory(schema, permit, std::move(buffers), max_buffer_size));
@@ -3727,7 +3727,7 @@ static reader_bounds make_reader_bounds(
 
     return reader_bounds {
         .r = mb.m ? make_mutation_reader_from_mutations_v2(s, permit, std::move(*mb.m), *slice, fwd)
-                  : make_empty_flat_reader_v2(s, permit),
+                  : make_empty_mutation_reader(s, permit),
         .lower = std::move(mb.lower),
         .upper = std::move(mb.upper)
     };
@@ -3837,7 +3837,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_order_merger_in_memory) {
         if (mut) {
             return make_mutation_reader_from_mutations_v2(s, permit, std::move(*mut), fwd);
         }
-        return make_empty_flat_reader_v2(s, permit);
+        return make_empty_mutation_reader(s, permit);
     };
 
     auto make_tested = [s = g._s, &semaphore] (std::vector<mutation_bounds> ms, streamed_mutation::forwarding fwd) {
@@ -4223,7 +4223,7 @@ SEASTAR_THREAD_TEST_CASE(test_clustering_combining_of_empty_readers) {
     auto permit = semaphore.make_permit();
     std::vector<reader_bounds> rs;
     rs.push_back({
-        .r = make_empty_flat_reader_v2(s, permit),
+        .r = make_empty_mutation_reader(s, permit),
         .lower = position_in_partition::before_all_clustered_rows(),
         .upper = position_in_partition::after_all_clustered_rows()
     });
@@ -4348,7 +4348,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_safe_to_create_with_admitted_permit) {
                 const query::partition_slice&,
                 tracing::trace_state_ptr,
                 mutation_reader::forwarding) {
-            return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
+            return make_empty_mutation_reader(std::move(schema), std::move(permit));
         };
 
         // timeout is used to break the deadlock in case this test fails

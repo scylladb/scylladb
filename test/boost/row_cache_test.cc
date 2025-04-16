@@ -203,7 +203,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_full_range)
                 const query::partition_slice&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_mutation_reader(s, std::move(permit)), secondary_calls_count);
         })), tracker);
 
         assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
@@ -234,7 +234,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_empty_single_part
                 const query::partition_slice&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_mutation_reader(s, std::move(permit)), secondary_calls_count);
         })), tracker);
         auto range = make_single_partition_range(s, 100);
         assert_that(cache.make_reader(s, semaphore.make_permit(), range))
@@ -259,7 +259,7 @@ SEASTAR_TEST_CASE(test_cache_uses_continuity_info_for_single_partition_query) {
                 const query::partition_slice&,
                 tracing::trace_state_ptr,
                 streamed_mutation::forwarding fwd) {
-            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_mutation_reader(s, std::move(permit)), secondary_calls_count);
         })), tracker);
 
         assert_that(cache.make_reader(s, semaphore.make_permit(), query::full_partition_range))
@@ -292,7 +292,7 @@ void test_cache_delegates_to_underlying_only_once_with_single_partition(schema_p
         if (range.contains(dht::ring_position(m.decorated_key()), dht::ring_position_comparator(*s))) {
             return make_counting_reader(make_mutation_reader_from_mutations_v2(s, std::move(permit), m, std::move(fwd)), secondary_calls_count);
         } else {
-            return make_counting_reader(make_empty_flat_reader_v2(s, std::move(permit)), secondary_calls_count);
+            return make_counting_reader(make_empty_mutation_reader(s, std::move(permit)), secondary_calls_count);
         }
     })), tracker);
 

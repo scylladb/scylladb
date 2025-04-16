@@ -67,7 +67,7 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
                     auto shard = s->get_sharder().shard_for_reads(m.token());
                     shards_before[shard]++;
                 }
-                auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
+                auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations_v2(gen.schema(), make_reader_permit(e), muts) : make_empty_mutation_reader(s, make_reader_permit(e));
                 auto close_source_reader = deferred_close(source_reader);
                 auto& sharder = s->get_sharder();
                 size_t partitions_received = distribute_reader_and_consume_on_shards(s, sharder,
@@ -129,7 +129,7 @@ SEASTAR_TEST_CASE(test_multishard_writer_producer_aborts) {
         auto test_random_streams = [&e] (random_mutation_generator&& gen, size_t partition_nr, generate_error error = generate_error::no) {
             auto muts = gen(partition_nr);
             schema_ptr s = gen.schema();
-            auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations_v2(s, make_reader_permit(e), muts) : make_empty_flat_reader_v2(s, make_reader_permit(e));
+            auto source_reader = partition_nr > 0 ? make_mutation_reader_from_mutations_v2(s, make_reader_permit(e), muts) : make_empty_mutation_reader(s, make_reader_permit(e));
             auto close_source_reader = deferred_close(source_reader);
             int mf_produced = 0;
             auto get_next_mutation_fragment = [&source_reader, &mf_produced] () mutable {

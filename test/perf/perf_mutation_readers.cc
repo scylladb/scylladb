@@ -171,7 +171,7 @@ PERF_TEST_F(combined, single_active)
     mrs.reserve(4);
     mrs.emplace_back(make_mutation_reader_from_mutations_v2(schema().schema(), permit(), single_stream()));
     for (auto i = 0; i < 3; i++) {
-        mrs.emplace_back(make_empty_flat_reader_v2(schema().schema(), permit()));
+        mrs.emplace_back(make_empty_mutation_reader(schema().schema(), permit()));
     }
     return consume_all(make_combined_reader(schema().schema(), permit(), std::move(mrs)));
 }

@@ -778,8 +778,8 @@ SEASTAR_THREAD_TEST_CASE(test_unique_inactive_read_handle) {
         .with_column("v", int32_type)
         .build();
 
-    auto sem1_h1 = sem1.register_inactive_read(make_empty_flat_reader_v2(schema, sem1.make_tracking_only_permit(schema, get_name(), db::no_timeout, {})));
-    auto sem2_h1 = sem2.register_inactive_read(make_empty_flat_reader_v2(schema, sem2.make_tracking_only_permit(schema, get_name(), db::no_timeout, {})));
+    auto sem1_h1 = sem1.register_inactive_read(make_empty_mutation_reader(schema, sem1.make_tracking_only_permit(schema, get_name(), db::no_timeout, {})));
+    auto sem2_h1 = sem2.register_inactive_read(make_empty_mutation_reader(schema, sem2.make_tracking_only_permit(schema, get_name(), db::no_timeout, {})));
 
     // Sanity check that lookup still works with empty handle.
     BOOST_REQUIRE(!sem1.unregister_inactive_read(reader_concurrency_semaphore::inactive_read_handle{}));

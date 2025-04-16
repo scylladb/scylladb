@@ -283,7 +283,7 @@ public:
         if (auto reader_opt = make_mutation_reader_opt(s, permit, range, slice, std::move(trace_state_ptr), fwd, fwd_mr)) {
             return std::move(*reader_opt);
         }
-        [[unlikely]] return make_empty_flat_reader_v2(std::move(s), std::move(permit));
+        [[unlikely]] return make_empty_mutation_reader(std::move(s), std::move(permit));
     }
     // Same as make_mutation_reader, but returns an empty optional instead of a no-op reader when there is nothing to
     // read. This is an optimization.

@@ -366,7 +366,7 @@ repair_reader::read_mutation_fragment() {
 future<> repair_reader::on_end_of_stream() noexcept {
     co_await _reader.close();
     _permit.release_base_resources();
-    _reader = mutation_fragment_v1_stream(make_empty_flat_reader_v2(_schema, _permit));
+    _reader = mutation_fragment_v1_stream(make_empty_mutation_reader(_schema, _permit));
     _reader_handle.reset();
 }
 
@@ -885,7 +885,7 @@ public:
             // become evictable normally).
             // Prevent this by marking the permit as evictable ASAP.
             // FIXME: provide a better API for this, this is very clunky
-            _fake_inactive_read_handle = _db.local().get_reader_concurrency_semaphore().register_inactive_read(make_empty_flat_reader_v2(_schema, _permit));
+            _fake_inactive_read_handle = _db.local().get_reader_concurrency_semaphore().register_inactive_read(make_empty_mutation_reader(_schema, _permit));
     }
 
     // follower constructor

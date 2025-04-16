@@ -716,7 +716,7 @@ mutation_reader make_combined_reader(schema_ptr schema,
         mutation_reader::forwarding fwd_mr,
         combined_reader_statistics* statistics) {
     if (readers.empty()) {
-        return make_empty_flat_reader_v2(std::move(schema), std::move(permit));
+        return make_empty_mutation_reader(std::move(schema), std::move(permit));
     }
     if (readers.size() == 1) {
         return std::move(readers.front());
