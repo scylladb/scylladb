@@ -58,7 +58,7 @@
 #include "readers/from_fragments_v2.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "readers/generating_v2.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include "readers/next_partition_adaptor.hh"
 #include "readers/combined.hh"
 #include "readers/compacting.hh"

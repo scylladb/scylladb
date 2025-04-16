@@ -41,7 +41,7 @@
 #include <fmt/ranges.h>
 #include "readers/from_mutations_v2.hh"
 #include "readers/delegating_impl.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include <seastar/testing/thread_test_case.hh>
 
 using namespace std::chrono_literals;

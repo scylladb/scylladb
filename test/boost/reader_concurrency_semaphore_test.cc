@@ -30,7 +30,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <boost/test/unit_test.hpp>
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include "readers/from_mutations_v2.hh"
 #include "replica/database.hh" // new_reader_base_cost is there :(
 #include "db/config.hh"

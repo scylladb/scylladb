@@ -51,7 +51,7 @@
 #include "service/storage_proxy.hh"
 #include "db/batchlog_manager.hh"
 #include "idl/repair.dist.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include "readers/evictable.hh"
 #include "readers/queue.hh"
 #include "readers/filtering.hh"

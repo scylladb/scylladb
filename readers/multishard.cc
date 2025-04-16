@@ -12,7 +12,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "dht/sharder.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include "readers/evictable.hh"
 #include "readers/mutation_reader.hh"
 #include "readers/foreign.hh"

@@ -18,7 +18,7 @@
 #include "mutation/partition_version.hh"
 #include "utils/double-decker.hh"
 #include "db/cache_tracker.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include "readers/mutation_source.hh"
 #include "compaction/compaction_garbage_collector.hh"
 

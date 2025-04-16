@@ -17,7 +17,7 @@
 
 #include "readers/from_mutations_v2.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include "readers/combined.hh"
 #include "replica/memtable.hh"
 

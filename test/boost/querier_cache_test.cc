@@ -26,7 +26,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "readers/from_mutations_v2.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 
 BOOST_AUTO_TEST_SUITE(querier_cache_test)
 

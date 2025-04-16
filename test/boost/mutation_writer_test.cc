@@ -32,7 +32,7 @@
 #include "test/lib/test_utils.hh"
 
 #include "readers/from_mutations_v2.hh"
-#include "readers/empty_v2.hh"
+#include "readers/empty.hh"
 #include "readers/generating_v2.hh"
 #include "readers/combined.hh"
 
