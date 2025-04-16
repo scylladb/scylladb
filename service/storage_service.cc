@@ -6750,7 +6750,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         });
     }
 
-    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
+    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) -> future<std::tuple<std::vector<canonical_mutation>, sstring>> {
         std::vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
@@ -6770,7 +6770,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
 
         if (src == dst) {
             sstring reason = format("No-op move of tablet {} to {}", gid, dst);
-            return std::make_tuple(std::move(updates), std::move(reason));
+            co_return std::make_tuple(std::move(updates), std::move(reason));
         }
 
         if (src.host != dst.host && locator::contains(tinfo.replicas, dst.host)) {
@@ -6807,7 +6807,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
 
-        return std::make_tuple(std::move(updates), std::move(reason));
+        co_return std::make_tuple(std::move(updates), std::move(reason));
     });
 }
 
@@ -6821,7 +6821,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
+    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) -> future<std::tuple<std::vector<canonical_mutation>, sstring>> {
         std::vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
@@ -6851,7 +6851,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
 
         sstring reason = format("Adding replica to tablet {}, node {}", gid, dst);
 
-        return std::make_tuple(std::move(updates), std::move(reason));
+        co_return std::make_tuple(std::move(updates), std::move(reason));
     });
 }
 
@@ -6865,7 +6865,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         });
     }
 
-    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
+    co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) -> future<std::tuple<std::vector<canonical_mutation>, sstring>> {
         std::vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
@@ -6896,7 +6896,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
 
-        return std::make_tuple(std::move(updates), std::move(reason));
+        co_return std::make_tuple(std::move(updates), std::move(reason));
     });
 }
 
@@ -6978,7 +6978,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     co_return std::move(load_stats);
 }
 
-future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
+future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<future<std::tuple<std::vector<canonical_mutation>, sstring>>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         bool topology_busy;
@@ -7001,7 +7001,7 @@ future<> storage_service::transit_tablet(table_id table, dht::token token, nonco
             throw std::runtime_error(fmt::format("Tablet {} is in transition", locator::global_tablet_id{table, tid}));
         }
 
-        auto [ updates, reason ] = prepare_mutations(tmap, guard.write_timestamp());
+        auto [ updates, reason ] = co_await prepare_mutations(tmap, guard.write_timestamp());
 
         rtlogger.info("{}", reason);
         rtlogger.trace("do update {} reason {}", updates, reason);
