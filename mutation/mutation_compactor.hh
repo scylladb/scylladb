@@ -149,6 +149,7 @@ class compact_mutation_state {
     gc_clock::time_point _query_time;
     max_purgeable_fn _get_max_purgeable;
     can_gc_fn _can_gc;
+    bool _gc_enabled;
     api::timestamp_type _max_purgeable = api::missing_timestamp;
     std::optional<gc_clock::time_point> _gc_before;
     const query::partition_slice& _slice;
@@ -283,7 +284,7 @@ private:
 
     bool can_gc(tombstone t, is_shadowable is_shadowable) {
         if (!sstable_compaction()) {
-            return true;
+            return _gc_enabled;
         }
         if (!t) {
             return false;
@@ -300,10 +301,11 @@ public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
     compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
-              uint32_t partition_limit, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
+              uint32_t partition_limit, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token, bool gc_enabled = true)
         : _schema(s)
         , _query_time(query_time)
-        , _can_gc(always_gc)
+        , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable); })
+        , _gc_enabled(gc_enabled)
         , _slice(slice)
         , _row_limit(limit)
         , _partition_limit(partition_limit)

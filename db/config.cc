@@ -1079,6 +1079,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Total maximum throttle. Throttling is reduced proportionally to the number of nodes in the cluster.")
     , batchlog_replay_cleanup_after_replays(this, "batchlog_replay_cleanup_after_replays", liveness::LiveUpdate, value_status::Used, 60,
         "Clean up batchlog memtable after every N replays. Replays are issued on a timer, every 60 seconds. So if batchlog_replay_cleanup_after_replays is set to 60, the batchlog memtable is flushed every 60 * 60 seconds.")
+    , batchlog_cleanup_with_memtable_rollover(this, "batchlog_cleanup_with_memtable_rollover", liveness::LiveUpdate, value_status::Used, false,
+        "Clean up batchlog memtable via memtable rollover, instead of memtable flush (experimental and WIP)")
     /**
     * @Group Request scheduler properties
     * @GroupDescription Settings to handle incoming client requests according to a defined policy. If you need to use these properties, your nodes are overloaded and dropping requests. It is recommended that you add more nodes and not try to prioritize requests.
