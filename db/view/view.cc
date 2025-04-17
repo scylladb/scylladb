@@ -29,6 +29,7 @@
 #include "db/view/base_info.hh"
 #include "db/view/view_build_status.hh"
 #include "db/view/view_building_worker.hh"
+#include "locator/tablets.hh"
 #include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
 #include "clustering_bounds_comparator.hh"
@@ -80,6 +81,7 @@
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
 #include "idl/view.dist.hh"
+#include "sstables/sstables.hh"
 
 using namespace std::chrono_literals;
 
@@ -3695,6 +3697,22 @@ future<> view_building_worker::run_view_building_state_observer() {
     });
     co_await _group0_client.wait_until_group0_upgraded(_as);
 
+    // Initially discover staging sstables on this node 
+    // and create view_building tasks if needed.
+    // Try untill success.
+    while (!_as.abort_requested()) {
+        try {
+            // Sstables are spread across all shards
+            co_await container().invoke_on_all([building_tasks = _vb_state_machine.building_state.tasks_state] (auto& vbw) {
+                return vbw.discover_staging_sstables(std::move(building_tasks));
+            });
+            break;
+        } catch (abort_requested_exception&) {
+        } catch (...) {
+            vbw_logger.warn("Error while discovering staging sstables: {}. Retrying...", std::current_exception());
+        }
+    }
+
     while (!_as.abort_requested()) {
         bool sleep = false;
         try {
@@ -3794,6 +3812,107 @@ bool view_building_worker::is_shard_free(shard_id shard) {
     return !std::ranges::any_of(_state.tasks_map, [&shard] (auto& task_entry) {
         return task_entry.second->replica.shard == shard;
     });
+}
+
+future<> view_building_worker::save_view_building_tasks(std::vector<service::view_building::view_building_task> tasks) {
+    static const unsigned group0_retries = 3;
+
+    unsigned retries_left = group0_retries;
+    while (retries_left--) {
+        try {
+            auto guard = co_await _group0_client.start_operation(_as);
+            std::vector<canonical_mutation> cmuts;
+
+            for (auto& task: tasks) {
+                // Generate new id for the task
+                task.id = utils::UUID_gen::get_time_UUID();
+                auto mut = co_await _group0_client.sys_ks().make_view_building_task_mutation(guard.write_timestamp(), task);
+                cmuts.emplace_back(std::move(mut));
+            }
+
+            auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create view building tasks");
+            co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _as);
+            break;
+        } catch (service::group0_concurrent_modification&) {
+            vbw_logger.warn("Got group0_concurrent_modification error in save_view_building_tasks(). Retries left: {}", retries_left);
+            if (retries_left == 0) {
+                std::rethrow_exception(std::current_exception());
+            }
+        }
+    }
+}
+
+static locator::tablet_id get_sstable_tablet_id(const locator::tablet_map& tablet_map, const sstables::sstable& sst) {
+    auto last_token = sst.get_last_decorated_key().token();
+    auto tablet_id = tablet_map.get_tablet_id(last_token);
+
+#ifdef SEASTAR_DEBUG
+    // Single sstable from tablet-table should contain data for only one tablet
+    auto first_token = sst.get_first_decorated_key().token();
+    auto first_token_tablet_id = tablet_map.get_tablet_id(first_token);
+    SCYLLA_ASSERT(tablet_id == first_token_tablet_id);
+#endif
+
+    return tablet_id;
+}
+
+static shard_id get_sstable_shard_id(const sstables::sstable& sst) {
+    auto shards = sst.get_shards_for_this_sstable();
+#ifdef SEASTAR_DEBUG
+    // Sstable from tablet-table should belong to only one shard
+    SCYLLA_ASSERT(shards.size() == 1);
+#endif
+    return shards[0];
+}
+
+static bool staging_task_exists(const service::view_building::building_tasks& tasks, table_id table_id, const locator::tablet_replica& replica, locator::tablet_id tid) {
+    if (!tasks.contains(table_id) || !tasks.at(table_id).contains(replica)) {
+        return false;
+    }
+    auto& replica_tasks = tasks.at(table_id).at(replica);
+    return std::ranges::any_of(replica_tasks.staging_tasks, [&tid] (auto& t) {
+        return t.second.tid == tid;
+    });
+}
+
+// Because view building state lives only on shard0, the method needs to take copy of building tasks
+// to detemine whether a task for particular staging sstable exists or not.
+future<> view_building_worker::discover_staging_sstables(service::view_building::building_tasks building_tasks) {
+    std::vector<service::view_building::view_building_task> tasks_to_create;    
+    auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
+
+    _db.get_tables_metadata().for_each_table([&] (table_id table_id, lw_shared_ptr<replica::table> table) {
+        if (!table->uses_tablets()) {
+            return;
+        }
+
+        auto& tablet_map = _db.get_token_metadata().tablets().get_tablet_map(table_id);
+        auto sstables = table->get_sstables();
+        for (auto sstable: *sstables) {
+            if (!sstable->requires_view_building()) {
+                continue;
+            }
+
+            auto shard = get_sstable_shard_id(*sstable);
+            auto tid = get_sstable_tablet_id(tablet_map, *sstable);
+
+            if (!staging_task_exists(building_tasks, table_id, {my_host_id, shard}, tid)) {
+                // For the future: we can check if the sstable needs to go through view building coordinator
+                //                 or maybe it can be registered to view_update_generator directly.
+
+                // Task id doesn't matter, it'll be created by save_view_building_tasks()
+                tasks_to_create.emplace_back(utils::UUID{}, service::view_building::view_building_task::task_type::process_staging, 
+                        service::view_building::view_building_task::task_state::idle, table_id, ::table_id{}, locator::tablet_replica{my_host_id, shard}, tid);
+            }
+            _staging_sstables[table_id][tid].push_back(std::move(sstable));
+        }
+    });
+
+    if (!tasks_to_create.empty()) {
+        co_await container().invoke_on(0, [tasks_to_create = std::move(tasks_to_create)] (auto& vbw) {
+            return vbw.save_view_building_tasks(std::move(tasks_to_create));
+        });
+    }
 }
 
 void view_building_worker::init_messaging_service() {
