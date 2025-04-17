@@ -4016,11 +4016,23 @@ static rjson::value describe_item(schema_ptr schema,
     return item_descr;
 }
 
+void foo1()
+{
+    std::cout << "not called";
+}
+
+void foo2()
+{
+    std::cout << "called";
+}
+
 future<executor::request_return_type> executor::get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.get_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("Getting item {}", request);
 
+    foo2();
+    
     schema_ptr schema = get_table(_proxy, request);
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
