@@ -3131,6 +3131,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         topology_builder topo(e);
 
         topo.add_node(node_state::normal, 2);
+        topo.start_new_rack();
         topo.add_node(node_state::normal, 2);
 
         const size_t initial_tablets = 2;
