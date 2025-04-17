@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "seastar/core/loop.hh"
 #include "sstables/shared_sstable.hh"
 #include "db/timeout_clock.hh"
 #include "utils/chunked_vector.hh"
@@ -98,6 +99,7 @@ private:
             service::allow_hints allow_hints,
             wait_for_all_updates wait_for_all);
 
+    std::pair<stop_iteration, uint64_t> generate_updates_from_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable>& sstables);
 public:
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
     size_t queued_batches_count() const { return _sstables_with_tables.size(); }
