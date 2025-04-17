@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include "locator/tablets.hh"
 #include "service/view_building_state.hh"
+#include "sstables/shared_sstable.hh"
 #include "utils/UUID.hh"
 
 namespace replica {
@@ -103,6 +104,7 @@ private:
     abort_source _as;
 
     local_state _state;
+    std::unordered_map<table_id, std::unordered_map<locator::tablet_id, std::vector<sstables::shared_sstable>>> _staging_sstables;
     future<> _view_building_state_observer = make_ready_future<>();
     
 public:
@@ -119,6 +121,9 @@ private:
     bool is_shard_free(shard_id shard);
     
     dht::token_range get_tablet_token_range(table_id table_id, locator::tablet_id tablet_id);
+
+    future<> save_view_building_tasks(std::vector<service::view_building::view_building_task> tasks);
+    future<> discover_staging_sstables(service::view_building::building_tasks building_tasks);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
