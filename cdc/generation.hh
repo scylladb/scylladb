@@ -151,6 +151,10 @@ struct cdc_stream_diff {
     std::vector<stream_id> opened_streams;
 };
 
+struct table_streams {
+    std::map<api::timestamp_type, committed_stream_set> committed;
+};
+
 class no_generation_data_exception : public std::runtime_error {
 public:
     no_generation_data_exception(cdc::generation_id generation_ts)
