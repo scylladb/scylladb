@@ -172,6 +172,7 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     bool update_service_levels_cache = false;
     bool update_service_levels_effective_cache = false;
     bool make_view_building_state_transition = false;
+    std::unordered_set<table_id> update_cdc_streams;
 
     for (const auto& m : modules.entries) {
         if (m.table == db::system_keyspace::service_levels_v2()->id()) {
@@ -187,6 +188,18 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             make_view_building_state_transition = true;
         } else if (m.table == db::system_keyspace::v3::scylla_local()->id()) {
             make_view_building_state_transition = true;
+        } else if (m.table == db::system_keyspace::cdc_streams_state()->id()) {
+            const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_state());
+            auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
+            update_cdc_streams.insert(cdc_log_table_id);
+        } else if (m.table == db::system_keyspace::cdc_streams_history()->id()) {
+            const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_history());
+            auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
+            update_cdc_streams.insert(cdc_log_table_id);
+        } else if (m.table == db::system_keyspace::cdc_pending_streams()->id()) {
+            const auto elements = m.pk.explode(*db::system_keyspace::cdc_pending_streams());
+            auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
+            update_cdc_streams.insert(cdc_log_table_id);
         }
     }
     
@@ -195,6 +208,9 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     }
     if (make_view_building_state_transition) {
         co_await _ss.view_building_transition();
+    }
+    if (update_cdc_streams.size()) {
+        co_await _ss.load_cdc_streams(std::move(update_cdc_streams));
     }
 }
 
@@ -228,6 +244,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
         auto modules_to_reload = get_modules_to_reload(chng.mutations);
         auto tablet_keys = replica::get_tablet_metadata_change_hint(chng.mutations);
         co_await write_mutations_to_database(_sp, cmd.creator_addr, std::move(chng.mutations));
+        co_await reload_modules(std::move(modules_to_reload));
         co_await _ss.topology_transition({.tablets_hint = std::move(tablet_keys)});
         co_await reload_modules(std::move(modules_to_reload));
     },
@@ -359,6 +376,9 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
         co_await _ss.compression_dictionary_updated_callback_all();
     }
     co_await _ss.update_service_levels_cache(qos::update_both_cache_levels::yes, qos::query_context::group0);
+    if (_feature_service.cdc_with_tablets) {
+        co_await _ss.load_cdc_streams();
+    }
     _ss._topology_state_machine.event.broadcast();
     _ss._view_building_state_machine.event.broadcast();
 }

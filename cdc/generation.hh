@@ -143,6 +143,16 @@ struct cdc_stream_diff {
 using base_streams_state = std::unordered_map<table_id, committed_stream_set>;
 using pending_streams = std::unordered_map<table_id, std::vector<cdc::stream_id>>;
 
+struct pending_stream_entry {
+    std::vector<cdc::stream_id> stream_set;
+    std::optional<db_clock::time_point> committed_time;
+};
+
+struct table_streams {
+    std::map<api::timestamp_type, committed_stream_set> committed;
+    std::optional<pending_stream_entry> pending;
+};
+
 class no_generation_data_exception : public std::runtime_error {
 public:
     no_generation_data_exception(cdc::generation_id generation_ts)
