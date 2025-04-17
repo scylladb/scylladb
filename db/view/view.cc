@@ -3353,19 +3353,67 @@ future<> view_builder::register_staging_sstable(sstables::shared_sstable sst, lw
     return _vug.register_staging_sstable(std::move(sst), std::move(table));
 }
 
-future<bool> check_needs_view_update_path(view_builder& vb, locator::token_metadata_ptr tmptr, const replica::table& t, streaming::stream_reason reason) {
+future<sstable_destination_decision> check_needs_view_update_path(view_builder& vb, locator::token_metadata_ptr tmptr, const replica::table& t, streaming::stream_reason reason) {
     if (is_internal_keyspace(t.schema()->ks_name())) {
-        return make_ready_future<bool>(false);
+        co_return sstable_destination_decision::normal_directory;
     }
-    if (reason == streaming::stream_reason::repair && !t.views().empty()) {
-        return make_ready_future<bool>(true);
-    }
-    return do_with(std::move(tmptr), t.views(), [&vb] (locator::token_metadata_ptr& tmptr, auto& views) {
-        return map_reduce(views,
+
+    if (vb.get_db().find_keyspace(t.schema()->ks_name()).uses_tablets()) {
+        // views are managed by view building coordinator
+        if (t.views().empty()) {
+            co_return sstable_destination_decision::normal_directory;
+        }
+
+        auto build_status_map = co_await vb.get_sys_ks().get_view_build_status_map();
+        auto views_names = t.views() 
+                | std::views::transform([] (const view_ptr& v) { return std::make_pair(v->ks_name(), v->cf_name()); })
+                | std::ranges::to<std::set>();
+
+        bool any_started_building = false;
+        bool any_started = false;
+        bool all_success = true;
+        for (auto& [view_name, statuses]: build_status_map) {
+            if (!views_names.contains(view_name)) {
+                continue;
+            }
+
+            any_started_building = true;
+            any_started = any_started || std::ranges::any_of(statuses | std::views::values, [] (const build_status& status) {
+                return status == build_status::STARTED;
+            });
+            all_success = all_success && std::ranges::all_of(statuses | std::views::values, [] (const build_status& status) {
+                return status == build_status::SUCCESS;
+            });
+        }
+
+        if (!any_started_building) {
+            // If all of the views didn't start building yet (and none of them is finished building)
+            // the sstable can go to normal directory and no view update will be lost
+            co_return sstable_destination_decision::normal_directory;
+        } else if (any_started) {
+            // If any of the views started building and didn't finished yet, we need to use view building
+            // coordinator to schedule staging sstables processing to control if replica is not in a pending state.
+            co_return sstable_destination_decision::staging_managed_by_vbc;
+        } else if (all_success) {
+            // If all of the views were built, the sstable can be registered to view update generator directly (in case of `stream_reason::repair`).
+            co_return reason == streaming::stream_reason::repair ? sstable_destination_decision::staging_directly_to_generator : sstable_destination_decision::normal_directory;
+        }
+        // This should be unreachable, reaching this point would mean that,
+        // any of the views started building, none of the status is `STARTED` and not all statuses are `SUCCESS`.
+        // Since there are only 2 statuses: STARTED and SUCCESS, this is unreachable.
+        on_internal_error(vlogger, fmt::format("check_needs_view_update_path() reached unreachable branch. any_started_building: {} | any_started: {} | all_success: {}", any_started_building, any_started, all_success));
+    } else {
+        // views are managed by view builder
+        if (reason == streaming::stream_reason::repair && !t.views().empty()) {
+            co_return sstable_destination_decision::staging_directly_to_generator;
+        } 
+
+        auto any_view_build_ongoing = co_await map_reduce(t.views(),
                 [&] (const view_ptr& view) { return vb.check_view_build_ongoing(*tmptr, view->ks_name(), view->cf_name()); },
                 false,
                 std::logical_or<bool>());
-    });
+        co_return any_view_build_ongoing ? sstable_destination_decision::staging_directly_to_generator : sstable_destination_decision::normal_directory;
+    }
 }
 
 void view_updating_consumer::do_flush_buffer() {
