@@ -417,6 +417,10 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
     }
 
     auto nodes = module->get_nodes();
+    co_await utils::get_local_injector().inject("tasks_vt_get_children", [] (auto& handler) -> future<> {
+        tmlogger.info("tasks_vt_get_children: waiting");
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{10});
+    });
     co_return co_await map_reduce(nodes, [ms, parent_id, is_host_alive = std::move(is_host_alive)] (auto host_id) -> future<std::vector<task_identity>> {
         if (is_host_alive(host_id)) {
             return ser::tasks_rpc_verbs::send_tasks_get_children(ms, host_id, parent_id).then([host_id] (auto resp) {
