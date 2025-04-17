@@ -325,6 +325,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
 
         // cdc log partition key
         assert_has_column(cdc::log_meta_column_name("stream_id"), bytes_type, column_kind::partition_key);
+        assert_has_column(cdc::log_meta_column_name("closed_time"), timestamp_type, column_kind::static_column);
         assert_has_column(cdc::log_meta_column_name("time"), timeuuid_type, column_kind::clustering_key);
         assert_has_column(cdc::log_meta_column_name("batch_seq_no"), int32_type, column_kind::clustering_key);
 
