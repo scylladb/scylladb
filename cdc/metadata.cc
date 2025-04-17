@@ -12,6 +12,8 @@
 #include "cdc/generation.hh"
 #include "cdc/metadata.hh"
 
+#include <seastar/coroutine/maybe_yield.hh>
+
 extern logging::logger cdc_log;
 
 static api::timestamp_type to_ts(db_clock::time_point tp) {
@@ -202,4 +204,112 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
     }
 
     return !it->second;
+}
+
+future<> cdc::metadata::do_update_tablet_streams_map(
+        cdc::metadata::tablet_streams_map& new_map,
+        const cdc::base_streams_state& base_data,
+        const cdc::pending_streams& pending_data,
+        const cdc::streams_history& history_data) {
+
+    auto stream_cmp = [] (const auto& a, const auto& b) { return a.token() < b.token(); };
+
+    for (const auto& [table, base_table_state] : base_data) {
+        co_await coroutine::maybe_yield();
+
+        table_streams new_table_map;
+
+        auto append_stream = [&new_table_map] (db_clock::time_point stream_ts, std::vector<cdc::stream_id> stream_set) {
+            new_table_map.committed[to_ts(stream_ts)] = committed_stream_set {stream_ts, std::move(stream_set)};
+        };
+
+        auto base_stream_set = base_table_state.streams;
+        std::ranges::sort(base_stream_set, stream_cmp);
+
+        append_stream(base_table_state.ts, std::move(base_stream_set));
+
+        // for each history entry, comprised of closed and opened streams, construct the next
+        // stream set from the previous one, and append it to the table's stream list.
+        if (auto it = history_data.find(table); it != history_data.end()) {
+            const auto& table_history = it->second;
+            for (const auto& [ts, entries] : table_history) {
+                co_await coroutine::maybe_yield();
+
+                std::vector<stream_id> opened, closed;
+                for (const auto& [kind, sid] : entries) {
+                    if (kind == stream_kind::opened) {
+                        opened.push_back(sid);
+                    } else if (kind == stream_kind::closed) {
+                        closed.push_back(sid);
+                    } else {
+                        on_internal_error(cdc_log, fmt::format("invalid stream_kind {} in cdc_streams_history for table {}", std::to_underlying(kind), table));
+                    }
+                }
+
+                const auto& prev_stream_set = std::crbegin(new_table_map.committed)->second.streams;
+
+                std::vector<stream_id> next_stream_set;
+                next_stream_set.reserve(prev_stream_set.size() + opened.size() - closed.size());
+
+                std::ranges::sort(closed, stream_cmp);
+                std::ranges::set_difference(prev_stream_set, closed, std::back_inserter(next_stream_set), stream_cmp);
+                for (auto&& sid : opened) {
+                    next_stream_set.push_back(std::move(sid));
+                }
+                std::ranges::sort(next_stream_set, stream_cmp);
+
+                append_stream(ts, std::move(next_stream_set));
+            }
+        }
+
+        if (auto it = pending_data.find(table); it != pending_data.end()) {
+            auto pending_stream = it->second;
+            std::ranges::sort(pending_stream, stream_cmp);
+
+            // it is possible the pending stream is equal to the last stream according to the history table.
+            // it happens when the pending stream is committed and not closed yet.
+            const auto& last_stream_set = std::crbegin(new_table_map.committed)->second;
+            std::optional<db_clock::time_point> committed_time;
+            if (std::ranges::equal(pending_stream, last_stream_set.streams)) {
+                committed_time = last_stream_set.ts;
+            }
+
+            new_table_map.pending = pending_stream_entry {std::move(pending_stream), committed_time};
+        }
+
+        new_map[table] = std::move(new_table_map);
+    }
+}
+
+future<> cdc::metadata::load_tablet_streams_map(
+        const cdc::base_streams_state& base_data,
+        const cdc::pending_streams& pending_data,
+        const cdc::streams_history& history_data) {
+
+    // This constructs a new map for all tables from scratch, based on the data we have from the CDC tables.
+
+    tablet_streams_map new_tablet_streams;
+
+    co_await do_update_tablet_streams_map(new_tablet_streams, base_data, pending_data, history_data);
+
+    _tablet_streams = std::move(new_tablet_streams);
+}
+
+future<> cdc::metadata::load_tablet_streams_map(
+        const cdc::base_streams_state& base_data,
+        const cdc::pending_streams& pending_data,
+        const cdc::streams_history& history_data,
+        const std::unordered_set<table_id>& changed_tables) {
+
+    // This updates the existing map incrementally, only for the changed tables.
+    // For changed tables that have data we replace its entry with a new one constructed from the data,
+    // and for changed tables that don't have data we remove them from the map.
+
+    co_await do_update_tablet_streams_map(_tablet_streams, base_data, pending_data, history_data);
+
+    for (auto table : changed_tables) {
+        if (!base_data.contains(table)) {
+            _tablet_streams.erase(table);
+        }
+    }
 }
