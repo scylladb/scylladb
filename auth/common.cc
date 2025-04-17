@@ -118,6 +118,11 @@ future<> create_legacy_metadata_table_if_missing(
     return qs;
 }
 
+::service::raft_timeout get_raft_timeout() noexcept {
+    auto dur = internal_distributed_query_state().get_client_state().get_timeout_config().other_timeout;
+    return ::service::raft_timeout{.value = lowres_clock::now() + dur};
+}
+
 static future<> announce_mutations_with_guard(
         ::service::raft_group0_client& group0_client,
         std::vector<canonical_mutation> muts,
