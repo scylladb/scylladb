@@ -2360,6 +2360,106 @@ future<bool> system_keyspace::cdc_is_rewritten() {
     });
 }
 
+future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,
+        noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f) {
+    sstring query = table ? format("SELECT table_id, timestamp, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_STREAMS_STATE, *table)
+                          : format("SELECT table_id, timestamp, stream_id FROM {}.{}", NAME, CDC_STREAMS_STATE);
+
+    struct cur_t {
+        table_id tid;
+        db_clock::time_point ts;
+        std::vector<cdc::stream_id> streams;
+    };
+    std::optional<cur_t> cur;
+
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto tid = table_id(row.get_as<utils::UUID>("table_id"));
+        auto ts = row.get_as<db_clock::time_point>("timestamp");
+        auto stream_id = cdc::stream_id(row.get_as<bytes>("stream_id"));
+
+        if (!cur || tid != cur->tid || ts != cur->ts) {
+            if (cur) {
+                co_await f(cur->tid, cur->ts, std::move(cur->streams));
+            }
+            cur = { tid, ts, std::vector<cdc::stream_id>() };
+        }
+        cur->streams.push_back(std::move(stream_id));
+
+        co_return stop_iteration::no;
+    });
+
+    if (cur) {
+        co_await f(cur->tid, cur->ts, std::move(cur->streams));
+    }
+}
+
+future<cdc::base_streams_state> system_keyspace::read_cdc_streams_state(table_id table) {
+    cdc::base_streams_state st;
+    co_await read_cdc_streams_state(table, [&] (table_id tid, db_clock::time_point ts, std::vector<cdc::stream_id> streams) -> future<> {
+        st[tid].ts = ts;
+        st[tid].streams = std::move(streams);
+        return make_ready_future<>();
+    });
+    co_return std::move(st);
+}
+
+future<> system_keyspace::read_cdc_streams_history(std::optional<table_id> table,
+        noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f) {
+    sstring query = table ? format("SELECT table_id, timestamp, stream_kind, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_STREAMS_HISTORY, *table)
+                          : format("SELECT table_id, timestamp, stream_kind, stream_id FROM {}.{}", NAME, CDC_STREAMS_HISTORY);
+
+    struct cur_t {
+        table_id tid;
+        db_clock::time_point ts;
+        cdc::cdc_stream_diff diff;
+    };
+    std::optional<cur_t> cur;
+
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto tid = table_id(row.get_as<utils::UUID>("table_id"));
+        auto ts = row.get_as<db_clock::time_point>("timestamp");
+        auto stream_kind = cdc::read_stream_kind(row.get_as<int8_t>("stream_kind"));
+        auto stream_id = cdc::stream_id(row.get_as<bytes>("stream_id"));
+
+        if (!cur || tid != cur->tid || ts != cur->ts) {
+            if (cur) {
+                co_await f(cur->tid, cur->ts, std::move(cur->diff));
+            }
+            cur = { tid, ts, cdc::cdc_stream_diff() };
+        }
+
+        if (stream_kind == cdc::stream_kind::closed) {
+            cur->diff.closed_streams.push_back(std::move(stream_id));
+        } else if (stream_kind == cdc::stream_kind::opened) {
+            cur->diff.opened_streams.push_back(std::move(stream_id));
+        } else {
+            on_internal_error(slogger, fmt::format("unexpected CDC stream kind {} in {}.{} for table {}",
+                    std::to_underlying(stream_kind), NAME, CDC_STREAMS_HISTORY, table));
+        }
+
+        co_return stop_iteration::no;
+    });
+
+    if (cur) {
+        co_await f(cur->tid, cur->ts, std::move(cur->diff));
+    }
+}
+
+future<cdc::pending_streams> system_keyspace::read_cdc_pending_streams(table_id table) {
+    sstring query = format("SELECT table_id, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_PENDING_STREAMS, table);
+
+    cdc::pending_streams st;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto tid = table_id(row.get_as<utils::UUID>("table_id"));
+        auto stream_id = cdc::stream_id(row.get_as<bytes>("stream_id"));
+
+        st[tid].push_back(std::move(stream_id));
+
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+    co_return std::move(st);
+}
+
 bool system_keyspace::bootstrap_needed() const {
     return get_bootstrap_state() == bootstrap_state::NEEDS_BOOTSTRAP;
 }
