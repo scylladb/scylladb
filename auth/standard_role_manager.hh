@@ -95,7 +95,10 @@ private:
 
     future<> migrate_legacy_metadata();
 
-    future<> create_default_role_if_missing();
+    future<> legacy_create_default_role_if_missing();
+
+    future<> maybe_create_default_role();
+    future<> maybe_create_default_role_with_retries();
 
     future<> create_or_replace(std::string_view role_name, const role_config&, ::service::group0_batch&);
 
