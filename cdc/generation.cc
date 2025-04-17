@@ -1224,4 +1224,66 @@ make_drop_table_streams_mutations(table_id table, api::timestamp_type ts) {
     return mutations;
 }
 
+future<> generation_service::load_cdc_tablet_streams(std::optional<std::unordered_set<table_id>> changed_tables) {
+    // track which tables we expect to get data for, and which we actually get.
+    // when a table is dropped we won't get any streams for it. we will use this to
+    // know which tables are dropped and remove their stream map from the metadata.
+    std::unordered_set<table_id> tables_to_process;
+    if (changed_tables) {
+        tables_to_process = *changed_tables;
+    } else {
+        tables_to_process = _cdc_metadata.get_tables_with_cdc_tablet_streams() | std::ranges::to<std::unordered_set<table_id>>();
+    }
+
+    auto read_streams_state = [this] (const std::optional<std::unordered_set<table_id>>& tables, noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f) -> future<> {
+        if (tables) {
+            for (auto table : *tables) {
+                co_await _sys_ks.local().read_cdc_streams_state(table, [&] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+                    return f(table, base_ts, std::move(base_stream_set));
+                });
+            }
+        } else {
+            co_await _sys_ks.local().read_cdc_streams_state(std::nullopt, [&] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+                return f(table, base_ts, std::move(base_stream_set));
+            });
+        }
+    };
+
+    co_await read_streams_state(changed_tables, [this, &tables_to_process] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+        table_streams new_table_map;
+
+        auto append_stream = [&new_table_map] (db_clock::time_point stream_tp, std::vector<cdc::stream_id> stream_set) {
+            auto ts = std::chrono::duration_cast<api::timestamp_clock::duration>(stream_tp.time_since_epoch()).count();
+            new_table_map[ts] = committed_stream_set {stream_tp, std::move(stream_set)};
+        };
+
+        append_stream(base_ts, std::move(base_stream_set));
+
+        co_await _sys_ks.local().read_cdc_streams_history(table, [&] (table_id tid, db_clock::time_point ts, cdc_stream_diff diff) -> future<> {
+            const auto& prev_stream_set = std::crbegin(new_table_map)->second.streams;
+
+            append_stream(ts, co_await cdc::metadata::construct_next_stream_set(
+                    prev_stream_set, std::move(diff.opened_streams), diff.closed_streams));
+        });
+
+        co_await container().invoke_on_all(coroutine::lambda([&] (generation_service& svc) -> future<> {
+            table_streams new_table_map_copy;
+            for (const auto& [ts, entry] : new_table_map) {
+                new_table_map_copy[ts] = entry;
+                co_await coroutine::maybe_yield();
+            }
+            svc._cdc_metadata.load_tablet_streams_map(table, std::move(new_table_map_copy));
+        }));
+
+        tables_to_process.erase(table);
+    });
+
+    // the remaining tables have no streams - remove them from the metadata
+    co_await container().invoke_on_all([&] (generation_service& svc) {
+        for (auto table : tables_to_process) {
+            svc._cdc_metadata.remove_tablet_streams_map(table);
+        }
+    });
+}
+
 } // namespace cdc

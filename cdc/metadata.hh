@@ -37,6 +37,11 @@ class metadata final {
     using container_t = std::map<api::timestamp_type, std::optional<topology_description>>;
     container_t _gens;
 
+    using table_streams_ptr = lw_shared_ptr<const table_streams>;
+    using tablet_streams_map = std::unordered_map<table_id, table_streams_ptr>;
+
+    tablet_streams_map _tablet_streams;
+
     /* The timestamp used in the last successful `get_stream` call. */
     api::timestamp_type _last_stream_timestamp = api::missing_timestamp;
 
@@ -82,6 +87,21 @@ public:
      * Returns true iff this generation is not obsolete and wasn't previously prepared nor inserted.
      */
     bool prepare(db_clock::time_point ts);
+
+    void load_tablet_streams_map(table_id tid, table_streams new_table_map);
+    void remove_tablet_streams_map(table_id tid);
+
+    const tablet_streams_map& get_all_tablet_streams() const {
+        return _tablet_streams;
+    }
+
+    std::vector<table_id> get_tables_with_cdc_tablet_streams() const;
+
+    static future<std::vector<stream_id>> construct_next_stream_set(
+        const std::vector<cdc::stream_id>& prev_stream_set,
+        std::vector<cdc::stream_id> opened,
+        const std::vector<cdc::stream_id>& closed);
+
 };
 
 } // namespace cdc

@@ -10,7 +10,10 @@
 #include "exceptions/exceptions.hh"
 
 #include "cdc/generation.hh"
+#include "utils/stall_free.hh"
 #include "cdc/metadata.hh"
+
+#include <seastar/coroutine/maybe_yield.hh>
 
 extern logging::logger cdc_log;
 
@@ -202,4 +205,59 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
     }
 
     return !it->second;
+}
+
+future<std::vector<cdc::stream_id>> cdc::metadata::construct_next_stream_set(
+        const std::vector<cdc::stream_id>& prev_stream_set,
+        std::vector<cdc::stream_id> opened,
+        const std::vector<cdc::stream_id>& closed) {
+
+    if (closed.size() == prev_stream_set.size()) {
+        // all previous streams are closed, so the next stream set is just the opened streams.
+        co_return std::move(opened);
+    }
+
+    // construct the next stream set from the previous one by adding the opened
+    // streams and removing the closed streams. we assume each stream set is
+    // sorted by token, and the result is sorted as well.
+
+    std::vector<cdc::stream_id> next_stream_set;
+    next_stream_set.reserve(prev_stream_set.size() + opened.size() - closed.size());
+
+    auto next_prev = prev_stream_set.begin();
+    auto next_closed = closed.begin();
+    auto next_opened = opened.begin();
+
+    while (next_prev != prev_stream_set.end() || next_opened != opened.end()) {
+        co_await coroutine::maybe_yield();
+
+        if (next_prev == prev_stream_set.end() || (next_opened != opened.end() && next_opened->token() < next_prev->token())) {
+            next_stream_set.push_back(std::move(*next_opened));
+            next_opened++;
+            continue;
+        }
+
+        if (next_closed != closed.end() && *next_prev == *next_closed) {
+            next_prev++;
+            next_closed++;
+            continue;
+        }
+
+        next_stream_set.push_back(*next_prev);
+        next_prev++;
+    }
+
+    co_return std::move(next_stream_set);
+}
+
+void cdc::metadata::load_tablet_streams_map(table_id tid, table_streams new_table_map) {
+    _tablet_streams[tid] = make_lw_shared(std::move(new_table_map));
+}
+
+void cdc::metadata::remove_tablet_streams_map(table_id tid) {
+    _tablet_streams.erase(tid);
+}
+
+std::vector<table_id> cdc::metadata::get_tables_with_cdc_tablet_streams() const {
+    return _tablet_streams | std::views::keys | std::ranges::to<std::vector<table_id>>();
 }

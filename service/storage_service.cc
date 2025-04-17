@@ -959,6 +959,10 @@ future<> storage_service::compression_dictionary_updated_callback(std::string_vi
     return _compression_dictionary_updated_callback(name);
 }
 
+future<> storage_service::load_cdc_streams(std::optional<std::unordered_set<table_id>> changed_tables) {
+    co_await _cdc_gens.local().load_cdc_tablet_streams(std::move(changed_tables));
+}
+
 // Moves the coroutine lambda onto the heap and extends its
 // lifetime until the resulting future is completed.
 // This allows to use captures in coroutine lambda after co_await-s.
