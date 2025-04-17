@@ -11,6 +11,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 #include "gms/generation-number.hh"
+#include "db/view/view_building_worker.hh"
 #include "replica/database_fwd.hh"
 #include "test/lib/cql_test_env.hh"
 #include "cdc/generation_service.hh"
@@ -141,6 +142,7 @@ private:
     sharded<cql3::query_processor> _qp;
     sharded<auth::service> _auth_service;
     sharded<db::view::view_builder> _view_builder;
+    sharded<db::view::view_building_worker> _view_building_worker;
     sharded<db::view::view_update_generator> _view_update_generator;
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
@@ -361,6 +363,10 @@ public:
 
     virtual db::view::view_update_generator& local_view_update_generator() override {
         return _view_update_generator.local();
+    }
+
+    virtual distributed<db::view::view_building_worker>& view_building_worker() override {
+        return _view_building_worker;
     }
 
     virtual service::migration_notifier& local_mnotifier() override {
@@ -922,7 +928,7 @@ private:
                 _view_builder.stop().get();
             });
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _ss.start(std::ref(abort_sources), std::ref(_db),
@@ -1069,6 +1075,11 @@ private:
             });
 
             group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
+
+            _view_building_worker.start(std::ref(_db), std::ref(_sys_ks), std::ref(_mnotifier), std::ref(group0_client), std::ref(_view_update_generator), std::ref(_ms), std::ref(_view_building_state_machine)).get();
+            auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [this] {
+                _view_building_worker.stop().get();
+            });
 
             const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
 

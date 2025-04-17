@@ -16,6 +16,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
+#include "db/view/view_building_worker.hh"
 #include "db/view/view_update_generator.hh"
 #include "service/qos/service_level_controller.hh"
 #include "replica/database.hh"
@@ -159,6 +160,8 @@ public:
 
     virtual distributed<db::view::view_builder>& view_builder() = 0;
     virtual db::view::view_builder& local_view_builder() = 0;
+
+    virtual distributed<db::view::view_building_worker>& view_building_worker() = 0;
 
     virtual db::view::view_update_generator& local_view_update_generator() = 0;
 
