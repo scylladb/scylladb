@@ -1082,6 +1082,8 @@ async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(m
 
     cql = await safe_rolling_restart(manager, [servers[0]], with_down=insert_with_down)
 
+    await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 30)
+
     all_replicas = await get_all_tablet_replicas(manager, servers[1], ks, "test")
     all_replicas.sort(key=lambda x: x.last_token)
     assert len(all_replicas) >= 3
