@@ -928,6 +928,8 @@ public:
     future<> compression_dictionary_updated_callback(std::string_view name);
     future<> compression_dictionary_updated_callback_all();
 
+    future<> load_cdc_streams();
+
     future<> do_cluster_cleanup();
 
     // Starts the upgrade procedure to topology on raft.
