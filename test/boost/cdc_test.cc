@@ -2125,4 +2125,113 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_construct_next_stream_set) {
+    // for convenience of testing we represent stream_id by its token as int64_t.
+    // this function takes care of translating it into stream_id and back
+    using stream_set = std::vector<int64_t>;
+
+    auto do_test = [&] (stream_set prev, stream_set opened, stream_set closed, stream_set expected) {
+        std::unordered_map<int64_t, cdc::stream_id> token_to_stream;
+
+        auto stream_id_for_token = [&token_to_stream] (int64_t t) {
+            if (!token_to_stream.contains(t)) {
+                token_to_stream[t] = cdc::stream_id(dht::token(t), 0);
+            }
+            return token_to_stream[t];
+        };
+
+        auto tokens_to_stream_ids = [&stream_id_for_token] (const stream_set& tokens) {
+            std::vector<cdc::stream_id> stream_ids;
+            for (auto t : tokens) {
+                stream_ids.push_back(stream_id_for_token(t));
+            }
+            return stream_ids;
+        };
+
+        auto result = cdc::metadata::construct_next_stream_set(
+                tokens_to_stream_ids(prev),
+                tokens_to_stream_ids(opened),
+                tokens_to_stream_ids(closed)).get();
+
+        stream_set result_tokens = std::views::transform(result, [] (cdc::stream_id sid) { return dht::token::to_int64(sid.token()); }) | std::ranges::to<std::vector>();
+
+        BOOST_REQUIRE_EQUAL(expected, result_tokens);
+    };
+
+    do_test(
+        stream_set { 10, 20, 30 }, stream_set { 15, 25 }, stream_set { 20 },
+        stream_set { 10, 15, 25, 30 }
+    );
+
+    do_test(
+        stream_set { 10, 20, 30 }, stream_set { 5, 15, 25, 35 }, stream_set { 10, 20, 30 },
+        stream_set { 5, 15, 25, 35 }
+    );
+
+    do_test(
+        stream_set { 10, 20, 30 }, stream_set {}, stream_set { 10, 20, 30 },
+        stream_set {}
+    );
+
+    do_test(
+        stream_set {}, stream_set { 10, 20, 30 }, stream_set {},
+        stream_set { 10, 20, 30 }
+    );
+
+    do_test(
+        stream_set { 15 }, stream_set { 10, 20, 30 }, stream_set {},
+        stream_set { 10, 15, 20, 30 }
+    );
+
+    // Randomized test: create a random prev set, a random closed subset, and a random opened set
+    {
+        std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<int> size_dist(1, 100);
+        std::uniform_int_distribution<int> token_dist(1, 1000);
+
+        // Generate random prev set
+        int prev_size = size_dist(rng);
+        std::set<int64_t> prev_set;
+        while (prev_set.size() < size_t(prev_size)) {
+            auto x = token_dist(rng);
+            if (!prev_set.count(x)) { // ensure uniqueness
+                prev_set.insert(x);
+            }
+        }
+        std::vector<int64_t> prev(prev_set.begin(), prev_set.end());
+        std::vector<int64_t> expected;
+
+        // Generate random closed subset of prev
+        std::vector<int64_t> closed;
+        for (auto t : prev) {
+            if (std::bernoulli_distribution(0.5)(rng)) {
+                closed.push_back(t);
+            } else {
+                expected.push_back(t);
+            }
+        }
+
+        // Generate random opened set (disjoint from prev)
+        int opened_size = size_dist(rng);
+        std::set<int64_t> opened_set;
+        while (opened_set.size() < size_t(opened_size)) {
+            int64_t candidate = token_dist(rng);
+            if (!prev_set.count(candidate) && !opened_set.count(candidate)) {
+                opened_set.insert(candidate);
+                expected.push_back(candidate);
+            }
+        }
+        std::vector<int64_t> opened(opened_set.begin(), opened_set.end());
+
+        std::ranges::sort(expected);
+
+        testlog.info("test_construct_next_stream_set: prev={}", prev);
+        testlog.info("test_construct_next_stream_set: opened={}", opened);
+        testlog.info("test_construct_next_stream_set: closed={}", closed);
+        testlog.info("test_construct_next_stream_set: expected={}", expected);
+
+        do_test(prev, opened, closed, expected);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
