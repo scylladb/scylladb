@@ -111,6 +111,8 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
 
     db_config->flush_schema_tables_after_modification.set(false);
     db_config->commitlog_use_o_dsync(false);
+
+    db_config->rf_rack_valid_keyspaces(true);
 }
 
 cql_test_config::cql_test_config(const cql_test_config&) = default;
