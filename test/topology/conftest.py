@@ -183,6 +183,7 @@ async def manager(request, manager_internal, record_property, mode):
     perform checks for cluster state.
     """
     test_case_name = request.node.name
+<<<<<<< HEAD:test/topology/conftest.py
     run_id = request.config.getoption('run_id')
     tmp_dir = pathlib.Path(request.config.getoption('tmpdir'))
     xml_path: pathlib.Path = pathlib.Path(request.config.getoption('xmlpath'))
@@ -191,6 +192,13 @@ async def manager(request, manager_internal, record_property, mode):
                         f"{pathlib.Path(xml_path.stem).stem}.log"
                         )
     test_log = suite_testpy_log.parent / f"{suite_testpy_log.stem}.{test_case_name}.log"
+||||||| parent of 441cee8d9c (test.py: fix gathering logs in case of fail):test/cluster/conftest.py
+    suite_testpy_log = testpy_test.log_filename
+    test_log = suite_testpy_log.parent / f"{suite_testpy_log.stem}.{test_case_name}.log"
+=======
+    suite_testpy_log = testpy_test.log_filename
+    test_log = suite_testpy_log.parent / f"{Path(suite_testpy_log.stem).stem}.{test_case_name}.log"
+>>>>>>> 441cee8d9c (test.py: fix gathering logs in case of fail):test/cluster/conftest.py
     # this should be consistent with scylla_cluster.py handler name in _before_test method
     test_py_log_test = suite_testpy_log.parent / f"{test_case_name}.log"
 
@@ -211,7 +219,13 @@ async def manager(request, manager_internal, record_property, mode):
             failed_test_dir_path,
             {'pytest.log': test_log, 'test_py.log': test_py_log_test}
         )
+<<<<<<< HEAD:test/topology/conftest.py
         with open(failed_test_dir_path / f"stacktrace", 'w') as f:
+||||||| parent of 441cee8d9c (test.py: fix gathering logs in case of fail):test/cluster/conftest.py
+        with open(failed_test_dir_path / "stacktrace", "w") as f:
+=======
+        with open(failed_test_dir_path / "stacktrace.txt", "w") as f:
+>>>>>>> 441cee8d9c (test.py: fix gathering logs in case of fail):test/cluster/conftest.py
             f.write(report.longreprtext)
         if request.config.getoption('artifacts_dir_url') is not None:
             # get the relative path to the tmpdir for the failed directory
