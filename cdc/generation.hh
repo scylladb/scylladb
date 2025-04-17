@@ -122,6 +122,28 @@ public:
     {}
 };
 
+enum class stream_kind : int8_t {
+    current = 0,
+    closed = 1,
+    opened = 2,
+};
+
+stream_kind read_stream_kind(int8_t val);
+
+struct committed_stream_set {
+    db_clock::time_point ts;
+    std::vector<cdc::stream_id> streams;
+};
+
+struct cdc_stream_diff {
+    std::vector<stream_id> closed_streams;
+    std::vector<stream_id> opened_streams;
+};
+
+using base_streams_state = std::unordered_map<table_id, committed_stream_set>;
+using streams_history = std::unordered_map<table_id, std::vector<std::pair<db_clock::time_point, cdc_stream_diff>>>;
+using pending_streams = std::unordered_map<table_id, std::vector<cdc::stream_id>>;
+
 class no_generation_data_exception : public std::runtime_error {
 public:
     no_generation_data_exception(cdc::generation_id generation_ts)
