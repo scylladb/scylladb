@@ -404,7 +404,7 @@ task_manager::virtual_task::impl::impl(module_ptr module) noexcept
     : _module(std::move(module))
 {}
 
-future<std::vector<task_identity>> task_manager::virtual_task::impl::get_children(module_ptr module, task_id parent_id) {
+future<std::vector<task_identity>> task_manager::virtual_task::impl::get_children(module_ptr module, task_id parent_id, std::function<bool(locator::host_id)> is_host_alive) {
     auto ms = module->get_task_manager()._messaging;
     if (!ms) {
         auto ids = co_await module->get_task_manager().get_virtual_task_children(parent_id);
@@ -417,15 +417,19 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
     }
 
     auto nodes = module->get_nodes();
-    co_return co_await map_reduce(nodes, [ms, parent_id] (auto host_id) -> future<std::vector<task_identity>> {
-        return ser::tasks_rpc_verbs::send_tasks_get_children(ms, host_id, parent_id).then([host_id] (auto resp) {
-            return resp | std::views::transform([host_id] (auto id) {
-                return task_identity{
-                    .host_id = host_id,
-                    .task_id = id
-                };
-            }) | std::ranges::to<std::vector<task_identity>>();
-        });
+    co_return co_await map_reduce(nodes, [ms, parent_id, is_host_alive = std::move(is_host_alive)] (auto host_id) -> future<std::vector<task_identity>> {
+        if (is_host_alive(host_id)) {
+            return ser::tasks_rpc_verbs::send_tasks_get_children(ms, host_id, parent_id).then([host_id] (auto resp) {
+                return resp | std::views::transform([host_id] (auto id) {
+                    return task_identity{
+                        .host_id = host_id,
+                        .task_id = id
+                    };
+                }) | std::ranges::to<std::vector<task_identity>>();
+            });
+        } else {
+            return make_ready_future<std::vector<task_identity>>();
+        }
     }, std::vector<task_identity>{}, concat<task_identity>);
 }
 
