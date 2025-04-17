@@ -196,10 +196,8 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
                "--cache-hit-rate-read-balancing", "0",
                "--query-tombstone-page-limit", "10",
                "--query-page-size-in-bytes", "1024"]
-    node1 = await manager.server_add(cmdline=cmdline)
-    node2 = await manager.server_add(cmdline=cmdline)
-
-    nodes = (node1, node2)
+    nodes = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+    node1, node2 = nodes
 
     cql = manager.get_cql()
 
@@ -265,7 +263,7 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
         await manager.driver_connect()
         cql, hosts = await manager.get_ready_cql(nodes)
 
-        logger.info("Check rows with CL=LOCAL_ONE before read-repair")
+        logger.info("Check rows before read-repair")
         check_rows(cql, host1, node1_rows)
         check_rows(cql, host2, node2_rows)
 
@@ -305,7 +303,7 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ManagerCl
             await manager.api.keyspace_flush(node.ip_addr, ks)
             await manager.api.keyspace_compaction(node.ip_addr, ks)
 
-        logger.info("Check rows with CL=LOCAL_ONE after read-repair")
+        logger.info("Check rows after read-repair")
         check_rows(cql, host1, all_rows)
         check_rows(cql, host2, all_rows)
 
