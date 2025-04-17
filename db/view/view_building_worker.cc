@@ -799,8 +799,16 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
 }
 
 future<> view_building_worker::batch::do_process_staging(view_building_worker& local_vbw) {
-    // TODO: handle process staging sstables tasks
-    co_return;
+    auto table_id = tasks.begin()->second.base_id;
+    auto last_token = tasks.begin()->second.last_token;
+
+    if (local_vbw._staging_sstables[table_id][last_token].empty()) {
+        co_return;
+    }
+
+    auto table = local_vbw._db.get_tables_metadata().get_table(table_id).shared_from_this();
+    auto sstables = std::exchange(local_vbw._staging_sstables[table_id][last_token], {});
+    co_await local_vbw._vug.process_staging_sstables(std::move(table), std::move(sstables));
 }
 
 }
