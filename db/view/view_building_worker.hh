@@ -125,6 +125,9 @@ public:
     view_building_worker(replica::database& db, service::raft_group0_client& group0_client, view_update_generator& vug, netw::messaging_service& ms, service::view_building::view_building_state_machine& vbsm);
     void start_state_observer();
 
+    // Creates process_staging view building task and saves sstable to `_staging_sstables`
+    future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
+    
     future<> drain();
     future<> stop();
 
