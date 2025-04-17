@@ -101,6 +101,19 @@ private:
 
     friend struct fmt::formatter<attr_cache_key>;
 
+    struct id_cache_key {
+        azure_host::id_type id;
+        bool operator==(const id_cache_key& v) const = default;
+    };
+
+    struct id_cache_key_hash {
+        size_t operator()(const id_cache_key& k) const {
+            return std::hash<azure_host::id_type>()(k.id);
+        }
+    };
+
+    friend struct fmt::formatter<id_cache_key>;
+
     template<typename Key, typename Value, typename Hash>
     using cache_type = utils::loading_cache<
         Key,
@@ -111,6 +124,7 @@ private:
         Hash
     >;
     cache_type<attr_cache_key, key_and_id_type, attr_cache_key_hash> _attr_cache;
+    cache_type<id_cache_key, bytes, id_cache_key_hash> _id_cache;
 
     static constexpr char AKV_HOST_TEMPLATE[] = "{}.vault.azure.net";
     static constexpr char AKV_PATH_TEMPLATE[] = "/keys/{}/{}/{}?api-version=7.4";
@@ -124,6 +138,7 @@ private:
     future<shared_ptr<tls::certificate_credentials>> make_creds();
     future<rjson::value> send_request(const sstring& host, unsigned port, bool use_https, const sstring& path, const rjson::value& body, const rest::http_log_filter& filter);
     future<key_and_id_type> create_key(const attr_cache_key&);
+    future<bytes> find_key(const id_cache_key&);
 };
 
 azure_host::impl::impl(const std::string& name, const host_options& options)
@@ -135,6 +150,10 @@ azure_host::impl::impl(const std::string& name, const host_options& options)
         .max_size = std::numeric_limits<size_t>::max(),
         .expiry = options.key_cache_expiry.value_or(default_expiry),
         .refresh = options.key_cache_refresh.value_or(default_refresh)}, azlog, std::bind_front(&impl::create_key, this))
+    , _id_cache(utils::loading_cache_config{
+        .max_size = std::numeric_limits<size_t>::max(),
+        .expiry = options.key_cache_expiry.value_or(default_expiry),
+        .refresh = options.key_cache_refresh.value_or(default_refresh)}, azlog, std::bind_front(&impl::find_key, this))
 {
     if (!_options.tenant_id.empty() && !_options.client_id.empty() && (!_options.client_secret.empty() || !_options.client_cert.empty())) {
         _credentials = std::make_unique<azure::service_principal_credentials>(
@@ -318,6 +337,10 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
     co_return key_and_id_type{ key, id };
 }
 
+future<bytes> azure_host::impl::find_key(const id_cache_key& k) {
+    throw std::logic_error("Not implemented");
+}
+
 // ==================== azure_host class implementation ====================
 
 azure_host::azure_host(const std::string& name, const host_options& options)
@@ -377,5 +400,13 @@ struct fmt::formatter<encryption::azure_host::impl::attr_cache_key> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const encryption::azure_host::impl::attr_cache_key& d, fmt::format_context& ctxt) const {
         return fmt::format_to(ctxt.out(), "{},{},{}", d.master_key, d.info.alg, d.info.len);
+    }
+};
+
+template<>
+struct fmt::formatter<encryption::azure_host::impl::id_cache_key> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const encryption::azure_host::impl::id_cache_key& d, fmt::format_context& ctxt) const {
+        return fmt::format_to(ctxt.out(), "{}", d.id);
     }
 };
