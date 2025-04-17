@@ -66,6 +66,15 @@ api::timestamp_clock::duration get_generation_leeway() {
     return generation_leeway;
 }
 
+stream_kind read_stream_kind(int8_t val) {
+    if (val != std::to_underlying(stream_kind::current)
+            && val != std::to_underlying(stream_kind::closed)
+            && val != std::to_underlying(stream_kind::opened)) {
+        throw std::runtime_error(format("invalid value {} for stream kind", val));
+    }
+    return static_cast<stream_kind>(val);
+}
+
 static void copy_int_to_bytes(int64_t i, size_t offset, bytes& b) {
     i = net::hton(i);
     std::copy_n(reinterpret_cast<int8_t*>(&i), sizeof(int64_t), b.begin() + offset);
