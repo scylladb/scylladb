@@ -25,6 +25,7 @@
 #include "sstables/sstables_registry.hh"
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
+#include "cdc/generation.hh"
 #include "locator/host_id.hh"
 #include "virtual_tables.hh"
 #include "types/types.hh"
@@ -598,6 +599,9 @@ public:
 
     future<bool> cdc_is_rewritten();
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
+
+    future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f);
+    future<> read_cdc_streams_history(table_id table, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
 
     // Load Raft Group 0 id from scylla.local
     future<utils::UUID> get_raft_group0_id();
