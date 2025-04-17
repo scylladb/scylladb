@@ -4,23 +4,16 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
-import datetime
-import glob
 import json
 import logging
-import os
 import pytest
 import random
-import struct
-import subprocess
-import tempfile
 import time
 from typing import TypeAlias, Any
 
 from cassandra.cluster import ConsistencyLevel, Session  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from cassandra.pool import Host  # type: ignore
-from cassandra.murmur3 import murmur3  # type: ignore
 
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
@@ -30,13 +23,6 @@ from test.cluster.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
 
-
-def serialize_int(i: int) -> str:
-    return struct.pack(">l", i).hex()
-
-
-def serialize_key(i: int) -> str:
-    return struct.pack(">hl", 4, i).hex()
 
 class DataClass:
     @classmethod
@@ -52,8 +38,7 @@ class DataClass:
         raise NotImplementedError()
 
     @classmethod
-    def generate_sstable(self, total_rows: int, live_rows: set[int], dead_timestamp: int, live_timestamp: int,
-                         deletion_time: datetime.datetime) -> list[dict[str, Any]]:
+    async def write_data(self, cql, ks: str, total_rows: int, node_live_rows: set[int], all_live_rows: set[int]) -> None:
         raise NotImplementedError()
 
     @classmethod
@@ -85,36 +70,18 @@ class row_tombstone_data(DataClass):
         return f"SELECT * FROM {ks}.tbl WHERE pk = {self.pk}"
 
     @classmethod
-    def generate_sstable(cls, total_rows: int, live_rows: set[int], dead_timestamp: int, live_timestamp: int,
-                         deletion_time: datetime.datetime) -> list[dict[str, Any]]:
-        rows = []
-        formatted_deletion_time = deletion_time.strftime("%Y-%m-%d %H:%M:%S")
-        serialized_value = serialize_int(cls.v)
+    async def write_data(cls, cql, ks, total_rows: int, live_rows: set[int], all_live_rows: set[int]) -> None:
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.tbl (pk, ck, v) VALUES (?, ?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.LOCAL_ONE
+
+        delete_stmt = cql.prepare(f"DELETE FROM {ks}.tbl WHERE pk = ? AND ck = ?")
+        delete_stmt.consistency_level = ConsistencyLevel.LOCAL_ONE
+
         for ck in range(total_rows):
-            row = {
-                "type": "clustering-row",
-                "key": {"raw": serialize_key(ck)},
-            }
             if ck in live_rows:
-                row["marker"] = {"timestamp": live_timestamp}
-                row["columns"] = {"v": {
-                    "is_live": True,
-                    "type": "regular",
-                    "timestamp": live_timestamp,
-                    "value": serialized_value,
-                }}
-            else:
-                row["tombstone"] = {"timestamp": dead_timestamp, "deletion_time": formatted_deletion_time}
-            rows.append(row)
-
-        assert len(rows) == total_rows
-
-        return [
-            {
-                "key": {"raw": serialize_key(cls.pk)},
-                "clustering_elements": rows,
-            },
-        ]
+                await cql.run_async(insert_stmt, (cls.pk, ck, cls.v))
+            elif ck not in all_live_rows:
+                await cql.run_async(delete_stmt, (cls.pk, ck))
 
     @classmethod
     def check_mutation_row(cls, row, expected_live_rows: set[int]) -> tuple | None:
@@ -157,51 +124,23 @@ class partition_tombstone_data(DataClass):
     partition_tombstone_timestamp = None
     partition_live = False
 
-    class PartitionKey:
-        def __init__(self, value):
-            self.value = value
-            self.raw = serialize_key(self.value)
-            self.token = murmur3(struct.pack(">l", self.value))
-
-        def __lt__(self, o):
-            return self.token < o.token
-
     @classmethod
     def get_select_query(self, ks):
         return f"SELECT * FROM {ks}.tbl"
 
     @classmethod
-    def generate_sstable(cls, total_rows: int, live_rows: set[int], dead_timestamp: int, live_timestamp: int,
-                         deletion_time: datetime.datetime) -> list[dict[str, Any]]:
-        partitions = []
-        formatted_deletion_time = deletion_time.strftime("%Y-%m-%d %H:%M:%S")
-        serialized_value = serialize_int(cls.v)
-        pks = sorted([cls.PartitionKey(pk) for pk in range(total_rows)])
-        for pk in pks:
-            partition: dict[str, Any] = {
-                "key": {"raw": pk.raw, "token": pk.token},
-            }
-            if pk.value in live_rows:
-                partition["clustering_elements"] = [
-                    {
-                        "type": "clustering-row",
-                        "key": {"raw": ""},
-                        "marker": {"timestamp": live_timestamp},
-                        "columns": {"v": {
-                            "is_live": True,
-                            "type": "regular",
-                            "timestamp": live_timestamp,
-                            "value": serialized_value,
-                        }},
-                    },
-                ]
-            else:
-                partition["tombstone"] = {"timestamp": dead_timestamp, "deletion_time": formatted_deletion_time}
+    async def write_data(cls, cql, ks, total_rows: int, live_rows: set[int], all_live_rows: set[int]) -> None:
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.LOCAL_ONE
 
-            partitions.append(partition)
+        delete_stmt = cql.prepare(f"DELETE FROM {ks}.tbl WHERE pk = ?")
+        delete_stmt.consistency_level = ConsistencyLevel.LOCAL_ONE
 
-        assert len(partitions) == total_rows
-        return partitions
+        for pk in range(total_rows):
+            if pk in live_rows:
+                await cql.run_async(insert_stmt, (pk, cls.v))
+            elif pk not in all_live_rows:
+                await cql.run_async(delete_stmt, (pk,))
 
     @classmethod
     def check_mutation_row(cls, row, expected_live_rows: set[int]) -> tuple | None:
@@ -239,18 +178,13 @@ class partition_tombstone_data(DataClass):
         assert row.v == cls.v
 
 
-incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombstone", marks=pytest.mark.skip(reason="Issue #21179")),
+incremental_repair_test_data = [pytest.param(row_tombstone_data, id="row-tombstone"),
                                 pytest.param(partition_tombstone_data, id="partition-tombstone")]
 
 
-@pytest.fixture(scope="function")
-def workdir():
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        yield tmp_dir
-
 @pytest.mark.parametrize("data_class", incremental_repair_test_data)
 @pytest.mark.asyncio
-async def test_incremental_read_repair(data_class: DataClass, workdir: str, manager: ManagerClient):
+async def test_incremental_read_repair(data_class: DataClass, manager: ManagerClient):
     """Stress the incremental read repair logic
 
     Write a long stream of row tombstones, with a live row before and after.
@@ -259,10 +193,11 @@ async def test_incremental_read_repair(data_class: DataClass, workdir: str, mana
     logger.info(f"random-seed: {seed}")
     random.seed(seed)
     cmdline = ["--hinted-handoff-enabled", "0",
+               "--cache-hit-rate-read-balancing", "0",
                "--query-tombstone-page-limit", "10",
                "--query-page-size-in-bytes", "1024"]
-    node1 = await manager.server_add(cmdline=cmdline)
-    node2 = await manager.server_add(cmdline=cmdline)
+    nodes = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+    node1, node2 = nodes
 
     cql = manager.get_cql()
 
@@ -271,51 +206,35 @@ async def test_incremental_read_repair(data_class: DataClass, workdir: str, mana
     # The test generates and uploads sstables, assuming their specific
     # contents. These assumptions are not held with tablets, which
     # distribute data among sstables differently than vnodes.
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = { 'enabled': false }") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = { 'enabled': true }") as ks:
         table_schema = f"CREATE TABLE {ks}.tbl ({data_class.get_column_spec()}) WITH speculative_retry = 'NONE'"
         cql.execute(table_schema)
 
-        schema_file_path = os.path.join(workdir, "schema.cql")
-        with open(schema_file_path, "w") as schema_file:
-            schema_file.write(table_schema)
-
-        dead_timestamp = int(time.time() * 1000)
-        live_timestamp = dead_timestamp + 1
-
         total_rows = 100
         max_live_rows = 8
-        deletion_time = datetime.datetime.now()
 
         row_set: TypeAlias = set[int]
 
-        async def generate_and_upload_sstable(node: ServerInfo, node_row: int) -> row_set:
-            live_rows = {random.randint(0, total_rows - 1) for _ in range(random.randint(0, max_live_rows))}
-            live_rows.add(node_row)
+        async def write_data(node: ServerInfo, node_live_rows: set[int], all_live_rows: set[int]) -> row_set:
+            other_nodes = [n for n in nodes if n != node]
 
-            sstable = data_class.generate_sstable(total_rows, live_rows, dead_timestamp, live_timestamp, deletion_time)
-            scylla_exe = await manager.server_get_exe(node.server_id)
-            node_workdir = await manager.server_get_workdir(node.server_id)
-            table_upload_dir = glob.glob(os.path.join(node_workdir, "data", ks, "tbl-*", "upload"))[0]
+            for other_node in other_nodes:
+                await manager.server_stop_gracefully(other_node.server_id)
 
-            input_file_path = os.path.join(workdir, f"node{node.server_id}.sstable.json")
-            with open(input_file_path, "w") as f:
-                json.dump(sstable, f, indent=4)
+            await manager.driver_connect(node)
 
-            subprocess.check_call([
-                scylla_exe, "sstable", "write",
-                "--schema-file", schema_file_path,
-                "--input-file", input_file_path,
-                "--output-dir", table_upload_dir,
-                "--generation", "1"])
+            await data_class.write_data(manager.get_cql(), ks, total_rows, node_live_rows, all_live_rows)
 
-            await manager.api.load_new_sstables(node.ip_addr, ks, "tbl")
+            for other_node in other_nodes:
+                await manager.server_start(other_node.server_id)
 
-            return live_rows
-
-        node1_rows = await generate_and_upload_sstable(node1, 0)
-        node2_rows = await generate_and_upload_sstable(node2, total_rows - 1)
+        node1_rows = {random.randint(0, total_rows - 1) for _ in range(random.randint(0, max_live_rows))} | {0}
+        node2_rows = {random.randint(0, total_rows - 1) for _ in range(random.randint(0, max_live_rows))} | {total_rows - 1}
         all_rows = node1_rows | node2_rows
         assert len(all_rows) >= 2
+
+        await write_data(node1, node1_rows, all_rows)
+        await write_data(node2, node2_rows, all_rows)
 
         logger.info(f"node1_rows: {len(node1_rows)} rows, row ids: {node1_rows}")
         logger.info(f"node2_rows: {len(node2_rows)} rows, row ids: {node2_rows}")
@@ -338,14 +257,18 @@ async def test_incremental_read_repair(data_class: DataClass, workdir: str, mana
             actual_dead_rows -= actual_live_rows
 
             assert actual_live_rows == expected_live_rows
-            assert len(actual_live_rows) + len(actual_dead_rows) == total_rows
+            assert len(actual_live_rows) + len(actual_dead_rows) == total_rows - (len(all_rows) - len(actual_live_rows))
 
-        logger.info("Check rows with CL=ONE before read-repair")
+        # Need reconnecting after start/stop of nodes
+        await manager.driver_connect()
+        cql, hosts = await manager.get_ready_cql(nodes)
+
+        logger.info("Check rows before read-repair")
         check_rows(cql, host1, node1_rows)
         check_rows(cql, host2, node2_rows)
 
         logger.info("Run read-repair")
-        res = cql.execute(SimpleStatement(data_class.get_select_query(ks), consistency_level=ConsistencyLevel.ALL))
+        res = cql.execute(SimpleStatement(data_class.get_select_query(ks), consistency_level=ConsistencyLevel.ALL), trace=True)
         res_rows = []
         pages = []
         while True:
@@ -355,6 +278,15 @@ async def test_incremental_read_repair(data_class: DataClass, workdir: str, mana
                 res.fetch_next_page()
             else:
                 break
+
+        tracing = res.get_all_query_traces(max_wait_sec_per=900)
+        page_events = []
+        for trace in tracing:
+            events = []
+            for event in trace.events:
+                events.append(f"{event.source} {event.source_elapsed} {event.description}")
+            page_events.append('\n'.join(events))
+        logger.info(f"Tracing:\n{'\n\n'.join(page_events)}")
 
         logger.debug(f"repair: {len(pages)} pages: {pages}")
         data_class.check_page_count(len(pages))
@@ -371,7 +303,7 @@ async def test_incremental_read_repair(data_class: DataClass, workdir: str, mana
             await manager.api.keyspace_flush(node.ip_addr, ks)
             await manager.api.keyspace_compaction(node.ip_addr, ks)
 
-        logger.info("Check rows with CL=ONE after read-repair")
+        logger.info("Check rows after read-repair")
         check_rows(cql, host1, all_rows)
         check_rows(cql, host2, all_rows)
 
