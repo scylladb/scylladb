@@ -256,3 +256,27 @@ async def test_node_ops_task_wait(manager: ManagerClient):
 
     await decommission_task
     await waiting_task
+
+@pytest.mark.asyncio
+async def test_get_children(manager: ManagerClient):
+    module_name = "node_ops"
+    tm = TaskManagerClient(manager.api)
+    servers = [await manager.server_add() for _ in range(2)]
+
+    injection = "tasks_vt_get_children"
+    handler = await inject_error_one_shot(manager.api, servers[0].ip_addr, injection)
+
+    log = await manager.server_open_log(servers[0].server_id)
+    mark = await log.mark()
+
+    bootstrap_task = [task for task in await tm.list_tasks(servers[0].ip_addr, module_name) if task.kind == "cluster"][0]
+
+    async def _decommission():
+        await log.wait_for('tasks_vt_get_children: waiting', from_mark=mark)
+        await manager.decommission_node(servers[1].server_id)
+        await handler.message()
+
+    async def _get_status():
+        await tm.get_task_status(servers[0].ip_addr, bootstrap_task.task_id)
+
+    await asyncio.gather(*(_decommission(), _get_status()))
