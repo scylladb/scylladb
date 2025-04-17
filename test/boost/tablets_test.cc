@@ -2190,6 +2190,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     topology_builder topo(e);
 
     auto host1 = topo.add_node(node_state::normal, 1);
+    topo.start_new_rack();
     auto host2 = topo.add_node(node_state::normal, 1);
     topo.add_node(node_state::normal, 2);
 
