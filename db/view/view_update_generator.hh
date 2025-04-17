@@ -82,6 +82,8 @@ public:
     future<> drain();
     future<> stop();
     future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
+    // Generate view updates from staging sstables instantly and move those sstables to table's base directory
+    future<> process_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable> sstables);
 
     replica::database& get_db() noexcept { return _db; }
 
