@@ -203,3 +203,76 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
 
     return !it->second;
 }
+
+void cdc::metadata::load_streams_state(const cdc::base_streams_state& base_data, const cdc::pending_streams& pending_data, const cdc::streams_history& history_data) {
+    tablet_streams_map m;
+    pending_streams_map pending_streams;
+
+    for (const auto& [table, base_table_state] : base_data) {
+        auto append_stream = [&m] (utils::UUID ts_uuid, std::vector<cdc::stream_id> stream_set) {
+            auto ts = to_ts(db_clock::time_point(utils::UUID_gen::unix_timestamp(ts_uuid)));
+            m[table][ts] = committed_stream_set {ts_uuid, std::move(stream_set)};
+        };
+
+        auto stream_cmp = [] (const auto& a, const auto& b) { return a.token() < b.token(); };
+
+        auto base_stream_set = base_table_state.streams;
+        std::ranges::sort(base_stream_set, stream_cmp);
+
+        append_stream(base_table_state.ts, std::move(base_stream_set));
+
+        // for each history entry, comprised of closed and opened streams, construct the next
+        // stream set from the previous one, and append it to the table's stream list.
+        if (auto it = history_data.find(table); it != history_data.end()) {
+            const auto& table_history = it->second;
+            for (const auto& [ts, entries] : table_history) {
+                std::vector<stream_id> opened, closed;
+                for (const auto& entry : entries) {
+                    auto kind = entry.first;
+                    auto sid = entry.second;
+                    switch (kind) {
+                        case stream_kind::closed:
+                            closed.push_back(sid);
+                            break;
+                        case stream_kind::opened:
+                            opened.push_back(sid);
+                            break;
+                        default:
+                            on_internal_error(cdc_log, fmt::format("invalid stream_kind {} in cdc_streams_history for table {}", std::to_underlying(kind), table));
+                    }
+                }
+
+                const auto& prev_stream_set = std::crbegin(m)->second.streams;
+
+                std::vector<stream_id> next_stream_set;
+                next_stream_set.reserve(prev_stream_set.size() + opened.size() - closed.size());
+
+                std::ranges::sort(closed, stream_cmp);
+                std::ranges::set_difference(prev_stream_set, closed, std::back_inserter(next_stream_set), stream_cmp);
+                for (auto&& sid : opened) {
+                    next_stream_set.push_back(std::move(sid));
+                }
+                std::ranges::sort(next_stream_set, stream_cmp);
+
+                append_stream(ts, std::move(next_stream_set));
+            }
+        }
+
+        if (auto it = pending_data.find(table); it != pending_data.end()) {
+            auto pending_stream = it->second;
+            std::ranges::sort(pending_stream, stream_cmp);
+
+            // it is possible the pending stream is equal to the last stream according to the history table.
+            // it happens when the pending stream is committed and not closed yet.
+            auto& last_stream_set = std::crbegin(m)->second;
+            std::optional<utils::UUID> committed_time;
+            if (std::ranges::equal(pending_stream, last_stream_set.streams)) {
+                committed_time = last_stream_set.ts;
+            }
+            pending_streams[table] = {std::move(pending_stream), committed_time};
+        }
+    }
+
+    _tablet_streams = std::move(m);
+    _pending_streams = std::move(pending_streams);
+}

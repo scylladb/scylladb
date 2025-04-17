@@ -1202,4 +1202,14 @@ make_drop_table_streams_mutations(table_id table, api::timestamp_type ts) {
     return mutations;
 }
 
+future<> generation_service::load_cdc_tablet_streams() {
+    auto sd = co_await _sys_ks.local().read_cdc_streams_state();
+    auto pd = co_await _sys_ks.local().read_cdc_pending_streams();
+    auto hd = co_await _sys_ks.local().read_cdc_streams_history();
+
+    co_await container().invoke_on_all([sd = std::move(sd), pd = std::move(pd), hd = std::move(hd)] (generation_service& svc) {
+        return svc._cdc_metadata.load_streams_state(sd, pd, hd);
+    });
+}
+
 } // namespace cdc
