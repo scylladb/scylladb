@@ -232,7 +232,7 @@ async def manager(request: pytest.FixtureRequest,
     """
     test_case_name = request.node.name
     suite_testpy_log = testpy_test.log_filename
-    test_log = suite_testpy_log.parent / f"{suite_testpy_log.stem}.{test_case_name}.log"
+    test_log = suite_testpy_log.parent / f"{Path(suite_testpy_log.stem).stem}.{test_case_name}.log"
     # this should be consistent with scylla_cluster.py handler name in _before_test method
     test_py_log_test = suite_testpy_log.parent / f"{test_log.stem}_cluster.log"
 
@@ -253,7 +253,7 @@ async def manager(request: pytest.FixtureRequest,
             failed_test_dir_path,
             {'pytest.log': test_log, 'test_py.log': test_py_log_test}
         )
-        with open(failed_test_dir_path / "stacktrace", "w") as f:
+        with open(failed_test_dir_path / "stacktrace.txt", "w") as f:
             f.write(report.longreprtext)
         if request.config.getoption('artifacts_dir_url') is not None:
             # get the relative path to the tmpdir for the failed directory
