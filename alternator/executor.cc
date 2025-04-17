@@ -3227,14 +3227,17 @@ future<std::vector<rjson::value>> executor::describe_multi_item(schema_ptr schem
         const query::partition_slice&& slice,
         shared_ptr<cql3::selection::selection> selection,
         foreign_ptr<lw_shared_ptr<query::result>> query_result,
-        shared_ptr<const std::optional<attrs_to_get>> attrs_to_get) {
+        shared_ptr<const std::optional<attrs_to_get>> attrs_to_get,
+        uint64_t& rcu_half_units) {
     cql3::selection::result_set_builder builder(*selection, gc_clock::now());
     query::result_view::consume(*query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
     auto result_set = builder.build();
     std::vector<rjson::value> ret;
     for (auto& result_row : result_set->rows()) {
         rjson::value item = rjson::empty_object();
-        describe_single_item(*selection, result_row, *attrs_to_get, item);
+        rcu_consumed_capacity_counter consumed_capacity;
+        describe_single_item(*selection, result_row, *attrs_to_get, item, &consumed_capacity._total_bytes);
+        rcu_half_units += consumed_capacity.get_half_units();
         ret.push_back(std::move(item));
         co_await coroutine::maybe_yield();
     }
@@ -4135,6 +4138,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // listing all the request aimed at a single table. For efficiency, inside
     // each table_requests we further group together all reads going to the
     // same partition, so we can later send them together.
+    bool should_add_rcu = rcu_consumed_capacity_counter::should_add_capacity(request);
     struct table_requests {
         schema_ptr schema;
         db::consistency_level cl;
@@ -4161,6 +4165,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         }
     };
     std::vector<table_requests> requests;
+    std::vector<std::vector<uint64_t>> responses_sizes;
     uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs(get_table_from_batch_request(_proxy, it));
@@ -4188,7 +4193,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     // If we got here, all "requests" are valid, so let's start the
     // requests for the different partitions all in parallel.
     std::vector<future<std::vector<rjson::value>>> response_futures;
+    responses_sizes.resize(requests.size());
+    size_t responses_sizes_pos = 0;
     for (const auto& rs : requests) {
+        responses_sizes[responses_sizes_pos].resize(rs.requests.size());
+        size_t pos = 0;
         for (const auto &r : rs.requests) {
             auto& pk = r.first;
             auto& cks = r.second;
@@ -4211,12 +4220,14 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             command->allow_limit = db::allow_per_partition_rate_limit::yes;
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
-                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get] (service::storage_proxy::coordinator_query_result qr) mutable {
+                    [schema = rs.schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = rs.attrs_to_get, &response_size = responses_sizes[responses_sizes_pos][pos]] (service::storage_proxy::coordinator_query_result qr) mutable {
                 utils::get_local_injector().inject("alternator_batch_get_item", [] { throw std::runtime_error("batch_get_item injection"); });
-                return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get));
+                return describe_multi_item(std::move(schema), std::move(partition_slice), std::move(selection), std::move(qr.query_result), std::move(attrs_to_get), response_size);
             });
+            pos++;
             response_futures.push_back(std::move(f));
         }
+        responses_sizes_pos++;
     }
 
     // Wait for all requests to complete, and then return the response.
@@ -4228,10 +4239,14 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Responses", rjson::empty_object());
     rjson::add(response, "UnprocessedKeys", rjson::empty_object());
-
+    size_t rcu_half_units;
     auto fut_it = response_futures.begin();
+    responses_sizes_pos = 0;
+    rjson::value consumed_capacity = rjson::empty_array();
     for (const auto& rs : requests) {
-        auto table = table_name(*rs.schema);
+        std::string table = table_name(*rs.schema);
+        size_t pos = 0;
+        rcu_half_units = 0;
         for (const auto &r : rs.requests) {
             auto& pk = r.first;
             auto& cks = r.second;
@@ -4246,6 +4261,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 for (rjson::value& json : results) {
                     rjson::push_back(response["Responses"][table], std::move(json));
                 }
+                rcu_half_units += rcu_consumed_capacity_counter::get_half_units(responses_sizes[responses_sizes_pos][pos], rs.cl == db::consistency_level::LOCAL_QUORUM);
             } catch(...) {
                 eptr = std::current_exception();
                 // This read of potentially several rows in one partition,
@@ -4269,7 +4285,20 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                     rjson::push_back(response["UnprocessedKeys"][table]["Keys"], std::move(*ck.second));
                 }
             }
+            pos++;
         }
+        _stats.rcu_total += rcu_half_units;
+        if (should_add_rcu) {
+            rjson::value entry = rjson::empty_object();
+            rjson::add(entry, "TableName", table);
+            rjson::add(entry, "CapacityUnits", rcu_half_units*0.5);
+            rjson::push_back(consumed_capacity, std::move(entry));
+        }
+        responses_sizes_pos++;
+    }
+
+    if (should_add_rcu) {
+        rjson::add(response, "ConsumedCapacity", std::move(consumed_capacity));
     }
     elogger.trace("Unprocessed keys: {}", response["UnprocessedKeys"]);
     if (!some_succeeded && eptr) {
