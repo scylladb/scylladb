@@ -134,6 +134,9 @@ public:
             service::view_building::view_building_state_machine& vbsm);
     void start_state_observer();
 
+    // Creates process_staging view building task and saves sstable to `_staging_sstables`
+    future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
+    
     future<> drain();
     future<> stop();
 
