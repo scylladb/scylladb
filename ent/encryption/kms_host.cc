@@ -464,7 +464,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
                     auto buf = co_await read_text_file_fully(credentials);
                     std::string profile;
 
-                    static std::regex cred_line(R"foo(\s*\[(?:profile\s+)?(\w+)\]|([^\s]+)\s*=\s*([^\s]+)\s*\n)foo");
+                    static std::regex cred_line(R"foo(\s*\[(?:profile\s+)?([\w-]+)\]|([^\s]+)\s*=\s*([^\s]+)\s*\n)foo");
                     std::cregex_iterator i(buf.get(), buf.get() + buf.size(), cred_line), e;
 
                     std::string id, secret;
