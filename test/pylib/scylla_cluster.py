@@ -1100,9 +1100,42 @@ class ScyllaCluster:
         self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
         self.removed.add(server_id)
 
+<<<<<<< HEAD
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            seeds: Optional[List[IPAddress]] = None) -> None:
         """Start a server. No-op if already running."""
+||||||| parent of d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
+    async def server_start(self,
+                           server_id: ServerNum,
+                           expected_error: str | None = None,
+                           seeds: list[IPAddress] | None = None,
+                           expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                           cmdline_options_override: list[str] | None = None,
+                           append_env_override: dict[str, str] | None = None) -> None:
+        """Start a server.
+
+        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
+        if provided.
+
+        No-op if already running.
+        """
+=======
+    async def server_start(self,
+                           server_id: ServerNum,
+                           expected_error: str | None = None,
+                           seeds: list[IPAddress] | None = None,
+                           connect_driver = True,
+                           expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                           cmdline_options_override: list[str] | None = None,
+                           append_env_override: dict[str, str] | None = None) -> None:
+        """Start a server.
+
+        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
+        if provided.
+
+        No-op if already running.
+        """
+>>>>>>> d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
         if server_id in self.running:
             return
         assert server_id in self.stopped, f"Server {server_id} unknown"
@@ -1118,7 +1151,27 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
+<<<<<<< HEAD
         await server.start(self.api, expected_error)
+||||||| parent of d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
+        await server.start(
+            api=self.api,
+            expected_error=expected_error,
+            expected_server_up_state=expected_server_up_state,
+            cmdline_options_override=cmdline_options_override,
+            append_env_override=append_env_override,
+        )
+=======
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
+        await server.start(
+            api=self.api,
+            expected_error=expected_error,
+            expected_server_up_state=expected_server_up_state,
+            cmdline_options_override=cmdline_options_override,
+            append_env_override=append_env_override,
+        )
+>>>>>>> d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
         if expected_error is not None:
             self.running.pop(server_id)
             self.stopped[server_id] = server
@@ -1503,9 +1556,30 @@ class ScyllaClusterManager:
         assert self.cluster
         server_id = ServerNum(int(request.match_info["server_id"]))
         data = await request.json()
+<<<<<<< HEAD
         expected_error = data["expected_error"]
         seeds = data["seeds"]
         await self.cluster.server_start(server_id, expected_error, seeds)
+||||||| parent of d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
+        await self.cluster.server_start(
+            server_id=server_id,
+            expected_error=data.get("expected_error"),
+            seeds=data.get("seeds"),
+            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
+            cmdline_options_override=data.get("cmdline_options_override"),
+            append_env_override=data.get("append_env_override"),
+        )
+=======
+        await self.cluster.server_start(
+            server_id=server_id,
+            expected_error=data.get("expected_error"),
+            seeds=data.get("seeds"),
+            connect_driver=data.get("connect_driver"),
+            expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
+            cmdline_options_override=data.get("cmdline_options_override"),
+            append_env_override=data.get("append_env_override"),
+        )
+>>>>>>> d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
 
     async def _cluster_server_pause(self, request) -> None:
         """Pause the specified server."""
