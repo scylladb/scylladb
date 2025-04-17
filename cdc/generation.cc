@@ -13,6 +13,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/all.hh>
 
 #include "gms/endpoint_state.hh"
 #include "gms/versioned_value.hh"
@@ -1199,6 +1200,44 @@ make_drop_table_streams_mutations(table_id table, api::timestamp_type ts) {
         mutations.emplace_back(std::move(m));
     }
     return mutations;
+}
+
+future<> generation_service::load_cdc_tablet_streams() {
+    auto sd = co_await _sys_ks.local().read_cdc_streams_state();
+    auto pd = co_await _sys_ks.local().read_cdc_pending_streams();
+    auto hd = co_await _sys_ks.local().read_cdc_streams_history();
+
+    co_await container().invoke_on_all([sd = std::move(sd), pd = std::move(pd), hd = std::move(hd)] (generation_service& svc) {
+        return svc._cdc_metadata.load_tablet_streams_map(sd, pd, hd);
+    });
+}
+
+future<> generation_service::load_cdc_tablet_streams(std::unordered_set<table_id> changed_tables) {
+    base_streams_state sd;
+    pending_streams pd;
+    streams_history hd;
+
+    co_await coroutine::parallel_for_each(changed_tables, [this, &sd, &pd, &hd] (table_id table) -> future<> {
+        auto [sd_table, pd_table, hd_table] = co_await coroutine::all(
+            [&] { return _sys_ks.local().read_cdc_streams_state(table); },
+            [&] { return _sys_ks.local().read_cdc_pending_streams(table); },
+            [&] { return _sys_ks.local().read_cdc_streams_history(table); });
+
+        if (sd_table.contains(table)) {
+            sd[table] = std::move(sd_table[table]);
+
+            if (pd_table.contains(table)) {
+                pd[table] = std::move(pd_table[table]);
+            }
+            if (hd_table.contains(table)) {
+                hd[table] = std::move(hd_table[table]);
+            }
+        }
+    });
+
+    co_await container().invoke_on_all([sd = std::move(sd), pd = std::move(pd), hd = std::move(hd), changed_tables = std::move(changed_tables)] (generation_service& svc) {
+        return svc._cdc_metadata.load_tablet_streams_map(sd, pd, hd, changed_tables);
+    });
 }
 
 } // namespace cdc
