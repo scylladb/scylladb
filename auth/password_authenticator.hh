@@ -40,7 +40,15 @@ class password_authenticator : public authenticator {
     ::service::migration_manager& _migration_manager;
     future<> _stopped;
     abort_source _as;
+<<<<<<< HEAD
     std::string _superuser;
+||||||| parent of f85d73d405 (auth: split auth-v2 logic for adding default superuser password)
+    std::string _superuser;
+    shared_promise<> _superuser_created_promise;
+=======
+    std::string _superuser; // default superuser name from the config (may or may not be present in roles table)
+    shared_promise<> _superuser_created_promise;
+>>>>>>> f85d73d405 (auth: split auth-v2 logic for adding default superuser password)
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
@@ -81,7 +89,10 @@ private:
 
     future<> migrate_legacy_metadata() const;
 
-    future<> create_default_if_missing();
+    future<> legacy_create_default_if_missing();
+
+    future<> maybe_create_default_password();
+    future<> maybe_create_default_password_with_retries();
 
     sstring update_row_query() const;
 };
