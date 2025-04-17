@@ -6,7 +6,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
 
-from .util import new_test_table, unique_name
+from .util import new_test_table, unique_name, keyspace_has_tablets
 from .nodetool import flush
 import pytest
 import time
@@ -22,15 +22,18 @@ def wait_for_first_cdc_generation(cql, timeout):
         assert time.time() < deadline, "Timed out waiting for the first CDC generation"
         time.sleep(1)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
     '''Test that the stream IDs chosen for CDC log entries come from the CDC generation
     whose streams are listed in the streams description table. Since this test is executed
     on a single-node cluster, there is only one generation.'''
 
-    wait_for_first_cdc_generation(cql, 60)
+    has_tablets = keyspace_has_tablets(cql, test_keyspace)
+
+    if not has_tablets:
+        wait_for_first_cdc_generation(cql, 60)
+
+    stream_ids = set()
 
     schema = "pk int primary key"
     extra = " with cdc = {'enabled': true}"
@@ -41,22 +44,26 @@ def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
 
         log_stream_ids = set(r[0] for r in cql.execute(f'select "cdc$stream_id" from {table}_scylla_cdc_log'))
 
+        if has_tablets:
+            streams_desc = cql.execute(SimpleStatement(
+                    'select stream_id from system.cdc_streams_state',
+                    consistency_level=ConsistencyLevel.ONE))
+            for entry in streams_desc:
+                stream_ids.add(entry.stream_id)
+
     # There should be exactly one generation, so we just select the streams
-    streams_desc = cql.execute(SimpleStatement(
-            'select streams from system_distributed.cdc_streams_descriptions_v2',
-            consistency_level=ConsistencyLevel.ONE))
-    stream_ids = set()
-    for entry in streams_desc:
-        stream_ids.update(entry.streams)
+    if not has_tablets:
+        streams_desc = cql.execute(SimpleStatement(
+                'select streams from system_distributed.cdc_streams_descriptions_v2',
+                consistency_level=ConsistencyLevel.ONE))
+        for entry in streams_desc:
+            stream_ids.update(entry.streams)
 
     assert(log_stream_ids.issubset(stream_ids))
 
 
 # Test for #10473 - reading logs (from sstable) after dropping
 # column in base.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
     schema = "pk int primary key, v int"
     extra = " with cdc = {'enabled': true}"
@@ -70,9 +77,6 @@ def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
 
 # Regression test for #12098 - check that LWT inserts don't observe
 # themselves inside preimages
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace):
     schema = "pk int primary key"
     extra = " with cdc = {'enabled': true, 'preimage':true}"
@@ -93,9 +97,6 @@ def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace):
 # use for its backing view, the CDC code doesn't do that, but creating the
 # table with CDC (or enabling CDC) should fail gracefully with a clear
 # error message, and this test verifies that.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cdc_taken_log_name(scylla_only, cql, test_keyspace):
     name = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {name}_scylla_cdc_log (p int PRIMARY KEY)")

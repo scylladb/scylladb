@@ -747,9 +747,6 @@ def test_desc_udf_uda(cql, test_keyspace, scylla_only):
 # Example: caching = {'keys': 'ALL', 'rows_per_partition': 'ALL'}
 # Reproduces #14895
 # The test is marked scylla_only because it uses a Scylla-only property "cdc".
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_whitespaces_in_table_options(cql, test_keyspace, scylla_only):
     regex = "\\{[^}]*[:,][^\\s][^}]*\\}" # looks for any colon or comma without space after it inside a { }
     
@@ -991,9 +988,6 @@ def test_table_options_quoting(cql, test_keyspace):
 
 # We need to hide cdc log tables (more precisely, their CREATE statemtns and/or names)
 # but we are attaching `ALTER TABLE <cdc log table name> WITH <all table's properties>` to description of base table
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 @pytest.mark.parametrize("cdc_enablement_query",
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(b) USING 'vector_index'"],
@@ -1044,9 +1038,6 @@ def test_hide_cdc_table(scylla_only, cql, test_keyspace, cdc_enablement_query):
 
 # Verify that the format of the result of `DESC TABLE` targeting a CDC log table
 # has the expected format.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 @pytest.mark.parametrize("cdc_enablement_query",
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(v) USING 'vector_index'"],
@@ -1075,9 +1066,6 @@ def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace, cdc_enab
 
 # Verify that the create statement returned by `DESC TABLE` targeting a CDC log table
 # is correct and as expected.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 @pytest.mark.parametrize("cdc_enablement_query",
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(v) USING 'vector_index'"],
@@ -1139,9 +1127,6 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
 
 # Verify that the options of a CDC log table specified by the create statement
 # returned by `DESC TABLE` reflect the reality and are present.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 @pytest.mark.parametrize("cdc_enablement_query",
                          ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
                           "CREATE INDEX ON {t}(v) USING 'vector_index'"],
