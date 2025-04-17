@@ -1261,6 +1261,7 @@ class ScyllaCluster:
                            server_id: ServerNum,
                            expected_error: str | None = None,
                            seeds: list[IPAddress] | None = None,
+                           connect_driver = True,
                            expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
                            cmdline_options_override: list[str] | None = None,
                            append_env_override: dict[str, str] | None = None) -> None:
@@ -1286,6 +1287,8 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
         await server.start(
             api=self.api,
             expected_error=expected_error,
@@ -1717,6 +1720,7 @@ class ScyllaClusterManager:
             server_id=server_id,
             expected_error=data.get("expected_error"),
             seeds=data.get("seeds"),
+            connect_driver=data.get("connect_driver"),
             expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
             cmdline_options_override=data.get("cmdline_options_override"),
             append_env_override=data.get("append_env_override"),
