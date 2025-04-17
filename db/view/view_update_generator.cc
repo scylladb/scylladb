@@ -236,7 +236,7 @@ std::pair<stop_iteration, uint64_t> view_update_generator::generate_updates_from
 
 future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable> sstables) {
     return seastar::async([this, table = std::move(table), &sstables] {
-        for(auto& sst: sstables) {
+        for (auto& sst: sstables) {
             _progress_tracker->on_sstable_registration(sst);
         }
 
