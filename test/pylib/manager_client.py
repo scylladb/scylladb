@@ -224,10 +224,11 @@ class ManagerClient():
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            wait_others: int = 0, wait_interval: float = 45, seeds: Optional[List[IPAddress]] = None,
-                           timeout: Optional[float] = None) -> None:
+                           timeout: Optional[float] = None, connect_driver: bool = True) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient starting %s", server_id)
-        data = {"expected_error": expected_error, "seeds": seeds}
+        data = {"expected_error": expected_error, "seeds": seeds, "connect_driver": connect_driver}
+
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         if expected_error is None:
@@ -242,7 +243,7 @@ class ManagerClient():
         await self.server_stop_gracefully(server_id)
         await self.server_start(server_id=server_id, wait_others=wait_others, wait_interval=wait_interval)
 
-    async def rolling_restart(self, servers: List[ServerInfo], with_down: Optional[Callable[[ServerInfo], Awaitable[Any]]] = None):
+    async def rolling_restart(self, servers: List[ServerInfo], with_down: Optional[Callable[[ServerInfo], Awaitable[Any]]] = None, wait_for_cql = True):
         # `servers` might not include all the running servers, but we want to check against all of them
         servers_running = await self.running_servers()
 
@@ -258,10 +259,11 @@ class ManagerClient():
 
             if with_down:
                 up_servers = [u for u in servers if u.server_id != s.server_id]
-                await wait_for_cql_and_get_hosts(self.cql, up_servers, time() + 60)
+                if wait_for_cql:
+                    await wait_for_cql_and_get_hosts(self.cql, up_servers, time() + 60)
                 await with_down(s)
 
-            await self.server_start(s.server_id)
+            await self.server_start(s.server_id, connect_driver=wait_for_cql)
 
             # Wait for other servers to see the restarted server.
             # Otherwise, the next server we are going to restart may not yet see "s" as restarted
@@ -271,8 +273,8 @@ class ManagerClient():
             for s2 in servers_running:
                 if s2.server_id != s.server_id:
                     await self.server_sees_other_server(s2.ip_addr, s.ip_addr)
-
-        await wait_for_cql_and_get_hosts(self.cql, servers_running, time() + 60)
+        if wait_for_cql:
+            await wait_for_cql_and_get_hosts(self.cql, servers_running, time() + 60)
 
     async def server_pause(self, server_id: ServerNum) -> None:
         """Pause the specified server."""

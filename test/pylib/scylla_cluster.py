@@ -1142,7 +1142,7 @@ class ScyllaCluster:
         self.removed.add(server_id)
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
-                           seeds: Optional[List[IPAddress]] = None) -> None:
+                           seeds: Optional[List[IPAddress]] = None, connect_driver = True) -> None:
         """Start a server. No-op if already running."""
         if server_id in self.running:
             return
@@ -1159,7 +1159,13 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
-        await server.start(self.api, expected_error)
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
+        await server.start(
+            api=self.api,
+            expected_error=expected_error,
+            expected_server_up_state=expected_server_up_state,
+        )
         if expected_error is not None:
             self.running.pop(server_id)
             self.stopped[server_id] = server
@@ -1557,7 +1563,9 @@ class ScyllaClusterManager:
         data = await request.json()
         expected_error = data["expected_error"]
         seeds = data["seeds"]
-        await self.cluster.server_start(server_id, expected_error, seeds)
+        connect_driver = data["connect_driver"]
+        await self.cluster.server_start(server_id, expected_error, seeds, connect_driver)
+
 
     async def _cluster_server_pause(self, request) -> None:
         """Pause the specified server."""
