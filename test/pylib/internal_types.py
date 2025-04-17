@@ -38,3 +38,6 @@ class ServerUpState(Enum):
     HOST_ID_QUERIED = auto()
     CQL_CONNECTED = auto()
     CQL_QUERIED = auto()
+
+    def requires_cql(self) -> bool:
+        return self in {ServerUpState.CQL_CONNECTED, ServerUpState.CQL_QUERIED}
