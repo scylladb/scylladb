@@ -267,7 +267,7 @@ public:
             impl& operator=(impl&&) = delete;
             virtual ~impl() = default;
         protected:
-            static future<std::vector<task_identity>> get_children(module_ptr module, task_id parent_id);
+            static future<std::vector<task_identity>> get_children(module_ptr module, task_id parent_id, std::function<bool(gms::inet_address)> is_host_alive);
         public:
             virtual task_group get_group() const noexcept = 0;
             virtual future<std::set<task_id>> get_ids() const = 0;
