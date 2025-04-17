@@ -19,6 +19,7 @@ class database;
 namespace db {
 namespace view {
 class view_builder;
+class view_building_worker;
 }
 }
 
@@ -27,6 +28,7 @@ namespace streaming {
 mutation_reader_consumer make_streaming_consumer(sstring origin,
     sharded<replica::database>& db,
     db::view::view_builder& vb,
+    sharded<db::view::view_building_worker>& vbw,
     uint64_t estimated_partitions,
     stream_reason reason,
     sstables::offstrategy offstrategy,

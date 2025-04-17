@@ -582,7 +582,7 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
                 co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only, true, scope, {});
             });
         } else {
-            co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, ks_name, cf_name, skip_cleanup, skip_reshape);
+            co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, _view_building_worker, ks_name, cf_name, skip_cleanup, skip_reshape);
         }
     } catch (...) {
         llog.warn("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=failed: {}",
@@ -751,12 +751,14 @@ future<> sstables_loader::download_task_impl::run() {
 sstables_loader::sstables_loader(sharded<replica::database>& db,
         netw::messaging_service& messaging,
         sharded<db::view::view_builder>& vb,
+        sharded<db::view::view_building_worker>& vbw,
         tasks::task_manager& tm,
         sstables::storage_manager& sstm,
         seastar::scheduling_group sg)
     : _db(db)
     , _messaging(messaging)
     , _view_builder(vb)
+    , _view_building_worker(vbw)
     , _task_manager_module(make_shared<task_manager_module>(tm))
     , _storage_manager(sstm)
     , _sched_group(std::move(sg))
