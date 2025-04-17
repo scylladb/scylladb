@@ -1688,6 +1688,12 @@ void check_no_rack_overload(const token_metadata& tm) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
+    cql_test_config cfg{};
+    // This test relies on the fact that we use an RF strictly smaller than the number of racks.
+    // Because of that, we cannot enable `rf_rack_valid_keyspaces` in this test because we won't
+    // be able to create a keyspace.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
 
@@ -1741,7 +1747,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
         });
 
         BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
-    }).get();
+    }, cfg).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
@@ -3018,6 +3024,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) 
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) {
+    cql_test_config cfg{};
+    // This test purposefully uses just one rack, which means that we cannot enable
+    // the `rf_rack_valid_keyspaces` configuration option because we won't be able to create
+    // a keyspace with RF > 1.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 2;
         const int n_racks = 1;
@@ -3044,7 +3056,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, cfg).get();
 }
 
 // Verify merge can proceed with multiple racks and RF=#racks
@@ -3087,6 +3099,20 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_rack
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) {
+    cql_test_config cfg{};
+    // The scenario this test addresses cannot happen with `rf_rack_valid_keyspaces` set to true.
+    //
+    // Among the tablet replicas for a given tablet, there CANNOT be two nodes from the same rack.
+    // After the decommission of B, both tablets will reside on ALL other nodes, which implies that
+    // they're on pairwise distinct racks. However, since B was taking part in replication of the
+    // tablets, it must've been among the replicas of at least one of the tablets and, for the very
+    // same reason, it must be on a separate rack. Hence, all nodes must reside on pairwise distinct racks.
+    //
+    // So, we if want to keep the current number of nodes and RF, we must have 4 racks. But we cannot
+    // do that until we've implemented scylladb/scylladb#23737. Besides, the test seems to rely on
+    // using just one rack, which makes it incompatible with `rf_rack_valid_keyspaces: true` anyway.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 3;
         const int n_racks = 1;
@@ -3136,7 +3162,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) 
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, cfg).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
