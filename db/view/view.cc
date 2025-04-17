@@ -80,6 +80,7 @@
 #include "locator/host_id.hh"
 #include "cartesian_product.hh"
 #include "idl/view.dist.hh"
+#include "sstables/sstables.hh"
 
 using namespace std::chrono_literals;
 
