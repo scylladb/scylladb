@@ -8,8 +8,10 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/with_scheduling_group.hh>
+#include <seastar/core/future.hh>
 
 #include "consumer.hh"
+#include "db/view/view_building_worker.hh"
 #include "replica/database.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "db/view/view_builder.hh"
@@ -22,13 +24,14 @@ namespace streaming {
 mutation_reader_consumer make_streaming_consumer(sstring origin,
         sharded<replica::database>& db,
         db::view::view_builder& vb,
+        sharded<db::view::view_building_worker>& vbw,
         uint64_t estimated_partitions,
         stream_reason reason,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard,
         std::optional<int64_t> repaired_at,
         lw_shared_ptr<sstables::sstable_list> sstable_list_to_mark_as_repaired) {
-    return [&db, &vb = vb.container(), estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, repaired_at, sstable_list_to_mark_as_repaired] (mutation_reader reader) -> future<> {
+    return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, repaired_at, sstable_list_to_mark_as_repaired] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
@@ -38,7 +41,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
 
             auto cf = db.local().find_column_family(reader.schema()).shared_from_this();
             auto guard = service::topology_guard(frozen_guard);
-            bool use_view_update_path = co_await with_scheduling_group(db.local().get_gossip_scheduling_group(), [&] {
+            auto use_view_update_path = co_await with_scheduling_group(db.local().get_gossip_scheduling_group(), [&] {
                 return db::view::check_needs_view_update_path(vb.local(), db.local().get_token_metadata_ptr(), *cf, reason);
             });
             //FIXME: for better estimations this should be transmitted from remote
@@ -48,11 +51,11 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
             // means partition estimation shouldn't be adjusted.
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             mutation_reader_consumer consumer =
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, origin = std::move(origin),
+                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, &vbw, origin = std::move(origin),
                 offstrategy, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
-                    sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
+                    sst = use_view_update_path == db::view::sstable_destination_decision::normal_directory ? cf->make_streaming_sstable_for_write() : cf->make_streaming_staging_sstable();
                 } catch (...) {
                     return current_exception_as_future().finally([reader = std::move(reader)] () mutable {
                         return reader.close();
@@ -77,11 +80,13 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                         cf->enable_off_strategy_trigger();
                     }
                     co_await cf->add_sstable_and_update_cache(sst, offstrategy);
-                }).then([cf, s, sst, use_view_update_path, &vb]() mutable -> future<> {
-                    if (!use_view_update_path) {
-                        return make_ready_future<>();
+                }).then([cf, s, sst, use_view_update_path, &vb, &vbw]() mutable -> future<> {
+                    if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
+                        return vbw.local().register_staging_sstable_tasks({sst}, std::move(cf));
+                    } else if (use_view_update_path == db::view::sstable_destination_decision::staging_directly_to_generator) {
+                        return vb.local().register_staging_sstable(sst, std::move(cf));
                     }
-                    return vb.local().register_staging_sstable(sst, std::move(cf));
+                    return make_ready_future<>();
                 });
             };
             if (!offstrategy) {
