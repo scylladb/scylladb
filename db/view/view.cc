@@ -3914,6 +3914,26 @@ future<> view_building_worker::discover_staging_sstables(service::view_building:
     }
 }
 
+future<> view_building_worker::register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table) {
+    auto table_id = table->schema()->id();
+    auto& tablet_map = _db.get_token_metadata().tablets().get_tablet_map(table_id);
+
+    auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
+    auto shard = get_sstable_shard_id(*sst);
+    auto tid = get_sstable_tablet_id(tablet_map, *sst);
+
+    // Task id doesn't matter, it'll be created by save_view_building_tasks()
+    service::view_building::view_building_task task {
+        utils::UUID{}, service::view_building::view_building_task::task_type::process_staging, service::view_building::view_building_task::task_state::idle,
+        table_id, ::table_id{}, {my_host_id, shard}, tid
+    };
+    _staging_sstables[table_id][tid].push_back(std::move(sst));
+
+    co_await container().invoke_on(0, [task = std::move(task)] (auto& vbw) {
+        return vbw.save_view_building_tasks({std::move(task)});
+    });
+}
+
 void view_building_worker::init_messaging_service() {
     ser::view_rpc_verbs::register_work_on_view_building_tasks(&_messaging, [this] (std::vector<utils::UUID> ids) -> future<std::vector<service::view_building::view_task_result>> {
         return container().invoke_on(0, [ids = std::move(ids)] (view_building_worker& vbw) -> future<std::vector<service::view_building::view_task_result>> {
