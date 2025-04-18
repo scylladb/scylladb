@@ -109,6 +109,9 @@ public:
     };
 
 private:
+    enum class mode { no_gc, gc_all, gc_expired };
+
+    mode _mode{mode::gc_expired};
     const per_table_history_maps* _reconcile_history_maps{};
     const gc_time_min_source* _gc_min_source{};
     // 0 is a sentinel value meaning we don't have information on RF.
@@ -124,13 +127,21 @@ private:
     [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
 
     tombstone_gc_before_getter(const per_table_history_maps* reconcile_history_maps, const gc_time_min_source* gc_min_source, size_t table_replication_factor)
-        : _reconcile_history_maps(reconcile_history_maps)
+        : _mode(mode::gc_expired)
+        , _reconcile_history_maps(reconcile_history_maps)
         , _gc_min_source(gc_min_source)
         , _table_replication_factor(table_replication_factor)
     { }
 
 public:
     tombstone_gc_before_getter() = default;
+
+    struct no_gc{};
+    tombstone_gc_before_getter(no_gc) : _mode(mode::no_gc) { } // implicit
+
+    struct gc_all{};
+    tombstone_gc_before_getter(gc_all) : _mode(mode::gc_all) { } // implicit
+
     explicit tombstone_gc_before_getter(const tombstone_gc_state& tombstone_gc, size_t table_replication_factor)
         : tombstone_gc_before_getter(tombstone_gc._reconcile_history_maps, &tombstone_gc._gc_min_source, table_replication_factor)
     { }
