@@ -8,13 +8,18 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <optional>
+#include <ranges>
 #include <seastar/core/shared_ptr.hh>
+#include <string_view>
+#include <unordered_set>
 
 #include "index/secondary_index_manager.hh"
 
 #include "cql3/statements/index_target.hh"
 #include "cql3/expr/expression.hh"
 #include "index/target_parser.hh"
+#include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "db/view/view.hh"
 #include "concrete_types.hh"
@@ -339,6 +344,29 @@ bool secondary_index_manager::is_global_index(const schema& s) const {
     return std::ranges::any_of(_indices | std::views::values, [&s] (const index& i) {
         return !i.metadata().local() && s.cf_name() == index_table_name(i.metadata().name());
     });
+}
+
+std::optional<sstring> secondary_index_manager::custom_index_class(const schema& s) const {
+
+    auto idx = _indices.find(index_name_from_table_name(s.cf_name()));
+
+    if (idx == _indices.end() || !(*idx).second.metadata().options().contains(cql3::statements::index_target::custom_index_option_name)) {
+        return std::nullopt;
+    } else {
+        return (*idx).second.metadata().options().at(cql3::statements::index_target::custom_index_option_name);
+    }
+}
+
+// We pass the feature_service as the supported custom classes will depend on the features
+bool secondary_index_manager::is_custom_class_supported(const gms::feature_service& fs, const sstring& class_name) {
+
+    // TODO: Change this set to a map to implementation 
+    // when https://github.com/scylladb/vector-store/issues/115 is done
+
+    const static std::unordered_set<std::string_view> classes = {
+        "vector_index",
+    };
+    return classes.contains(class_name);
 }
 
 }
