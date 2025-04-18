@@ -86,8 +86,8 @@ public:
         return _sst->get_stats_metadata();
     }
 
-    const shared_sstable get_sstable() const noexcept {
-        return _sst;
+    const sstable* operator->() const noexcept {
+        return &*_sst;
     }
 
     mutation_reader make_reader(
@@ -3288,7 +3288,7 @@ static void do_validate_stats_metadata(schema_ptr s, sstable_assertions& written
     BOOST_REQUIRE_EQUAL(orig_stats.max_local_deletion_time, written_stats.max_local_deletion_time);
     BOOST_REQUIRE_EQUAL(orig_stats.min_ttl, written_stats.min_ttl);
     BOOST_REQUIRE_EQUAL(orig_stats.max_ttl, written_stats.max_ttl);
-    if (orig_sst->has_correct_min_max_column_names() && written_sst.get_sstable()->has_correct_min_max_column_names()) {
+    if (orig_sst->has_correct_min_max_column_names() && written_sst->has_correct_min_max_column_names()) {
         BOOST_REQUIRE(orig_stats.min_column_names.elements == written_stats.min_column_names.elements);
         BOOST_REQUIRE(orig_stats.max_column_names.elements == written_stats.max_column_names.elements);
     }
