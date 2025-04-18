@@ -82,10 +82,6 @@ public:
         return _sst->make_reader(_sst->_schema, _env.make_reader_permit(), query::full_partition_range, _sst->_schema->full_slice());
     }
 
-    const stats_metadata& get_stats_metadata() const {
-        return _sst->get_stats_metadata();
-    }
-
     const sstable* operator->() const noexcept {
         return &*_sst;
     }
@@ -3273,7 +3269,7 @@ static void do_validate_stats_metadata(schema_ptr s, sstable_assertions& written
     auto orig_sst = written_sst.get_env().reusable_sst(s, get_write_test_path(table_name), 1, sstable_version_types::mc).get();
 
     const auto& orig_stats = orig_sst->get_stats_metadata();
-    const auto& written_stats = written_sst.get_stats_metadata();
+    const auto& written_stats = written_sst->get_stats_metadata();
 
     auto check_estimated_histogram = [] (const utils::estimated_histogram& lhs, const utils::estimated_histogram& rhs) {
         BOOST_REQUIRE(lhs.bucket_offsets == rhs.bucket_offsets);
@@ -3299,7 +3295,7 @@ static void do_validate_stats_metadata(schema_ptr s, sstable_assertions& written
 }
 
 static void check_min_max_column_names(sstable_assertions& written_sst, std::vector<bytes> min_components, std::vector<bytes> max_components) {
-    const auto& st = written_sst.get_stats_metadata();
+    const auto& st = written_sst->get_stats_metadata();
     BOOST_TEST_MESSAGE(fmt::format("min {}/{} max {}/{}", st.min_column_names.elements.size(), min_components.size(), st.max_column_names.elements.size(), max_components.size()));
     BOOST_REQUIRE(st.min_column_names.elements.size() == min_components.size());
     for (auto i = 0U; i < st.min_column_names.elements.size(); i++) {
