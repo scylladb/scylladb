@@ -97,10 +97,12 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     disabled_tests = get_disabled_tests(suite_config, modes)
     args = copy(DEFAULT_ARGS)
     custom_args_config = suite_config.get('custom_args', {})
+    extra_scylla_cmdline_options = suite_config.get('extra_scylla_cmdline_options', [])
     test_name = file_path.stem
     no_parallel_run = True if test_name in no_parallel_cases else False
 
     custom_args = custom_args_config.get(file_path.stem, ['-c2 -m2G'])
+    args.extend(extra_scylla_cmdline_options)
     if len(custom_args) > 1:
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, parameters=custom_args,
                                    no_parallel_run=no_parallel_run, modes=modes, disabled_tests=disabled_tests,
