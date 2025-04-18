@@ -134,8 +134,6 @@ private:
     { }
 
 public:
-    tombstone_gc_before_getter() = default;
-
     struct no_gc{};
     tombstone_gc_before_getter(no_gc) : _mode(mode::no_gc) { } // implicit
 
