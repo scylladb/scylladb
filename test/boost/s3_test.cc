@@ -664,6 +664,53 @@ SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
     test_download_data_source(make_proxy_client, 3 * 1024);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_object_copy) {
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+    const sstring name_copy(fmt::format("/{}/testobject-{}-copy", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+
+    semaphore mem(16 << 20);
+    auto cln = make_minio_client(mem);
+    auto close_client = deferred_close(*cln);
+    constexpr std::string_view content{"1234567890"};
+
+    testlog.info("Put object {}", name);
+    temporary_buffer<char> data = sstring(content).release();
+    cln->put_object(name, std::move(data)).get();
+
+
+    testlog.info("Copy object {}", name);
+
+    cln->copy_object(name, name_copy).get();
+
+    size_t sz = cln->get_object_size(name_copy).get();
+    BOOST_REQUIRE_EQUAL(sz, content.size());
+
+    auto out = output_stream<char>(cln->make_upload_sink(name));
+
+    constexpr size_t chunk_size = 1_MiB;
+    constexpr size_t writes = 11;
+    auto rnd = tests::random::get_bytes(chunk_size);
+    for (unsigned ch = 0; ch < writes; ch++) {
+        out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+    }
+
+    out.flush().get();
+    out.close().get();
+    cln->copy_object(name, name_copy, 5_MiB).get();
+
+    sz = cln->get_object_size(name_copy).get();
+    BOOST_REQUIRE_EQUAL(sz, chunk_size * writes);
+
+    for (size_t off = 0; off < sz; off += chunk_size) {
+        auto len = std::min(chunk_size, sz - off);
+        auto range = s3::range{off, len};
+        auto orig_buf = cln->get_object_contiguous(name, range).get();
+        auto copy_buf = cln->get_object_contiguous(name_copy, range).get();
+        testlog.info("Got [{}:{}) chunk", off, len);
+        BOOST_REQUIRE_EQUAL(memcmp(copy_buf.get(), orig_buf.get(), len), 0);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_creds) {
     /*
      * Note: This test does not cover the functionality of the `aws::environment_aws_credentials_provider` class because proper testing requires altering
