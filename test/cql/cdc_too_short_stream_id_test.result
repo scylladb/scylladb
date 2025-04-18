@@ -1,7 +1,5 @@
-> -- CDC and tablets are not working together yet, turn them off.
 > CREATE KEYSPACE ks
->     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
->     tablets = {'enabled': false};
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 OK
 > USE ks;
 OK
