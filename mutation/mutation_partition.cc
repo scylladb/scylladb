@@ -1334,7 +1334,8 @@ mutation_partition::compact_for_query(
     bool drop_tombstones_unconditionally = false;
     // Replicas should only send non-purgeable tombstones already,
     // so we can expect to not have to actually purge any tombstones here.
-    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, row_limit, always_gc, drop_tombstones_unconditionally, tombstone_gc_before_getter());
+    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, row_limit, always_gc, drop_tombstones_unconditionally,
+            tombstone_gc_before_getter::gc_all());
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
@@ -1358,7 +1359,8 @@ void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(
     };
     bool drop_tombstones_unconditionally = true;
     auto compaction_time = gc_clock::time_point::max();
-    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, always_gc, drop_tombstones_unconditionally, {});
+    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, always_gc, drop_tombstones_unconditionally,
+            tombstone_gc_before_getter::gc_all());
 }
 
 // Returns true if the mutation_partition represents no writes.

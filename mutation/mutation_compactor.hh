@@ -308,6 +308,7 @@ public:
         , _row_limit(limit)
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
+        , _gc_before_getter(tombstone_gc_before_getter::gc_all())
         , _last_pos(position_in_partition::for_partition_end())
         , _validator("mutation_compactor for read", _schema, validation_level)
     {
