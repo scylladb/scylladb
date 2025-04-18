@@ -359,6 +359,8 @@ tablet_colors = {
     (Tablet.STATE_LEAVING, 'write_both_read_old'): dark_red,
     (Tablet.STATE_JOINING, 'streaming'): light_green,
     (Tablet.STATE_LEAVING, 'streaming'): light_red,
+    (Tablet.STATE_JOINING, 'rebuild_repair'): light_green,
+    (Tablet.STATE_LEAVING, 'rebuild_repair'): light_red,
     (Tablet.STATE_JOINING, 'write_both_read_new'): light_yellow,
     (Tablet.STATE_LEAVING, 'write_both_read_new'): even_darker_purple,
     (Tablet.STATE_JOINING, 'use_new'): light_yellow,
@@ -482,7 +484,7 @@ def update_from_cql(initial=False):
                 stage_change = True
                 changed = True
                 if not initial and t.streaming:
-                    if tablet.stage != "streaming" and tablet.stage != "write_both_read_old":
+                    if tablet.stage != "streaming" and tablet.stage != "rebuild_repair" and tablet.stage != "write_both_read_old":
                         dst = t.streaming
                         t.streaming = None
                         fire_tracer(id, replica, dst, light_purple, light_yellow, tablet_h * 0.7,
