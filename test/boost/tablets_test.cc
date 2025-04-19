@@ -2533,6 +2533,8 @@ allocate_replicas_in_racks(const std::vector<endpoint_dc_rack>& racks, int rf,
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
   do_with_cql_env_thread([] (auto& e) {
     topology_builder topo(e);
     const int n_hosts = 6;
@@ -2623,7 +2625,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
             return e.execute_cql(fmt::format("DROP KEYSPACE {}", ks)).discard_result();
         }).get();
     }
-  }).get();
+  }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
@@ -2879,6 +2881,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
 SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
     auto cfg = tablet_cql_test_config();
     cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.need_remote_proxy = true;
 
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
@@ -3140,6 +3143,8 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     do_with_cql_env_thread([] (auto& e) {
         auto seed = tests::random::get_int<int32_t>();
         std::mt19937 random_engine{seed};
@@ -3170,10 +3175,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) 
 
             do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
         }
-    }).get();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 2;
         const int n_racks = 1;
@@ -3200,7 +3207,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, std::move(cfg)).get();
 }
 
 // Verify merge can proceed with multiple racks and RF=#racks
@@ -3213,6 +3220,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
 // t1: { n4, n2 }
 //
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_racks_and_rf_equals_racks) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 2;
         const int n_racks = rf;
@@ -3239,10 +3248,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_rack
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 3;
         const int n_racks = 1;
@@ -3292,7 +3303,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) 
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
