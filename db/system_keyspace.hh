@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "db/view/view_build_status.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
@@ -534,6 +535,12 @@ public:
     future<> remove_built_view(sstring ks_name, sstring view_name);
     future<std::vector<view_name>> load_built_views();
     future<std::vector<view_build_progress>> load_view_build_progress();
+
+    // system.view_build_status_v2
+    future<mutation> make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
+    future<mutation> make_view_build_status_update_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
+    future<mutation> make_remove_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name);
+    future<mutation> make_remove_view_build_status_on_host_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id);
 
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
