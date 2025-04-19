@@ -2727,6 +2727,23 @@ future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_
     });
 }
 
+future<system_keyspace::view_build_status_map> system_keyspace::get_view_build_status_map() {
+    static const sstring query = format("SELECT * FROM {}.{}", NAME, VIEW_BUILD_STATUS_V2);
+
+    view_build_status_map map;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto ks_name = row.get_as<sstring>("keyspace_name");
+        auto view_name = row.get_as<sstring>("view_name");
+        auto host_id = locator::host_id(row.get_as<utils::UUID>("host_id"));
+        auto status = view::build_status_from_string(row.get_as<sstring>("status"));
+
+        auto view = std::make_pair(std::move(ks_name), std::move(view_name));
+        map[view][host_id] = status;
+        co_return stop_iteration::no;
+    });
+    co_return map;
+}
+
 future<mutation> system_keyspace::make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status) {
     static const sstring stmt = format("INSERT INTO {}.{} (keyspace_name, view_name, host_id, status) VALUES (?, ?, ?, ?)", NAME, VIEW_BUILD_STATUS_V2);
 
