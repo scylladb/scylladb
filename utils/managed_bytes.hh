@@ -546,7 +546,7 @@ inline managed_bytes::managed_bytes(const managed_bytes& o) {
     if (o.is_inline()) {
         _inline_size = o._inline_size;
         _u = o._u;
-    } else if (o.is_single_chunk()) {
+    } else if (o.is_single_chunk() && o.size() <= max_seg(current_allocator())) {
         memory::on_alloc_point();
         auto& alctr = current_allocator();
         void* p = alctr.alloc<single_chunk_blob_storage>(sizeof(single_chunk_blob_storage) + o._u.single_chunk_ref.size);

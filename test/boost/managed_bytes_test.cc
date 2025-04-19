@@ -98,6 +98,24 @@ BOOST_AUTO_TEST_CASE(test_copy_constructor) {
     }
 }
 
+// Reproducer for #23781.
+// Simulates a copy of a large cell from the standard allocator to lsa.
+BOOST_AUTO_TEST_CASE(test_copy_constructor_standard_to_lsa) {
+    fragmenting_allocation_strategy alloc_1(128 * 1024);
+    fragmenting_allocation_strategy alloc_2(128 * 1024 / 10);
+
+    for (size_t size : {16*1024, 32*1024, 64*1024, 128*1024, 256*1024}) {
+        auto b = tests::random::get_bytes(size);
+        with_allocator(alloc_1, [&] {
+            auto m = managed_bytes(b);
+            with_allocator(alloc_2, [&] {
+                auto m_copy_different_allocator = m;
+                BOOST_CHECK_EQUAL(m, m_copy_different_allocator);
+            });
+        });
+    }
+}
+
 BOOST_AUTO_TEST_CASE(test_move_constructor) {
     fragmenting_allocation_strategy alloc_1(alloc_size);
     fragmenting_allocation_strategy alloc_2(alloc_size + 1);
