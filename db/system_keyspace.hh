@@ -539,6 +539,8 @@ public:
     future<std::vector<view_build_progress>> load_view_build_progress();
 
     // system.view_build_status_v2
+    using view_build_status_map = std::map<system_keyspace_view_name, std::map<locator::host_id, view::build_status>>;
+    future<view_build_status_map> get_view_build_status_map();
     future<mutation> make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
     future<mutation> make_view_build_status_update_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
     future<mutation> make_remove_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name);
