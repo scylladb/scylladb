@@ -2546,6 +2546,8 @@ allocate_replicas_in_racks(const std::vector<endpoint_dc_rack>& racks, int rf,
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
   auto do_test_case = [] (const shard_id rf) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     return do_with_cql_env_thread([rf] (auto& e) {
         topology_builder topo(e);
         const int n_hosts = 6;
@@ -2638,7 +2640,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         seastar::parallel_for_each(keyspaces, [&] (const sstring& ks) {
             return e.execute_cql(fmt::format("DROP KEYSPACE {}", ks)).discard_result();
         }).get();
-    });
+    }, std::move(cfg));
   };
 
   const int test_case_number = 13;
@@ -2909,6 +2911,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
 SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
     auto cfg = tablet_cql_test_config();
     cfg.db_config->tablets_initial_scale_factor(10.0);
+    cfg.need_remote_proxy = true;
 
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
@@ -3170,6 +3173,8 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     do_with_cql_env_thread([] (auto& e) {
         auto seed = tests::random::get_int<int32_t>();
         std::mt19937 random_engine{seed};
@@ -3200,11 +3205,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) 
 
             do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
         }
-    }).get();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) {
     cql_test_config cfg{};
+    cfg.need_remote_proxy = true;
     // This test purposefully uses just one rack, which means that we cannot enable
     // the `rf_rack_valid_keyspaces` configuration option because we won't be able to create
     // a keyspace with RF > 1.
@@ -3249,6 +3255,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
 // t1: { n4, n2 }
 //
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_racks_and_rf_equals_racks) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 2;
         const int n_racks = rf;
@@ -3275,11 +3283,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_rack
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) {
     cql_test_config cfg{};
+    cfg.need_remote_proxy = true;
     // The scenario this test addresses cannot happen with `rf_rack_valid_keyspaces` set to true.
     //
     // Among the tablet replicas for a given tablet, there CANNOT be two nodes from the same rack.
