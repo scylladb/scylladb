@@ -3593,7 +3593,11 @@ def get_local_task_queues():
 def get_local_io_queues():
     """ Return a list of io queues for the local reactor. """
     for dev, ioq in unordered_map(gdb.parse_and_eval('\'seastar\'::local_engine._io_queues')):
-        yield dev, std_unique_ptr(ioq).dereference()
+        try:
+            ioq_ptr = seastar_shared_ptr(ioq).get().dereference()
+        except gdb.error:
+            ioq_ptr = std_unique_ptr(ioq).dereference()
+        yield dev, ioq_ptr
 
 
 def get_local_tasks(tq_id = None):
