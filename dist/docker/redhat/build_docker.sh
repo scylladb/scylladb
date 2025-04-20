@@ -90,7 +90,7 @@ run microdnf clean all
 run microdnf --setopt=tsflags=nodocs -y update
 run microdnf --setopt=tsflags=nodocs -y install hostname python3 python3-pip kmod
 run microdnf clean all
-run pip3 install --prefix /usr supervisor
+run pip3 install --no-cache-dir --prefix /usr supervisor
 run bash -ec "echo LANG=C.UTF-8 > /etc/locale.conf"
 run bash -ec "rpm -ivh packages/*.rpm"
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
