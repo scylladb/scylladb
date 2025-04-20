@@ -360,7 +360,7 @@ elif [ "$ID" = "fedora" ]; then
     do
         pip_constrained_packages="${pip_constrained_packages} ${package}${pip_packages[$package]}"
     done
-    pip3 install --upgrade "$PIP_DEFAULT_ARGS" $pip_constrained_packages
+    pip3 install --upgrade --no-cache-dir "$PIP_DEFAULT_ARGS" $pip_constrained_packages
 
     if [ -f "$(node_exporter_fullpath)" ] && node_exporter_checksum; then
         echo "$(node_exporter_filename) already exists, skipping download"
