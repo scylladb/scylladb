@@ -2731,7 +2731,7 @@ void view_builder::on_drop_view(const sstring& ks_name, const sstring& view_name
                         .handle_exception([ks_name, view_name] (std::exception_ptr ep) {
             vlogger.warn("Failed to cleanup view {}.{}: {}", ks_name, view_name, ep);
         });
-    });
+    }).handle_exception_type([] (replica::no_such_keyspace&) {});
 }
 
 future<> view_builder::do_build_step() {
