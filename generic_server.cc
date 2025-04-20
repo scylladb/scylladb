@@ -338,7 +338,7 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 }
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
-    for (;;) {
+    while (!_gate.is_closed()) {
         seastar::gate::holder holder(_gate);
         bool shed = false;
         try {
