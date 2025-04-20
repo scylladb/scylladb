@@ -1891,6 +1891,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
                 break;
             case topology::transition_state::tablet_draining:
+                co_await utils::get_local_injector().inject("suspend_decommission",
+                        [] (auto& handler) { return handler.wait_for_message(db::timeout_clock::now() + 1min); });
                 try {
                     co_await handle_tablet_migration(std::move(guard), true);
                 } catch (term_changed_error&) {
