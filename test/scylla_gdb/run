@@ -14,7 +14,7 @@ print('Scylla is: ' + run.find_scylla() + '.')
 # (e.g., Scylla's release or debug build modes mode, but not dev mode).
 # Check this quickly up-front, instead of waiting for gdb to fail in a
 # mysterious way when it can't look up types.
-if not 'debug_info' in subprocess.run(['file', run.scylla],
+if not '.debug_info' in subprocess.run(['objdump', '-h', run.scylla],
         capture_output=True, text=True).stdout:
     print(f'Scylla executable was compiled without debugging information (-g)')
     print(f'so cannot be used to test gdb. Please set SCYLLA environment variable.')
