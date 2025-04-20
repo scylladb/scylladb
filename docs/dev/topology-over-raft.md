@@ -474,6 +474,28 @@ Once the new map is committed to group0, replicas will react to that by resizing
 to match the new tablet count, and also merging the compaction groups (sstable(s) + memtable) that
 belonged to sibling tablets together.
 
+# Co-located tables
+
+Different tables within a keyspace can be co-located. This means they maintain the same tablet count, and the replica
+sets for each pair of corresponding tablets are identical.
+
+Within a group of co-located tables, one table is designated as the base table. The complete tablet map is stored in
+system.tablets for the base_table. The tablet maps for the other dependent tables consist of only a reference to the
+base table in the base_table column.  A table's co-location is determined at the time of its creation. Currently,
+altering the co-location property of an existing table is not supported. When a table is created and its tablet map is
+first created, it is determined whether the table should be co-located with another base table. If so, a tablet map
+containing a reference to the base table is created, rather than allocating new tablets.
+
+When handling tablet transitions, each operation (e.g. streaming, repair, cleanup) is applied to all tables in the
+co-location group, because the transition state is shared with all co-located tables.
+
+For many operations, it is more useful to work on groups of co-located tables as an atomic unit, instead of working on
+each table independently. For example, when the tablets load balancer makes migration decisions or resize decisions, or
+when generating migrations for keyspace_rf_change, add_tablet_replica, move_tablet in the storage service, we work on
+table groups, with the base table as a representative of the group, and we write tablet mutations only to the tablet map
+of the base table. This is because these operations generate migrations or tablet resize, which are shared operations
+for co-located tables.
+
 # Sharding with tablets
 
 Each table can have different shard assignment for a given token computed from the placement of tablet replicas,
