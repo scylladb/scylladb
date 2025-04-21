@@ -131,11 +131,10 @@ lw_shared_ptr<const sstables::sstable_set> table::make_compound_sstable_set() co
     return _sg_manager->make_sstable_set();
 }
 
-lw_shared_ptr<sstables::sstable_set> table::make_maintenance_sstable_set() const {
+lw_shared_ptr<sstables::sstable_set> compaction_group::make_maintenance_sstable_set() const {
     // Level metadata is not used because (level 0) maintenance sstables are disjoint and must be stored for efficient retrieval in the partitioned set
     bool use_level_metadata = false;
-    return make_lw_shared<sstables::sstable_set>(
-            sstables::make_partitioned_sstable_set(_schema, use_level_metadata));
+    return make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_t.schema(), use_level_metadata));
 }
 
 void table::refresh_compound_sstable_set() {
@@ -551,6 +550,10 @@ void compaction_group::add_sstable(sstables::shared_sstable sstable) {
 
 const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() const noexcept {
     return _main_sstables;
+}
+
+sstables::sstable_set compaction_group::make_main_sstable_set() const {
+    return _t._compaction_strategy.make_sstable_set(as_table_state());
 }
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
@@ -1944,13 +1947,12 @@ std::vector<sstables::shared_sstable> compaction_group::all_sstables() const {
 
 future<>
 compaction_group::merge_sstables_from(compaction_group& group) {
-    auto& cs = _t.get_compaction_strategy();
     auto permit = co_await _t.get_sstable_list_permit();
     table::sstable_list_builder builder(_t, std::move(permit));
 
     auto sstables_to_merge = group.all_sstables();
     // re-build new list for this group with sstables of the group being merged.
-    auto res = co_await builder.build_new_list(*main_sstables(), cs.make_sstable_set(_t.schema()), sstables_to_merge, {});
+    auto res = co_await builder.build_new_list(*main_sstables(), make_main_sstable_set(), sstables_to_merge, {});
     // execute:
     std::invoke([&] noexcept {
         set_main_sstables(std::move(res.new_sstable_set));
@@ -2033,7 +2035,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(sstables::compact
             // The group that triggered compaction is the only one to have sstables removed from it.
             _cg_desc[&_cg].desc.old_sstables = _desc.old_sstables;
             for (auto& [cg, d] : _cg_desc) {
-                d.main_sstable_set_builder_result = co_await _builder.build_new_list(*cg->main_sstables(), _t._compaction_strategy.make_sstable_set(_t._schema),
+                d.main_sstable_set_builder_result = co_await _builder.build_new_list(*cg->main_sstables(), cg->make_main_sstable_set(),
                                                                   d.desc.new_sstables, d.desc.old_sstables);
 
                 if (!d.desc.old_sstables.empty()
@@ -2044,7 +2046,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(sstables::compact
                     // sstables from the maintenance set. No need to add any new sstables to the maintenance
                     // set though, as they are always added to the main set.
                     auto builder_result = co_await _builder.build_new_list(
-                            *cg->maintenance_sstables(), std::move(*_t.make_maintenance_sstable_set()), {}, d.desc.old_sstables);
+                            *cg->maintenance_sstables(), std::move(*cg->make_maintenance_sstable_set()), {}, d.desc.old_sstables);
                     d.new_maintenance_sstables = std::move(builder_result.new_sstable_set);
                 }
             }
@@ -2433,8 +2435,8 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _token_range(std::move(token_range))
     , _compaction_strategy_state(compaction::compaction_strategy_state::make(_t._compaction_strategy))
     , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
-    , _main_sstables(make_lw_shared<sstables::sstable_set>(t._compaction_strategy.make_sstable_set(t.schema())))
-    , _maintenance_sstables(t.make_maintenance_sstable_set())
+    , _main_sstables(make_lw_shared<sstables::sstable_set>(make_main_sstable_set()))
+    , _maintenance_sstables(make_maintenance_sstable_set())
 {
     _t._compaction_manager.add(as_table_state());
 }
@@ -2467,8 +2469,8 @@ bool compaction_group::empty() const noexcept {
 }
 
 void compaction_group::clear_sstables() {
-    _main_sstables = make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
-    _maintenance_sstables = _t.make_maintenance_sstable_set();
+    _main_sstables = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
+    _maintenance_sstables = make_maintenance_sstable_set();
 }
 
 void storage_group::clear_sstables() {
@@ -3175,8 +3177,8 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         // FIXME: the following isn't exception safe.
         for_each_compaction_group([&] (compaction_group& cg) {
 
-            auto pruned = make_lw_shared<sstables::sstable_set>(_compaction_strategy.make_sstable_set(_schema));
-            auto maintenance_pruned = make_maintenance_sstable_set();
+            auto pruned = make_lw_shared<sstables::sstable_set>(cg.make_main_sstable_set());
+            auto maintenance_pruned = cg.make_maintenance_sstable_set();
 
             auto prune = [&] (lw_shared_ptr<sstables::sstable_set>& pruned,
                                             const lw_shared_ptr<sstables::sstable_set>& pruning,
@@ -3980,7 +3982,7 @@ future<> compaction_group::cleanup() {
         const lw_shared_ptr<sstables::sstable_set> _empty_maintenance_set;
     private:
         lw_shared_ptr<sstables::sstable_set> empty_sstable_set() const {
-            return make_lw_shared<sstables::sstable_set>(_t._compaction_strategy.make_sstable_set(_t._schema));
+            return make_lw_shared<sstables::sstable_set>(_cg.make_main_sstable_set());
         }
     public:
         explicit compaction_group_cleaner(compaction_group& cg)
