@@ -798,6 +798,9 @@ future<> raft_group0::setup_group0(
         }
     }
 
+    co_await utils::get_local_injector().inject("sleep_in_synchronize",  [](auto& handler) -> future<> {
+        co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+    });
 
     group0_log.info("setup_group0: the cluster is ready to use Raft. Finishing.");
     co_await _client.set_group0_upgrade_state(group0_upgrade_state::use_post_raft_procedures);
