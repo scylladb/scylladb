@@ -769,7 +769,7 @@ private:
     }
 
     virtual sstables::sstable_set make_sstable_set_for_input() const {
-        return _table_s.get_compaction_strategy().make_sstable_set(_schema);
+        return _table_s.get_compaction_strategy().make_sstable_set(_table_s);
     }
 
     const tombstone_gc_state& get_tombstone_gc_state() const {

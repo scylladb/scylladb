@@ -70,7 +70,7 @@ public:
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::leveled;
     }
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override;
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const table_state& ts) const override;
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
