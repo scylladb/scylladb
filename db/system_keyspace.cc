@@ -1574,7 +1574,7 @@ schema_ptr system_keyspace::dicts() {
 }
 
 future<system_keyspace::local_info> system_keyspace::load_local_info() {
-    auto msg = co_await execute_cql(format("SELECT host_id, cluster_name FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
+    auto msg = co_await execute_cql(format("SELECT host_id, cluster_name, data_center, rack FROM system.{} WHERE key=?", LOCAL), sstring(LOCAL));
 
     local_info ret;
     if (!msg->empty()) {
@@ -1585,12 +1585,18 @@ future<system_keyspace::local_info> system_keyspace::load_local_info() {
         if (row.has("cluster_name")) {
             ret.cluster_name = row.get_as<sstring>("cluster_name");
         }
+        if (row.has("data_center")) {
+            ret.dc = row.get_as<sstring>("data_center");
+        }
+        if (row.has("rack")) {
+            ret.rack = row.get_as<sstring>("rack");
+        }
     }
 
     co_return ret;
 }
 
-future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_dc_rack location, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address) {
+future<> system_keyspace::save_local_info(local_info sysinfo, gms::inet_address broadcast_address, gms::inet_address broadcast_rpc_address) {
     auto& cfg = _db.get_config();
     sstring req = fmt::format("INSERT INTO system.{} (key, host_id, cluster_name, release_version, cql_version, native_protocol_version, data_center, rack, partitioner, rpc_address, broadcast_address, listen_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     , db::system_keyspace::LOCAL);
@@ -1601,8 +1607,8 @@ future<> system_keyspace::save_local_info(local_info sysinfo, locator::endpoint_
                             version::release(),
                             cql3::query_processor::CQL_VERSION,
                             to_sstring(unsigned(cql_serialization_format::latest().protocol_version())),
-                            location.dc,
-                            location.rack,
+                            sysinfo.dc,
+                            sysinfo.rack,
                             sstring(cfg.partitioner()),
                             broadcast_rpc_address,
                             broadcast_address,

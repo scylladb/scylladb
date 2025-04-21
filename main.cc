@@ -578,6 +578,17 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
     } else if (linfo.cluster_name != cfg.cluster_name()) {
         throw exceptions::configuration_exception("Saved cluster name " + linfo.cluster_name + " != configured name " + cfg.cluster_name());
     }
+    const auto location = snitch.local()->get_location();
+    if (linfo.dc.empty()) {
+        linfo.dc = location.dc;
+    } else if (linfo.dc != location.dc) {
+        throw std::runtime_error(format("Saved DC name \"{}\" is not equal to the DC name \"{}\" specified by the snitch", linfo.dc, location.dc));
+    }
+    if (linfo.rack.empty()) {
+        linfo.rack = location.rack;
+    } else if (linfo.rack != location.rack) {
+        throw std::runtime_error(format("Saved rack name \"{}\" is not equal to the rack name \"{}\" specified by the snitch", linfo.rack, location.rack));
+    }
     if (!linfo.host_id) {
         linfo.host_id = locator::host_id::create_random_id();
         startlog.info("Setting local host id to {}", linfo.host_id);
@@ -585,7 +596,7 @@ static locator::host_id initialize_local_info_thread(sharded<db::system_keyspace
 
     linfo.listen_address = listen_address;
     const auto host_id = linfo.host_id;
-    sys_ks.local().save_local_info(std::move(linfo), snitch.local()->get_location(), broadcast_address, broadcast_rpc_address).get();
+    sys_ks.local().save_local_info(std::move(linfo), broadcast_address, broadcast_rpc_address).get();
     return host_id;
 }
 

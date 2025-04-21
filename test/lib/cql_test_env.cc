@@ -724,8 +724,11 @@ private:
                 if (!linfo.host_id) {
                     linfo.host_id = locator::host_id::create_random_id();
                 }
+                const auto location = _snitch.local()->get_location();
+                linfo.dc = location.dc;
+                linfo.rack = location.rack;
                 host_id = linfo.host_id;
-                _sys_ks.local().save_local_info(std::move(linfo), _snitch.local()->get_location(), my_address, my_address).get();
+                _sys_ks.local().save_local_info(std::move(linfo), my_address, my_address).get();
             }
             locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
                 auto& topo = tm.get_topology();
