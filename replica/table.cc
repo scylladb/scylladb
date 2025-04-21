@@ -130,9 +130,7 @@ lw_shared_ptr<const sstables::sstable_set> table::make_compound_sstable_set() co
 }
 
 lw_shared_ptr<sstables::sstable_set> compaction_group::make_maintenance_sstable_set() const {
-    // Level metadata is not used because (level 0) maintenance sstables are disjoint and must be stored for efficient retrieval in the partitioned set
-    bool use_level_metadata = false;
-    return make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_t.schema(), use_level_metadata));
+    return make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_t.schema(), token_range()));
 }
 
 void table::refresh_compound_sstable_set() {
@@ -686,7 +684,13 @@ public:
         : _t(t)
     {
         storage_group_map r;
-        auto cg = make_lw_shared<compaction_group>(_t, size_t(0), dht::token_range::make_open_ended_both_sides());
+        // this might not reflect real vnode range for this node, but with 256 tokens, the actual
+        // first and last tokens are likely to be ~0.5% of the edges, so any measurement against
+        // this accurate enough token range will be likely up to ~1% off.
+        // TODO: we could fed actual vnode range here, but we might bump into a chicken and egg
+        //     problem if e.g. a system table is created before tokens were allocated.
+        auto full_token_range = dht::token_range::make(dht::first_token(), dht::last_token());
+        auto cg = make_lw_shared<compaction_group>(_t, size_t(0), std::move(full_token_range));
         _single_cg = cg.get();
         auto sg = make_lw_shared<storage_group>(std::move(cg));
         _single_sg = sg.get();

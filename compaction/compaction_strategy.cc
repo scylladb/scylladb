@@ -782,7 +782,7 @@ std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_
 
 =======
 std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const table_state& ts) const {
-    return std::make_unique<partitioned_sstable_set>(ts.schema(), false);
+    return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
 >>>>>>> 21d1e78457 (compaction: Wire table_state into make_sstable_set())

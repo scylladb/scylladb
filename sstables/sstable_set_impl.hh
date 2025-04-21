@@ -33,7 +33,8 @@ private:
     // Change counter on interval map for leveled sstables which is used by
     // incremental selector to determine whether or not to invalidate iterators.
     uint64_t _leveled_sstables_change_cnt = 0;
-    bool _use_level_metadata = false;
+    // Token range spanned by the compaction group owning this sstable set.
+    dht::token_range _token_range;
 private:
     static interval_type make_interval(const schema& s, const dht::partition_range& range);
     interval_type make_interval(const dht::partition_range& range) const;
@@ -49,7 +50,7 @@ public:
     static dht::partition_range to_partition_range(const dht::ring_position_view& pos, const interval_type& i);
 
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
-    explicit partitioned_sstable_set(schema_ptr schema, bool use_level_metadata = true);
+    explicit partitioned_sstable_set(schema_ptr schema, dht::token_range token_range);
     // For cloning the partitioned_sstable_set (makes a deep copy, including *_all)
     explicit partitioned_sstable_set(
         schema_ptr schema,
@@ -57,7 +58,7 @@ public:
         const interval_map_type& leveled_sstables,
         const lw_shared_ptr<sstable_list>& all,
         const std::unordered_map<run_id, shared_sstable_run>& all_runs,
-        bool use_level_metadata,
+        dht::token_range token_range,
         uint64_t bytes_on_disk);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;

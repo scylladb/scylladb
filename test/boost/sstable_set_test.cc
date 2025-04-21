@@ -24,8 +24,10 @@
 
 using namespace sstables;
 
-static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all = {}, bool use_level_metadata = true) {
-    auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata));
+static auto full_range = dht::token_range::make(dht::first_token(), dht::last_token());
+
+static sstables::sstable_set make_sstable_set(schema_ptr schema, lw_shared_ptr<sstable_list> all = {}) {
+    auto ret = sstables::sstable_set(std::make_unique<partitioned_sstable_set>(schema, full_range));
     for (auto& sst : *all) {
         ret.insert(sst);
     }
@@ -153,7 +155,7 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
         auto sst1 = make_sstable_easy(env, std::move(mr), cfg);
         auto size1 = sst1->bytes_on_disk();
 
-        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema(), true));
+        auto ss1 = make_lw_shared<sstable_set>(std::make_unique<partitioned_sstable_set>(ss.schema(), full_range));
         ss1->insert(sst1);
         BOOST_REQUIRE_EQUAL(ss1->bytes_on_disk(), size1);
 
