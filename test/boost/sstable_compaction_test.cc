@@ -3729,7 +3729,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
                 *s, gc_now, max_purgeable_func, tombstone_gc_state(nullptr), std::move(cr), std::move(purged_cr));
 
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
-            auto compacting = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s));
+            auto compacting = make_lw_shared<sstables::sstable_set>(env.make_sstable_set(cs, s));
             for (auto&& sst : all) {
                 compacting->insert(std::move(sst));
             }
@@ -4745,7 +4745,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
 
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, {});
 
-        auto set = cs.make_sstable_set(s);
+        auto set = cs.make_sstable_set(cf.as_table_state());
         set.insert(std::move(sst1));
         set.insert(std::move(sst2));
 
@@ -4938,8 +4938,8 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
         };
 
         {
-            auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
-            auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
+            auto set1 = make_lw_shared<sstable_set>(env.make_sstable_set(cs, s));
+            auto set2 = make_lw_shared<sstable_set>(env.make_sstable_set(cs, s));
             std::vector<shared_sstable> ssts;
             ssts.push_back(new_sstable(set1, 0, 1, 1));
             ssts.push_back(new_sstable(set2, 0, 1, 1));
@@ -4960,10 +4960,10 @@ SEASTAR_TEST_CASE(compound_sstable_set_incremental_selector_test) {
         }
 
         {
-            auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
-            auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
+            auto set1 = make_lw_shared<sstable_set>(env.make_sstable_set(cs, s));
+            auto set2 = make_lw_shared<sstable_set>(env.make_sstable_set(cs, s));
             std::vector<shared_sstable> ssts;
-            ssts.push_back(new_sstable(set1, 0, 1, 0));
+            ssts.push_back(new_sstable(set1, 0, 7, 0)); // simulates L0 sstable spanning most of the range.
             ssts.push_back(new_sstable(set2, 0, 1, 1));
             ssts.push_back(new_sstable(set1, 0, 1, 1));
             ssts.push_back(new_sstable(set2, 3, 4, 1));
@@ -5054,8 +5054,8 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
         auto close_cf = deferred_stop(cf);
         cf->start();
 
-        auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
-        auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(s));
+        auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(cf.as_table_state()));
+        auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(cf.as_table_state()));
 
         auto sst_gen = env.make_sst_factory(s);
 
