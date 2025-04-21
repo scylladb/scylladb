@@ -147,13 +147,20 @@ macro(update_build_flags config)
   endif()
   string(TOUPPER ${config} CONFIG)
   set(cxx_flags "CMAKE_CXX_FLAGS_${CONFIG}")
+  set(linker_flags "CMAKE_EXE_LINKER_FLAGS_${CONFIG}")
   string(APPEND ${cxx_flags}
     " -O${parsed_args_OPTIMIZATION_LEVEL}")
   if(parsed_args_WITH_DEBUG_INFO)
     string(APPEND ${cxx_flags} " -g -gz")
+  else()
+    # If Scylla is compiled without debug info, strip the debug symbols from
+    # the result in case one of the linked static libraries happens to have
+    # some debug symbols. See issue #23834.
+    string(APPEND ${linker_flags} " -Wl,--strip-debug")
   endif()
   unset(CONFIG)
   unset(cxx_flags)
+  unset(linker_flags)
 endmacro()
 
 set(pgo_opts "")

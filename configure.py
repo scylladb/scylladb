@@ -2806,6 +2806,12 @@ def create_build_system(args):
         mode_config.update(query_seastar_flags(f'{outdir}/{mode}/seastar/seastar.pc',
                                                mode_config['build_seastar_shared_libs'],
                                                args.staticcxx))
+    # If Scylla is compiled without -g, strip the debug symbols from
+    # the result in case one of the linked static libraries happens to
+    ## have some debug symbols. See issue #23834.
+    for mode, mode_config in build_modes.items():
+        if '-g' not in user_cflags.split() + mode_config['cxxflags'].split():
+            mode_config['cxx_ld_flags'] += ' -Wl,--strip-debug'
 
     ninja = find_ninja()
     with open(args.buildfile, 'w') as f:
