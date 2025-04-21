@@ -950,6 +950,7 @@ public:
         , _group_id("dummy-group")
         , _generation_generator(0)
     { }
+    virtual dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     virtual const schema_ptr& schema() const noexcept override { return _schema; }
     virtual unsigned min_compaction_threshold() const noexcept override { return _schema->min_compaction_threshold(); }
     virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
