@@ -294,6 +294,7 @@ future<> test_client_upload_file(const client_maker_function& client_maker, std:
 
     co_await readable_file.close();
     co_await input.close();
+    co_await client->delete_object(object_name);
     co_await client->close();
 }
 
@@ -584,6 +585,7 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
     semaphore mem(16 << 20);
     auto cln = make_minio_client(mem);
     auto close_client = deferred_close(*cln);
+    auto delete_object = deferred_delete_object(cln, name);
     constexpr std::string_view content{"1234567890"};
     for (auto i : {1, 2}) {
         testlog.info("Put object {}, iteration {}", name, i);
@@ -633,6 +635,7 @@ void test_download_data_source(const client_maker_function& client_maker, unsign
     semaphore mem(16<<20);
     auto cln = client_maker(mem);
     auto close_client = deferred_close(*cln);
+    auto delete_object = deferred_delete_object(cln, name);
 
     static constexpr unsigned chunk_size = 1000;
     testlog.info("Preparation: Upload object");
@@ -671,6 +674,8 @@ SEASTAR_THREAD_TEST_CASE(test_object_copy) {
     semaphore mem(16 << 20);
     auto cln = make_minio_client(mem);
     auto close_client = deferred_close(*cln);
+    auto delete_object = deferred_delete_object(cln, name);
+    auto delete_copy_object = deferred_delete_object(cln, name_copy);
     constexpr std::string_view content{"1234567890"};
 
     testlog.info("Put object {}", name);
