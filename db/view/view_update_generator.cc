@@ -143,7 +143,11 @@ future<> view_update_generator::start() {
                     // Exploit the fact that sstables in the staging directory
                     // are usually non-overlapping and use a partitioned set for
                     // the read.
-                    auto ssts = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+                    // With tablets, it doesn't matter full range is fed into partitioned set since
+                    // there will be usually one sstable to be processed per tablet, and sstables of
+                    // different tablets are disjoint.
+                    auto token_range = dht::token_range::make(dht::first_token(), dht::last_token());
+                    auto ssts = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, std::move(token_range)));
                     for (auto& sst : sstables) {
                         ssts->insert(sst);
                         input_size += sst->data_size();
