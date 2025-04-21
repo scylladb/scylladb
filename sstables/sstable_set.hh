@@ -256,7 +256,7 @@ public:
     friend class compound_sstable_set;
 };
 
-sstable_set make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata = true);
+sstable_set make_partitioned_sstable_set(schema_ptr schema, dht::token_range token_range);
 
 sstable_set make_compound_sstable_set(schema_ptr schema, std::vector<lw_shared_ptr<sstable_set>> sets);
 

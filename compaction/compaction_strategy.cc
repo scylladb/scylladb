@@ -790,7 +790,7 @@ future<reshape_config> make_reshape_config(const sstables::storage& storage, res
 }
 
 std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const table_state& ts) const {
-    return std::make_unique<partitioned_sstable_set>(ts.schema(), false);
+    return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
 }
