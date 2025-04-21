@@ -56,9 +56,9 @@ def gdb(request, scylla_gdb):
     try:
         gdb_library.lookup_type('size_t')
     except:
-        print('ERROR: Scylla executable was compiled without debugging information (-g)')
-        print('so cannot be used to test gdb. Please set SCYLLA environment variable.')
-        sys.exit(1)
+        pytest.exit('ERROR: Scylla executable was compiled without debugging '
+                    'information (-g) so cannot be used to test gdb. Please '
+                    'set SCYLLA environment variable.')
 
     # The gdb tests are known to be broken on aarch64 (see
     # https://sourceware.org/bugzilla/show_bug.cgi?id=27886) and untested
