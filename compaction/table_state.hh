@@ -33,6 +33,7 @@ namespace compaction {
 class table_state {
 public:
     virtual ~table_state() {}
+    virtual dht::token_range token_range() const noexcept = 0;
     virtual const schema_ptr& schema() const noexcept = 0;
     // min threshold as defined by table.
     virtual unsigned min_compaction_threshold() const noexcept = 0;

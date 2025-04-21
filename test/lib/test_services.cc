@@ -51,6 +51,7 @@ public:
             , _group_id("table_for_tests::table_state")
     {
     }
+    dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     const schema_ptr& schema() const noexcept override {
         return table().schema();
     }
