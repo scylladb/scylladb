@@ -667,35 +667,20 @@ SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
     test_download_data_source(make_proxy_client, 3 * 1024);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_object_copy) {
+void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {
     const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
     const sstring name_copy(fmt::format("/{}/testobject-{}-copy", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
     semaphore mem(16 << 20);
-    auto cln = make_minio_client(mem);
+    auto cln = client_maker(mem);;
     auto close_client = deferred_close(*cln);
     auto delete_object = deferred_delete_object(cln, name);
     auto delete_copy_object = deferred_delete_object(cln, name_copy);
-    constexpr std::string_view content{"1234567890"};
-
-    testlog.info("Put object {}", name);
-    temporary_buffer<char> data = sstring(content).release();
-    cln->put_object(name, std::move(data)).get();
-
-
-    testlog.info("Copy object {}", name);
-
-    cln->copy_object(name, name_copy).get();
-
-    size_t sz = cln->get_object_size(name_copy).get();
-    BOOST_REQUIRE_EQUAL(sz, content.size());
 
     auto out = output_stream<char>(cln->make_upload_sink(name));
-
-    constexpr size_t chunk_size = 1_MiB;
-    constexpr size_t writes = 11;
     auto rnd = tests::random::get_bytes(chunk_size);
-    for (unsigned ch = 0; ch < writes; ch++) {
+
+    for (unsigned ch = 0; ch < chunks; ch++) {
         out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
     }
 
@@ -703,8 +688,8 @@ SEASTAR_THREAD_TEST_CASE(test_object_copy) {
     out.close().get();
     cln->copy_object(name, name_copy, 5_MiB).get();
 
-    sz = cln->get_object_size(name_copy).get();
-    BOOST_REQUIRE_EQUAL(sz, chunk_size * writes);
+    auto sz = cln->get_object_size(name_copy).get();
+    BOOST_REQUIRE_EQUAL(sz, chunk_size * chunks);
 
     for (size_t off = 0; off < sz; off += chunk_size) {
         auto len = std::min(chunk_size, sz - off);
@@ -714,6 +699,22 @@ SEASTAR_THREAD_TEST_CASE(test_object_copy) {
         testlog.info("Got [{}:{}) chunk", off, len);
         BOOST_REQUIRE_EQUAL(memcmp(copy_buf.get(), orig_buf.get(), len), 0);
     }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_small_object_copy) {
+    test_object_copy(make_minio_client, 1000, 2);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_object_copy) {
+    test_object_copy(make_minio_client, 1_MiB, 6);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_small_object_copy_proxy) {
+    test_object_copy(make_proxy_client, 1000, 2);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_object_copy_proxy) {
+    test_object_copy(make_proxy_client, 1_MiB, 6);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_creds) {
