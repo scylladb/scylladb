@@ -490,6 +490,12 @@ test_env::make_table_for_tests(schema_ptr s) {
     return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
 }
 
+sstables::sstable_set test_env::make_sstable_set(sstables::compaction_strategy& cs, schema_ptr s) {
+    auto t = make_table_for_tests(s);
+    auto close_t = deferred_stop(t);
+    return cs.make_sstable_set(t.as_table_state());
+}
+
 void test_env::request_abort() {
     _impl->abort.request_abort();
 }

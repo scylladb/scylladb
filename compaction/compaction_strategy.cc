@@ -774,6 +774,18 @@ future<reshape_config> make_reshape_config(const sstables::storage& storage, res
     };
 }
 
+<<<<<<< HEAD
+||||||| parent of 21d1e78457 (compaction: Wire table_state into make_sstable_set())
+std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_set(schema_ptr schema) const {
+    return std::make_unique<partitioned_sstable_set>(std::move(schema), false);
+}
+
+=======
+std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const table_state& ts) const {
+    return std::make_unique<partitioned_sstable_set>(ts.schema(), false);
+}
+
+>>>>>>> 21d1e78457 (compaction: Wire table_state into make_sstable_set())
 }
 
 namespace compaction {
