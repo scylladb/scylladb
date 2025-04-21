@@ -2327,6 +2327,10 @@ class compaction_group::table_state : public compaction::table_state {
 public:
     explicit table_state(table& t, compaction_group& cg) : _t(t), _cg(cg) {}
 
+    dht::token_range token_range() const noexcept override {
+        return _cg.token_range();
+    }
+
     const schema_ptr& schema() const noexcept override {
         return _t.schema();
     }
