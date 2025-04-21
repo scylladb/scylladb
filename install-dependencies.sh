@@ -121,6 +121,7 @@ fedora_packages=(
     binaryen
     lcov
 
+    lld
     llvm-bolt
     moreutils
     iproute
@@ -138,12 +139,6 @@ fedora_packages=(
     https://github.com/scylladb/cassandra-stress/releases/download/v3.17.5/cassandra-stress-3.17.5-1.noarch.rpm
 )
 
-# lld is not available on s390x, see
-# https://src.fedoraproject.org/rpms/lld/c/aa6e69df60747496f8f22121ae8cc605c9d3498a?branch=rawhide
-if [ "$(uname -m)" != "s390x" ]; then
-    fedora_packages+=(lld)
-fi
-
 fedora_python3_packages=(
     python3-pyyaml
     python3-urwid
@@ -159,8 +154,8 @@ fedora_python3_packages=(
 
 # an associative array from packages to constrains
 declare -A pip_packages=(
-    [scylla-driver]="==3.28.2"  # lock-step with tools/cqlsh
-    [geomet]="<0.3,>=0.1"
+    [scylla-driver]="==$(cat tools/cqlsh/requirements.txt | grep scylla-driver | cut -d= -f3)"
+    [geomet]=""
     [traceback-with-variables]=""
     [scylla-api-client]=""
     [treelib]=""
@@ -218,7 +213,6 @@ go_arch() {
     local -A GO_ARCH=(
         ["x86_64"]=amd64
         ["aarch64"]=arm64
-        ["s390x"]=s390x
     )
     echo ${GO_ARCH["$(arch)"]}
 }
@@ -227,7 +221,6 @@ NODE_EXPORTER_VERSION=1.9.0
 declare -A NODE_EXPORTER_CHECKSUM=(
     ["x86_64"]=e7b65ea30eec77180487d518081d3dcb121b975f6d95f1866dfb9156c5b24075
     ["aarch64"]=5314fae1efff19abf807cfc8bd7dadbd47a35565c1043c236ffb0689dc15ef4f
-    ["s390x"]=089d2c2f87b4d716dd5ff006b89ab4424e7917f67830a8dd580d528f1d99ca58
 )
 NODE_EXPORTER_DIR=/opt/scylladb/dependencies
 
