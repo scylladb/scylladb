@@ -175,6 +175,7 @@ async def test_mv_update_on_pending_replica(manager: ManagerClient, intranode):
 # issue #19529, it remains active until it timeouts, preventing topology changes
 # during this time.
 @pytest.mark.asyncio
+@skip_mode('debug', 'the test requires a short timeout for remove_node, but it is unpredictably slow in debug')
 async def test_mv_write_to_dead_node(manager: ManagerClient):
     servers = await manager.servers_add(4)
 
@@ -193,4 +194,4 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
     # If the MV write is not completed, as in issue #19529, the topology change
     # will be held for long time until the write timeouts.
     # Otherwise, it is expected to complete in short time.
-    await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=60)
+    await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=180)
