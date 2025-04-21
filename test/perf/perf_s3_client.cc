@@ -106,9 +106,10 @@ public:
         } while (now() < until);
     }
 
-    future<> run_download() {
+    future<> run_download(bool is_chunked) {
         plog.info("Downloading with input_stream");
-        auto in = input_stream<char>(_client->make_download_source(_object_name, s3::range{0, _object_size}));
+        auto in = input_stream<char>(is_chunked ? _client->make_chunked_download_source(_object_name, s3::range{0, _object_size})
+                                                : _client->make_download_source(_object_name, s3::range{0, _object_size}));
         auto start = now();
         uint64_t sz = 0;
         co_await in.consume([&sz] (auto buf) {
@@ -188,7 +189,13 @@ int main(int argc, char** argv) {
             } else if (operation == "get") {
                 co_await test.invoke_on_all(&tester::run_contiguous_get);
             } else if (operation == "download") {
-                co_await test.invoke_on_all(&tester::run_download);
+                co_await test.invoke_on_all([](auto& tester) {
+                    return tester.run_download(false);
+                });
+            } else if (operation == "chunked_download") {
+                co_await test.invoke_on_all([](auto& tester) {
+                    return tester.run_download(true);
+                });
             } else {
                 throw std::runtime_error(format("Unknown operation {}", operation));
             }
