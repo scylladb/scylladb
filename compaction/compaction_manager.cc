@@ -1128,6 +1128,7 @@ future<> compaction_manager::drain() {
     }
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
+    _compaction_submission_timer.cancel();
     cmlog.info("Drained");
 }
 
