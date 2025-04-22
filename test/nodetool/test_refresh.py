@@ -53,3 +53,32 @@ def test_refresh_primary_replica_only(nodetool, scylla_only):
             ("refresh", "ks", "tbl", "--primary-replica-only"),
             {"expected_requests": []},
             ["error processing arguments: --primary-replica-only|-pro takes no effect without --load-and-stream|-las"])
+
+def test_refresh_scope_only(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("refresh", "ks", "tbl", "--scope=all"),
+            {"expected_requests": []},
+            ["error processing arguments: --scope takes no effect without --load-and-stream|-las"])
+
+def test_refresh_scope_primary_replica(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("refresh", "ks", "tbl", "--scope=all", "--primary-replica-only", "--load-and-stream"),
+            {"expected_requests": []},
+            ["error processing arguments: Scoped streaming of primary replica only is not supported yet"])
+
+def test_refresh_scope_illegal(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("refresh", "ks", "tbl", "--scope=broken", "--load-and-stream"),
+            {"expected_requests": []},
+            ["error processing arguments: Invalid scope parameter value"])
+
+@pytest.mark.parametrize("load_and_stream_opt", ["--load-and-stream", "-las"])
+@pytest.mark.parametrize("scope_val", ["all", "dc", "rack", "node"])
+def test_refresh_load_and_stream_scope(nodetool, load_and_stream_opt, scope_val):
+    nodetool("refresh", "ks", "tbl", load_and_stream_opt, f"--scope={scope_val}", expected_requests=[
+        expected_request("POST", "/storage_service/sstables/ks",
+                         params={"cf": "tbl", "load_and_stream": "true", "scope": f"{scope_val}"})])
+

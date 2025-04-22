@@ -457,13 +457,19 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         boost::algorithm::to_lower(primary_replica);
         bool load_and_stream = stream == "true" || stream == "1";
         bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
+        auto scope = parse_stream_scope(req->get_query_param("scope"));
+
+        if (scope != sstables_loader::stream_scope::all && !load_and_stream) {
+            throw httpd::bad_param_exception("scope takes no effect without load-and-stream");
+        }
+
         // No need to add the keyspace, since all we want is to avoid always sending this to the same
         // CPU. Even then I am being overzealous here. This is not something that happens all the time.
         auto coordinator = std::hash<sstring>()(cf) % smp::count;
         return sst_loader.invoke_on(coordinator,
                 [ks = std::move(ks), cf = std::move(cf),
-                load_and_stream, primary_replica_only] (sstables_loader& loader) {
-            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only, sstables_loader::stream_scope::all);
+                load_and_stream, primary_replica_only, scope] (sstables_loader& loader) {
+            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only, scope);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
                 auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());

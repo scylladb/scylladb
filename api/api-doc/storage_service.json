@@ -2144,6 +2144,15 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"scope",
+                     "description":"Defines the set of nodes to which mutations can be streamed",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query",
+                     "enum": ["all", "dc", "rack", "node"]
                   }
                ]
             }
