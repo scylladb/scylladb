@@ -39,7 +39,9 @@ def has_rest_api(cql):
         # Scylla's REST API does not have an official "ping" command,
         # so we just list the keyspaces as a (usually) short operation
         try:
-            ok = requests.get(f'{url}/column_family/name/keyspace').ok
+            # Use a short timeout to give up quickly if the REST API port
+            # is blocked in a way that the request can just hang forever.
+            ok = requests.get(f'{url}/column_family/name/keyspace', timeout=1).ok
         except:
             ok = False
         checked_rest_api[url] = ok
@@ -196,3 +198,12 @@ class no_autocompaction_context:
                     raise RuntimeError(f"failed to enable autocompaction using {api_path}: {ret.text}")
             else:
                 run_nodetool(self._cql, "enableautocompaction", ks, tbl)
+
+# Send a message to the Scylla log. E.g., we can write a message to the log
+# indicating that a test has started, which will make it easier to see which
+# test caused which errors in the log.
+# If the REST API cannot be reached (e.g., we're running the test against
+# Cassandra or the REST port is blocked), this function will do nothing.
+def scylla_log(cql, message, level):
+    if has_rest_api(cql):
+        requests.post(f'{rest_api_url(cql)}/system/log?message={requests.utils.quote(message)}&level={level}')
