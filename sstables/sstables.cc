@@ -2600,7 +2600,7 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
         co_return nullptr;
     }
     auto checksum = make_lw_shared<sstables::checksum>();
-    co_await do_read_simple(component_type::CRC, [checksum, this] (version_types v, file crc_file) -> future<> {
+    co_await do_read_simple(component_type::CRC, [&checksum, this] (version_types v, file crc_file) -> future<> {
         file_input_stream_options options;
         options.buffer_size = 4096;
 
@@ -2627,7 +2627,14 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
 
         co_await crc_stream.close();
         maybe_rethrow_exception(std::move(ex));
-        _components->checksum = checksum->weak_from_this();
+        if (!_components->checksum) {
+            _components->checksum = checksum->weak_from_this();
+        } else {
+            // Race condition: Another fiber/thread has called `read_checksum()`
+            // while we were loading the component from disk. Discard our local
+            // copy and use theirs.
+            checksum = _components->checksum->shared_from_this();
+        }
     });
 
     co_return std::move(checksum);
