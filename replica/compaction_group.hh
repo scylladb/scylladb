@@ -21,6 +21,7 @@
 #include "replica/logstor/segment_manager.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
+#include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
 
 #pragma once
@@ -105,6 +106,8 @@ class compaction_group {
     std::vector<future<>> _separator_flushes;
     seastar::semaphore _separator_flush_sem{1};
 
+    db::replay_position _lowest_rp;
+    friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
     std::unique_ptr<compaction_group_view> make_non_compacting_view();
@@ -174,7 +177,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush() noexcept;
+    future<> flush(std::optional<db::replay_position> = {}) noexcept;
     bool can_flush() const;
     bool needs_flush() const;
 
