@@ -3,7 +3,7 @@ set(CMAKE_CXX_FLAGS_COVERAGE
   CACHE
   INTERNAL
   "")
-update_cxx_flags(CMAKE_CXX_FLAGS_COVERAGE
+update_build_flags(Coverage
   WITH_DEBUG_INFO
   OPTIMIZATION_LEVEL "g")
 

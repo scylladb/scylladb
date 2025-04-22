@@ -3,7 +3,7 @@ set(CMAKE_CXX_FLAGS_DEV
   CACHE
   INTERNAL
   "")
-update_cxx_flags(CMAKE_CXX_FLAGS_DEV
+update_build_flags(Dev
   OPTIMIZATION_LEVEL "2")
 
 set(scylla_build_mode_Dev "dev")
