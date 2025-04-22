@@ -84,8 +84,9 @@ async def test_zero_token_nodes_topology_ops(manager: ManagerClient, tablets_ena
     logging.info(f'Stopping {server_d}')
     await manager.server_stop_gracefully(server_d.server_id)
 
-    logging.info(f'Initiating removenode of {server_b} by {server_a}, ignore_dead={[server_d.ip_addr]}')
-    await manager.remove_node(server_a.server_id, server_b.server_id, [server_d.ip_addr])
+    server_d_id = await manager.get_host_id(server_d.server_id)
+    logging.info(f'Initiating removenode of {server_b} by {server_a}, ignore_dead={[server_d_id]}')
+    await manager.remove_node(server_a.server_id, server_b.server_id, [server_d_id])
 
     logging.info(f'Initiating removenode of {server_d} by {server_a}')
     await manager.remove_node(server_a.server_id, server_d.server_id)
