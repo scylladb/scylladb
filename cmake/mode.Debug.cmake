@@ -1,6 +1,6 @@
 set(OptimizationLevel "g")
 
-update_cxx_flags(CMAKE_CXX_FLAGS_DEBUG
+update_build_flags(Debug
   WITH_DEBUG_INFO
   OPTIMIZATION_LEVEL ${OptimizationLevel})
 

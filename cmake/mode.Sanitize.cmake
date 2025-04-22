@@ -3,7 +3,7 @@ set(CMAKE_CXX_FLAGS_SANITIZE
   CACHE
   INTERNAL
   "")
-update_cxx_flags(CMAKE_CXX_FLAGS_SANITIZE
+update_build_flags(Sanitize
   WITH_DEBUG_INFO
   OPTIMIZATION_LEVEL "s")
 
