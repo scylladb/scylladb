@@ -650,26 +650,25 @@ public:
 
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
         co_return co_await with_shared(_progress_mutex, [this] -> future<tasks::task_manager::task::progress> {
-        // TODO: fix the indent
-        switch (_progress_state) {
-        case progress_state::uninitialized:
-            co_return tasks::task_manager::task::progress{};
-        case progress_state::finalized:
-            co_return _final_progress;
-        case progress_state::initialized:
-            break;
-        }
-        auto p = co_await _progress_per_shard.map_reduce(
-            adder<stream_progress>{},
-            [] (const progress_holder& holder) -> stream_progress {
-              auto p = holder.progress;
-              SCYLLA_ASSERT(p);
-              return *p;
-            });
-        co_return tasks::task_manager::task::progress {
-            .completed = p.completed,
-            .total = p.total,
-        };
+            switch (_progress_state) {
+            case progress_state::uninitialized:
+                co_return tasks::task_manager::task::progress{};
+            case progress_state::finalized:
+                co_return _final_progress;
+            case progress_state::initialized:
+                break;
+            }
+            auto p = co_await _progress_per_shard.map_reduce(
+                adder<stream_progress>{},
+                [] (const progress_holder& holder) -> stream_progress {
+                  auto p = holder.progress;
+                  SCYLLA_ASSERT(p);
+                  return *p;
+                });
+            co_return tasks::task_manager::task::progress {
+                .completed = p.completed,
+                .total = p.total,
+            };
         });
     }
 };
