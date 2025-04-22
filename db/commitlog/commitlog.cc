@@ -94,6 +94,8 @@ public:
     virtual void release_cf_count(const cf_id_type&, const replay_position&) = 0;
 };
 
+const db::replay_position db::replay_position::max = db::replay_position(std::numeric_limits<db::segment_id_type>::max(), std::numeric_limits<db::position_type>::max());
+
 db::commitlog::config db::commitlog::config::from_db_config(const db::config& cfg, seastar::scheduling_group sg, size_t shard_available_memory) {
     config c;
 
