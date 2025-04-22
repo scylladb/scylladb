@@ -1145,8 +1145,11 @@ future<> compaction_manager::drain() {
         // Disable the state so that it can be enabled later if requested.
         _state = state::disabled;
     }
+    _compaction_submission_timer.cancel();
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
+    // Trigger a signal to properly exit from postponed_compactions_reevaluation() fiber
+    reevaluate_postponed_compactions();
     cmlog.info("Drained");
 }
 
