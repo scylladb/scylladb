@@ -1120,7 +1120,10 @@ future<> compaction_manager::drain() {
     cmlog.info("Asked to drain");
     if (*_early_abort_subscription) {
         _state = state::disabled;
+        _compaction_submission_timer.cancel();
         co_await stop_ongoing_compactions("drain");
+        // Trigger a signal to properly exit from postponed_compactions_reevaluation() fiber
+        reevaluate_postponed_compactions();
     }
     cmlog.info("Drained");
 }
