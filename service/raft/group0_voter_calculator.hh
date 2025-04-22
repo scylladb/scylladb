@@ -41,6 +41,7 @@ public:
         sstring rack;
         bool is_voter;
         bool is_alive;
+        bool is_leader = false;
     };
 
     using nodes_list_t = std::unordered_map<raft::server_id, node_descriptor>;

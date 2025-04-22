@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
 
 #include "service/raft/group0_voter_calculator.hh"
@@ -936,6 +937,108 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_kept_across_racks) {
          })) {
         BOOST_CHECK(voters.contains(id));
     }
+}
+
+
+BOOST_DATA_TEST_CASE(leader_is_retained_as_voter, boost::unit_test::data::make({0, 1, 2}), leader_node_idx) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add a third DC to a 2 DC cluster.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            // The initial nodes (just 2 DCs)
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 0}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 1}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 2}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
+            // The new nodes (3rd DC)
+            // - this will lead to 1 voter being removed from the DC-1
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: The current leader is retained as a voter, even after adding
+    //         the third datacenter and redistributing voters.
+
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
+    BOOST_CHECK(voters.contains(ids[leader_node_idx]));
+}
+
+
+BOOST_DATA_TEST_CASE(leader_is_retained_as_voter_in_racks, boost::unit_test::data::make({0, 1, 3}), leader_node_idx) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add a third DC to a 2 DC cluster.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            // The initial nodes (just 2 DCs)
+            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 0}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 1}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack-4", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 3}},
+            // The new nodes (3rd DC)
+            // - this will lead to 1 voter being removed from the DC-1
+            {ids[4], {.datacenter = "dc-3", .rack = "rack-5", .is_voter = false, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack-6", .is_voter = false, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: The current leader is retained as a voter, even after adding
+    //         the third datacenter and redistributing voters.
+
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
+    BOOST_CHECK(voters.contains(ids[leader_node_idx]));
+}
+
+
+BOOST_DATA_TEST_CASE(leader_is_retained_as_voter_in_two_dc_asymmetric_setup, boost::unit_test::data::make({0, 1}), leader_node_idx) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Remove nodes from a 2 DC cluster so that each DC has 1 node left.
+
+    // - this will lead to 1 voter being removed from one DC
+    // - the leader should be retained as a voter
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            // The result nodes (just one per DC)
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 0}},
+            {ids[1], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 1}},
+            // no other nodes - all removed
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: The current leader is retained as a voter.
+
+    // TODO (scylladb/scylladb#23266): This should be equal to 1, after we enforce the odd number of voters
+    BOOST_CHECK_GE(voters.size(), 1);
+    BOOST_CHECK(voters.contains(ids[leader_node_idx]));
 }
 
 
