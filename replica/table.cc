@@ -1598,7 +1598,14 @@ public:
 future<>
 table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) noexcept {
     auto old = cg.memtables()->back();
-    tlogger.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy());
+    // Reset low marker for CL initiated flush here. As stated above, this function never
+    // fails, and even if it did, all we are saying is that the work of moving data from
+    // _lowest_rp -> wherever is now on us. In any case, actual segment release will not
+    // happen until success and the commitlog callback below
+    // If we are being flushed for any other reason, we still change the RP range
+    // remaining unflushed in the memtable_list (to none)
+    auto old_low = std::exchange(cg._lowest_rp, db::replay_position::max);
+    tlogger.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}, low_rp: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy(), old_low);
 
     if (old->empty()) {
         tlogger.debug("Memtable is empty");
@@ -2788,6 +2795,7 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
     , _backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
     , _repair_sstable_classifier(std::move(repair_classifier))
+    , _lowest_rp(db::replay_position::max)
 {
 }
 
@@ -3585,7 +3593,14 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     co_return details;
 }
 
-future<> compaction_group::flush() noexcept {
+future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcept {
+    if (pos && *pos < _lowest_rp) {
+        return make_ready_future<>();
+    }
+    // Note: _lowest_rp will be reset in seal_active_memtable.
+    // This is a little asymmetric, and not the prettiest. But since we
+    // set the flush function, I guess it is ok. Retaining low until then
+    // for logging purposes as well.
     try {
         return _memtables->flush();
     } catch (...) {
@@ -3624,17 +3639,13 @@ size_t storage_group::memtable_count() const {
 }
 
 future<> table::flush(std::optional<db::replay_position> pos) {
-    if (pos && *pos < _flush_rp) {
-        co_return;
-    }
     // There is nothing to flush if the table was stopped.
     if (_pending_flushes_phaser.is_closed()) {
         co_return;
     }
     auto op = _pending_flushes_phaser.start();
-    auto fp = _highest_rp;
-    co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::flush));
-    _flush_rp = std::max(_flush_rp, fp);
+    // no std::bind_back in the clang version I'm on... :-(
+    co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
 }
 
 bool storage_group::can_flush() const {
@@ -4005,6 +4016,11 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     check_valid_rp(rp);
     try {
         cg.memtables()->active_memtable().apply(std::forward<Args>(args)..., std::move(h));
+        // keep track of lowest written RP in compaction group. This is the new
+        // flush range guard.
+        cg._lowest_rp = std::min(cg._lowest_rp, rp);
+        // must also retain highest RP in table, since this is required for
+        // truncation etc.
         _highest_rp = std::max(_highest_rp, rp);
     } catch (...) {
         _failed_counter_applies_to_memtable++;
