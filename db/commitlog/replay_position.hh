@@ -55,6 +55,8 @@ struct replay_position {
 
     template <typename Describer>
     auto describe_type(sstables::sstable_version_types v, Describer f) { return f(id, pos); }
+
+    static const replay_position max;
 };
 
 class commitlog;
