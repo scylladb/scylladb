@@ -9,6 +9,7 @@ import logging
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import unique_name, wait_for_view
+from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 # much less than the streaming group.
 # Reproduces https://github.com/scylladb/scylladb/issues/21232
 @pytest.mark.asyncio
+@skip_mode('debug', 'the test needs to do some work which takes too much time in debug mode')
 async def test_view_building_scheduling_group(manager: ManagerClient):
     server = await manager.server_add()
     cql = manager.get_cql()
