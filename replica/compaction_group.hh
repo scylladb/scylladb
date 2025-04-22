@@ -19,6 +19,7 @@
 #include "locator/tablets.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
+#include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
 
 #pragma once
@@ -87,6 +88,8 @@ class compaction_group {
     bool _tombstone_gc_enabled = true;
     std::optional<compaction::compaction_backlog_tracker> _backlog_tracker;
     repair_classifier_func _repair_sstable_classifier;
+    db::replay_position _lowest_rp;
+    friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
     std::unique_ptr<compaction_group_view> make_non_compacting_view();
@@ -156,7 +159,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush() noexcept;
+    future<> flush(std::optional<db::replay_position> = {}) noexcept;
     bool can_flush() const;
 
     const dht::token_range& token_range() const noexcept {
