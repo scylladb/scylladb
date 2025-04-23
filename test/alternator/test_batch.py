@@ -456,6 +456,282 @@ def test_batch_write_item_too_many(test_table_sn):
             test_table_sn.name: [{'DeleteRequest': {'Key': {'p': p, 'c': i}}} for i in range(105)]
     })
 
+
+
+
+
+
+
+
+
+
+
+
+## test procedure
+# 1. run
+# for x in test_performance_batch_write_item_1 test_performance_batch_write_item_2 test_performance_batch_write_item_3 test_performance_create_table_1 test_performance_put_item_1 test_performance_put_item_2 test_performance_update_item_1 test_performance_update_item_2 test_performance_scan_1 test_performance_query_1 test_performance_tag_resource_1 test_performance_update_time_to_live_1 test_performance_update_time_to_live_2; do test/alternator/run test_batch.py -k $x; mv /tmp/scylla-*/log /tmp/test_o/log_$x.txt; done
+# run parse_log_output_1 on it
+# run seastar/scripts/stall-analyser.py /tmp/output_file_log_XXX --format trace -e "$SCYLLA" > /tmp/parsed_output_file_log_XXX
+# run parse_log_output_2 on it
+
+def parse_log_output_2(input_file, output_file):
+    with open(input_file, 'r', encoding='utf8') as input, open(output_file, 'w', encoding='utf8') as output:
+        for line in input:
+            x = line.rfind(' ')
+            ms = None
+            if x >= 0:
+                try:
+                    ms = int(line[x + 1:])
+                    line = line[:x]
+                except:
+                    pass
+            assert ms, line
+            line = line.replace('std::basic_string_view<char, std::char_traits<char> >', 'std::string_view')
+            line = line.replace('std::basic_string<char, std::char_traits<char> >', 'std::string')
+
+            total_line = line
+            prev = ''
+            count = 0
+            def update(nxt):
+                nonlocal prev, count
+                nxt = nxt.strip()
+                if prev == nxt:
+                    count += 1
+                else:
+                    if prev:
+                        if count > 1:
+                            print(f'      {prev} x{count}', file=output)
+                        else:
+                            print(f'      {prev}', file=output)
+                    prev = nxt
+                    count = 1
+
+            print(f'stalled for {ms} ms', file=output)
+            for line in total_line.split(';'):
+                x = line.find('<')
+                if x > 0:
+                    y = line.rfind('>')
+                    if y > x:
+                        line = line[:x] + ' ' + line[y + 1:]
+                update(line)
+            update('')
+            print('', file=output)
+            print('', file=output)
+
+
+def parse_log_output_1(input_dir):
+    import re
+
+    reactor_stalled_re = re.compile(r'Reactor stalled for (\d+) ms on shard \d+, in scheduling group [^.]*\. Backtrace: (.*)')
+
+
+    input = input_dir + '/log'
+    print(f'processing {input}')
+
+    with open(input, 'r', encoding='utf8') as inp:
+        data = inp.readlines()
+
+    for x in range(len(data)):
+        l = data[x]
+        if 'api - /system/log: test/alternator: Starting test_batch.py::' in l:
+            data2 = data[x + 1:]
+            break
+    else:
+        assert False, input
+
+    for x in range(len(data2)):
+        l = data2[x]
+        if 'api - /system/log: test/alternator: Ended test_batch.py::' in l:
+            data3 = data2[:x]
+            break
+    else:
+        assert False, input
+
+    with open(f'/tmp/output_file_log_{input_dir[5:]}', 'w', encoding='utf8') as output:
+        for x in range(len(data3)):
+            l = data3[x].rstrip()
+            if not l: continue
+            if l.startswith(' '):
+                continue
+            if 'sleeping ' in l and ' seconds until next period' in l: continue
+            if ' - Setting reconcile time to' in l: continue
+            if l.startswith('kernel callstack: '): continue
+            if 'sstable - Rebuilding bloom filter' in l: continue
+            if '] schema_tables - ' in l: continue
+            if 'seastar_memory - oversized allocation: ' in l: continue
+            if 'alternator-executor - Creating keyspace' in l: continue
+            if '] query_processor' in l: continue
+            m = reactor_stalled_re.match(l)
+            if m:
+                print(l, file=output)
+                if x + 1 < len(data3):
+                    l2 = data3[x + 1]
+                    if l2.startswith('kernel callstack: '):
+                        print(l2.rstrip(), file=output)
+            else:
+                print(f'UNPARSED               -> {l[:120]}')        
+
+
+
+
+
+
+
+
+
+
+def test_performance_batch_write_item_1(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        #yield 'v', 'qwerty' * (1000000)
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(100 * x + i) }}} for i in range(100)]
+        })
+def test_performance_batch_write_item_2(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        yield 'v', 'qwerty' * (1000000)
+    test_table_ss.meta.client.batch_write_item(RequestItems = {
+        test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter() }}}]
+    })
+def test_performance_batch_write_item_3(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        for x in range(0, 50000):
+            yield f'v{x}', f'qwerty{x}'
+    test_table_ss.meta.client.batch_write_item(RequestItems = {
+        test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter() }}}]
+    })
+def test_performance_create_table_1(dynamodb):
+    p = random_string()
+    from test.alternator.util import create_test_table
+
+    mx = 9000
+    key_schema = [ { 'AttributeName': 'pqwerty' * mx, 'KeyType': 'HASH' }, { 'AttributeName': 'qwerty' * mx, 'KeyType': 'RANGE' } ]
+    attr_def = [ { 'AttributeName': 'pqwerty' * mx, 'AttributeType': 'S' }, { 'AttributeName': 'qwerty' * mx, 'AttributeType': 'S' } ]
+    table = create_test_table(dynamodb, KeySchema=key_schema, AttributeDefinitions=attr_def)    
+    table.delete()
+def test_performance_put_item_1(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        yield 'v', 'qwerty' * (1000000)
+    test_table_ss.put_item(Item = { k:v for k, v in column_iter() })
+    test_table_ss.get_item(Key={ 'p': p, 'c': f'{p}0'})
+    test_table_ss.delete_item(Key={ 'p': p, 'c': f'{p}0'})
+def test_performance_put_item_2(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        for x in range(0, 50000):
+            yield f'v{x}', f'qwerty{x}'
+    test_table_ss.put_item(Item = { k:v for k, v in column_iter() })
+    test_table_ss.delete_item(Key={ 'p': p, 'c': f'{p}0'})
+def test_performance_update_item_1(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        yield 'v', 'qwerty' * (1000000)
+    test_table_ss.put_item(Item = { k:v for k, v in column_iter() })
+    mx = 1
+    test_table_ss.update_item(Key={ 'p': p, 'c': f'{p}0' },
+        ReturnValues='ALL_OLD')
+def test_performance_update_item_2(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        for x in range(0, 50000):
+            yield f'v{x}', f'qwerty{x}'
+    test_table_ss.put_item(Item = { k:v for k, v in column_iter() })
+    test_table_ss.update_item(Key={ 'p': p, 'c': f'{p}0' }, ReturnValues='ALL_OLD')
+def test_performance_scan_1(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        yield 'v', f'qwerty{i}'
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(100 * x + i) }}} for i in range(100)]
+        })
+    test_table_ss.scan(Limit=50000)
+def test_performance_query_1(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        yield 'v', f'qwerty{i}'
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(x * 100 + i) }}} for i in range(100)]
+        })
+    test_table_ss.query(Limit=50000, KeyConditionExpression='p=:p',
+        ExpressionAttributeValues={':p': f'{p}5599'})
+def test_performance_tag_resource_1(test_table_ss):
+    descr = test_table_ss.meta.client.describe_table(TableName=test_table_ss.name)['Table']
+    arn =  descr['TableArn']
+    mx = 10
+    test_table_ss.meta.client.tag_resource(ResourceArn=arn, Tags=[
+        {"Key": f"k{x}", "Value": f"qwerty{x}" * 35} for x in range(0, mx)
+    ])
+    test_table_ss.meta.client.list_tags_of_resource(ResourceArn=arn)
+    test_table_ss.meta.client.untag_resource(ResourceArn=arn, TagKeys=[ f"k{x}" for x in range(0, mx)])
+def test_performance_update_time_to_live_1(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        for x in range(0, 50000):
+            yield f'v{x}', f'qwerty{x}'
+    test_table_ss.meta.client.batch_write_item(RequestItems = {
+        test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter() }}}]
+    })
+    test_table_ss.meta.client.update_time_to_live(TableName=test_table_ss.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+    test_table_ss.meta.client.describe_time_to_live(TableName=test_table_ss.name)
+    test_table_ss.meta.client.update_time_to_live(TableName=test_table_ss.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': False})
+def test_performance_update_time_to_live_2(test_table_ss):
+    p = random_string()
+    def column_iter(i=0):
+        yield 'p', p
+        yield 'c', f'{p}{i}'
+        #yield 'v', 'qwerty' * (1000000)
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(x * 100 + i) }}} for i in range(100)]
+        })
+    test_table_ss.meta.client.update_time_to_live(TableName=test_table_ss.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+    test_table_ss.meta.client.describe_time_to_live(TableName=test_table_ss.name)
+    test_table_ss.meta.client.update_time_to_live(TableName=test_table_ss.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': False})
+
+
+
+
+
+
+# test_performance_batch_write_item_1 test_performance_batch_write_item_2 test_performance_batch_write_item_3 test_performance_create_table_1 test_performance_put_item_1 test_performance_put_item_2 test_performance_update_item_1 test_performance_update_item_2 test_performance_scan_1 test_performance_query_1 test_performance_tag_resource_1 test_performance_update_time_to_live_1
+
+
+
+
+
+
+
+
+
+
+
+
 # According to the DynamoDB documentation, a single BatchGetItem operation is
 # limited to retrieving up to 100 items or a total of 16 MB of data,
 # whichever is smaller. If we read less than those limits in a single
