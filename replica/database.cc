@@ -2422,7 +2422,10 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
 
 future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
     return sharded_db.invoke_on_all([id] (replica::database& db) {
-        return db.find_column_family(id).flush();
+        if (db.column_family_exists(id)) {
+            return db.find_column_family(id).flush();
+        }
+        return make_ready_future();
     });
 }
 
@@ -2433,7 +2436,12 @@ future<> database::drop_cache_for_table_on_all_shards(sharded<database>& sharded
 }
 
 future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, std::string_view ks_name, std::string_view table_name) {
-    return flush_table_on_all_shards(sharded_db, sharded_db.local().find_uuid(ks_name, table_name));
+    try {
+        return flush_table_on_all_shards(sharded_db, sharded_db.local().find_uuid(ks_name, table_name));
+    } catch (no_such_column_family&) {
+        // Skip.
+        return make_ready_future();
+    }
 }
 
 static future<> force_new_commitlog_segments(std::unique_ptr<db::commitlog>& cl1, std::unique_ptr<db::commitlog>& cl2) {
