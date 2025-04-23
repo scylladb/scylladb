@@ -2424,7 +2424,10 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
 
 future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
     return sharded_db.invoke_on_all([id] (replica::database& db) {
-        return db.find_column_family(id).flush();
+        if (db.column_family_exists(id)) {
+            return db.find_column_family(id).flush();
+        }
+        return make_ready_future();
     });
 }
 
