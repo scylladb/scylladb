@@ -15,7 +15,6 @@
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
 #include "raft_group0.hh"
-#include "tools/build_info.hh"
 
 namespace service {
 
@@ -24,16 +23,35 @@ namespace {
 seastar::logger rvlogger("group0_voter_handler");
 
 
-using is_alive_t = bool_class<struct is_alive_tag>;
-using is_voter_t = bool_class<struct is_voter_tag>;
+// Represents the priority of nodes based on their status and role.
+//
+// The priority is used to determine the order in which nodes are selected as voters.
+// The priority values can be combined (one node might have multiple of the properties).
+struct node_priority {
 
-bool operator<(const is_alive_t& lhs, const is_alive_t& rhs) {
-    return static_cast<bool>(lhs) < static_cast<bool>(rhs);
-}
+    using value_t = int;
 
-bool operator<(const is_voter_t& lhs, const is_voter_t& rhs) {
-    return static_cast<bool>(lhs) < static_cast<bool>(rhs);
-}
+    // The priority of alive nodes.
+    //
+    // It should be the largest priority value to prefer alive nodes over dead nodes.
+    static constexpr value_t alive = 10;
+
+    // The priority of nodes that are voters.
+    //
+    // It should be smaller than the alive node priority (to still prefer alive nodes to dead voters).
+    static constexpr value_t voter = 1;
+
+    static constexpr value_t get_value(const group0_voter_calculator::node_descriptor& node) {
+        value_t priority = 0;
+        if (node.is_alive) {
+            priority += node_priority::alive;
+        }
+        if (node.is_voter) {
+            priority += node_priority::voter;
+        }
+        return priority;
+    }
+};
 
 
 using nodes_ref_list_t = std::vector<std::pair<raft::server_id, std::reference_wrapper<const group0_voter_calculator::node_descriptor>>>;
@@ -50,22 +68,44 @@ using nodes_ref_list_t = std::vector<std::pair<raft::server_id, std::reference_w
 // assigned voters, alive nodes, and dead voters.
 class rack_info {
 
-    using nodes_map_key_t = std::tuple<is_alive_t, is_voter_t>;
-    using nodes_map_t = std::multimap<nodes_map_key_t, raft::server_id>;
-    nodes_map_t _nodes;
+    size_t _alive_nodes_remaining = 0;
+    size_t _existing_dead_voters_remaining = 0;
 
-    size_t _voters_count = 0;
+    using node_info_t = std::tuple<node_priority::value_t, raft::server_id,
+            // the ref to the node descriptor is still needed to be able to update the state of rack
+            // (alive/dead voter nodes remaining)
+            std::reference_wrapper<const group0_voter_calculator::node_descriptor>>;
 
-    static nodes_map_t create_nodes_map(std::ranges::input_range auto&& nodes) {
-        return nodes | std::views::transform([](const auto& node_entry) {
+    struct node_info_priority_compare {
+        bool operator()(const node_info_t& lhs, const node_info_t& rhs) const {
+            // First field: The priority of the node (higher has more priority)
+            return std::get<0>(lhs) < std::get<0>(rhs);
+        }
+    };
+
+    using nodes_store_t = std::priority_queue<node_info_t, std::vector<node_info_t>, node_info_priority_compare>;
+    nodes_store_t _nodes;
+
+    size_t _assigned_voters_count = 0;
+
+    static nodes_store_t create_nodes_list(std::ranges::input_range auto&& nodes, size_t& alive_nodes_remaining, size_t& existing_dead_voters_remaining) {
+        alive_nodes_remaining = 0;
+        existing_dead_voters_remaining = 0;
+
+        return nodes | std::views::transform([&alive_nodes_remaining, &existing_dead_voters_remaining](const auto& node_entry) {
             const auto& [id, node] = node_entry;
-            return std::make_pair(std::make_tuple(is_alive_t{node.get().is_alive}, is_voter_t{node.get().is_voter}), id);
-        }) | std::ranges::to<nodes_map_t>();
+            if (node.get().is_alive) {
+                ++alive_nodes_remaining;
+            } else if (node.get().is_voter) {
+                ++existing_dead_voters_remaining;
+            }
+            return std::make_tuple(node_priority::get_value(node), id, node);
+        }) | std::ranges::to<nodes_store_t>();
     }
 
 public:
     explicit rack_info(std::ranges::input_range auto&& nodes)
-        : _nodes(create_nodes_map(nodes)) {
+        : _nodes(create_nodes_list(nodes, _alive_nodes_remaining, _existing_dead_voters_remaining)) {
     }
 
     // Select the "best" next voter from the rack
@@ -75,29 +115,22 @@ public:
     // If a node is selected, it is removed from the list of candidates, and the number of voters assigned
     // to the rack is incremented.
     [[nodiscard]] std::optional<raft::server_id> select_next_voter() {
-        const auto node = std::invoke([this]() {
-            // Process alive nodes first, then dead nodes
-            for (const auto is_alive : {is_alive_t::yes, is_alive_t::no}) {
-                // Process voter nodes first, then non-voter nodes
-                for (const auto is_voter : {is_voter_t::yes, is_voter_t::no}) {
-                    const auto& [first, end] = _nodes.equal_range(std::make_tuple(is_alive, is_voter));
-                    if (first != end) {
-                        return first;
-                    }
-                }
-            }
-
-            return _nodes.end();
-        });
-
-        if (node == _nodes.end()) {
+        if (_nodes.empty()) {
             return std::nullopt;
         }
 
-        const auto voter_id = node->second;
+        const auto [priority, voter_id, node] = _nodes.top();
+        _nodes.pop();
 
-        _nodes.erase(node);
-        ++_voters_count;
+        if (node.get().is_alive) {
+            SCYLLA_ASSERT(_alive_nodes_remaining > 0);
+            --_alive_nodes_remaining;
+        } else if (node.get().is_voter) {
+            SCYLLA_ASSERT(_existing_dead_voters_remaining > 0);
+            --_existing_dead_voters_remaining;
+        }
+
+        ++_assigned_voters_count;
 
         return voter_id;
     }
@@ -111,38 +144,20 @@ public:
 
     // The priority comparator for the rack_info
     friend bool operator<(const rack_info& rack1, const rack_info& rack2) {
-        // First criteria: The number of already assigned voters (lower has more priority)
-        if (rack1._voters_count != rack2._voters_count) {
-            return rack1._voters_count > rack2._voters_count;
+        // First criteria: The number of already newly assigned voters (lower has more priority)
+        if (rack1._assigned_voters_count != rack2._assigned_voters_count) {
+            return rack1._assigned_voters_count > rack2._assigned_voters_count;
         }
-
-        const auto& rack1_alive_nodes_boundary = rack1._nodes.lower_bound(std::make_tuple(is_alive_t::yes, is_voter_t::no));
-        const auto& rack2_alive_nodes_boundary = rack2._nodes.lower_bound(std::make_tuple(is_alive_t::yes, is_voter_t::no));
 
         // Second criteria: The number of alive nodes (voters and non-voters) remaining (higher has more priority)
-
-        const auto rack1_alive_nodes_remaining = std::distance(rack1_alive_nodes_boundary, rack1._nodes.end());
-        const auto rack2_alive_nodes_remaining = std::distance(rack2_alive_nodes_boundary, rack2._nodes.end());
-        if (rack1_alive_nodes_remaining != rack2_alive_nodes_remaining) {
-            return rack1_alive_nodes_remaining < rack2_alive_nodes_remaining;
+        if (rack1._alive_nodes_remaining != rack2._alive_nodes_remaining) {
+            return rack1._alive_nodes_remaining < rack2._alive_nodes_remaining;
         }
 
-        // Third criteria: The number of dead voters remaining (higher has more priority)
-        //      We want to keep the dead voters in case we can't find enough alive voters.
-
-        // Note that the nodes don't contain dead non-voters (we filter them out in `group0_voter_calculator::distribute_voters`),
-        // so we can use the whole subrange from the beginning (and can avoid another boundary search).
-        // We check for this condition in the non-release builds.
-        if constexpr (!tools::build_info::is_release_build()) {
-            SEASTAR_ASSERT(!rack1._nodes.contains(std::make_tuple(is_alive_t::no, is_voter_t::no)));
-            SEASTAR_ASSERT(!rack2._nodes.contains(std::make_tuple(is_alive_t::no, is_voter_t::no)));
-        }
-
-        const auto rack1_dead_nodes_remaining = std::distance(rack1._nodes.begin(), rack1_alive_nodes_boundary);
-        const auto rack2_dead_nodes_remaining = std::distance(rack2._nodes.begin(), rack2_alive_nodes_boundary);
-        return rack1_dead_nodes_remaining < rack2_dead_nodes_remaining;
+        // Third criteria: The number of existing dead voters remaining (higher has more priority)
+        //      We want to keep the existing dead voters in case we can't find enough alive voters.
+        return rack1._existing_dead_voters_remaining < rack2._existing_dead_voters_remaining;
     }
-
 };
 
 
@@ -158,7 +173,7 @@ public:
 class datacenter_info {
 
     size_t _nodes_remaining = 0;
-    size_t _voters_count = 0;
+    size_t _assigned_voters_count = 0;
 
     using racks_store_t = std::priority_queue<rack_info>;
     racks_store_t _racks;
@@ -204,7 +219,7 @@ public:
             SCYLLA_ASSERT(_nodes_remaining > 0);
 
             --_nodes_remaining;
-            ++_voters_count;
+            ++_assigned_voters_count;
 
             return voter_id;
         }
@@ -219,15 +234,14 @@ public:
     //
     // The selection is limited by the maximum number of voters per datacenter.
     [[nodiscard]] bool has_more_candidates(size_t voters_max_per_dc) const {
-        return _nodes_remaining > 0 && _voters_count < voters_max_per_dc;
+        return _nodes_remaining > 0 && _assigned_voters_count < voters_max_per_dc;
     }
 
     // The priority comparator for the datacenter_info
     friend bool operator<(const datacenter_info& dc1, const datacenter_info& dc2) {
-        // First criteria: The number of already assigned voters (lower has more priority)
-
-        if (dc1._voters_count != dc2._voters_count) {
-            return dc1._voters_count > dc2._voters_count;
+        // First criteria: The number of already newly assigned voters (lower has more priority)
+        if (dc1._assigned_voters_count != dc2._assigned_voters_count) {
+            return dc1._assigned_voters_count > dc2._assigned_voters_count;
         }
 
         // Second criteria: The number of racks (higher has more priority)
