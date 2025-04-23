@@ -824,12 +824,12 @@ public:
         co_return sink;
     }
 
-    future<data_source> wrap_source(const sstables::sstable& sst, sstables::component_type type, data_source source) override {
+    future<sstables::data_source_creator_fn> wrap_source(const sstables::sstable& sst, sstables::component_type type, sstables::data_source_creator_fn data_source_creator) override {
         switch (type) {
         case sstables::component_type::Scylla:
         case sstables::component_type::TemporaryTOC:
         case sstables::component_type::TOC:
-            co_return source;
+            co_return data_source_creator;
         case sstables::component_type::CompressionInfo:
         case sstables::component_type::CRC:
         case sstables::component_type::Data:
@@ -840,11 +840,13 @@ public:
         case sstables::component_type::Summary:
         case sstables::component_type::TemporaryStatistics:
         case sstables::component_type::Unknown:
-            co_await wrap_writeonly(
-                sst, type, [&source](shared_ptr<symmetric_key> k) {
-                    source = data_source(make_encrypted_source(std::move(source), std::move(k)));
-                });
-            co_return source;
+            co_await wrap_writeonly(sst, type, [&data_source_creator](shared_ptr<symmetric_key> k) {
+                data_source_creator = [data_source_creator = std::move(data_source_creator), key = std::move(k)](off64_t) {
+                    const off64_t size_fix = key->block_size();
+                    return data_source(make_encrypted_source(data_source_creator(size_fix), std::move(key)));
+                };
+            });
+            co_return data_source_creator;
         }
     }
 };

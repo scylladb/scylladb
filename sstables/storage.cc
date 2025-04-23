@@ -646,22 +646,21 @@ static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type
     co_return sink;
 }
 
-static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source source) {
+static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source_creator_fn source_creator) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto* ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
             std::exception_ptr p;
             try {
-                source = co_await ext->wrap_source(sst, type, std::move(source));
+                source_creator = co_await ext->wrap_source(sst, type, std::move(source_creator));
             } catch (...) {
                 p = std::current_exception();
             }
             if (p) {
-                co_await source.close();
                 std::rethrow_exception(std::move(p));
             }
         }
     }
-    co_return source;
+    co_return source_creator(0);
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
@@ -670,8 +669,15 @@ future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_ty
     return maybe_wrap_sink(sst, type, _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as));
 }
 
-future<data_source> s3_storage::make_data_or_index_source(sstable& sst, component_type type, file, uint64_t offset, uint64_t len, file_input_stream_options) const {
-    return maybe_wrap_source(sst, type, _client->make_chunked_download_source(make_s3_object_name(sst, type), s3::range{offset, len}, _as));
+future<data_source>
+s3_storage::make_data_or_index_source(sstable& sst, component_type type, file, uint64_t offset, uint64_t len, file_input_stream_options) const {
+    return maybe_wrap_source(sst, type, [this, object_name = make_s3_object_name(sst, type), offset, len](off64_t len_fix) {
+        auto length = len;
+        if ((len & (len_fix - 1)) != 0) {
+            length += len_fix;
+        }
+        return _client->make_chunked_download_source(object_name, s3::range{offset, length}, _as);
+    });
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
