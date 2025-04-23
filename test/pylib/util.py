@@ -287,8 +287,8 @@ def get_configured_modes() -> list[str]:
                             out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
 
 
-def get_modes_to_run(session) -> list[str]:
-    modes = session.config.getoption('modes')
+def get_modes_to_run(config) -> list[str]:
+    modes = config.getoption('modes')
     if not modes:
         modes = get_configured_modes()
     if not modes:
