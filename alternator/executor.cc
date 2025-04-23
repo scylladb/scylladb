@@ -148,6 +148,34 @@ std::string json_string::to_json() const {
     return _value;
 }
 
+// This function throws api_error::validation if input value is not an object.
+static void validate_is_object(const rjson::value& value, const char* caller) {
+    if (!value.IsObject()) {
+        throw api_error::validation(fmt::format("{} must be an object", caller));
+    }
+}
+
+// This function assumes the given value is an object and returns requested member value.
+// If it is not possible an api_error::validation is thrown.
+static const rjson::value& get_member(const rjson::value& obj, const char* member_name, const char* caller) {
+    validate_is_object(obj, caller);
+    const rjson::value* ret = rjson::find(obj, member_name);
+    if (!ret) {
+       throw api_error::validation(fmt::format("{} is missing a mandatory member {}", caller, member_name));
+    }
+    return *ret;
+}
+
+
+// This function assumes the given value is an object with a single member, and returns this member.
+// In case the requirements are not met an api_error::validation is thrown.
+static const rjson::value::Member& get_single_member(const rjson::value& v, const char* caller) {
+    if (!v.IsObject() || v.MemberCount() != 1) {
+        throw api_error::validation(format("{}: expected an object with a single member.", caller));
+    }
+    return *(v.MemberBegin());
+}
+
 executor::executor(gms::gossiper& gossiper,
          service::storage_proxy& proxy,
          service::migration_manager& mm,
@@ -2795,13 +2823,20 @@ static future<> do_batch_write(service::storage_proxy& proxy,
 
 future<executor::request_return_type> executor::batch_write_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
     _stats.api_operations.batch_write_item++;
-    rjson::value& request_items = request["RequestItems"];
     auto start_time = std::chrono::steady_clock::now();
+    const rjson::value& request_items = get_member(request, "RequestItems", "BatchWriteItem content");
+    validate_is_object(request_items, "RequestItems");
+    if (request_items.ObjectEmpty()) {
+        co_return api_error::validation("RequestItems can't be empty");
+    }
 
     const auto maximum_batch_write_size = _proxy.data_dictionary().get_config().alternator_max_items_in_batch_write();
 
     size_t total_items = 0;
-    for (auto it = std::as_const(request_items).MemberBegin(); it != std::as_const(request_items).MemberEnd(); ++it) {
+    for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
+        if (!it->value.IsArray() || it->value.Empty()) {
+            co_return api_error::validation("Member of RequestItems must be a non-empty array of WriteRequest objects");
+        }
         total_items += it->value.Size();
     }
     if (total_items > maximum_batch_write_size) {
@@ -2821,14 +2856,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
-            if (!request.IsObject() || request.MemberCount() != 1) {
-                co_return api_error::validation(format("Invalid BatchWriteItem request: {}", request));
-            }
-            auto r = request.MemberBegin();
-            const std::string r_name = r->name.GetString();
+            auto& r = get_single_member(request, "RequestItems element");
+            const auto r_name = rjson::to_string_view(r.name);
             if (r_name == "PutRequest") {
-                const rjson::value& put_request = r->value;
-                const rjson::value& item = put_request["Item"];
+                const rjson::value& item = get_member(r.value, "Item", "PutRequest");
+                validate_is_object(item, "Item in PutRequest");
                 auto&& put_item = put_or_delete_item(
                         item, schema, put_or_delete_item::put_item{},
                         si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name())));
@@ -2842,7 +2874,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 }
                 used_keys.insert(std::move(mut_key));
             } else if (r_name == "DeleteRequest") {
-                const rjson::value& key = (r->value)["Key"];
+                const rjson::value& key = get_member(r.value, "Key", "DeleteRequest");
+                validate_is_object(key, "Key in DeleteRequest");
                 wcu_units++; // Delete is always 1 unit
                 wcu_delete_units++;
                 mutation_builders.emplace_back(schema, put_or_delete_item(
@@ -2884,12 +2917,9 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     co_return make_jsonable(std::move(ret));
 }
 
-static std::string get_item_type_string(const rjson::value& v) {
-    if (!v.IsObject() || v.MemberCount() != 1) {
-        throw api_error::validation(format("Item has invalid format: {}", v));
-    }
-    auto it = v.MemberBegin();
-    return it->name.GetString();
+static const std::string_view get_item_type_string(const rjson::value& v) {
+    const rjson::value::Member& mem = get_single_member(v, "Item");
+    return rjson::to_string_view(mem.name);
 }
 
 // attrs_to_get saves for each top-level attribute an attrs_to_get_node,
@@ -3555,14 +3585,14 @@ static std::optional<rjson::value> action_result(
             // An ADD can be used to create a new attribute (when
             // v1.IsNull()) or to add to a pre-existing attribute:
             if (v1.IsNull()) {
-                std::string v2_type = get_item_type_string(v2);
+                const auto v2_type = get_item_type_string(v2);
                 if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
                     result = v2;
                 } else {
                     throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
                 }
             } else {
-                std::string v1_type = get_item_type_string(v1);
+                const auto v1_type = get_item_type_string(v1);
                 if (v1_type == "N") {
                     if (get_item_type_string(v2) != "N") {
                         throw api_error::validation(fmt::format("Incorrect operand type for operator or function. Expected {}: {}", v1_type, rjson::print(v2)));
@@ -3908,7 +3938,7 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                     const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
                     const rjson::value& v2 = (it->value)["Value"];
                     validate_value(v2, "AttributeUpdates");
-                    std::string v2_type = get_item_type_string(v2);
+                    const auto v2_type = get_item_type_string(v2);
                     if (v2_type != "SS" && v2_type != "NS" && v2_type != "BS") {
                         throw api_error::validation(fmt::format("AttributeUpdates DELETE operation with Value only valid for sets, got type {}", v2_type));
                     }
@@ -3946,15 +3976,15 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
                 // An ADD can be used to create a new attribute (when
                 // !v1) or to add to a pre-existing attribute:
                 if (!v1) {
-                    std::string v2_type = get_item_type_string(v2);
+                    const auto v2_type = get_item_type_string(v2);
                     if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS" || v2_type == "L") {
                         do_update(std::move(column_name), v2);
                     } else {
                         throw api_error::validation(format("An operand in the AttributeUpdates ADD has an incorrect data type: {}", v2));
                     }
                 } else {
-                    std::string v1_type = get_item_type_string(*v1);
-                    std::string v2_type = get_item_type_string(v2);
+                    const auto v1_type = get_item_type_string(*v1);
+                    const auto v2_type = get_item_type_string(v2);
                     if (v2_type != v1_type) {
                         throw api_error::validation(fmt::format("Operand type mismatch in AttributeUpdates ADD. Expected {}, got {}", v1_type, v2_type));
                     }
