@@ -4967,6 +4967,7 @@ future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
 
 future<> storage_service::raft_check_and_repair_cdc_streams() {
     std::optional<cdc::generation_id_v2> last_committed_gen;
+    utils::UUID request_id;
 
     while (true) {
         rtlogger.info("request check_and_repair_cdc_streams, refreshing topology");
@@ -4990,9 +4991,22 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             cdc_log.info("CDC generation {} needs repair, requesting a new one", last_committed_gen);
         }
 
+        if (_topology_state_machine._topology.global_request_id) {
+            request_id = *_topology_state_machine._topology.global_request_id;
+        } else {
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_global_topology_request(global_topology_request::new_cdc_generation);
-        topology_change change{{builder.build()}};
+        std::vector<canonical_mutation> muts;
+        if (_feature_service.topology_global_request_queue) {
+            request_id = guard.new_group0_state_id();
+            topology_request_tracking_mutation_builder rtbuilder(request_id);
+            builder.set_global_topology_request_id(request_id);
+            rtbuilder.set("done", false)
+                     .set("start_time", db_clock::now());
+            muts.push_back(rtbuilder.build());
+        }
+        muts.push_back(builder.build());
+        topology_change change{std::move(muts)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
                 ::format("request check+repair CDC generation from {}", _group0->group0_server().id()));
         try {
@@ -5001,9 +5015,28 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             rtlogger.info("request check+repair CDC: concurrent operation is detected, retrying.");
             continue;
         }
+        }
         break;
     }
 
+    if (request_id) {
+        // Wait until request completes
+        auto error = co_await wait_for_topology_request_completion(request_id);
+
+        if (!error.empty()) {
+            auto err = fmt::format("Check and repair cdc stream failed. See earlier errors ({}). Request ID: {}", error, request_id);
+            rtlogger.error("{}", err);
+            throw std::runtime_error(err);
+        }
+
+        auto gen = _topology_state_machine._topology.committed_cdc_generations.empty()
+                ? std::nullopt
+                : std::optional(_topology_state_machine._topology.committed_cdc_generations.back());
+
+        if (last_committed_gen == gen) {
+            on_internal_error(rtlogger, "Wrong generation after complation of check and repair cdc stream");
+        }
+    } else {
     // Wait until we commit a new CDC generation.
     co_await _topology_state_machine.event.when([this, &last_committed_gen] {
         auto gen = _topology_state_machine._topology.committed_cdc_generations.empty()
@@ -5011,6 +5044,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
                 : std::optional(_topology_state_machine._topology.committed_cdc_generations.back());
         return last_committed_gen != gen;
     });
+    }
 }
 
 future<> storage_service::rebuild(utils::optional_param source_dc) {
