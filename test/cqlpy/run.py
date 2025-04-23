@@ -46,6 +46,7 @@ def run_with_generated_dir(run_cmd_generator, run_dir_generator):
         (cmd, env) = run_cmd_generator(pid, dir)
         # redirect stdout and stderr to log file, as in a shell's >log 2>&1:
         log = os.path.join(dir, 'log')
+        print(f'QWERTY logging to {log}')
         fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode=0o666)
         sys.stdout.flush()
         os.close(1)
@@ -149,8 +150,8 @@ def abort_run_with_dir(pid, tmpdir):
     # Be paranoid about rmtree accidentally removing the entire disk...
     # TODO: check tmpdir is actually in TMPDIR and refuse to remove it
     # if not.
-    if tmpdir != '/':
-        shutil.rmtree(tmpdir)
+    # if tmpdir != '/':
+    #     shutil.rmtree(tmpdir)
     return f
 
 def abort_run_with_temporary_dir(pid):

@@ -60,6 +60,8 @@
 #include "alternator/extract_from_attrs.hh"
 #include "types/types.hh"
 #include "db/system_keyspace.hh"
+#include <thread>
+#include <chrono>
 
 using namespace std::chrono_literals;
 
@@ -2815,6 +2817,16 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         }
     }
 
+    // {
+    //     auto now = std::chrono::high_resolution_clock::now();
+    //     for(auto i = 0u; i < 1000000; ++i)
+    //         elogger.error("QWERTY");
+    //     auto now2 = std::chrono::high_resolution_clock::now();
+
+    //     elogger.error("QWERTY running time {} ms", std::chrono::duration_cast<std::chrono::milliseconds>(now2 - now));
+    // }
+    // std::this_thread::sleep_for(std::chrono::milliseconds{ 2000 });
+    // elogger.error("QWERTY QWERTY");
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, client_state, b.first, auth::permission::MODIFY);
     }
