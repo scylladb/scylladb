@@ -690,8 +690,8 @@ schema_ptr scylla_table_schema_history() {
 }
 
 static
-mutation
-redact_columns_for_missing_features(mutation&& m, schema_features features) {
+mutation_opt
+redact_mutation_for_missing_features(mutation&& m, schema_features features) {
     return std::move(m);
     // The following code is needed if there are new schema features that require redaction.
 #if 0
@@ -724,7 +724,10 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
                 continue;
             }
             auto mut = co_await unfreeze_gently(p.mut(), s);
-            co_yield redact_columns_for_missing_features(std::move(mut), features);
+            auto redacted_mut = redact_mutation_for_missing_features(std::move(mut), features);
+            if (redacted_mut) {
+                co_yield std::move(*redacted_mut);
+            }
         }
     };
     auto hash = md5_hasher();
@@ -828,8 +831,10 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
             if (is_system_keyspace(partition_key)) {
                 continue;
             }
-            mut = redact_columns_for_missing_features(std::move(mut), features);
-            results.emplace_back(co_await make_canonical_mutation_gently(mut));
+            auto redacted_mut = redact_mutation_for_missing_features(std::move(mut), features);
+            if (redacted_mut) {
+                results.emplace_back(co_await make_canonical_mutation_gently(*redacted_mut));
+            }
         }
         co_return results;
     };
@@ -842,9 +847,13 @@ future<std::vector<canonical_mutation>> convert_schema_to_mutations(distributed<
 
 std::vector<mutation>
 adjust_schema_for_schema_features(std::vector<mutation> schema, schema_features features) {
+    size_t i = 0;
     for (auto& m : schema) {
-        m = redact_columns_for_missing_features(std::move(m), features);
+        if (auto redacted_mut = redact_mutation_for_missing_features(std::move(m), features)) {
+            schema[i++] = std::move(*redacted_mut);
+        }
     }
+    schema.erase(schema.begin() + i, schema.end());
     return schema;
 }
 
