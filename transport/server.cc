@@ -425,6 +425,17 @@ cql_server::connection::read_frame() {
     }
 }
 
+// This function intentionally sleeps to the end of the query timeout in CQL server.
+// It was introduced to remove similar waiting in storage_proxy (ref. scylladb#3699),
+// because storage proxy was blocking ERM (thus topology changes).
+future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const {
+    auto time_left = timeout - seastar::lowres_clock::now();
+    return seastar::sleep_abortable(time_left, _server._abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
+        // Return timeout error no matter if sleep was aborted or not
+        return utils::result_into_future<result_with_foreign_response_ptr>(std::move(resp));
+    });
+}
+
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
     cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
     using auth_state = service::client_state::auth_state;
@@ -543,6 +554,15 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
                     _client_state.get_remote_address(), stream, exp->code(), exp->what());
                 try { ++_server._stats.errors[exp->code()]; } catch(...) {}
                 return utils::result_into_future<result_with_foreign_response_ptr>(make_unavailable_error(stream, exp->code(), exp->what(), exp->consistency, exp->required, exp->alive, trace_state));
+            } else if (auto* exp = try_catch<exceptions::read_failure_exception_with_timeout>(eptr)) {
+                clogger.debug("{}: request resulted in read_failure_exception_with_timeout, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                // Return read timeout exception, as we wait here until the timeout passes
+                return sleep_until_timeout_passes(
+                    exp->_timeout,
+                    make_read_timeout_error(stream, exp->_timeout_exception.code(), exp->_timeout_exception.what(), exp->_timeout_exception.consistency, exp->_timeout_exception.received, exp->_timeout_exception.block_for, exp->_timeout_exception.data_present, trace_state)
+                );
             } else if (auto* exp = try_catch<exceptions::read_timeout_exception>(eptr)) {
                 clogger.debug("{}: request resulted in read_timeout_error, stream {}, code {}, message [{}]",
                     _client_state.get_remote_address(), stream, exp->code(), exp->what());
