@@ -2801,7 +2801,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         "Topology coordinator is called for node {} in state 'left'", node.id));
                 break;
         }
-    };
+    }
 
     std::variant<join_node_response_params::accepted, join_node_response_params::rejected>
     validate_joining_node(const node_to_work_on& node) {
