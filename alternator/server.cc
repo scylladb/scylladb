@@ -462,6 +462,9 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             client_state = std::move(client_state), trace_state = std::move(trace_state),
             units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
                 rjson::value json_request = co_await _json_parser.parse(std::move(content));
+                if (!json_request.IsObject()) {
+                    co_return api_error::validation("Request content must be an object");
+                }
                 co_return co_await callback(_executor, client_state, trace_state,
                     make_service_permit(std::move(units)), std::move(json_request), std::move(req));
     };
