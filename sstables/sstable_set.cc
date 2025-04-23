@@ -273,7 +273,21 @@ bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) cons
     // since many of such sstables would have presence on almost all intervals.
     static constexpr float unleveled_threshold = 0.85f;
     auto sst_tr = dht::token_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
-    return dht::overlap_ratio(_token_range, sst_tr) >= unleveled_threshold;
+    bool as_unleveled = dht::overlap_ratio(_token_range, sst_tr) >= unleveled_threshold;
+
+    utils::get_local_injector().inject("sstable_set_insertion_verification", [&] () {
+        auto& i = utils::get_local_injector();
+        auto table_name = i.inject_parameter<std::string_view>("sstable_set_insertion_verification", "table").value();
+        bool expect_unleveled = i.inject_parameter<int>("sstable_set_insertion_verification", "expect_unleveled").value();
+        if (_schema->cf_name() != table_name) {
+            return;
+        }
+        sstlog.info("SSTable {}, as_unleveled={}, expect_unleveled={}, sst_tr={}, overlap_ratio={}",
+            sst->generation(), as_unleveled, expect_unleveled, sst_tr, dht::overlap_ratio(_token_range, sst_tr));
+        SCYLLA_ASSERT(as_unleveled == expect_unleveled);
+    });
+
+    return as_unleveled;
 }
 
 dht::ring_position partitioned_sstable_set::to_ring_position(const dht::compatible_ring_position_or_view& crp) {
