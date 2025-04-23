@@ -586,9 +586,10 @@ def test_performance_batch_write_item_1(test_table_ss):
         yield 'p', p
         yield 'c', f'{p}{i}'
         #yield 'v', 'qwerty' * (1000000)
-    test_table_ss.meta.client.batch_write_item(RequestItems = {
-        test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(i) }}} for i in range(100000)]
-    })
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(100 * x + i) }}} for i in range(100)]
+        })
 def test_performance_batch_write_item_2(test_table_ss):
     p = random_string()
     def column_iter(i=0):
@@ -660,9 +661,10 @@ def test_performance_scan_1(test_table_ss):
         yield 'p', p
         yield 'c', f'{p}{i}'
         yield 'v', f'qwerty{i}'
-    test_table_ss.meta.client.batch_write_item(RequestItems = {
-        test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(i) }}} for i in range(50000)]
-    })
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(100 * x + i) }}} for i in range(100)]
+        })
     test_table_ss.scan(Limit=50000)
 def test_performance_query_1(test_table_ss):
     p = random_string()
@@ -670,9 +672,10 @@ def test_performance_query_1(test_table_ss):
         yield 'p', p
         yield 'c', f'{p}{i}'
         yield 'v', f'qwerty{i}'
-    test_table_ss.meta.client.batch_write_item(RequestItems = {
-        test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(i) }}} for i in range(50000)]
-    })
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(x * 100 + i) }}} for i in range(100)]
+        })
     test_table_ss.query(Limit=50000, KeyConditionExpression='p=:p',
         ExpressionAttributeValues={':p': f'{p}5599'})
 def test_performance_tag_resource_1(test_table_ss):
@@ -703,9 +706,10 @@ def test_performance_update_time_to_live_2(test_table_ss):
         yield 'p', p
         yield 'c', f'{p}{i}'
         #yield 'v', 'qwerty' * (1000000)
-    test_table_ss.meta.client.batch_write_item(RequestItems = {
-        test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(i) }}} for i in range(100000)]
-    })
+    for x in range(0, 100):
+        test_table_ss.meta.client.batch_write_item(RequestItems = {
+            test_table_ss.name: [{'PutRequest': {'Item': { k:v for k, v in column_iter(x * 100 + i) }}} for i in range(100)]
+        })
     test_table_ss.meta.client.update_time_to_live(TableName=test_table_ss.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
     test_table_ss.meta.client.describe_time_to_live(TableName=test_table_ss.name)
     test_table_ss.meta.client.update_time_to_live(TableName=test_table_ss.name, TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': False})

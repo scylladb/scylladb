@@ -2,18 +2,20 @@
 
 import os, sys, re, subprocess
 
+cwd = os.getcwd()
+
 def parse_log_output_1(input_file, output_file):
     import re
 
     reactor_stalled_re = re.compile(r'Reactor stalled for (\d+) ms on shard \d+, in scheduling group [^.]*\. Backtrace: (.*)')
 
-
-    print(f'processing {input_file}')
+    print(f'processing {input_file}', end='\r')
 
     with open(input_file, 'r', encoding='utf8') as inp:
         data = inp.readlines()
     
     emited = False
+    count = 0
     with open(output_file, 'w', encoding='utf8') as output:
         for x in range(len(data)):
             l = data[x].rstrip()
@@ -30,14 +32,25 @@ def parse_log_output_1(input_file, output_file):
             if '] query_processor' in l: continue
             m = reactor_stalled_re.match(l)
             if m:
+                btrace = m.group(2).split()
+                btrace2 = []
+                btrace2_set = set()
+                for y in btrace:
+                    if y not in btrace2_set:
+                        btrace2_set.add(y)
+                        btrace2.append(y)
+                btrace3 = ' '.join(btrace2)
+                l = l[:m.start(2)] + btrace3
                 print(l, file=output)
                 if x + 1 < len(data):
                     l2 = data[x + 1]
                     if l2.startswith('kernel callstack: '):
                         print(l2.rstrip(), file=output)
                 emited = True
+                count += 1
             else:
                 print(f'UNPARSED               -> {l[:120]}')
+    print(f'processed {input_file}, got {count} entries')
     return emited
 
 def parse_log_output_2(input_file, output_file):
@@ -85,9 +98,9 @@ def parse_log_output_2(input_file, output_file):
             print('', file=output)
 
 
-if 1:
+if 0:
     os.makedirs('/tmp/test_o', exist_ok=True)
-    tries = 10
+    tries = 25
     for test_name in (
             'test_performance_batch_write_item_1',
             'test_performance_batch_write_item_2',
@@ -108,7 +121,7 @@ if 1:
             os.remove(dest_path)
         for attempt in range(tries):
             subprocess.check_call(['rm', '-rf', '/tmp/scylla-*' ])
-            subprocess.check_call(['/home/y/work/scylladb/test/alternator/run', 'test_batch.py', '-k', test_name])
+            subprocess.check_call([os.path.join(cwd, 'test/alternator/run'), 'test_batch.py', '-k', test_name])
             for y in os.listdir('/tmp'):
                 if y.startswith('scylla-'):
                     s = os.path.join('/tmp', y, 'log')
@@ -143,14 +156,17 @@ for f in os.listdir('/tmp/test_o'):
         o2 = os.path.join('/tmp/test_o', 'p2_' + f[4:])
         o3 = os.path.join('/tmp/test_o', 'res_' + f[4:])
         f = os.path.join('/tmp/test_o', f)
+        try:
+            os.remove(o2)
+        except Exception:
+            pass
         if parse_log_output_1(f, o):
             with open(o2, 'w', encoding='utf8') as output:
+                print(f'writing {o2}')
                 subprocess.check_call([
                     '/home/y/work/scylla-testtest/seastar/scripts/stall-analyser.py',
                     os.path.join(os.getcwd(), o),
                     '--format', 'graph',
                     '-e', os.environ['SCYLLA'] ],
                     stdout=output)
-        
-        #parse_log_output_2(o2, o3)
 
