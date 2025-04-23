@@ -2220,17 +2220,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
                 // majority and commit.
                 topology_mutation_builder builder(guard.write_timestamp());
+                std::vector<canonical_mutation> updates;
                 builder.add_new_committed_cdc_generation(cdc_gen_id);
                 if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
                     builder.del_global_topology_request();
                     builder.del_transition_state();
+                    if (_feature_service.topology_global_request_queue) {
+                        topology_request_tracking_mutation_builder rtbuilder(*_topo_sm._topology.global_request_id);
+                        builder.del_global_topology_request_id();
+                        rtbuilder.done();
+                        updates.push_back(rtbuilder.build());
+                    }
                 } else {
                     builder.set_transition_state(topology::transition_state::write_both_read_old);
                     builder.set_session(session_id(guard.new_group0_state_id()));
                     builder.set_version(_topo_sm._topology.version + 1);
                 }
+                updates.push_back(builder.build());
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
-                co_await update_topology_state(std::move(guard), {builder.build()}, std::move(str));
+                co_await update_topology_state(std::move(guard), std::move(updates), std::move(str));
             }
                 break;
             case topology::transition_state::tablet_draining:
