@@ -36,6 +36,9 @@ bool operator<(const is_voter_t& lhs, const is_voter_t& rhs) {
 }
 
 
+using nodes_ref_list_t = std::vector<std::pair<raft::server_id, std::reference_wrapper<const group0_voter_calculator::node_descriptor>>>;
+
+
 // Represents information about a rack and provides functionality to manage voter selection.
 //
 // This class is responsible for storing information about nodes within a rack and selecting voters based
@@ -56,7 +59,7 @@ class rack_info {
     static nodes_map_t create_nodes_map(std::ranges::input_range auto&& nodes) {
         return nodes | std::views::transform([](const auto& node_entry) {
             const auto& [id, node] = node_entry;
-            return std::make_pair(std::make_tuple(is_alive_t{node.is_alive}, is_voter_t{node.is_voter}), id);
+            return std::make_pair(std::make_tuple(is_alive_t{node.get().is_alive}, is_voter_t{node.get().is_voter}), id);
         }) | std::ranges::to<nodes_map_t>();
     }
 
@@ -161,22 +164,12 @@ class datacenter_info {
     racks_store_t _racks;
 
     static racks_store_t create_racks_list(std::ranges::input_range auto&& nodes) {
-        const auto nodes_by_rack = nodes | std::views::transform([](const auto& node_entry) {
-            const auto& [id, node] = node_entry;
-            return std::make_pair(std::string_view{node.rack}, std::make_pair(id, std::cref(node)));
-        }) | std::ranges::to<std::unordered_multimap>();
-
-        racks_store_t::container_type racks;
-
-        for (const auto rack : nodes_by_rack | std::views::keys | std::ranges::to<std::set>()) {
-            const auto [first, last] = nodes_by_rack.equal_range(rack);
-
-            racks.emplace_back(std::ranges::subrange(first, last) | std::views::transform([](const auto& node_entry) {
-                return node_entry.second;
-            }));
+        std::unordered_map<std::string_view, nodes_ref_list_t> nodes_by_rack;
+        for (const auto& [id, node] : nodes) {
+            nodes_by_rack[node.get().rack].emplace_back(id, node);
         }
 
-        return racks | std::ranges::to<racks_store_t>();
+        return nodes_by_rack | std::views::values | std::ranges::to<racks_store_t>();
     }
 
 public:
@@ -306,21 +299,18 @@ class calculator_impl {
         SCYLLA_ASSERT(largest_dc_size != nullptr);
         *largest_dc_size = 0;
 
-        const auto& nodes_by_dc = std::invoke([&nodes]() {
-            std::unordered_map<std::string_view, std::vector<std::pair<raft::server_id, const group0_voter_calculator::node_descriptor>>> nodes_by_dc;
-            for (const auto& [id, node] : nodes) {
-                nodes_by_dc[node.datacenter].emplace_back(id, node);
-            }
-            return nodes_by_dc;
-        });
+        std::unordered_map<std::string_view, nodes_ref_list_t> nodes_by_dc;
+        for (const auto& [id, node] : nodes) {
+            nodes_by_dc[node.datacenter].emplace_back(id, node);
+        }
 
-        const auto datacenters = nodes_by_dc | std::views::keys | std::ranges::views::transform([&nodes_by_dc, largest_dc_size](const auto& dc) {
-            const auto& dc_nodes = nodes_by_dc.at(dc);
-            *largest_dc_size = std::max<size_t>(*largest_dc_size, dc_nodes.size());
-            return dc_nodes;
-        });
+        if (!nodes_by_dc.empty()) {
+            *largest_dc_size = std::ranges::max_element(nodes_by_dc, [](const auto& dc1, const auto& dc2) {
+                return dc1.second.size() < dc2.second.size();
+            })->second.size();
+        }
 
-        return datacenters | std::ranges::to<datacenters_store_t>();
+        return nodes_by_dc | std::views::values | std::ranges::to<datacenters_store_t>();
     }
 
     // Select the next voter from the datacenters
