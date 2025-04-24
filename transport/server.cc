@@ -326,10 +326,7 @@ cql_server::~cql_server() = default;
 
 shared_ptr<generic_server::connection>
 cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
-    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr),sem, std::move(initial_sem_units));
-    ++_stats.connects;
-    ++_stats.connections;
-    return conn;
+    return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
 }
 
 future<>
@@ -344,7 +341,6 @@ cql_server::advertise_new_connection(shared_ptr<generic_server::connection> raw_
 
 future<>
 cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    --_stats.connections;
     if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
         const auto ip = conn->get_client_state().get_client_address().addr();
         const auto port = conn->get_client_state().get_client_port();
@@ -649,10 +645,13 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
         clogger.debug("Shedding all incoming requests due to overload");
         _shed_incoming_requests = true;
     });
+    ++_server._stats.connects;
+    ++_server._stats.connections;
 }
 
 cql_server::connection::~connection() {
     _server._notifier->unregister_connection(this);
+    --_server._stats.connections;
 }
 
 client_data cql_server::connection::make_client_data() const {
