@@ -396,28 +396,34 @@ future<> group0_voter_handler::update_nodes(
 
     group0_voter_calculator::nodes_list_t nodes;
 
-    auto add_nodes = [this, &nodes, &group0_config](const std::set<locator::host_id>& nodes_set, bool is_alive) {
+    // Helper for adding a single node
+    auto add_node = [&nodes, &group0_config](const raft::server_id& id, const replica_state& rs, bool is_alive) {
+        const auto is_voter = group0_config.can_vote(id);
+        nodes.emplace(id, group0_voter_calculator::node_descriptor{
+                                  .datacenter = rs.datacenter,
+                                  .rack = rs.rack,
+                                  .is_voter = is_voter,
+                                  .is_alive = is_alive,
+                          });
+    };
+
+    // Helper function to add nodes from a specific list
+    auto add_nodes_from_list = [this, &add_node](const std::set<locator::host_id>& nodes_set, bool is_alive) {
         for (const auto& host_id : nodes_set) {
             const raft::server_id id{host_id.uuid()};
-            const auto& it = _topology.normal_nodes.find(id);
+            const auto it = _topology.normal_nodes.find(id);
             if (it == _topology.normal_nodes.end()) {
                 // This is expected, as the nodes present in the gossiper may not be present
                 // in the topology yet or any more.
                 rvlogger.debug("Node {} not found in the topology", id);
                 continue;
             }
-            const auto& rs = it->second;
-            nodes.emplace(id, group0_voter_calculator::node_descriptor{
-                                      .datacenter = rs.datacenter,
-                                      .rack = rs.rack,
-                                      .is_voter = group0_config.can_vote(id),
-                                      .is_alive = is_alive,
-                              });
+            add_node(id, it->second, is_alive);
         }
     };
 
-    add_nodes(nodes_alive, true);
-    add_nodes(nodes_dead, false);
+    add_nodes_from_list(nodes_alive, true);
+    add_nodes_from_list(nodes_dead, false);
 
     // Handle the added nodes
     for (const auto& id : nodes_added) {
@@ -427,20 +433,12 @@ future<> group0_voter_handler::update_nodes(
             rvlogger.debug("Node {} to be added is already a member", id);
             continue;
         }
-        const auto& it = _topology.normal_nodes.find(id);
+        const auto it = _topology.normal_nodes.find(id);
         if (it == _topology.normal_nodes.end()) {
-            rvlogger.warn("Node {} to be added not found in the topology - can't add as a voter candidate", id);
+            rvlogger.warn("Node {} was not found in the topology, can't add as a voter candidate", id);
             continue;
         }
-        const auto is_alive = _gossiper.is_alive(locator::host_id{id.uuid()});
-        const auto& rs = it->second;
-        const auto is_voter = group0_config.can_vote(id);
-        nodes[id] = {
-                .datacenter = rs.datacenter,
-                .rack = rs.rack,
-                .is_voter = is_voter,
-                .is_alive = is_alive,
-        };
+        add_node(id, it->second, _gossiper.is_alive(locator::host_id{id.uuid()}));
     }
 
     std::unordered_set<raft::server_id> voters_add;
