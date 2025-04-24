@@ -166,6 +166,7 @@ public:
     size_t compress_max_size(size_t input_len) const override;
     std::map<sstring, sstring> options() const override;
     algorithm get_algorithm() const override;
+    std::optional<unsigned> get_dict_owner_for_test() const override;
 };
 
 class snappy_processor: public compressor {
@@ -268,6 +269,7 @@ public:
     size_t compress_max_size(size_t input_len) const override;
     algorithm get_algorithm() const override;
     std::map<sstring, sstring> options() const override;
+    std::optional<unsigned> get_dict_owner_for_test() const override;
 };
 
 zstd_processor::zstd_processor(const compression_parameters& opts, cdict_ptr cdict, ddict_ptr ddict) {
@@ -323,6 +325,16 @@ size_t zstd_processor::compress_max_size(size_t input_len) const {
 
 auto zstd_processor::get_algorithm() const -> algorithm {
     return (_cdict || _ddict) ? algorithm::zstd_with_dicts : algorithm::zstd;
+}
+
+std::optional<unsigned> zstd_processor::get_dict_owner_for_test() const {
+    if (_cdict) {
+        return _cdict.get_owner_shard();
+    } else if (_ddict) {
+        return _ddict.get_owner_shard();
+    } else {
+        return std::nullopt;
+    }
 }
 
 const std::string_view DICTIONARY_OPTION = ".dictionary.";
@@ -384,6 +396,10 @@ std::map<sstring, sstring> zstd_processor::options() const {
 
 std::map<sstring, sstring> compressor::options() const {
     return {};
+}
+
+std::optional<unsigned> compressor::get_dict_owner_for_test() const {
+    return std::nullopt;
 }
 
 std::string compressor::name() const {
@@ -659,6 +675,16 @@ std::map<sstring, sstring> lz4_processor::options() const {
         return dict_as_options(*dict_blob);
     } else {
         return {};
+    }
+}
+
+std::optional<unsigned> lz4_processor::get_dict_owner_for_test() const {
+    if (_cdict) {
+        return _cdict.get_owner_shard();
+    } else if (_ddict) {
+        return _ddict.get_owner_shard();
+    } else {
+        return std::nullopt;
     }
 }
 
@@ -1013,17 +1039,16 @@ future<foreign_ptr<lw_shared_ptr<const raw_dict>>> default_sstable_compressor_fa
     });
 }
 
-future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_writing(schema_ptr s) {
-    const auto params = s->get_compressor_params();
+future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_writing_impl(const compression_parameters& params, table_id id) {
     using algorithm = compression_parameters::algorithm;
     const auto algo = params.get_algorithm();
-    compressor_factory_logger.debug("make_compressor_for_writing: table={} algo={}", s->id(), algo);
+    compressor_factory_logger.debug("make_compressor_for_writing: table={} algo={}", id, algo);
     switch (algo) {
     case algorithm::lz4:
         co_return std::make_unique<lz4_processor>(nullptr, nullptr);
     case algorithm::lz4_with_dicts: {
         holder::foreign_lz4_cdict cdict;
-        if (auto recommended = co_await get_recommended_dict(s->id())) {
+        if (auto recommended = co_await get_recommended_dict(id)) {
             cdict = co_await container().invoke_on(recommended.get_owner_shard(), [recommended = std::move(recommended)] (self& local) mutable {
                 return local._holder->get_lz4_dict_for_writing(recommended.release());
             });
@@ -1041,7 +1066,7 @@ future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_w
         co_return std::make_unique<zstd_processor>(params, nullptr, nullptr);
     case algorithm::zstd_with_dicts: {
         holder::foreign_zstd_cdict cdict;
-        if (auto recommended = co_await get_recommended_dict(s->id())) {
+        if (auto recommended = co_await get_recommended_dict(id)) {
             auto level = params.zstd_compression_level().value_or(ZSTD_defaultCLevel());
             cdict = co_await container().invoke_on(recommended.get_owner_shard(), [level, recommended = std::move(recommended)] (self& local) mutable {
                 return local._holder->get_zstd_dict_for_writing(recommended.release(), level);
@@ -1058,17 +1083,22 @@ future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_w
     abort();
 }
 
-future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_reading(sstables::compression& c) {
-    const auto params = compression_parameters(sstables::options_from_compression(c));
+future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_writing(schema_ptr s) {
+    return make_compressor_for_writing_impl(s->get_compressor_params(), s->id());
+}
+
+future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_writing_for_tests(const compression_parameters& params, table_id id) {
+    return make_compressor_for_writing_impl(params, id);
+}
+
+future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_reading_impl(const compression_parameters& params, std::span<const std::byte> dict) {
     using algorithm = compression_parameters::algorithm;
     const auto algo = params.get_algorithm();
-    compressor_factory_logger.debug("make_compressor_for_reading: compression={} algo={}", fmt::ptr(&c), algo);
     switch (algo) {
     case algorithm::lz4:
         co_return std::make_unique<lz4_processor>(nullptr, nullptr);
     case algorithm::lz4_with_dicts: {
-        auto dict = dict_from_options(c);
-        auto dict_span = std::as_bytes(std::span(*dict));
+        auto dict_span = dict;
         auto sha = get_sha256(dict_span);
         auto dict_owner = get_dict_owner(local_numa_id(), sha);
         auto ddict = co_await container().invoke_on(dict_owner, [dict_span] (self& local) mutable {
@@ -1089,8 +1119,7 @@ future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_r
     }
     case algorithm::zstd_with_dicts: {
         auto level = params.zstd_compression_level().value_or(ZSTD_defaultCLevel());
-        auto dict = dict_from_options(c);
-        auto dict_span = std::as_bytes(std::span(*dict));
+        auto dict_span = dict;
         auto sha = get_sha256(dict_span);
         auto dict_owner = get_dict_owner(local_numa_id(), sha);
         auto ddict = co_await container().invoke_on(dict_owner, [level, dict_span] (self& local) mutable {
@@ -1106,6 +1135,18 @@ future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_r
         co_return nullptr;
     }
     abort();
+}
+
+future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_reading(sstables::compression& c) {
+    const auto params = compression_parameters(sstables::options_from_compression(c));
+    auto dict = dict_from_options(c);
+    const auto algo = params.get_algorithm();
+    compressor_factory_logger.debug("make_compressor_for_reading: compression={} algo={}", fmt::ptr(&c), algo);
+    co_return co_await make_compressor_for_reading_impl(params, std::as_bytes(std::span(*dict)));
+}
+
+future<compressor_ptr> default_sstable_compressor_factory::make_compressor_for_reading_for_tests(const compression_parameters& params, std::span<const std::byte> dict) {
+    return make_compressor_for_reading_impl(params, dict);
 }
 
 raw_dict::raw_dict(dictionary_holder& owner, dict_id key, std::span<const std::byte> dict)
