@@ -376,13 +376,6 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
-                return advertise_new_connection(conn); // Notify any listeners about new connection.
-            }).then_wrapped([this, conn] (future<> f) {
-                try {
-                    f.get();
-                } catch (...) {
-                    _logger.info("exception while advertising new connection: {}", std::current_exception());
-                }
                 // Block while monitoring for lifetime/errors.
                 return conn->process().then_wrapped([this, conn] (auto f) {
                     try {
@@ -395,23 +388,12 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                             _logger.info("exception while processing connection: {}", ep);
                         }
                     }
-                    return unadvertise_connection(conn);
                 });
             });
         } catch (...) {
             _logger.debug("accept failed: {}", std::current_exception());
         }
     }
-}
-
-future<>
-server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn) {
-    return make_ready_future<>();
-}
-
-future<>
-server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    return make_ready_future<>();
 }
 
 }

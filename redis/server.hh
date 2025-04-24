@@ -100,6 +100,5 @@ private:
     };
 
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
-    future<> unadvertise_connection(shared_ptr<generic_server::connection> conn) override;
 };
 }

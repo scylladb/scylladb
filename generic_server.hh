@@ -151,10 +151,6 @@ public:
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) = 0;
 
-    virtual future<> advertise_new_connection(shared_ptr<connection> conn);
-
-    virtual future<> unadvertise_connection(shared_ptr<connection> conn);
-
     future<> for_each_gently(noncopyable_function<void(connection&)>);
 };
 

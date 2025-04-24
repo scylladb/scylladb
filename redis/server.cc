@@ -46,11 +46,6 @@ redis_server::make_connection(socket_address server_addr, connected_socket&& fd,
     return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
 }
 
-future<>
-redis_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    return make_ready_future<>();
-}
-
 future<redis_server::result> redis_server::connection::process_request_one(redis::request&& request, redis::redis_options& opts, service_permit permit) {
     return futurize_invoke([this, request = std::move(request), &opts, permit] () mutable {
         return _server._query_processor.local().process(std::move(request), seastar::ref(opts), permit).then([] (auto&& message) {
