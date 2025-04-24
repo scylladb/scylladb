@@ -2786,6 +2786,9 @@ future<> view_builder::generate_mutations_on_node_left(replica::database& db, db
     muts.reserve(muts.size() + db.get_views().size());
     // We expect the table to have a row for each existing view, so generate delete mutations for all views.
     for (auto& view : db.get_views()) {
+        if (should_ignore_tablet_keyspace(db, view->ks_name())) {
+            continue;
+        }
         auto mut = co_await sys_ks.make_remove_view_build_status_on_host_mutation(timestamp, {view->ks_name(), view->cf_name()}, host_id);
         muts.emplace_back(std::move(mut));
     }
