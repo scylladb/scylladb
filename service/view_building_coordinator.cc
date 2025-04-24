@@ -195,7 +195,7 @@ future<std::optional<group0_guard>> view_building_coordinator::update_state(grou
 
 }
 
-static std::pair<sstring, sstring> table_id_to_name(replica::database& db, table_id id) {
+static std::pair<sstring, sstring> table_id_to_name(const replica::database& db, table_id id) {
     auto schema = db.find_schema(id);
     return {schema->ks_name(), schema->cf_name()};
 }
@@ -629,6 +629,16 @@ future<> view_building_coordinator::generate_tablet_resize_updates(std::vector<c
     }
 }
 
+future<> view_building_coordinator::remove_view_build_statuses_on_left_node(std::vector<canonical_mutation>& out, const group0_guard& guard, locator::host_id host_id) {
+    for (auto [view_id, statuses]: _vb_sm.views_state.status_map) {
+        if (statuses.contains(host_id)) {
+            auto view_name = table_id_to_name(_db, view_id);
+            auto mut = co_await _sys_ks.make_remove_view_build_status_on_host_mutation(guard.write_timestamp(), view_name, host_id);
+            out.emplace_back(std::move(mut));
+        }
+    }
+}
+
 future<> view_building_coordinator::generate_rf_change_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, const locator::tablet_map& old_map, const locator::tablet_map& new_map) {
     vbc_logger.debug("Generating keyspace RF change updates for table {}", table_id);
     if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
@@ -701,6 +711,44 @@ future<> generate_tablet_replicas_change_updates(db::system_keyspace& sys_ks, st
                 vbc_logger.debug("Creating new task {} for pending replica {}", task.id, task.replica);
             }
         }
+    }
+}
+
+future<> mark_view_build_statuses(raft_group0_client& group0_client, db::system_keyspace& sys_ks, const view_building_state_machine& vb_sm, locator::host_id host_id, abort_source& as) {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+
+    while (true) {
+        as.check();
+        auto guard = co_await group0_client.start_operation(as);
+        std::vector<canonical_mutation> muts;
+
+        // View builder coordinator marks statuses (STARTED/SUCCESS) on all nodes at once,
+        // so copy the status to the new node.
+        // Ignore views which are not started yet.
+        for (auto [view_id, statuses]: vb_sm.views_state.status_map) {
+            if (!statuses.contains(host_id)) {
+                auto view_name = table_id_to_name(sys_ks.local_db(), view_id);
+                auto mut = co_await sys_ks.make_view_build_status_mutation(guard.write_timestamp(), view_name, host_id, statuses.begin()->second);
+                muts.emplace_back(std::move(mut));
+            }
+        }
+
+        if (muts.empty()) {
+            co_return;
+        }
+
+        auto cmd = group0_client.prepare_command(
+            ::service::write_mutations{
+                .mutations{std::move(muts)},
+            }, guard, "mark view build statuses on new node"
+        );
+        try {
+            co_await group0_client.add_entry(std::move(cmd), std::move(guard), as);
+        } catch (group0_concurrent_modification&) {
+            // retry
+            continue;
+        }
+        co_return;
     }
 }
 

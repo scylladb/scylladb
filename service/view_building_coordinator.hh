@@ -30,6 +30,7 @@ namespace service {
 
 class group0_guard;
 class raft_group0;
+class raft_group0_client;
 
 
 namespace view_building {
@@ -59,6 +60,8 @@ public:
     future<> generate_tablet_migration_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, dht::token last_token, const locator::tablet_migration_info& mig);
     future<> generate_tablet_resize_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, const locator::tablet_map& tmap, table_id table_id, locator::resize_decision resize_decision);
     future<> generate_rf_change_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, const locator::tablet_map& old_map, const locator::tablet_map& new_map);
+
+    future<> remove_view_build_statuses_on_left_node(std::vector<canonical_mutation>& out, const group0_guard& guard, locator::host_id host_id);
 
 private:
     future<group0_guard> start_operation();
@@ -92,6 +95,9 @@ future<> generate_tablet_migration_updates(db::system_keyspace& sys_ks, const vi
 future<> generate_tablet_replicas_change_updates(db::system_keyspace& sys_ks, std::vector<view_building_task> tasks_for_tablet_id,
         std::vector<canonical_mutation>& out, api::timestamp_type write_timestamp, table_id table_id, locator::tablet_id tid,
         const locator::tablet_replica_set& old_replicas, const locator::tablet_replica_set& new_replicas);
+
+future<> mark_view_build_statuses(raft_group0_client& group0_client, db::system_keyspace& sys_ks, const view_building_state_machine& vb_sm,
+        locator::host_id host_id, abort_source& as);
 
 }
 
