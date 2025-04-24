@@ -2424,7 +2424,10 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
 
 future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
     return sharded_db.invoke_on_all([id] (replica::database& db) {
-        return db.find_column_family(id).flush();
+        if (db.column_family_exists(id)) {
+            return db.find_column_family(id).flush();
+        }
+        return make_ready_future();
     });
 }
 
@@ -2454,6 +2457,9 @@ future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std
      * to discard the currently active segment, This ensures we get 
      * as sstable-ish a universe as we can, as soon as we can.
     */
+    if (utils::get_local_injector().enter("flush_tables_on_all_shards_table_drop")) {
+        tables.push_back(table_info{});
+    }
     return sharded_db.invoke_on_all([] (replica::database& db) {
         return force_new_commitlog_segments(db._commitlog, db._schema_commitlog);
     }).then([&, tables = std::move(tables)] {
