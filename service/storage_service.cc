@@ -1994,6 +1994,9 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
             // bootstrap_tokens was previously set using tokens gossiped by the replaced node
         }
         co_await start_sys_dist_ks();
+        if (_feature_service.view_building_coordinator) {
+            co_await view_building::mark_view_build_statuses(_group0->client(), _sys_ks.local(), _view_building_state_machine, _db.local().get_token_metadata().get_my_id(), _abort_source);
+        }
         co_await _view_builder.local().mark_existing_views_as_built();
         co_await _sys_ks.local().update_tokens(bootstrap_tokens);
         co_await bootstrap(bootstrap_tokens, cdc_gen_id, ri);
@@ -5860,6 +5863,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     case node_state::replacing: {
                         set_mode(mode::BOOTSTRAP);
                         // See issue #4001
+                        if (_feature_service.view_building_coordinator) {
+                            co_await view_building::mark_view_build_statuses(_group0->client(), _sys_ks.local(), _view_building_state_machine, _db.local().get_token_metadata().get_my_id(), _abort_source);
+                        }
                         co_await _view_builder.local().mark_existing_views_as_built();
                         co_await _db.invoke_on_all([] (replica::database& db) {
                             for (auto& cf : db.get_non_system_column_families()) {
