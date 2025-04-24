@@ -113,10 +113,27 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
         if (rs->uses_tablets()) {
             warnings.push_back(
                 "Tables in this keyspace will be replicated using Tablets "
+<<<<<<< HEAD
                 "and will not support CDC, LWT and counters features. "
                 "To use CDC, LWT or counters, drop this keyspace and re-create it "
                 "without tablets by adding AND TABLETS = {'enabled': false} "
                 "to the CREATE KEYSPACE statement.");
+||||||| parent of f740f9f0e1 (cql: fix CREATE tablets KS warning msg)
+                "and will not support CDC, LWT and counters features. "
+                "To use CDC, LWT or counters, drop this keyspace and re-create it "
+                "without tablets by adding AND TABLETS = {'enabled': false} "
+                "to the CREATE KEYSPACE statement.");
+            if (ksm->initial_tablets().value()) {
+                warnings.push_back("Keyspace `initial` tablets option is deprecated.  Use per-table tablet options instead.");
+            }
+=======
+                "and will not support Materialized Views, Secondary Indexes, CDC, LWT and counters features. "
+                "To use Materialized Views, Secondary Indexes, CDC, LWT or counters, drop this keyspace and re-create it "
+                "without tablets by adding AND TABLETS = {'enabled': false} to the CREATE KEYSPACE statement.");
+            if (ksm->initial_tablets().value()) {
+                warnings.push_back("Keyspace `initial` tablets option is deprecated.  Use per-table tablet options instead.");
+            }
+>>>>>>> f740f9f0e1 (cql: fix CREATE tablets KS warning msg)
         }
 
         // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to create an RF-rack-invalid keyspace.
