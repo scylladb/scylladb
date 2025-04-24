@@ -360,9 +360,11 @@ fi
 if [ "$(grep -o ~dev <<< $VERSION)" == "~dev" ]
 then
     BRANCH=${MAIN_BRANCH}
+    JENKINS_WORKSPACE_DIR=/jenkins/workspace/scylla-${MAIN_BRANCH}/next
 else
     BASE_VERSION=$(grep -o "^[0-9]\+\.[0-9]\+" <<< $VERSION)
     BRANCH=branch-${BASE_VERSION}
+    JENKINS_WORKSPACE_DIR=/jenkins/workspace/scylla-${BASE_VERSION}/build
 fi
 
 if ! [[ -d ${SCYLLA_REPO_PATH} ]]
@@ -414,7 +416,10 @@ Launching dbuild container.
 
 To examine the coredump with gdb:
 
-    $ gdb -x scylla-gdb.py -ex 'set directories /src/scylla' -iex 'set solib-search-path /opt/scylladb/libreloc/' --core ${COREFILE} /opt/scylladb/libexec/scylla
+    $ gdb -x scylla-gdb.py -ex 'set directories /src/scylla' \
+        -iex 'set substitute-path ${JENKINS_WORKSPACE_DIR}/scylla /src/scylla' \
+        -iex 'set solib-search-path /opt/scylladb/libreloc/' \
+        --core ${COREFILE} /opt/scylladb/libexec/scylla
 
 See https://github.com/scylladb/scylladb/blob/master/docs/dev/debugging.md for more information on how to debug scylla.
 
