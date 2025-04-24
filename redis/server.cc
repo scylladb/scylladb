@@ -43,15 +43,11 @@ redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::s
 
 shared_ptr<generic_server::connection>
 redis_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
-    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
-    ++_stats._connects;
-    ++_stats._connections;
-    return conn;
+    return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
 }
 
 future<>
 redis_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    --_stats._connections;
     return make_ready_future<>();
 }
 
@@ -69,9 +65,12 @@ redis_server::connection::connection(redis_server& server, socket_address server
     , _server_addr(server_addr)
     , _options(server._config._read_consistency_level, server._config._write_consistency_level, server._config._timeout_config, server._auth_service, addr, server._total_redis_db_count)
 {
+    ++_server._stats._connects;
+    ++_server._stats._connections;
 }
 
 redis_server::connection::~connection() {
+    --_server._stats._connections;
 }
 
 thread_local redis_server::connection::execution_stage_type redis_server::connection::_process_request_stage {"redis_transport", &connection::process_request_one};
