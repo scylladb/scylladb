@@ -7,31 +7,22 @@
 
 from .porting import *
 
-# public class VectorInvalidQueryTest extends SAITester
-# {
-#     @BeforeClass
-#     public static void setupClass()
-#     {
-#         requireNetwork();
-#     }
+def test_cannot_create_empty_vector_column(cql, test_keyspace):
+        assert_invalid_message(
+            cql,
+            "",
+            "dimension",
+            f"CREATE TABLE {test_keyspace}.test_table (pk int, str_val text, val vector<float, 0>, PRIMARY KEY(pk))"
+        )
 
-#     @Test
-#     public void cannotCreateEmptyVectorColumn()
-#     {
-#         assertThatThrownBy(() -> execute(String.format("CREATE TABLE %s.%s (pk int, str_val text, val vector<float, 0>, PRIMARY KEY(pk))",
-#                                                        KEYSPACE, createTableName())))
-#         .isInstanceOf(InvalidRequestException.class)
-#         .hasMessage("vectors may only have positive dimensions; given 0");
-#     }
-
-#     @Test
-#     public void cannotQueryEmptyVectorColumn()
-#     {
-#         createTable("CREATE TABLE %s (pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))");
-#         assertThatThrownBy(() -> execute("SELECT similarity_cosine((vector<float, 0>) [], []) FROM %s"))
-#         .isInstanceOf(InvalidRequestException.class)
-#         .hasMessage("vectors may only have positive dimensions; given 0");
-#     }
+@pytest.mark.xfail(reason="similarity_cosine not implemented yet")
+def test_cannot_query_empty_vector_column(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))") as table:
+        assert_invalid_message(
+            cql, table,
+            "dimension",
+            "SELECT similarity_cosine((vector<float, 0>) [], []) FROM %s"
+        )
 
 #     @Test
 #     public void cannotIndex1DWithCosine()
@@ -52,93 +43,86 @@ from .porting import *
 #         .hasMessage("Invalid vector literal for val of type vector<float, 3>; expected 3 elements, but given 2");
 #     }
 
-#     @Test
-#     public void cannotQueryWrongNumberOfDimensions()
-#     {
-#         createTable("CREATE TABLE %s (pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(val) USING 'StorageAttachedIndex'");
+def test_cannot_query_wrong_number_of_dimensions(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))") as table:
+        execute(cql, table, "CREATE CUSTOM INDEX ON %s(val) USING 'vector_index'")
 
-#         execute("INSERT INTO %s (pk, str_val, val) VALUES (0, 'A', [1.0, 2.0, 3.0])");
-#         execute("INSERT INTO %s (pk, str_val, val) VALUES (1, 'B', [2.0, 3.0, 4.0])");
-#         execute("INSERT INTO %s (pk, str_val, val) VALUES (2, 'C', [3.0, 4.0, 5.0])");
-#         execute("INSERT INTO %s (pk, str_val, val) VALUES (3, 'D', [4.0, 5.0, 6.0])");
+        execute(cql, table, "INSERT INTO %s (pk, str_val, val) VALUES (0, 'A', [1.0, 2.0, 3.0])")
+        execute(cql, table, "INSERT INTO %s (pk, str_val, val) VALUES (1, 'B', [2.0, 3.0, 4.0])")
+        execute(cql, table, "INSERT INTO %s (pk, str_val, val) VALUES (2, 'C', [3.0, 4.0, 5.0])")
+        execute(cql, table, "INSERT INTO %s (pk, str_val, val) VALUES (3, 'D', [4.0, 5.0, 6.0])")
 
-#         assertThatThrownBy(() -> execute("SELECT * FROM %s ORDER BY val ann of [2.5, 3.5] LIMIT 5"))
-#         .isInstanceOf(InvalidRequestException.class)
-#         .hasMessage("Invalid vector literal for val of type vector<float, 3>; expected 3 elements, but given 2");
-#     }
+        assert_invalid_message(
+            cql, table,
+            "Invalid vector literal",
+            "SELECT * FROM %s ORDER BY val ANN OF [2.5, 3.5] LIMIT 5"
+        )
 
-#     @Test
-#     public void testMultiVectorOrderingsNotAllowed() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (pk int, str_val text, val1 vector<float, 3>, val2 vector<float, 3>, PRIMARY KEY(pk))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(str_val) USING 'StorageAttachedIndex'");
-#         createIndex("CREATE CUSTOM INDEX ON %s(val1) USING 'StorageAttachedIndex'");
-#         createIndex("CREATE CUSTOM INDEX ON %s(val2) USING 'StorageAttachedIndex'");
+def test_multi_vector_orderings_not_allowed(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, str_val text, val1 vector<float, 3>, val2 vector<float, 3>, PRIMARY KEY(pk))") as table:
 
-#         assertInvalidMessage("Cannot specify more than one ANN ordering",
-#                              "SELECT * FROM %s ORDER BY val1 ann of [2.5, 3.5, 4.5], val2 ann of [2.1, 3.2, 4.0] LIMIT 2");
-#     }
+        # Scylla doesnt support custom indexes on text columns so we use a regular index.
+        execute(cql, table, "CREATE INDEX ON %s(str_val)")
+        execute(cql, table, "CREATE CUSTOM INDEX ON %s(val1) USING 'vector_index'")
+        execute(cql, table, "CREATE CUSTOM INDEX ON %s(val2) USING 'vector_index'")
 
-#     @Test
-#     public void testDescendingVectorOrderingIsNotAllowed() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (pk int, val vector<float, 3>, PRIMARY KEY(pk))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(val) USING 'StorageAttachedIndex'");
+        assert_invalid_message(
+            cql, table, "Cannot specify more than one ANN ordering",
+            "SELECT * FROM %s ORDER BY val1 ANN OF [2.5, 3.5, 4.5], val2 ANN OF [2.1, 3.2, 4.0] LIMIT 2"
+        )
 
-#         assertInvalidMessage("Descending ANN ordering is not supported",
-#                              "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5] DESC LIMIT 2");
-#     }
+def test_descending_vector_ordering_is_not_allowed(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, val vector<float, 3>, PRIMARY KEY(pk))") as table:
+        execute(cql, table, "CREATE INDEX c_index ON %s (val) using 'vector_index'")
 
-#     @Test
-#     public void testVectorOrderingIsNotAllowedWithClusteringOrdering() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(val) USING 'StorageAttachedIndex'");
+        assert_invalid_message(cql, table, "Descending ANN ordering is not supported",
+                               "SELECT val FROM %s where val=[1.2, 1.2, 1.2] ORDER BY val ann of [2.5, 3.5, 4.5] DESC LIMIT 2")
 
-#         assertInvalidMessage("ANN ordering does not support any other ordering",
-#                              "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5], ck ASC LIMIT 2");
-#     }
+def test_vector_ordering_is_not_allowed_with_clustering_ordering(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
+        execute(cql, table, "CREATE CUSTOM INDEX c_index ON %s (val) using 'vector_index'")
 
-#     @Test
-#     public void testVectorOrderingIsNotAllowedWithoutIndex() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))");
+        assert_invalid_message(cql, table, "ANN ordering does not support any other ordering",
+                               "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5], ck ASC LIMIT 2")
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEX_MESSAGE,
-#                              "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5] LIMIT 5");
+def test_vector_ordering_is_not_allowed_without_index(cql, test_keyspace):
+    ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
+    with create_table(cql, test_keyspace, "(pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))") as table:
+        assert_invalid_message(
+            cql, table, "ANN ordering by vector requires the column to be indexed",
+            "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5] LIMIT 5"
+        )
+        assert_invalid_message(
+            cql, table, "ANN ordering by vector requires the column to be indexed",
+            "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5] LIMIT 5 ALLOW FILTERING"
+        )
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEX_MESSAGE,
-#                              "SELECT * FROM %s ORDER BY val ann of [2.5, 3.5, 4.5] LIMIT 5 ALLOW FILTERING");
-#     }
+def test_invalid_column_name_with_ann(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
+        assert_invalid_message(
+            cql, table,
+            f"Undefined column name",
+            "SELECT k FROM %s ORDER BY bad_col ANN OF [1.0] LIMIT 1"
+        )
 
-#     @Test
-#     public void testInvalidColumnNameWithAnn() throws Throwable
-#     {
-#         String table = createTable(KEYSPACE, "CREATE TABLE %s (k int, c int, v int, primary key (k, c))");
-#         assertInvalidMessage(String.format("Undefined column name bad_col in table %s", KEYSPACE + '.' + table),
-#                              "SELECT k from %s ORDER BY bad_col ANN OF [1.0] LIMIT 1");
-#     }
-
-#     @Test
-#     public void cannotPerformNonANNQueryOnVectorIndex() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(val) USING 'StorageAttachedIndex'");
-
-#         assertInvalidMessage(StatementRestrictions.VECTOR_INDEXES_ANN_ONLY_MESSAGE,
-#                              "SELECT * FROM %s WHERE val = [1.0, 2.0, 3.0]");
-#     }
-
-#     @Test
-#     public void cannotOrderWithAnnOnNonVectorColumn() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (k int, v int, primary key(k))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(v) USING 'StorageAttachedIndex'");
-
-#         assertInvalidMessage(StatementRestrictions.ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE,
-#                              "SELECT * FROM %s ORDER BY v ANN OF 1 LIMIT 1");
-#     }
+def test_cannot_perform_non_ann_query_on_vector_index(cql, test_keyspace):
+    VECTOR_INDEXES_ANN_ONLY_MESSAGE = "Vector indexes only support ANN queries"
+    with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
+        execute(cql, table, "CREATE CUSTOM INDEX c_index ON %s (val) USING 'vector_index'")
+        assert_invalid_message(
+            cql, table, VECTOR_INDEXES_ANN_ONLY_MESSAGE,
+            "SELECT * FROM %s WHERE val = [1.0, 2.0, 3.0]"
+        )
+        
+def test_cannot_order_with_ann_on_non_vector_column(cql, test_keyspace):
+    ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE = "ANN ordering is only supported on float vector indexes"
+    with create_table(cql, test_keyspace, "(k int, v int, PRIMARY KEY(k))") as table:
+        # Scylla doesn't support custom indexes on int columns so we use a regular index.
+        execute(cql, table, "CREATE INDEX c_index ON %s (v)")
+        assert_invalid_message(
+            cql, table, ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE,
+            "SELECT * FROM %s ORDER BY v ANN OF 1 LIMIT 1"
+        )
 
 #     @Test
 #     public void disallowZeroVectorsWithCosineSimilarity()
@@ -154,19 +138,20 @@ from .porting import *
 #         assertThatThrownBy(() -> execute("SELECT * FROM %s ORDER BY value ann of [0.0, 0.0] LIMIT 2")).isInstanceOf(InvalidRequestException.class);
 #     }
 
-#     @Test
-#     public void mustHaveLimitSpecifiedAndWithinMaxAllowed()
-#     {
-#         createTable("CREATE TABLE %s (k int PRIMARY KEY, v vector<float, 1>)");
-#         createIndex("CREATE CUSTOM INDEX ON %s(v) USING 'StorageAttachedIndex' WITH OPTIONS = {'similarity_function' : 'euclidean'}");
+def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>)") as table:
+        execute(cql, table, "CREATE CUSTOM INDEX c_index ON %s (v) USING 'vector_index'")
 
-#         assertThatThrownBy(() -> executeNet("SELECT * FROM %s WHERE k = 1 ORDER BY v ANN OF [0]"))
-#         .isInstanceOf(InvalidQueryException.class).hasMessage(SelectStatement.TOPK_LIMIT_ERROR);
+        assert_invalid_message(
+            cql, table, "LIMIT",
+            "SELECT * FROM %s WHERE k = 1 ORDER BY v ANN OF [0]"
+        )
 
-#         assertThatThrownBy(() -> executeNet("SELECT * FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 1001"))
-#         .isInstanceOf(InvalidQueryException.class).hasMessage(String.format(StorageAttachedIndex.ANN_LIMIT_ERROR, IndexWriterConfig.MAX_TOP_K, 1001));
-#     }
-
+        assert_invalid_message(
+            cql, table, "LIMIT",
+            f"SELECT * FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 1001"
+        )
+        
 #     @Test
 #     public void mustHaveLimitWithinPageSize()
 #     {
@@ -189,103 +174,114 @@ from .porting import *
 #         assertEquals(1, result.size());
 #     }
 
-#     @Test
-#     public void cannotHaveAggregationOnANNQuery()
-#     {
-#         createTable("CREATE TABLE %s (k int PRIMARY KEY, v vector<float, 1>, c int)");
-#         createIndex("CREATE CUSTOM INDEX ON %s(v) USING 'StorageAttachedIndex' WITH OPTIONS = {'similarity_function' : 'euclidean'}");
+def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace):
+    TOPK_AGGREGATION_ERROR = "can not be run with aggregation"
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>, c int)") as table:
+        execute(cql, table, "CREATE CUSTOM INDEX ON %s(v) USING 'vector_index'")
 
-#         execute("INSERT INTO %s (k, v, c) VALUES (1, [4], 1)");
-#         execute("INSERT INTO %s (k, v, c) VALUES (2, [3], 10)");
-#         execute("INSERT INTO %s (k, v, c) VALUES (3, [2], 100)");
-#         execute("INSERT INTO %s (k, v, c) VALUES (4, [1], 1000)");
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (1, [4], 1)")
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (2, [3], 10)")
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (3, [2], 100)")
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (4, [1], 1000)")
 
-#         assertThatThrownBy(() -> executeNet("SELECT sum(c) FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 4"))
-#         .isInstanceOf(InvalidQueryException.class).hasMessage(SelectStatement.TOPK_AGGREGATION_ERROR);
-#     }
+        assert_invalid_message(
+            cql, table, TOPK_AGGREGATION_ERROR,
+            "SELECT sum(c) FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 4"
+        )
 
-#     @Test
-#     public void multipleVectorColumnsInQueryFailCorrectlyTest() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (k int PRIMARY KEY, v1 vector<float, 1>, v2 vector<float, 1>)");
-#         createIndex("CREATE CUSTOM INDEX ON %s(v1) USING 'StorageAttachedIndex' WITH OPTIONS = {'similarity_function' : 'euclidean'}");
+# TODO: Update the test to include the similarity function option once it is implemented
+def test_multiple_vector_columns_in_query_fail_correctly(cql, test_keyspace):
+    ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v1 vector<float, 1>, v2 vector<float, 1>)") as table:
+        execute(cql, table, "CREATE CUSTOM INDEX ON %s(v1) USING 'vector_index'")
 
-#         execute("INSERT INTO %s (k, v1, v2) VALUES (1, [1], [2])");
+        execute(cql, table, "INSERT INTO %s (k, v1, v2) VALUES (1, [1], [2])")
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEX_MESSAGE,
-#                              "SELECT * FROM %s WHERE v1 = [1] ORDER BY v2 ANN OF [2] ALLOW FILTERING");
-#     }
+        # Added a LIMIT here to account for differences in the sequence of validation checks between Scylla and Cassandra.
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEX_MESSAGE,
+            "SELECT * FROM %s WHERE v1 = [1] ORDER BY v2 ANN OF [2] LIMIT 3 ALLOW FILTERING"
+        )
 
-#     @Test
-#     public void annOrderingIsNotAllowedWithoutIndexWhereIndexedColumnExistsInQueryTest() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (k int PRIMARY KEY, v vector<float, 1>, c int)");
-#         createIndex("CREATE CUSTOM INDEX ON %s(c) USING 'StorageAttachedIndex'");
+def test_ann_ordering_not_allowed_without_index_where_indexed_column_exists_in_query(cql, test_keyspace):
+    ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>, c int)") as table:
+        # Scylla doesn't support custom indexes on int columns so we use a regular index.
+        execute(cql, table, "CREATE INDEX c_index ON %s (c)")
 
-#         execute("INSERT INTO %s (k, v, c) VALUES (1, [4], 1)");
-#         execute("INSERT INTO %s (k, v, c) VALUES (2, [3], 10)");
-#         execute("INSERT INTO %s (k, v, c) VALUES (3, [2], 100)");
-#         execute("INSERT INTO %s (k, v, c) VALUES (4, [1], 1000)");
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (1, [4], 1)")
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (2, [3], 10)")
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (3, [2], 100)")
+        execute(cql, table, "INSERT INTO %s (k, v, c) VALUES (4, [1], 1000)")
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEX_MESSAGE,
-#                              "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
-#     }
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEX_MESSAGE,
+            "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
 
-#     @Test
-#     public void cannotPostFilterOnNonIndexedColumnWithAnnOrdering() throws Throwable
-#     {
-#         createTable("CREATE TABLE %s (pk1 int, pk2 int, ck1 int, ck2 int, v vector<float, 1>, c int, primary key ((pk1, pk2), ck1, ck2))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(v) USING 'StorageAttachedIndex' WITH OPTIONS = {'similarity_function' : 'euclidean'}");
+def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace):
+    ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requires the column to be indexed"
+    with create_table(
+        cql,
+        test_keyspace,
+        "(pk1 int, pk2 int, ck1 int, ck2 int, v vector<float, 1>, c int, primary key ((pk1, pk2), ck1, ck2))"
+    ) as table:
+        # TODO: add "WITH OPTIONS = {'similarity_function' : 'euclidean'}" once it is implemented
+        execute(cql, table, "CREATE CUSTOM INDEX ON %s(v) USING 'vector_index'")
 
-#         execute("INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (1, 1, 1, 1, [4], 1)");
-#         execute("INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (2, 2, 1, 1, [3], 10)");
-#         execute("INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (3, 3, 1, 1, [2], 100)");
-#         execute("INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (4, 4, 1, 1, [1], 1000)");
+        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (1, 1, 1, 1, [4], 1)")
+        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (2, 2, 1, 1, [3], 10)")
+        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (3, 3, 1, 1, [2], 100)")
+        execute(cql, table, "INSERT INTO %s (pk1, pk2, ck1, ck2, v, c) VALUES (4, 4, 1, 1, [1], 1000)")
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-#                              "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
+            "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
+            "SELECT * FROM %s WHERE ck1 >= 0 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
+            "SELECT * FROM %s WHERE ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
+            "SELECT * FROM %s WHERE pk1 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
+            "SELECT * FROM %s WHERE pk2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
+            "SELECT * FROM %s WHERE pk1 = 1 AND pk2 = 1 AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
+        assert_invalid_message(
+            cql, table, ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
+            "SELECT * FROM %s WHERE token(pk1, pk2) = token(1, 1) AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
+        )
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-#                              "SELECT * FROM %s WHERE ck1 >= 0 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
+def test_cannot_have_per_partition_limit_with_ann_ordering(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int, c int, v vector<float, 1>, PRIMARY KEY(k, c))") as table:
+        execute(cql, table, "CREATE CUSTOM INDEX ON %s(v) USING 'vector_index'")
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-#                              "SELECT * FROM %s WHERE ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
+        execute(cql, table, "INSERT INTO %s (k, c, v) VALUES (1, 1, [1])")
+        execute(cql, table, "INSERT INTO %s (k, c, v) VALUES (1, 2, [2])")
+        execute(cql, table, "INSERT INTO %s (k, c, v) VALUES (1, 3, [3])")
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-#                              "SELECT * FROM %s WHERE pk1 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
+        assert_invalid_message(
+            cql, table, "do not support per-partition limits",
+            "SELECT * FROM %s ORDER BY v ANN OF [2] PER PARTITION LIMIT 1 LIMIT 3"
+        )
 
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-#                              "SELECT * FROM %s WHERE pk2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
-
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-#                              "SELECT * FROM %s WHERE pk1 = 1 AND pk2 = 1 AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
-
-#         assertInvalidMessage(StatementRestrictions.ANN_REQUIRES_INDEXED_FILTERING_MESSAGE,
-#                              "SELECT * FROM %s WHERE token(pk1, pk2) = token(1, 1) AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING");
-#     }
-
-#     @Test
-#     public void cannotHavePerPartitionLimitWithAnnOrdering()
-#     {
-#         createTable("CREATE TABLE %s (k int, c int, v vector<float, 1>, PRIMARY KEY(k, c))");
-#         createIndex("CREATE CUSTOM INDEX ON %s(v) USING 'StorageAttachedIndex' WITH OPTIONS = {'similarity_function' : 'euclidean'}");
-
-#         execute("INSERT INTO %s (k, c, v) VALUES (1, 1, [1])");
-#         execute("INSERT INTO %s (k, c, v) VALUES (1, 2, [2])");
-#         execute("INSERT INTO %s (k, c, v) VALUES (1, 3, [3])");
-
-#         assertThatThrownBy(() -> executeNet("SELECT * FROM %s ORDER BY v ANN OF [2] PER PARTITION LIMIT 1 LIMIT 3"))
-#             .isInstanceOf(InvalidQueryException.class).hasMessage(SelectStatement.TOPK_PARTITION_LIMIT_ERROR);
-#     }
-
-#     @Test
-#     public void cannotCreateIndexOnNonFloatVector()
-#     {
-#         createTable("CREATE TABLE %s (k int PRIMARY KEY, v vector<int, 1>)");
-
-#         assertThatThrownBy(() -> createIndex("CREATE CUSTOM INDEX ON %s(v) USING 'StorageAttachedIndex'"))
-#             .isInstanceOf(InvalidRequestException.class).hasRootCauseMessage(StorageAttachedIndex.VECTOR_NON_FLOAT_ERROR);
-#     }
+def test_cannot_create_index_on_non_float_vector(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<int, 1>)") as table:
+        assert_invalid_message(
+            cql, table, "vectors",
+            "CREATE CUSTOM INDEX ON %s(v) USING 'vector_index'"
+        )
 
 #     @Test
 #     public void canOrderWithWhereOnPrimaryColumns() throws Throwable
