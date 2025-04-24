@@ -21,8 +21,11 @@ from cassandra.protocol import InvalidRequest
 
 logger = logging.getLogger(__name__)
 
-async def create_keyspace(cql):
-    return await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+async def create_keyspace(cql, disable_tablets=False):
+    ks_options = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+    if disable_tablets:
+        ks_options = ks_options + " AND tablets={'enabled': false}"
+    return await create_new_test_keyspace(cql, ks_options)
 
 async def create_table(cql, ks):
     await cql.run_async(f"CREATE TABLE {ks}.t (p int, c int, PRIMARY KEY (p, c))")
@@ -507,7 +510,7 @@ async def test_migration_on_existing_raft_topology(request, manager: ManagerClie
     logging.info("Waiting until driver connects to every server")
     cql, hosts = await manager.get_ready_cql(servers)
 
-    ks = await create_keyspace(cql)
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}")
     await create_table(cql, ks)
     await create_mv(cql, ks, "vt1")
 
@@ -553,7 +556,10 @@ async def test_view_build_status_with_synchronize_wait(manager: ManagerClient):
     servers.append(await manager.server_add())
     cql, hosts = await manager.get_ready_cql(servers)
 
-    ks = await create_keyspace(cql)
+    # With tablets and view building coordinator, view build status is marked
+    # in the same group0 batch that sets new node status to normal,
+    # so `start_operation()` is not called and this test doesn't work.
+    ks = await create_keyspace(cql, disable_tablets=True)
     await create_table(cql, ks)
     # 'raft_group0_client::start_operation' gets called underneath this.
     await create_mv(cql, ks, "vt1")

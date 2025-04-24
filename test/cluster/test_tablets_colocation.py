@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
 from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 import time
@@ -371,6 +371,7 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
         new_replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
         assert new_replica[0] == dst_host_id
 
+        await wait_for_view(cql, 'tv', 2)
         rows = await cql.run_async(f"SELECT * FROM {ks}.tv")
         assert len(rows) == total_keys+1
 
