@@ -48,6 +48,8 @@ SEASTAR_TEST_CASE(test_case_sensitivity) {
         e.execute_cql("create materialized view mv_test2 as select \"theKey\", \"theClustering\", \"theValue\" from cf "
                        "where \"theKey\" is not null and \"theClustering\" is not null "
                        "primary key (\"theKey\",\"theClustering\")").get();
+        e.local_view_builder().wait_until_built("ks", "mv_test").get();
+        e.local_view_builder().wait_until_built("ks", "mv_test2").get();
         e.execute_cql("insert into cf (\"theKey\", \"theClustering\", \"theValue\") values (0 ,0, 0);").get();
 
         for (auto view : {"mv_test", "mv_test2"}) {
