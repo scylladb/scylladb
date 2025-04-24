@@ -36,6 +36,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/assert.hh"
+#include "utils/log.hh"
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
 #include "db/operation_type.hh"
@@ -331,21 +332,11 @@ cql_server::make_connection(socket_address server_addr, connected_socket&& fd, s
 
 future<>
 cql_server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn) {
-    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
-        const auto ip = conn->get_client_state().get_client_address().addr();
-        const auto port = conn->get_client_state().get_client_port();
-        clogger.trace("Advertising new connection from CQL client {}:{}", ip, port);
-    }
     return make_ready_future<>();
 }
 
 future<>
 cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
-        const auto ip = conn->get_client_state().get_client_address().addr();
-        const auto port = conn->get_client_state().get_client_port();
-        clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
-    }
     return make_ready_future<>();
 }
 
@@ -647,11 +638,21 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     });
     ++_server._stats.connects;
     ++_server._stats.connections;
+    if (clogger.is_enabled(logging::log_level::trace)) {
+        const auto ip = get_client_state().get_client_address().addr();
+        const auto port = get_client_state().get_client_port();
+        clogger.trace("Advertising new connection from CQL client {}:{}", ip, port);
+    }
 }
 
 cql_server::connection::~connection() {
     _server._notifier->unregister_connection(this);
     --_server._stats.connections;
+    if (clogger.is_enabled(logging::log_level::trace)) {
+        const auto ip = get_client_state().get_client_address().addr();
+        const auto port = get_client_state().get_client_port();
+        clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
+    }
 }
 
 client_data cql_server::connection::make_client_data() const {
