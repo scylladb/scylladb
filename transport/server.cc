@@ -330,16 +330,6 @@ cql_server::make_connection(socket_address server_addr, connected_socket&& fd, s
     return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
 }
 
-future<>
-cql_server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn) {
-    return make_ready_future<>();
-}
-
-future<>
-cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    return make_ready_future<>();
-}
-
 unsigned
 cql_server::connection::frame_size() const {
     return 9;
