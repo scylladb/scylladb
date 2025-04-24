@@ -82,12 +82,16 @@ private:
     shard_id get_dict_owner(unsigned numa_id, const sha256_type& sha);
     future<foreign_ptr<lw_shared_ptr<const raw_dict>>> get_recommended_dict(table_id t);
     future<> set_recommended_dict_local(table_id, std::span<const std::byte> dict);
+    future<compressor_ptr> make_compressor_for_writing_impl(const compression_parameters&, table_id);
+    future<compressor_ptr> make_compressor_for_reading_impl(const compression_parameters&, std::span<const std::byte> dict);
 public:
     default_sstable_compressor_factory(config = config{});
     ~default_sstable_compressor_factory();
 
     future<compressor_ptr> make_compressor_for_writing(schema_ptr) override;
+    future<compressor_ptr> make_compressor_for_writing_for_tests(const compression_parameters&, table_id);
     future<compressor_ptr> make_compressor_for_reading(sstables::compression&) override;
+    future<compressor_ptr> make_compressor_for_reading_for_tests(const compression_parameters&, std::span<const std::byte> dict);
     future<> set_recommended_dict(table_id, std::span<const std::byte> dict) override;
 };
 
