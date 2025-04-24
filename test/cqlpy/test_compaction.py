@@ -6,6 +6,7 @@ import pytest
 import requests
 from .util import new_materialized_view, new_test_table, unique_name, sleep_till_whole_second
 from . import nodetool
+from .test_materialized_view import wait_for_view_built
 
 def test_tombstone_gc_with_conflict_in_memtable(scylla_only, cql, test_keyspace):
     """
@@ -103,6 +104,7 @@ def test_tombstone_gc_with_materialized_view_update_in_memtable(scylla_only, cql
     with new_test_table(cql, test_keyspace, schema) as table:
         # Create a materialized view with same partition key as the base, and using a regular column in the base as a clustering key in the view
         with new_materialized_view(cql, table, '*', 'k, v', 'k is not null and v is not null', extra="with gc_grace_seconds = 0") as mv:
+            wait_for_view_built(cql, mv)
             with nodetool.no_autocompaction_context(cql, mv):
                 # Insert initial data into the base table
                 cql.execute(f"insert into {table} (k, v, w) values (1, 1, 1)")

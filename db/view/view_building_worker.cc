@@ -663,6 +663,7 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
         as.check();
         std::exception_ptr eptr;
         try {
+            utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, as).get();
             vbw_logger.info("Starting range {} building for base table: {}.{}", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
             auto end_token = reader.consume_in_thread(std::move(consumer));
             vbw_logger.info("Built range {} for base table: {}.{}", dht::token_range(range.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
