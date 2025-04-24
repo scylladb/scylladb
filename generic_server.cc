@@ -367,12 +367,15 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
                     _conns_cpu_concurrency_semaphore, std::move(units));
             if (shed) {
+                // We establish a connection even during shedding to notify the client;
+                // otherwise, they might hang waiting for a response.
                 _shed_connections++;
                 static thread_local logger::rate_limit rate_limit{std::chrono::seconds(10)};
                 _logger.log(log_level::warn, rate_limit,
                         "too many in-flight connection attempts: {}, connection dropped",
                         _conns_cpu_concurrency_semaphore.waiters());
                 conn->shutdown().ignore_ready_future();
+                continue;
             }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
