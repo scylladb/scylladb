@@ -631,6 +631,29 @@ future<> view_building_coordinator::generate_tablet_resize_updates(std::vector<c
     }
 }
 
+future<> view_building_coordinator::mark_view_build_statuses_on_node_join(std::vector<canonical_mutation>& out, const group0_guard& guard, locator::host_id host_id) {
+    // View builder coordinator marks statuses (STARTED/SUCCESS) on all nodes at once,
+    // so copy the status to the new node.
+    // Ignore views which are not started yet.
+    for (const auto& [view_id, statuses]: _vb_sm.views_state.status_map) {
+        if (!statuses.contains(host_id)) {
+            auto view_name = table_id_to_name(_db, view_id);
+            auto mut = co_await _sys_ks.make_view_build_status_mutation(guard.write_timestamp(), view_name, host_id, statuses.begin()->second);
+            out.emplace_back(std::move(mut));
+        }
+    }
+}
+
+future<> view_building_coordinator::remove_view_build_statuses_on_left_node(std::vector<canonical_mutation>& out, const group0_guard& guard, locator::host_id host_id) {
+    for (const auto& [view_id, statuses]: _vb_sm.views_state.status_map) {
+        if (statuses.contains(host_id)) {
+            auto view_name = table_id_to_name(_db, view_id);
+            auto mut = co_await _sys_ks.make_remove_view_build_status_on_host_mutation(guard.write_timestamp(), view_name, host_id);
+            out.emplace_back(std::move(mut));
+        }
+    }
+}
+
 future<> view_building_coordinator::generate_rf_change_updates(std::vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, const locator::tablet_map& old_map, const locator::tablet_map& new_map) {
     vbc_logger.debug("Generating keyspace RF change updates for table {}", table_id);
     if (!_vb_sm.building_state.tasks_state.contains(table_id)) {

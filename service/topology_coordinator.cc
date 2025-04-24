@@ -2082,7 +2082,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                    .set("node_state", node_state::normal);
                             rtbuilder.done();
                             auto reason = ::format("bootstrap: joined a zero-token node {}", node.id);
-                            co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
+                            std::vector<canonical_mutation> updates{builder.build(), rtbuilder.build()};
+                            co_await mark_view_build_statuses_on_node_join(updates, guard, node.id);
+                            co_await update_topology_state(std::move(guard), std::move(updates), reason);
                             co_await _voter_handler.on_node_added(node.id, _as);
                             break;
                         }
@@ -2136,7 +2138,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             builder2.with_node(replaced_id)
                                     .set("node_state", node_state::left);
                             rtbuilder.done();
-                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), builder2.build(), rtbuilder.build()},
+                            std::vector<canonical_mutation> updates{builder.build(), builder2.build(), rtbuilder.build()};
+                            co_await mark_view_build_statuses_on_node_join(updates, node.guard, node.id);
+                            co_await remove_view_build_statuses_on_left_node(updates, node.guard, replaced_id);
+                            co_await update_topology_state(take_guard(std::move(node)), std::move(updates),
                                     fmt::format("replace: replaced node {} with the new zero-token node {}", replaced_id, node.id));
                             co_await _voter_handler.on_node_added(node.id, _as);
                             break;
@@ -2400,6 +2405,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                            .set("node_state", node_state::normal);
                     muts.emplace_back(builder.build());
                     muts.emplace_back(rtbuilder.build());
+                    co_await mark_view_build_statuses_on_node_join(muts, node.guard, node.id);
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                    "bootstrap: read fence completed");
                     // Make sure the load balancer knows the capacity for the new node immediately.
@@ -2427,6 +2433,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         builder.del_transition_state();
                         cleanup_ignored_nodes_on_left(builder, node.id);
                         muts.push_back(rtbuilder.build());
+                        co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
                         co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
                     }
                     builder.set_version(_topo_sm._topology.version + 1)
@@ -2461,6 +2468,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     muts.push_back(builder2.build());
 
                     muts.push_back(rtbuilder.build());
+                    co_await mark_view_build_statuses_on_node_join(muts, node.guard, node.id);
+                    co_await remove_view_build_statuses_on_left_node(muts, node.guard, replaced_node_id);
                     co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(replaced_node_id.uuid()), muts);
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                   "replace: read fence completed");
@@ -2574,6 +2583,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                        .with_node(node.id)
                        .set("node_state", node_state::left);
                 muts.push_back(builder.build());
+                co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
                 co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
                 auto str = node.rs->state == node_state::decommissioning
                         ? ::format("finished decommissioning node {}", node.id)
@@ -2968,6 +2978,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         } catch (...) {
             on_fatal_internal_error(rtlogger, format("unhandled exception in view_building_coordinator::run(): {}", std::current_exception()));
         }
+    }
+
+    future<> mark_view_build_statuses_on_node_join(std::vector<canonical_mutation>& out, const group0_guard& guard, raft::server_id node_id) {
+        co_await _vb_coordinator->mark_view_build_statuses_on_node_join(out, guard, locator::host_id{node_id.uuid()});
+    }
+
+    future<> remove_view_build_statuses_on_left_node(std::vector<canonical_mutation>& out, const group0_guard& guard, raft::server_id node_id) {
+        co_await _vb_coordinator->remove_view_build_statuses_on_left_node(out, guard, locator::host_id{node_id.uuid()});
     }
 
     // Returns the guard if no work done. Otherwise, performs a table migration and consumes the guard.
