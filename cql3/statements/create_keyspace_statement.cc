@@ -113,10 +113,9 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
         if (rs->uses_tablets()) {
             warnings.push_back(
                 "Tables in this keyspace will be replicated using Tablets "
-                "and will not support CDC, LWT and counters features. "
-                "To use CDC, LWT or counters, drop this keyspace and re-create it "
-                "without tablets by adding AND TABLETS = {'enabled': false} "
-                "to the CREATE KEYSPACE statement.");
+                "and will not support Materialized Views, Secondary Indexes, CDC, LWT and counters features. "
+                "To use Materialized Views, Secondary Indexes, CDC, LWT or counters, drop this keyspace and re-create it "
+                "without tablets by adding AND TABLETS = {'enabled': false} to the CREATE KEYSPACE statement.");
         }
 
         // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to create an RF-rack-invalid keyspace.
