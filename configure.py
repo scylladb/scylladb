@@ -1538,6 +1538,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/secondary_index_test.cc',
     'test/boost/sessions_test.cc',
     'test/boost/sstable_compaction_test.cc',
+    'test/boost/sstable_compressor_factory_test.cc',
     'test/boost/sstable_directory_test.cc',
     'test/boost/sstable_set_test.cc',
     'test/boost/statement_restrictions_test.cc',
