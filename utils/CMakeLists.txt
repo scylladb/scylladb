@@ -64,6 +64,7 @@ target_sources(utils
     s3/credentials_providers/sts_assume_role_credentials_provider.cc
     s3/credentials_providers/aws_credentials_provider_chain.cc
     s3/utils/manip_s3.cc
+    azure/identity/request.cc
     azure/identity/credentials.cc
     azure/identity/service_principal_credentials.cc
     azure/identity/managed_identity_credentials.cc
