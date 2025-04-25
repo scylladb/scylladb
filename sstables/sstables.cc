@@ -3178,6 +3178,9 @@ future<> init_metrics() {
 
         sm::make_gauge("bloom_filter_memory_size", [] { return utils::filter::bloom_filter::get_shard_stats().memory_size; },
             sm::description("Bloom filter memory usage in bytes.")),
+
+        sm::make_counter("malformed_sstable_errors", [] { return sstables_stats::get_shard_stats().malformed_sstable_exceptions; },
+            sm::description("Number of malformed sstable errors. The cause might be a physical or logical corruption (e.g. out of order partitions)."))
     });
   });
 }
