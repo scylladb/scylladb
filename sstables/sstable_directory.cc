@@ -12,6 +12,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/file.hh>
+#include <seastar/util/lazy.hh>
 #include <boost/algorithm/string.hpp>
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables.hh"
@@ -242,6 +243,10 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
     auto shards = co_await get_shards_for_this_sstable(desc, storage_opts, flags);
     if (flags.sort_sstables_according_to_owner && shards.size() == 1 && shards[0] != this_shard_id()) {
         // identified a remote unshared sstable
+        dirlog.trace("{} identified as a remote unshared SSTable, shard={}", seastar::value_of([this, &desc] {
+                return sstable::component_basename(_schema->ks_name(), _schema->cf_name(),
+                        desc.version, desc.generation, desc.format, component_type::Data);
+            }), shards[0]);
         _unshared_remote_sstables[shards[0]].push_back(std::move(desc));
         co_return;
     }
