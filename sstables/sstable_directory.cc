@@ -502,7 +502,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
         }
         // Should be empty, since an SSTable that belongs to this shard is not remote.
         SCYLLA_ASSERT(shard_id != this_shard_id());
-        dirlog.debug("Moving {} unshared SSTables to shard {} ", info_vec.size(), shard_id);
+        dirlog.debug("Moving {} unshared SSTables of {}.{} to shard {} ", info_vec.size(), _schema->ks_name(), _schema->cf_name(), shard_id);
         return source_directory.invoke_on(shard_id, &sstables::sstable_directory::load_foreign_sstables, std::move(info_vec));
     });
 }
