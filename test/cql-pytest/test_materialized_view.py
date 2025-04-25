@@ -1189,3 +1189,14 @@ def test_base_partition_deletion_with_low_timestamp(cql, test_keyspace):
             # Verify we get only the row with the newer timestamp
             assert [2] == [x.c for x in cql.execute(f"SELECT c FROM {table} WHERE p=0")]
             assert [2] == [x.c for x in cql.execute(f"SELECT c FROM {mv} WHERE p=0")]
+
+# Test that we can perform reads from the view in reverse order without crashing.
+# Reproduces issue https://github.com/scylladb/scylladb/issues/21354
+def test_reverse_read_from_view(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int PRIMARY KEY, b int') as table:
+        with new_materialized_view(cql, table, '*', 'b, a', 'a is not null and b is not null') as mv:
+            cql.execute(f'insert into {table} (a, b) values (1, 1)')
+            cql.execute(f'insert into {table} (a, b) values (2, 1)')
+            assert {(1,),(2,)} == set(cql.execute(f'select a from {mv} where b=1'))
+            assert [(1,),(2,)] == list(cql.execute(f'select a from {mv} where b=1 order by a asc'))
+            assert [(2,),(1,)] == list(cql.execute(f'select a from {mv} where b=1 order by a desc'))

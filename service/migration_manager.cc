@@ -1053,29 +1053,20 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, netw::me
             // with TTL (refresh TTL in case column mapping already existed prior to that).
             auto us = s.unfreeze(db::schema_ctxt(proxy));
             // if this is a view - sanity check that its schema doesn't need fixing.
+            schema_ptr base_schema;
             if (us->is_view()) {
                 auto& db = proxy.local().local_db();
-                schema_ptr base_schema = db.find_schema(us->view_info()->base_id());
+                base_schema = db.find_schema(us->view_info()->base_id());
                 db::schema_tables::check_no_legacy_secondary_index_mv_schema(db, view_ptr(us), base_schema);
             }
-            return db::schema_tables::store_column_mapping(proxy, us, true).then([us] {
-                return frozen_schema{us};
+            return db::schema_tables::store_column_mapping(proxy, us, true).then([us, base_schema] -> base_and_view_schemas {
+                if (us->is_view()) {
+                    return {frozen_schema(us), base_schema};
+                } else {
+                    return {frozen_schema(us)};
+                }
             });
         });
-    }).then([&storage_proxy] (schema_ptr s) {
-        // If this is a view so this schema also needs a reference to the base
-        // table.
-        if (s->is_view()) {
-            if (!s->view_info()->base_info()) {
-                auto& db = storage_proxy.local_db();
-                // This line might throw a no_such_column_family
-                // It should be fine since if we tried to register a view for which
-                // we don't know the base table, our registry is broken.
-                schema_ptr base_schema = db.find_schema(s->view_info()->base_id());
-                s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*base_schema));
-            }
-        }
-        return s;
     });
 }
 
@@ -1099,6 +1090,8 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     }
 
     if (!s) {
+        // The schema returned by get_schema_definition comes (eventually) from the schema registry,
+        // so if it is a view, it already has base info and we don't need to set it later
         s = co_await get_schema_definition(v, dst, ms, _storage_proxy);
     }
 
@@ -1111,23 +1104,6 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
             co_await maybe_sync(s, dst);
         }
     }
-    // here s is guaranteed to be valid and synced
-    if (s->is_view() && !s->view_info()->base_info()) {
-        // The way to get here is if the view schema was deactivated
-        // and reactivated again, or if we loaded it from the schema
-        // history.
-        auto& db = _storage_proxy.local_db();
-        // This line might throw a no_such_column_family but
-        // that is fine, if the schema is synced, it means that if
-        // we failed to get the base table, we learned about the base
-        // table not existing (which means that the view also doesn't exist
-        // any more), which means that this schema is actually useless for either
-        // read or write so we better throw than return an incomplete useless
-        // schema
-        schema_ptr base_schema = db.find_schema(s->view_info()->base_id());
-        s->view_info()->set_base_info(s->view_info()->make_base_dependent_view_info(*base_schema));
-    }
-
     co_return s;
 }
 
