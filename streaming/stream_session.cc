@@ -378,35 +378,14 @@ future<prepare_message> stream_session::prepare(std::vector<stream_request> requ
     sslog.debug("[Stream #{}] prepare requests nr={}, summaries nr={}", plan_id, nr_requests, summaries.size());
     // prepare tasks
     set_state(stream_session_state::PREPARING);
-    auto& db = manager().db();
     for (auto& request : requests) {
         // always flush on stream request
         sslog.debug("[Stream #{}] prepare stream_request={}", plan_id, request);
-        const auto& ks = request.keyspace;
-        // Make sure cf requested by peer node exists
-        for (auto& cf : request.column_families) {
-            try {
-                db.find_column_family(ks, cf);
-            } catch (replica::no_such_column_family&) {
-                auto err = format("[Stream #{}] prepare requested ks={} cf={} does not exist", plan_id, ks, cf);
-                sslog.warn("{}", err.c_str());
-                throw std::runtime_error(err);
-            }
-        }
         add_transfer_ranges(std::move(request.keyspace), std::move(request.ranges), std::move(request.column_families));
         co_await coroutine::maybe_yield();
     }
     for (auto& summary : summaries) {
         sslog.debug("[Stream #{}] prepare stream_summary={}", plan_id, summary);
-        auto cf_id = summary.cf_id;
-        // Make sure cf the peer node will send to us exists
-        try {
-            db.find_column_family(cf_id);
-        } catch (replica::no_such_column_family&) {
-            auto err = format("[Stream #{}] prepare cf_id={} does not exist", plan_id, cf_id);
-            sslog.warn("{}", err.c_str());
-            throw std::runtime_error(err);
-        }
         prepare_receiving(summary);
     }
 
