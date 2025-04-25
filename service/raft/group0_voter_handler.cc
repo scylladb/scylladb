@@ -295,9 +295,8 @@ class calculator_impl {
         return std::min(nodes_count_exclude_largest - 1, (voters_max - 1) / 2);
     }
 
-    static datacenters_store_t create_datacenters_list(const group0_voter_calculator::nodes_list_t& nodes, size_t* largest_dc_size) {
-        SCYLLA_ASSERT(largest_dc_size != nullptr);
-        *largest_dc_size = 0;
+    static datacenters_store_t create_datacenters_list(const group0_voter_calculator::nodes_list_t& nodes, size_t& largest_dc_size) {
+        largest_dc_size = 0;
 
         std::unordered_map<std::string_view, nodes_ref_list_t> nodes_by_dc;
         for (const auto& [id, node] : nodes) {
@@ -305,7 +304,7 @@ class calculator_impl {
         }
 
         if (!nodes_by_dc.empty()) {
-            *largest_dc_size = std::ranges::max_element(nodes_by_dc, [](const auto& dc1, const auto& dc2) {
+            largest_dc_size = std::ranges::max_element(nodes_by_dc, [](const auto& dc1, const auto& dc2) {
                 return dc1.second.size() < dc2.second.size();
             })->second.size();
         }
@@ -349,7 +348,7 @@ public:
     constexpr static size_t VOTERS_MAX_DEFAULT = 5;
 
     calculator_impl(uint64_t voters_max, const group0_voter_calculator::nodes_list_t& nodes)
-        : _datacenters(create_datacenters_list(nodes, &_largest_dc_size))
+        : _datacenters(create_datacenters_list(nodes, _largest_dc_size))
         , _voters_max(calc_voters_max(voters_max, nodes, _datacenters, _largest_dc_size))
         , _voters_max_per_dc(calc_voters_max_per_dc(_voters_max, nodes, _datacenters, _largest_dc_size)) {
 
