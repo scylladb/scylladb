@@ -112,6 +112,21 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     bool _stopped = false;
 
+    // Possible states in which the repair service can be found.
+    //
+    // none: started, but not yet enabled. Once the repair service moves out of "none", it can
+    //       never legally move back
+    // stopped: stop() was called. The repair service will never be enabled or disabled again
+    //          and can no longer be used
+    // enabled: accepting repairs
+    // disabled: not accepting repairs
+    //
+    // Moving the repair service to and from enabled and disable states is legal, as many times
+    // as necessary.
+    enum class state { none, stopped, disabled, enabled };
+    state _state = state::none;
+    uint8_t _disabled_state_count = 1;
+
     size_t _max_repair_memory;
     seastar::semaphore _memory_sem;
     seastar::named_semaphore _load_parallelism_semaphore = {16, named_semaphore_exception_factory{"Load repair history parallelism"}};
@@ -150,6 +165,14 @@ public:
     // quickly as possible (we do not wait for repairs to finish but rather
     // stop them abruptly).
     future<> shutdown();
+
+    // enable the repair service.
+    void enable();
+
+    // abort all running repairs and moves the repair service into disabled state.
+    // The repair service is still alive after drain but it will not accept new repairs
+    // unless it is moved back to enabled state.
+    future<> drain();
 
     future<std::optional<gc_clock::time_point>> update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time, bool is_tablet);
     future<> cleanup_history(tasks::task_id repair_id);
