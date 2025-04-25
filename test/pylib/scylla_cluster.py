@@ -23,6 +23,15 @@ import traceback
 from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn
 import uuid
 from io import BufferedWriter
+<<<<<<< HEAD
+||||||| parent of a3bb679f49 (test: pylib: add ability to specify default authenticator during server_start)
+
+from test import TOP_SRC_DIR, TEST_DIR
+=======
+import importlib
+
+from test import TOP_SRC_DIR, TEST_DIR
+>>>>>>> a3bb679f49 (test: pylib: add ability to specify default authenticator during server_start)
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
@@ -41,7 +50,7 @@ import psutil
 
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
-from cassandra.auth import PlainTextAuthProvider        # type: ignore
+from cassandra.auth import PlainTextAuthProvider, AuthProvider # type: ignore
 from cassandra.cluster import Cluster           # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import NoHostAvailable   # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Session           # pylint: disable=no-name-in-module
@@ -281,6 +290,7 @@ class ScyllaServer:
         self.cluster_name = cluster_name
         self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
+        self.auth_provider: Optional[AuthProvider] = None
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
@@ -496,7 +506,8 @@ class ScyllaServer:
         oldlevel = caslog.getEffectiveLevel()
         # Be quiet about connection failures.
         caslog.setLevel('CRITICAL')
-        auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
+        if self.auth_provider is None:
+            self.auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
         # auth::standard_role_manager creates "cassandra" role in an
         # async loop auth::do_after_system_ready(), which retries
         # role creation with an exponential back-off. In other
@@ -527,7 +538,7 @@ class ScyllaServer:
                          # This is the latest version Scylla supports
                          protocol_version=4,
                          control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                         auth_provider=auth) as cluster:
+                         auth_provider=self.auth_provider) as cluster:
                 with cluster.connect() as session:
                     connected = True
                     # See the comment above about `auth::standard_role_manager`. We execute
@@ -537,7 +548,7 @@ class ScyllaServer:
                                                         {EXEC_PROFILE_DEFAULT: profile},
                                                    contact_points=contact_points,
                                                    control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                                                   auth_provider=auth)
+                                                   auth_provider=self.auth_provider)
                     self.control_connection = self.control_cluster.connect()
                     return ServerUpState.CQL_QUERIED
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
@@ -1127,7 +1138,8 @@ class ScyllaCluster:
                            connect_driver = True,
                            expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
                            cmdline_options_override: list[str] | None = None,
-                           append_env_override: dict[str, str] | None = None) -> None:
+                           append_env_override: dict[str, str] | None = None,
+                           auth_provider: dict[str, str] | None = None) -> None:
         """Start a server.
 
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
@@ -1164,6 +1176,15 @@ class ScyllaCluster:
 =======
         if not connect_driver:
             expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
+
+        def instance_auth_provider(desc: dict):
+            module_path, class_name = desc["authenticator"].rsplit('.', 1)
+            module = importlib.import_module(module_path)
+            auth_class = getattr(module, class_name)
+            return auth_class(**desc["kwargs"])
+
+        if auth_provider is not None:
+            server.auth_provider = instance_auth_provider(auth_provider)
         await server.start(
             api=self.api,
             expected_error=expected_error,
@@ -1578,6 +1599,7 @@ class ScyllaClusterManager:
             expected_server_up_state=getattr(ServerUpState, data.get("expected_server_up_state", "CQL_QUERIED")),
             cmdline_options_override=data.get("cmdline_options_override"),
             append_env_override=data.get("append_env_override"),
+            auth_provider=data.get("auth_provider"),
         )
 >>>>>>> d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
 

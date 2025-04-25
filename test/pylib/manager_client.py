@@ -217,10 +217,47 @@ class ManagerClient():
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully", timeout=timeout)
 
+<<<<<<< HEAD
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            wait_others: int = 0, wait_interval: float = 45, seeds: Optional[List[IPAddress]] = None,
                            timeout: Optional[float] = None) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
+||||||| parent of a3bb679f49 (test: pylib: add ability to specify default authenticator during server_start)
+    async def server_start(self,
+                           server_id: ServerNum,
+                           expected_error: str | None = None,
+                           wait_others: int = 0,
+                           wait_interval: float = 45,
+                           seeds: list[IPAddress] | None = None,
+                           timeout: float | None = None,
+                           connect_driver: bool = True,
+                           expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                           cmdline_options_override: list[str] | None = None,
+                           append_env_override: dict[str, str] | None = None) -> None:
+        """Start specified server and optionally wait for it to learn of other servers.
+
+        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
+        if provided.
+        """
+=======
+    async def server_start(self,
+                           server_id: ServerNum,
+                           expected_error: str | None = None,
+                           wait_others: int = 0,
+                           wait_interval: float = 45,
+                           seeds: list[IPAddress] | None = None,
+                           timeout: float | None = None,
+                           connect_driver: bool = True,
+                           expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                           cmdline_options_override: list[str] | None = None,
+                           append_env_override: dict[str, str] | None = None,
+                           auth_provider: dict[str, str] | None = None) -> None:
+        """Start specified server and optionally wait for it to learn of other servers.
+
+        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
+        if provided.
+        """
+>>>>>>> a3bb679f49 (test: pylib: add ability to specify default authenticator during server_start)
         logger.debug("ManagerClient starting %s", server_id)
 <<<<<<< HEAD
         data = {"expected_error": expected_error, "seeds": seeds}
@@ -240,6 +277,7 @@ class ManagerClient():
             "expected_server_up_state": expected_server_up_state.name,
             "cmdline_options_override": cmdline_options_override,
             "append_env_override": append_env_override,
+            "auth_provider": auth_provider,
         }
 >>>>>>> d9ec746c6d (test: pylib: allow rolling restart without waiting for cql)
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
