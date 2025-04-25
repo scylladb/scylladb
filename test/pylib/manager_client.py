@@ -246,7 +246,8 @@ class ManagerClient:
                            connect_driver: bool = True,
                            expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
                            cmdline_options_override: list[str] | None = None,
-                           append_env_override: dict[str, str] | None = None) -> None:
+                           append_env_override: dict[str, str] | None = None,
+                           auth_provider: dict[str, str] | None = None) -> None:
         """Start specified server and optionally wait for it to learn of other servers.
 
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
@@ -260,6 +261,7 @@ class ManagerClient:
             "expected_server_up_state": expected_server_up_state.name,
             "cmdline_options_override": cmdline_options_override,
             "append_env_override": append_env_override,
+            "auth_provider": auth_provider,
         }
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
