@@ -26,6 +26,7 @@ import uuid
 from io import BufferedWriter
 
 from test import TOP_SRC_DIR, TEST_DIR
+import importlib
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
@@ -44,7 +45,7 @@ import psutil
 
 from cassandra import InvalidRequest                    # type: ignore
 from cassandra import OperationTimedOut                 # type: ignore
-from cassandra.auth import PlainTextAuthProvider        # type: ignore
+from cassandra.auth import PlainTextAuthProvider, AuthProvider # type: ignore
 from cassandra.cluster import Cluster           # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import NoHostAvailable   # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import Session           # pylint: disable=no-name-in-module
@@ -291,6 +292,7 @@ class ScyllaServer:
         self.cluster_name = cluster_name
         self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
+        self.auth_provider: Optional[AuthProvider] = None
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
@@ -524,7 +526,8 @@ class ScyllaServer:
         oldlevel = caslog.getEffectiveLevel()
         # Be quiet about connection failures.
         caslog.setLevel('CRITICAL')
-        auth = PlainTextAuthProvider(username='cassandra', password='cassandra')
+        if self.auth_provider is None:
+            self.auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
         # auth::standard_role_manager creates "cassandra" role in an
         # async loop auth::do_after_system_ready(), which retries
         # role creation with an exponential back-off. In other
@@ -555,7 +558,7 @@ class ScyllaServer:
                          # This is the latest version Scylla supports
                          protocol_version=4,
                          control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                         auth_provider=auth) as cluster:
+                         auth_provider=self.auth_provider) as cluster:
                 with cluster.connect() as session:
                     connected = True
                     # See the comment above about `auth::standard_role_manager`. We execute
@@ -565,7 +568,7 @@ class ScyllaServer:
                                                         {EXEC_PROFILE_DEFAULT: profile},
                                                    contact_points=contact_points,
                                                    control_connection_timeout=self.TOPOLOGY_TIMEOUT,
-                                                   auth_provider=auth)
+                                                   auth_provider=self.auth_provider)
                     self.control_connection = self.control_cluster.connect()
                     return ServerUpState.CQL_QUERIED
         except (NoHostAvailable, InvalidRequest, OperationTimedOut) as exc:
@@ -1149,7 +1152,7 @@ class ScyllaCluster:
         self.removed.add(server_id)
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
-                           seeds: Optional[List[IPAddress]] = None) -> None:
+                           seeds: Optional[List[IPAddress]] = None, auth_provider: Optional[dict] = None) -> None:
         """Start a server. No-op if already running."""
         if server_id in self.running:
             return
@@ -1166,6 +1169,15 @@ class ScyllaCluster:
         # Put the server in `running` before starting it.
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
+
+        def instance_auth_provider(desc: dict):
+            module_path, class_name = desc["authenticator"].rsplit('.', 1)
+            module = importlib.import_module(module_path)
+            auth_class = getattr(module, class_name)
+            return auth_class(**desc["kwargs"])
+
+        if auth_provider is not None:
+            server.auth_provider = instance_auth_provider(auth_provider)
         await server.start(self.api, expected_error)
         if expected_error is not None:
             self.running.pop(server_id)
@@ -1574,7 +1586,8 @@ class ScyllaClusterManager:
         data = await request.json()
         expected_error = data["expected_error"]
         seeds = data["seeds"]
-        await self.cluster.server_start(server_id, expected_error, seeds)
+        auth_provider = data["auth_provider"]
+        await self.cluster.server_start(server_id, expected_error, seeds, auth_provider)
 
     async def _cluster_server_pause(self, request) -> None:
         """Pause the specified server."""
