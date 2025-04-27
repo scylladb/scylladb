@@ -663,7 +663,21 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
         as.check();
         std::exception_ptr eptr;
         try {
+            utils::get_local_injector().inject("view_building_worker_pause_build_range_task", [&] (auto& handler) -> future<> {
+                bool should_wait = true;
+                auto maybe_raw_token = handler.template get<int64_t>("token");
+                if (maybe_raw_token) {
+                    // Wait only if this range contains given token
+                    should_wait = range.contains(dht::token(*maybe_raw_token), std::compare_three_way{});
+                }
+
+                if (should_wait) {
+                    vbw_logger.info("do_build_range: paused, waiting for message");
+                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5), &as);
+                }
+            }).get();
             utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, as).get();
+            
             vbw_logger.info("Starting range {} building for base table: {}.{}", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
             auto end_token = reader.consume_in_thread(std::move(consumer));
             vbw_logger.info("Built range {} for base table: {}.{}", dht::token_range(range.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
