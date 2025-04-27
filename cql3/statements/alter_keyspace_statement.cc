@@ -245,10 +245,12 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             qp.db().real_database().validate_keyspace_update(*ks_md_update);
 
             service::topology_mutation_builder builder(ts);
-            builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
-            builder.set_global_topology_request_id(global_request_id);
             if (!qp.proxy().features().topology_global_request_queue) {
+                builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+                builder.set_global_topology_request_id(global_request_id);
                 builder.set_new_keyspace_rf_change_data(_name, ks_options);
+            } else {
+                builder.queue_global_topology_request_id(global_request_id);
             };
             service::topology_change change{{builder.build()}};
 

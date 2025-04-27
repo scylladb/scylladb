@@ -163,6 +163,9 @@ struct topology {
     // Pending global topology request's id, which is a new group0's state id
     std::optional<utils::UUID> global_request_id;
 
+    // A queue of pending global topology request's ids. Replaces the single one above
+    std::vector<utils::UUID> global_requests_queue;
+
     // The IDs of the committed CDC generations sorted by timestamps.
     // The obsolete generations may not be in this list as they are continually deleted.
     std::vector<cdc::generation_id_v2> committed_cdc_generations;

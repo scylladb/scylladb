@@ -23,6 +23,7 @@
 #include "db/consistency_level.hh"
 #include "db/commitlog/commitlog.hh"
 #include "storage_proxy.hh"
+#include "service/topology_state_machine.hh"
 #include "unimplemented.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
@@ -1075,13 +1076,18 @@ private:
             // an "Another global topology request is ongoing" error, we can wait for the already queued request to complete.
             // Note that we can not do this for a truncate which the topology coordinator has already started processing,
             // only for a truncate which is still waiting.
-            std::optional<global_topology_request>& global_request = _topology_state_machine._topology.global_request;
-            if (global_request.has_value()) {
-                if (*global_request == global_topology_request::truncate_table) {
+            if (_topology_state_machine._topology.global_request || !_topology_state_machine._topology.global_requests_queue.empty()) {
+                utils::UUID ongoing_global_request_id;
+                if (!_topology_state_machine._topology.global_requests_queue.empty()) {
+                    ongoing_global_request_id = _topology_state_machine._topology.global_requests_queue[0];
+                } else {
+                    ongoing_global_request_id = _topology_state_machine._topology.global_request_id.value();
+                }
+                const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id, true);
+                auto global_request = std::get<service::global_topology_request>(topology_requests_entry.request_type);
+                if (global_request == global_topology_request::truncate_table) {
                     std::optional<topology::transition_state>& tstate = _topology_state_machine._topology.tstate;
                     if (!tstate || *tstate != topology::transition_state::truncate_table) {
-                        const utils::UUID& ongoing_global_request_id = *_topology_state_machine._topology.global_request_id;
-                        const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id, true);
                         if (topology_requests_entry.truncate_table_id == table_id) {
                             global_request_id = ongoing_global_request_id;
                             slogger.info("Ongoing TRUNCATE for table {}.{} (global request ID {}) detected; waiting for it to complete",
@@ -1091,7 +1097,7 @@ private:
                     }
                 }
                 slogger.warn("Another global topology request ({}) is ongoing during attempt to TRUNCATE table {}.{}",
-                                *global_request, ks_name, cf_name);
+                                global_request, ks_name, cf_name);
                 throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to TRUNCATE table {}.{}, please retry.",
                                                                         ks_name, cf_name));
             }
@@ -1099,10 +1105,14 @@ private:
             global_request_id = guard.new_group0_state_id();
 
             std::vector<canonical_mutation> updates;
-            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
-                                    .set_global_topology_request(global_topology_request::truncate_table)
-                                    .set_global_topology_request_id(global_request_id)
-                                    .build());
+            topology_mutation_builder builder(guard.write_timestamp());
+            if (!_sp._features.topology_global_request_queue) {
+                builder.set_global_topology_request(global_topology_request::truncate_table)
+                       .set_global_topology_request_id(global_request_id);
+            } else {
+                builder.queue_global_topology_request_id(global_request_id);
+            }
+            updates.emplace_back(builder.build());
 
             updates.emplace_back(topology_request_tracking_mutation_builder(global_request_id, _sp._features.topology_requests_type_column)
                                     .set_truncate_table_data(table_id)

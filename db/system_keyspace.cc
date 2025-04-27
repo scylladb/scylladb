@@ -273,6 +273,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
+            .with_column("global_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -3294,6 +3295,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
 
         if (some_row.has("global_topology_request_id")) {
             ret.global_request_id = some_row.get_as<utils::UUID>("global_topology_request_id");
+        }
+
+        if (some_row.has("global_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "global_requests")) {
+                ret.global_requests_queue.push_back(value_cast<utils::UUID>(v));
+            }
         }
 
         if (some_row.has("enabled_features")) {

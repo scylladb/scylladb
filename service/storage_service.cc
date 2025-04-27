@@ -4742,16 +4742,17 @@ future<> storage_service::do_cluster_cleanup() {
 
         rtlogger.info("cluster cleanup requested");
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.set_global_topology_request(global_topology_request::cleanup);
         std::vector<canonical_mutation> muts;
         if (_feature_service.topology_global_request_queue) {
             request_id = guard.new_group0_state_id();
-            builder.set_global_topology_request_id(request_id);
+            builder.queue_global_topology_request_id(request_id);
             topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
             rtbuilder.set("done", false)
                      .set("start_time", db_clock::now())
                      .set("request_type", global_topology_request::cleanup);
             muts.push_back(rtbuilder.build());
+        } else {
+            builder.set_global_topology_request(global_topology_request::cleanup);
         }
         muts.push_back(builder.build());
         topology_change change{std::move(muts)};
@@ -4995,7 +4996,18 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
     while (true) {
         rtlogger.info("request check_and_repair_cdc_streams, refreshing topology");
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
-        auto curr_req = _topology_state_machine._topology.global_request;
+        std::optional<global_topology_request> curr_req;
+        if (_topology_state_machine._topology.global_request) {
+            curr_req = *_topology_state_machine._topology.global_request;
+            request_id = _topology_state_machine._topology.global_request_id.value();
+        } else if (!_topology_state_machine._topology.global_requests_queue.empty()) {
+            request_id = _topology_state_machine._topology.global_requests_queue[0];
+            auto req_entry = co_await _sys_ks.local().get_topology_request_entry(request_id, true);
+            curr_req = std::get<global_topology_request>(req_entry.request_type);
+        } else {
+            request_id = utils::UUID{};
+        }
+
         if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
             // FIXME: replace this with a queue
             throw std::runtime_error{
@@ -5014,20 +5026,19 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             cdc_log.info("CDC generation {} needs repair, requesting a new one", last_committed_gen);
         }
 
-        if (_topology_state_machine._topology.global_request_id) {
-            request_id = *_topology_state_machine._topology.global_request_id;
-        } else {
+        if (!request_id) {
             topology_mutation_builder builder(guard.write_timestamp());
-            builder.set_global_topology_request(global_topology_request::new_cdc_generation);
             std::vector<canonical_mutation> muts;
             if (_feature_service.topology_global_request_queue) {
                 request_id = guard.new_group0_state_id();
                 topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
-                builder.set_global_topology_request_id(request_id);
+                builder.queue_global_topology_request_id(request_id);
                 rtbuilder.set("done", false)
                          .set("start_time", db_clock::now())
                          .set("request_type", global_topology_request::new_cdc_generation);
                 muts.push_back(rtbuilder.build());
+            } else {
+                builder.set_global_topology_request(global_topology_request::new_cdc_generation);
             }
             muts.push_back(builder.build());
             topology_change change{std::move(muts)};

@@ -874,7 +874,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // Precondition: there is no node request and no ongoing topology transition
     // (checked under the guard we're holding).
     future<> handle_global_request(group0_guard guard) {
-        switch (_topo_sm._topology.global_request.value()) {
+        global_topology_request req;
+        utils::UUID req_id;
+        db::system_keyspace::topology_requests_entry req_entry;
+
+        if (_topo_sm._topology.global_request) {
+            req = *_topo_sm._topology.global_request;
+            req_id = _topo_sm._topology.global_request_id.value();
+        } else {
+            assert(_feature_service.topology_global_request_queue);
+            req_id = _topo_sm._topology.global_requests_queue[0];
+            req_entry = co_await _sys_ks.get_topology_request_entry(req_id, true);
+            req = std::get<global_topology_request>(req_entry.request_type);
+        }
+        switch (req) {
         case global_topology_request::new_cdc_generation: {
             rtlogger.info("new CDC generation requested");
 
@@ -889,14 +902,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             // after the generation is committed prevents this from happening. The second request would have
             // no effect - it would just overwrite the first request.
             builder.set_transition_state(topology::transition_state::commit_cdc_generation)
-                   .set_new_cdc_generation_data_uuid(gen_uuid);
+                   .set_new_cdc_generation_data_uuid(gen_uuid)
+                   .set_global_topology_request(req)
+                   .set_global_topology_request_id(req_id)
+                   .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id);
             auto reason = ::format(
                 "insert CDC generation data (UUID: {})", gen_uuid);
             co_await update_topology_state(std::move(guard), {std::move(mutation), builder.build()}, reason);
         }
         break;
         case global_topology_request::cleanup:
-            co_await start_cleanup_on_dirty_nodes(std::move(guard), true);
+            co_await start_cleanup_on_dirty_nodes(std::move(guard), req_id);
             break;
         case global_topology_request::keyspace_rf_change: {
             rtlogger.info("keyspace_rf_change requested");
@@ -906,15 +922,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
                 saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
             } else {
-                const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(*_topo_sm._topology.global_request_id, true);
-                ks_name = *topology_requests_entry.new_keyspace_rf_change_ks_name;
-                saved_ks_props = *topology_requests_entry.new_keyspace_rf_change_data;
+                ks_name = *req_entry.new_keyspace_rf_change_ks_name;
+                saved_ks_props = *req_entry.new_keyspace_rf_change_data;
             }
             cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
 
             auto repl_opts = new_ks_props.get_replication_options();
             repl_opts.erase(cql3::statements::ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
-            utils::UUID req_uuid = *_topo_sm._topology.global_request_id;
             std::vector<canonical_mutation> updates;
             sstring error;
             if (_db.has_keyspace(ks_name)) {
@@ -962,8 +976,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                                          .set_version(_topo_sm._topology.version + 1)
                                                          .del_global_topology_request()
                                                          .del_global_topology_request_id()
+                                                         .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
                                                          .build()));
-            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_uuid)
+            updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .done(error)
                                                          .build()));
             if (error.empty()) {
@@ -989,7 +1004,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             rtlogger.info("TRUNCATE TABLE requested");
             topology_mutation_builder builder(guard.write_timestamp());
             builder.set_transition_state(topology::transition_state::truncate_table)
-                   .set_session(session_id(_topo_sm._topology.global_request_id.value()));
+                   .set_global_topology_request(req)
+                   .set_global_topology_request_id(req_id)
+                   .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                   .set_session(session_id(req_id));
             co_await update_topology_state(std::move(guard), {builder.build()}, "TRUNCATE TABLE requested");
         }
         break;
@@ -1877,7 +1895,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         guard = std::get<group0_guard>(std::move(work));
 
-        if (_topo_sm._topology.global_request) {
+        if (_topo_sm._topology.global_request || !_topo_sm._topology.global_requests_queue.empty()) {
             return std::make_pair(true, std::move(guard));
         }
 
@@ -1970,13 +1988,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
 
             if (auto* cleanup = std::get_if<start_cleanup>(&work)) {
-                co_await start_cleanup_on_dirty_nodes(std::move(cleanup->guard), false);
+                co_await start_cleanup_on_dirty_nodes(std::move(cleanup->guard), utils::UUID{});
                 co_return true;
             }
 
             guard = std::get<group0_guard>(std::move(work));
 
-            if (_topo_sm._topology.global_request) {
+            if (_topo_sm._topology.global_request || !_topo_sm._topology.global_requests_queue.empty()) {
                 co_await handle_global_request(std::move(guard));
                 co_return true;
             }
@@ -2902,17 +2920,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return muts;
     }
 
-    future<> start_cleanup_on_dirty_nodes(group0_guard guard, bool global_request) {
+    future<> start_cleanup_on_dirty_nodes(group0_guard guard, utils::UUID global_request_id) {
         auto& topo = _topo_sm._topology;
         std::vector<canonical_mutation> muts;
-        muts.reserve(topo.normal_nodes.size() + size_t(global_request));
+        muts.reserve(topo.normal_nodes.size() + size_t(bool(global_request_id)));
 
-        if (global_request) {
+        if (global_request_id) {
             topology_mutation_builder builder(guard.write_timestamp());
             builder.del_global_topology_request();
             if (_feature_service.topology_global_request_queue) {
-                topology_request_tracking_mutation_builder rtbuilder(*_topo_sm._topology.global_request_id);
-                builder.del_global_topology_request_id();
+                topology_request_tracking_mutation_builder rtbuilder(global_request_id);
+                builder.del_global_topology_request_id()
+                       .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, global_request_id);
                 rtbuilder.done();
                 muts.emplace_back(rtbuilder.build());
             }
