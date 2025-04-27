@@ -1839,8 +1839,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .del_global_topology_request_id()
                                 .build());
             updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
-                                .set("end_time", db_clock::now())
-                                .set("done", true)
+                                .done()
                                 .build());
 
             try {
