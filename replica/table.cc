@@ -3257,14 +3257,9 @@ void table::set_schema(schema_ptr s) {
     _schema = std::move(s);
 
     for (auto&& v : _views) {
-        auto base_info = v->view_info()->make_base_dependent_view_info(*_schema);
-        v->view_info()->set_base_info(base_info);
-        if (v->registry_entry()) {
-            v->registry_entry()->update_base_schema(_schema);
-        }
+        v->view_info()->reset_view_info();
         if (auto reverse_schema = local_schema_registry().get_or_null(reversed(v->version()))) {
-            reverse_schema->view_info()->set_base_info(base_info);
-            reverse_schema->registry_entry()->update_base_schema(_schema);
+            reverse_schema->view_info()->reset_view_info();
         }
     }
 
@@ -3821,7 +3816,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
         co_return row_locker::lock_holder();
     }
 
-    auto views = db::view::with_base_info_snapshot(affected_views(gen, base, m));
+    auto views = affected_views(gen, base, m);
     if (views.empty()) {
         co_return row_locker::lock_holder();
     }

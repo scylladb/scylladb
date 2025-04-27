@@ -1489,7 +1489,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             }
         }
         const bool include_all_columns = true;
-        view_builder.with_view_info(*schema, include_all_columns, ""/*where clause*/);
+        view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
     }
 
     // FIXME: the following needs to be in a loop. If mm.announce() below
@@ -1774,7 +1774,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
                     }
                     const bool include_all_columns = true;
-                    view_builder.with_view_info(*schema, include_all_columns, ""/*where clause*/);
+                    view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
                     new_views.emplace_back(view_builder.build());
                 } else if (op == "Delete") {
                     elogger.trace("Deleting GSI {}", index_name);
