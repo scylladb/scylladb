@@ -4716,6 +4716,7 @@ future<> storage_service::do_drain() {
 future<> storage_service::do_cluster_cleanup() {
     auto& raft_server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
+    utils::UUID request_id;
 
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
@@ -4742,7 +4743,17 @@ future<> storage_service::do_cluster_cleanup() {
         rtlogger.info("cluster cleanup requested");
         topology_mutation_builder builder(guard.write_timestamp());
         builder.set_global_topology_request(global_topology_request::cleanup);
-        topology_change change{{builder.build()}};
+        std::vector<canonical_mutation> muts;
+        if (_feature_service.topology_global_request_queue) {
+            request_id = guard.new_group0_state_id();
+            builder.set_global_topology_request_id(request_id);
+            topology_request_tracking_mutation_builder rtbuilder(request_id);
+            rtbuilder.set("done", false)
+                    .set("start_time", db_clock::now());
+            muts.push_back(rtbuilder.build());
+        }
+        muts.push_back(builder.build());
+        topology_change change{std::move(muts)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup: cluster cleanup requested"));
 
         try {
@@ -4754,7 +4765,18 @@ future<> storage_service::do_cluster_cleanup() {
         break;
     }
 
-    // Wait cleanup finishes on all nodes
+    if (request_id) {
+        // Wait until request completes
+        auto error = co_await wait_for_topology_request_completion(request_id);
+        if (!error.empty()) {
+            auto err = fmt::format("Cleanup failed. See earlier errors ({}). Request ID: {}", error, request_id);
+            rtlogger.error("{}", err);
+            throw std::runtime_error(err);
+        }
+    }
+
+    // The wait above only wait until the comand is processed by the topology coordinator which start cleanup process,
+    // but we still need to wait for cleanup to complete here.
     co_await _topology_state_machine.event.when([this] {
         return std::all_of(_topology_state_machine._topology.normal_nodes.begin(), _topology_state_machine._topology.normal_nodes.end(), [] (auto& n) {
             return n.second.cleanup == cleanup_status::clean;
