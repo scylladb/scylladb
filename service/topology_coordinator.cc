@@ -979,12 +979,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         break;
         case global_topology_request::truncate_table: {
             rtlogger.info("TRUNCATE TABLE requested");
-            std::vector<canonical_mutation> updates;
-            updates.push_back(topology_mutation_builder(guard.write_timestamp())
-                                .set_transition_state(topology::transition_state::truncate_table)
-                                .set_session(session_id(_topo_sm._topology.global_request_id.value()))
-                                .build());
-            co_await update_topology_state(std::move(guard), std::move(updates), "TRUNCATE TABLE requested");
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.set_transition_state(topology::transition_state::truncate_table)
+                   .set_session(session_id(_topo_sm._topology.global_request_id.value()));
+            co_await update_topology_state(std::move(guard), {builder.build()}, "TRUNCATE TABLE requested");
         }
         break;
         }
