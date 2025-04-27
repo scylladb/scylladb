@@ -26,6 +26,7 @@
 #include "test/lib/tmpdir.hh"
 #include "utils/assert.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/helpers/bucket_lister.hh"
 #include "utils/s3/creds.hh"
 #include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"

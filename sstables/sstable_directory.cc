@@ -24,6 +24,7 @@
 #include "utils/overloaded_functor.hh"
 #include "utils/directories.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/helpers/bucket_lister.hh"
 #include "replica/database.hh"
 #include "dht/auto_refreshing_sharder.hh"
 
