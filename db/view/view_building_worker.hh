@@ -113,6 +113,7 @@ public:
 
 private:
     future<> run_view_building_state_observer();
+    future<> update_built_views();
     future<> update_building_state();
     future<> start_new_tasks(std::unordered_map<shard_id, std::vector<service::view_building::view_building_task>> new_tasks);
     bool is_shard_free(shard_id shard);
