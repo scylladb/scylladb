@@ -147,6 +147,7 @@ future<> view_building_worker::run_view_building_state_observer() {
             vbw_logger.trace("view_building_state_observer() iteration");
             auto read_apply_mutex_holder = co_await _group0_client.hold_read_apply_mutex(_as);
 
+            co_await update_built_views();
             co_await update_building_state();
             _as.check();
 
@@ -166,6 +167,43 @@ future<> view_building_worker::run_view_building_state_observer() {
             } catch (...) {
                 vbw_logger.warn("view_building_state_observer sleep failed: {}", std::current_exception());
             }
+        }
+    }
+}
+
+// Compares tablet-based views entries in `system.view_build_status_v2`(group0 table)
+// with data in `system.built_views`(local table), and updates the second table accordingly.
+// When we observe that a view is built, we also remove entries in `system.scylla_views_builds_in_progress`.
+future<> view_building_worker::update_built_views() {
+    auto id_to_name = [&] (table_id table_id) {
+        auto schema = _db.find_schema(table_id);
+        return std::make_pair(schema->ks_name(), schema->cf_name());
+    };
+    auto& sys_ks = _group0_client.sys_ks();
+
+    std::set<std::pair<sstring, sstring>> built_views;
+    for (auto& [id, statuses]: _vb_state_machine.views_state.status_map) {
+        if (std::ranges::all_of(statuses, [] (const auto& e) { return e.second == build_status::SUCCESS; })) {
+            built_views.insert(id_to_name(id));
+        }
+    }
+
+    auto local_built = co_await sys_ks.load_built_views() | std::views::filter([&] (auto& v) {
+        return !_db.has_keyspace(v.first) || _db.find_keyspace(v.first).uses_tablets();
+    }) | std::ranges::to<std::set>();
+
+    // Remove dead entries
+    for (auto& view: local_built) {
+        if (!built_views.contains(view)) {
+            co_await sys_ks.remove_built_view(view.first, view.second);
+        }
+    }
+
+    // Add new entries
+    for (auto& view: built_views) {
+        if (!local_built.contains(view)) {
+            co_await sys_ks.mark_view_as_built(view.first, view.second);
+            co_await sys_ks.remove_view_build_progress_across_all_shards(view.first, view.second);
         }
     }
 }
