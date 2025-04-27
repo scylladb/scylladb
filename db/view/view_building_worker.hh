@@ -127,6 +127,7 @@ public:
 
 private:
     future<> run_view_building_state_observer();
+    future<> update_built_views();
     future<> update_building_state();
     bool is_shard_free(shard_id shard);
     
