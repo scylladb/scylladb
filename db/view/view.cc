@@ -4202,6 +4202,20 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
         auto range = local_vbw.get_tablet_token_range(task.base_id, task.tid);
         auto prange = dht::to_partition_range(range);
 
+        utils::get_local_injector().inject("view_building_worker_pause_build_range_task", [&] (auto& handler) -> future<> {
+            bool should_wait = true;
+            auto maybe_raw_token = handler.template get<int64_t>("token");
+            if (maybe_raw_token) {
+                // Wait only if this range contains given token
+                should_wait = range.contains(dht::token(*maybe_raw_token), std::compare_three_way{});
+            }
+
+            if (should_wait) {
+                vbw_logger.info("do_build_range: paused, waiting for message");
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(1));
+            }
+        }).get();
+
         auto reader = base_cf->get_sstable_set().make_local_shard_sstable_reader(
                 base_cf->schema(), 
                 permit,
