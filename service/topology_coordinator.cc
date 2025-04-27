@@ -1465,6 +1465,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         utils::get_local_injector().inject("stream_tablet_fail_on_drain",
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
+                    utils::get_local_injector().inject("stream_tablet_fail",
+                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
 
                     if (action_failed(tablet_state.streaming)) {
                         bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
