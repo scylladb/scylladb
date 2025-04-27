@@ -2913,6 +2913,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (global_request) {
             topology_mutation_builder builder(guard.write_timestamp());
             builder.del_global_topology_request();
+            if (_feature_service.topology_global_request_queue) {
+                topology_request_tracking_mutation_builder rtbuilder(*_topo_sm._topology.global_request_id);
+                builder.del_global_topology_request_id();
+                rtbuilder.done();
+                muts.emplace_back(rtbuilder.build());
+            }
             muts.emplace_back(builder.build());
         }
         for (auto& [id, rs] : topo.normal_nodes) {
