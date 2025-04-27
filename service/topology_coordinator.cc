@@ -2154,6 +2154,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // Note: if there was a replace or removenode going on, we'd need to put the replaced/removed
                 // node into `exclude_nodes` parameter in `exec_global_command`, but CDC generations are never
                 // introduced during replace/remove.
+                topology_mutation_builder builder(guard.write_timestamp());
+                if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
+                    builder.del_global_topology_request();
+                    builder.del_global_topology_request_id();
+                    builder.del_transition_state();
+                }
+
                 try {
                     guard = co_await exec_global_command(std::move(guard), raft_topology_cmd::command::barrier, {_raft.id()});
                 } catch (term_changed_error&) {
@@ -2166,6 +2173,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     rtlogger.error("transition_state::commit_cdc_generation, "
                                     "raft_topology_cmd::command::barrier failed, error {}", std::current_exception());
                     _rollback = fmt::format("Failed to commit cdc generation: {}", std::current_exception());
+                }
+
+                if (_rollback) {
+                    if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation && _feature_service.topology_global_request_queue) {
+                        topology_request_tracking_mutation_builder rtbuilder(*_topo_sm._topology.global_request_id);
+                        // if this is global command fail it since there is nothing to rollback
+                        rtbuilder.done(*_rollback);
+                        _rollback.reset();
+                        co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, "committed new CDC generation command failed");
+                    }
                     break;
                 }
 
@@ -2219,15 +2236,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 // in the middle of a CDC generation switch (when they are prepared to switch but not
                 // committed) - they won't coordinate CDC-enabled writes until they reconnect to the
                 // majority and commit.
-                topology_mutation_builder builder(guard.write_timestamp());
                 std::vector<canonical_mutation> updates;
                 builder.add_new_committed_cdc_generation(cdc_gen_id);
                 if (_topo_sm._topology.global_request == global_topology_request::new_cdc_generation) {
-                    builder.del_global_topology_request();
-                    builder.del_transition_state();
                     if (_feature_service.topology_global_request_queue) {
                         topology_request_tracking_mutation_builder rtbuilder(*_topo_sm._topology.global_request_id);
-                        builder.del_global_topology_request_id();
                         rtbuilder.done();
                         updates.push_back(rtbuilder.build());
                     }
