@@ -81,11 +81,11 @@ static dht::shard_replica_set shards_for_writes(const schema& s, dht::token toke
     return shards;
 }
 
-future<paxos_state> paxos_state::load_and_repair_paxos_state(db::system_keyspace& sys_ks,
+future<paxos_state> paxos_state::load_and_repair_paxos_state(paxos_store& paxos_store,
         partition_key_view key, schema_ptr s, gc_clock::time_point now,
         db::timeout_clock::time_point timeout, const dht::shard_replica_set& shards)
 {
-    auto f = futurize_invoke(std::mem_fn(&db::system_keyspace::load_paxos_state), &sys_ks, key, s, now, timeout);
+    auto f = futurize_invoke(std::mem_fn(&paxos_store::load_paxos_state), &paxos_store, key, s, now, timeout);
     if (shards.size() > 1) {
         logger.debug("load_and_repair_paxos_state[{}]: two shards {}, load paxos state from both",
             key, shards);
@@ -98,11 +98,11 @@ future<paxos_state> paxos_state::load_and_repair_paxos_state(db::system_keyspace
                 format("invalid shards, this_shard_id {}, shard_for_writes {}", this_shard_id(), shards));
         }
         f = when_all_succeed(std::move(f),
-                smp::submit_to(*it, [&sys_ks, key, s, now, timeout] mutable {
-                    return sys_ks.load_paxos_state(key, std::move(s), now, timeout);
+                smp::submit_to(*it, [&paxos_store, key, s, now, timeout] mutable {
+                    return paxos_store.load_paxos_state(key, std::move(s), now, timeout);
                 })
             )
-            .then([&sys_ks, s, key, timeout](std::tuple<paxos_state, paxos_state> state) -> future<paxos_state> {
+            .then([&paxos_store, s, key, timeout](std::tuple<paxos_state, paxos_state> state) -> future<paxos_state> {
                 auto& [s0, s1] = state;
 
                 if (s0._promised_ballot == s1._promised_ballot &&
@@ -127,12 +127,12 @@ future<paxos_state> paxos_state::load_and_repair_paxos_state(db::system_keyspace
                 std::vector<future<>> futures;
                 futures.reserve(3);
                 if (accepted_proposal && s0._accepted_proposal != s1._accepted_proposal) {
-                    futures.push_back(sys_ks.save_paxos_proposal(*s, *accepted_proposal, timeout));
+                    futures.push_back(paxos_store.save_paxos_proposal(*s, *accepted_proposal, timeout));
                 } else if (s0._promised_ballot != s1._promised_ballot) {
-                    futures.push_back(sys_ks.save_paxos_promise(*s, key, promised_ballot, timeout));
+                    futures.push_back(paxos_store.save_paxos_promise(*s, key, promised_ballot, timeout));
                 }
                 if (s0._most_recent_commit != s1._most_recent_commit) {
-                    futures.push_back(sys_ks.save_paxos_decision(*s, *most_recent_commit, timeout));
+                    futures.push_back(paxos_store.save_paxos_decision(*s, *most_recent_commit, timeout));
                 }
                 auto result = make_ready_future<paxos_state>(promised_ballot,
                     std::move(accepted_proposal),
@@ -148,7 +148,7 @@ future<paxos_state> paxos_state::load_and_repair_paxos_state(db::system_keyspace
     return f;
 }
 
-future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema,
+future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
     co_await utils::get_local_injector().inject("paxos_prepare_timeout", timeout);
@@ -173,7 +173,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
     // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
     auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
-    paxos_state state = co_await load_and_repair_paxos_state(sys_ks, key, schema, gc_clock::time_point(now_in_sec), timeout, shards);
+    paxos_state state = co_await load_and_repair_paxos_state(paxos_store, key, schema, gc_clock::time_point(now_in_sec), timeout, shards);
     // If received ballot is newer that the one we already accepted it has to be accepted as well,
     // but we will return the previously accepted proposal so that the new coordinator will use it instead of
     // its own.
@@ -188,7 +188,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
         // If querying the result fails we continue without read round optimization
         auto [data_or_digest] = co_await coroutine::all(
             [&] {
-                return sys_ks.save_paxos_promise(*schema, std::ref(key), ballot, timeout);
+                return paxos_store.save_paxos_promise(*schema, std::ref(key), ballot, timeout);
             },
             [&] () -> future<std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>>> {
                 try {
@@ -211,7 +211,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
             co_await coroutine::return_exception(utils::injected_error("injected_error_after_save_promise"));
         }
 
-        auto upgrade_if_needed = [schema = std::move(schema), &sys_ks] (std::optional<proposal> p) -> future<std::optional<proposal>> {
+        auto upgrade_if_needed = [schema = std::move(schema), &paxos_store] (std::optional<proposal> p) -> future<std::optional<proposal>> {
             if (!p || p->update.schema_version() == schema->version()) {
                 co_return std::move(p);
             }
@@ -223,7 +223,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
             // for that version and upgrade the mutation with it.
             logger.debug("Stored mutation references outdated schema version. "
                 "Trying to upgrade the accepted proposal mutation to the most recent schema version.");
-            const column_mapping& cm = co_await service::get_column_mapping(sys_ks, p->update.column_family_id(), p->update.schema_version());
+            const column_mapping& cm = co_await paxos_store.get_column_mapping(p->update.column_family_id(), p->update.schema_version());
 
             co_return std::make_optional(proposal(p->ballot, freeze(p->update.unfreeze_upgrading(schema, cm))));
         };
@@ -241,7 +241,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
     }
 }
 
-future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
+future<bool> paxos_state::accept(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     co_await utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout);
     utils::latency_counter lc;
@@ -258,7 +258,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
     auto guard = co_await get_replica_lock(token, timeout, shards);
 
     auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
-    paxos_state state = co_await load_and_repair_paxos_state(sys_ks, proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout, shards);
+    paxos_state state = co_await load_and_repair_paxos_state(paxos_store, proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout, shards);
 
     // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
     // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
@@ -270,7 +270,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
             co_await coroutine::return_exception(utils::injected_error("injected_error_before_save_proposal"));
         }
 
-        co_await sys_ks.save_paxos_proposal(*schema, proposal, timeout);
+        co_await paxos_store.save_paxos_proposal(*schema, proposal, timeout);
 
         if (utils::get_local_injector().enter("paxos_error_after_save_proposal")) {
             co_await coroutine::return_exception(utils::injected_error("injected_error_after_save_proposal"));
@@ -283,7 +283,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
     }
 }
 
-future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, schema_ptr schema, proposal decision, clock_type::time_point timeout,
+future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_ptr schema, proposal decision, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
     if (utils::get_local_injector().enter("paxos_error_before_learn")) {
         co_await coroutine::return_exception(utils::injected_error("injected_error_before_learn"));
@@ -337,14 +337,45 @@ future<> paxos_state::learn(storage_proxy& sp, db::system_keyspace& sys_ks, sche
     // We don't need to lock the partition key if there is no gap between loading paxos
     // state and saving it, and here we're just blindly updating.
     co_await utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout);
-    co_return co_await sys_ks.save_paxos_decision(*schema, decision, timeout);
+    co_return co_await paxos_store.save_paxos_decision(*schema, decision, timeout);
 }
 
-future<> paxos_state::prune(db::system_keyspace& sys_ks, schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
+future<> paxos_state::prune(paxos_store& paxos_store, schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
         tracing::trace_state_ptr tr_state) {
     logger.debug("Delete paxos state for ballot {}", ballot);
     tracing::trace(tr_state, "Delete paxos state for ballot {}", ballot);
-    return sys_ks.delete_paxos_decision(*schema, key, ballot, timeout);
+    return paxos_store.delete_paxos_decision(*schema, key, ballot, timeout);
+}
+
+paxos_store::paxos_store(db::system_keyspace& sys_ks)
+: _sys_ks(sys_ks)
+{
+}
+
+future<column_mapping> paxos_store::get_column_mapping(table_id table_id, table_schema_version version) {
+    return service::get_column_mapping(_sys_ks, table_id, version);
+}
+
+future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
+    db::timeout_clock::time_point timeout)
+{
+    return _sys_ks.load_paxos_state(std::move(key), std::move(s), now, timeout);
+}
+
+future<> paxos_store::save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
+    return _sys_ks.save_paxos_promise(s, key, ballot, timeout);
+}
+
+future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& proposal, db::timeout_clock::time_point timeout) {
+    return _sys_ks.save_paxos_proposal(s, proposal, timeout);
+}
+
+future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decision, db::timeout_clock::time_point timeout) {
+    return _sys_ks.save_paxos_decision(s, decision, timeout);
+}
+
+future<> paxos_store::delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
+    return _sys_ks.delete_paxos_decision(s, key, ballot, timeout);
 }
 
 } // end of namespace "service::paxos"
