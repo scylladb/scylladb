@@ -646,7 +646,6 @@ struct alignas(segment_size) segment {
     static void operator delete(void* ptr) = delete;
 };
 
-static constexpr size_t max_managed_object_size = segment_size * 0.1;
 static constexpr auto max_used_space_ratio_for_compaction = 0.85;
 static constexpr size_t max_used_space_for_compaction = segment_size * max_used_space_ratio_for_compaction;
 static constexpr size_t min_free_space_for_compaction = segment_size - max_used_space_for_compaction;
