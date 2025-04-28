@@ -69,6 +69,7 @@ using nodes_ref_list_t = std::vector<std::pair<raft::server_id, std::reference_w
 class rack_info {
 
     size_t _alive_nodes_remaining = 0;
+    size_t _existing_alive_voters_remaining = 0;
     size_t _existing_dead_voters_remaining = 0;
 
     using node_info_t = std::tuple<node_priority::value_t, raft::server_id,
@@ -88,16 +89,25 @@ class rack_info {
 
     size_t _assigned_voters_count = 0;
 
-    static nodes_store_t create_nodes_list(std::ranges::input_range auto&& nodes, size_t& alive_nodes_remaining, size_t& existing_dead_voters_remaining) {
+    const group0_voter_calculator::node_descriptor* _selected_voter = nullptr;
+
+    static nodes_store_t create_nodes_list(std::ranges::input_range auto&& nodes, size_t& alive_nodes_remaining, size_t& existing_alive_voters_remaining,
+            size_t& existing_dead_voters_remaining) {
         alive_nodes_remaining = 0;
+        existing_alive_voters_remaining = 0;
         existing_dead_voters_remaining = 0;
 
-        return nodes | std::views::transform([&alive_nodes_remaining, &existing_dead_voters_remaining](const auto& node_entry) {
+        return nodes | std::views::transform([&alive_nodes_remaining, &existing_alive_voters_remaining, &existing_dead_voters_remaining](const auto& node_entry) {
             const auto& [id, node] = node_entry;
             if (node.get().is_alive) {
                 ++alive_nodes_remaining;
-            } else if (node.get().is_voter) {
-                ++existing_dead_voters_remaining;
+            }
+            if (node.get().is_voter) {
+                if (node.get().is_alive) {
+                    ++existing_alive_voters_remaining;
+                } else {
+                    ++existing_dead_voters_remaining;
+                }
             }
             return std::make_tuple(node_priority::get_value(node), id, node);
         }) | std::ranges::to<nodes_store_t>();
@@ -105,7 +115,7 @@ class rack_info {
 
 public:
     explicit rack_info(std::ranges::input_range auto&& nodes)
-        : _nodes(create_nodes_list(nodes, _alive_nodes_remaining, _existing_dead_voters_remaining)) {
+        : _nodes(create_nodes_list(nodes, _alive_nodes_remaining, _existing_alive_voters_remaining, _existing_dead_voters_remaining)) {
     }
 
     // Select the "best" next voter from the rack
@@ -115,6 +125,8 @@ public:
     // If a node is selected, it is removed from the list of candidates, and the number of voters assigned
     // to the rack is incremented.
     [[nodiscard]] std::optional<raft::server_id> select_next_voter() {
+        _selected_voter = nullptr;
+
         if (_nodes.empty()) {
             return std::nullopt;
         }
@@ -125,14 +137,27 @@ public:
         if (node.get().is_alive) {
             SCYLLA_ASSERT(_alive_nodes_remaining > 0);
             --_alive_nodes_remaining;
-        } else if (node.get().is_voter) {
-            SCYLLA_ASSERT(_existing_dead_voters_remaining > 0);
-            --_existing_dead_voters_remaining;
+        }
+        if (node.get().is_voter) {
+            if (node.get().is_alive) {
+                SCYLLA_ASSERT(_existing_alive_voters_remaining > 0);
+                --_existing_alive_voters_remaining;
+            } else {
+                SCYLLA_ASSERT(_existing_dead_voters_remaining > 0);
+                --_existing_dead_voters_remaining;
+            }
         }
 
         ++_assigned_voters_count;
+        _selected_voter = &node.get();
 
         return voter_id;
+    }
+
+    // Get the node descriptor for the currently selected voter
+    [[nodiscard]] const group0_voter_calculator::node_descriptor& get_selected_voter_info() const {
+        SCYLLA_ASSERT(_selected_voter != nullptr);
+        return *_selected_voter;
     }
 
     // Check if there are more candidates available for voter selection
@@ -149,12 +174,17 @@ public:
             return rack1._assigned_voters_count > rack2._assigned_voters_count;
         }
 
-        // Second criteria: The number of alive nodes (voters and non-voters) remaining (higher has more priority)
+        // Second criteria: The number of existing alive voters remaining (higher has more priority)
+        if (rack1._existing_alive_voters_remaining != rack2._existing_alive_voters_remaining) {
+            return rack1._existing_alive_voters_remaining < rack2._existing_alive_voters_remaining;
+        }
+
+        // Third criteria: The number of alive nodes (voters and non-voters) remaining (higher has more priority)
         if (rack1._alive_nodes_remaining != rack2._alive_nodes_remaining) {
             return rack1._alive_nodes_remaining < rack2._alive_nodes_remaining;
         }
 
-        // Third criteria: The number of existing dead voters remaining (higher has more priority)
+        // Fourth criteria: The number of existing dead voters remaining (higher has more priority)
         //      We want to keep the existing dead voters in case we can't find enough alive voters.
         return rack1._existing_dead_voters_remaining < rack2._existing_dead_voters_remaining;
     }
@@ -175,13 +205,22 @@ class datacenter_info {
     size_t _nodes_remaining = 0;
     size_t _assigned_voters_count = 0;
 
+    size_t _existing_alive_voters_remaining = 0;
+
     using racks_store_t = std::priority_queue<rack_info>;
     racks_store_t _racks;
 
-    static racks_store_t create_racks_list(std::ranges::input_range auto&& nodes) {
+    static racks_store_t create_racks_list(std::ranges::input_range auto&& nodes, size_t& existing_alive_voters_remaining) {
+        existing_alive_voters_remaining = 0;
+
         std::unordered_map<std::string_view, nodes_ref_list_t> nodes_by_rack;
         for (const auto& [id, node] : nodes) {
             nodes_by_rack[node.get().rack].emplace_back(id, node);
+            if (node.get().is_alive) {
+                if (node.get().is_voter) {
+                    ++existing_alive_voters_remaining;
+                }
+            }
         }
 
         return nodes_by_rack | std::views::values | std::ranges::to<racks_store_t>();
@@ -190,7 +229,7 @@ class datacenter_info {
 public:
     explicit datacenter_info(std::ranges::sized_range auto&& nodes)
         : _nodes_remaining(nodes.size())
-        , _racks(create_racks_list(nodes)) {
+        , _racks(create_racks_list(nodes, _existing_alive_voters_remaining)) {
     }
 
     // Select the "best" next voter from the datacenter
@@ -214,6 +253,15 @@ public:
 
             if (rack.has_more_candidates()) {
                 _racks.push(rack);
+            }
+
+            const auto& node = rack.get_selected_voter_info();
+
+            if (node.is_alive) {
+                if (node.is_voter) {
+                    SCYLLA_ASSERT(_existing_alive_voters_remaining > 0);
+                    --_existing_alive_voters_remaining;
+                }
             }
 
             SCYLLA_ASSERT(_nodes_remaining > 0);
@@ -244,7 +292,12 @@ public:
             return dc1._assigned_voters_count > dc2._assigned_voters_count;
         }
 
-        // Second criteria: The number of racks (higher has more priority)
+        // Second criteria: The number of existing alive voters remaining (higher has more priority)
+        if (dc1._existing_alive_voters_remaining != dc2._existing_alive_voters_remaining) {
+            return dc1._existing_alive_voters_remaining < dc2._existing_alive_voters_remaining;
+        }
+
+        // Third criteria: The number of racks (higher has more priority)
         return dc1._racks.size() < dc2._racks.size();
     }
 };

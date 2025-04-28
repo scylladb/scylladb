@@ -869,4 +869,74 @@ BOOST_AUTO_TEST_CASE(dcs_preferred_over_racks) {
 }
 
 
+BOOST_AUTO_TEST_CASE(existing_voters_are_retained_across_dcs) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add the nodes (3 of them are voters).
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-3", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-4", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-5", .rack = "rack", .is_voter = true, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: Existing voters are retained in the voter set.
+
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
+
+    for (const auto& [id, node] : nodes | std::views::filter([](const auto& node) {
+             return node.second.is_voter;
+         })) {
+        BOOST_CHECK(voters.contains(id));
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE(existing_voters_are_kept_across_racks) {
+
+    // Arrange: Set the voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 3;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add the nodes (3 of them are voters).
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            {ids[0], {.datacenter = "dc", .rack = "rack-1", .is_voter = true, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack-2", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack-3", .is_voter = true, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack-4", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc", .rack = "rack-5", .is_voter = true, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: Existing voters are retained in the voter set.
+
+    BOOST_CHECK_EQUAL(voters.size(), max_voters);
+
+    for (const auto& [id, node] : nodes | std::views::filter([](const auto& node) {
+             return node.second.is_voter;
+         })) {
+        BOOST_CHECK(voters.contains(id));
+    }
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
