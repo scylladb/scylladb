@@ -74,4 +74,5 @@ In addition, you can read our `blog <https://www.scylladb.com/blog/>`_ and atten
   reference/index
   faq
   Contribute to ScyllaDB <contribute>
+  2024.2 and earlier documentation <https://enterprise.docs.scylladb.com/branch-2024.2/>
 
