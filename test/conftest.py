@@ -91,7 +91,7 @@ def build_mode(request: pytest.FixtureRequest) -> str:
     mode = request.config.getoption("modes")
     if mode:
         return mode[0]
-    return mode
+    return "unknown"
 
 
 @pytest.fixture(autouse=True)
