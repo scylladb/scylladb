@@ -15,6 +15,7 @@ import requests
 import re
 
 from test.alternator.util import create_test_table, is_aws, scylla_log
+from test.pylib.suite.python import add_host_option
 from urllib.parse import urlparse
 from functools import cache
 
@@ -48,8 +49,8 @@ def pytest_addoption(parser):
         help="communicate with given URL instead of defaults")
     parser.addoption("--runveryslow", action="store_true",
         help="run tests marked veryslow instead of skipping them")
-    parser.addoption('--host', action='store', default='localhost',
-        help='Scylla server host to connect to')
+    add_host_option(parser)
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "veryslow: mark test as very slow to run")
 

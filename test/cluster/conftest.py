@@ -21,6 +21,7 @@ from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster import ScyllaClusterManager
+from test.pylib.suite.python import add_cql_connection_options
 import logging
 import pytest
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
@@ -55,12 +56,7 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
-    parser.addoption('--host', action='store', default='localhost',
-                     help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-                     help='CQL server port to connect to')
-    parser.addoption('--ssl', action='store_true',
-                     help='Connect to CQL via an encrypted TLSv1.2 connection')
+    add_cql_connection_options(parser)
     parser.addoption('--auth_username', action='store', default=None,
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
