@@ -157,9 +157,9 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
     } else if (is_resize_task(task_type)) {
         auto new_tablet_count = _ss.get_token_metadata().tablets().get_tablet_map(table).tablet_count();
         res->status.state = new_tablet_count == tablet_count ? tasks::task_manager::task_state::suspended : tasks::task_manager::task_state::done;
-        res->status.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
+        res->status.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper())) : std::vector<tasks::task_identity>{};
     } else {
-        res->status.children = co_await get_children(get_module(), id);
+        res->status.children = co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper()));
     }
     res->status.end_time = db_clock::now(); // FIXME: Get precise end time.
     co_return res->status;
@@ -252,7 +252,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
             }
             return make_ready_future();
         });
-        res.status.children = co_await get_children(get_module(), id);
+        res.status.children = co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper()));
     } else if (is_migration_task(task_type)) {    // Migration task.
         auto tablet_id = hint.get_tablet_id();
         res.pending_replica = tmap.get_tablet_transition_info(tablet_id)->pending_replica;
@@ -266,7 +266,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
             update_status(task_info, res.status, sched_nr);
             res.status.state = tasks::task_manager::task_state::running;
-            res.status.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id) : std::vector<tasks::task_identity>{};
+            res.status.children = task_type == locator::tablet_task_type::split ? co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper())) : std::vector<tasks::task_identity>{};
             co_return res;
         }
     }
