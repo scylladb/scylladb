@@ -68,6 +68,7 @@
 #include "db/virtual_tables.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "service/paxos/paxos_state.hh"
 #include "sstables/sstables_manager.hh"
 #include "init.hh"
 #include "lang/manager.hh"
@@ -135,6 +136,7 @@ private:
     sharded<gms::feature_service> _feature_service;
     sharded<sstables::storage_manager> _sstm;
     sharded<service::storage_proxy> _proxy;
+    sharded<service::paxos::paxos_store> _paxos_store;
     sharded<cql3::query_processor> _qp;
     sharded<auth::service> _auth_service;
     sharded<db::view::view_builder> _view_builder;
@@ -1001,8 +1003,13 @@ private:
 
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
 
+            _paxos_store.start(std::ref(_sys_ks)).get();
+            auto stop_paxos_store = defer_verbose_shutdown("paxos store", [this] {
+                _paxos_store.stop().get();
+            });
+
             if (cfg_in.need_remote_proxy) {
-                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(group0_client), std::ref(_topology_state_machine)).get();
+                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(_paxos_store), std::ref(group0_client), std::ref(_topology_state_machine)).get();
             }
             auto stop_proxy_remote = defer_verbose_shutdown("storage proxy RPC verbs", [this, need = cfg_in.need_remote_proxy] {
                 if (need) {
