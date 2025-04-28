@@ -60,6 +60,7 @@ class wcu_consumed_capacity_counter : public consumed_capacity_counter {
     virtual uint64_t get_half_units() const noexcept;
 public:
     wcu_consumed_capacity_counter(const rjson::value& request);
+    static uint64_t get_units(uint64_t total_bytes) noexcept;
 };
 
 }

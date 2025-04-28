@@ -74,6 +74,10 @@ uint64_t wcu_consumed_capacity_counter::get_half_units() const noexcept {
     return calculate_half_units(WCU_BLOCK_SIZE_LENGTH, _total_bytes, true);
 }
 
+uint64_t wcu_consumed_capacity_counter::get_units(uint64_t total_bytes) noexcept {
+    return calculate_half_units(WCU_BLOCK_SIZE_LENGTH, total_bytes, true) * HALF_UNIT_MULTIPLIER;
+}
+
 wcu_consumed_capacity_counter::wcu_consumed_capacity_counter(const rjson::value& request) :
         consumed_capacity_counter(should_add_capacity(request)) {
 }
