@@ -312,7 +312,6 @@ class Test:
         if xdist_worker_id := get_xdist_worker_id():
             self.uname = f"{xdist_worker_id}.{self.uname}"
         self.log_filename = self.suite.log_dir / f"{self.uname}.log"
-        self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
@@ -402,6 +401,7 @@ toxiproxy_id_gen = 0
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
+    test.log_filename.parent.mkdir(parents=True, exist_ok=True)
     with test.log_filename.open("wb") as log:
         def report_error(error, failure_injection_desc = None):
             msg = "=== TEST.PY SUMMARY START ===\n"
