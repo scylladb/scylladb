@@ -33,11 +33,14 @@ namespace utils {
 
 enum class loading_cache_reload_enabled { no, yes };
 
-struct loading_cache_config final {
+template <typename Clock>
+struct loading_cache_config_base final {
     size_t max_size = 0;
-    seastar::lowres_clock::duration expiry;
-    seastar::lowres_clock::duration refresh;
+    Clock::duration expiry;
+    Clock::duration refresh;
 };
+
+using loading_cache_config = loading_cache_config_base<seastar::lowres_clock>;
 
 template <typename Tp>
 struct simple_entry_size {
@@ -111,10 +114,16 @@ template<typename Key,
          typename EqualPred = std::equal_to<Key>,
          typename LoadingSharedValuesStats = utils::do_nothing_loading_shared_values_stats,
          typename LoadingCacheStats = utils::do_nothing_loading_cache_stats,
+         typename Clock = seastar::lowres_clock,
          typename Alloc = std::pmr::polymorphic_allocator<>>
 class loading_cache {
+public:
+    using config = loading_cache_config;
 
-    using loading_cache_clock_type = seastar::lowres_clock;
+private:
+    using loading_cache_clock_type = Clock;
+    using time_point = loading_cache_clock_type::time_point;
+    using duration = loading_cache_clock_type::duration;
     using safe_link_list_hook = bi::list_base_hook<bi::link_mode<bi::safe_link>>;
 
     class timestamped_val {
@@ -206,7 +215,7 @@ public:
     class entry_is_too_big : public std::exception {};
 
 private:
-    loading_cache(loading_cache_config cfg, logging::logger& logger)
+    loading_cache(config cfg, logging::logger& logger)
         : _cfg(std::move(cfg))
         , _logger(logger)
         , _timer([this] { on_timer(); })
@@ -214,14 +223,18 @@ private:
         static_assert(noexcept(LoadingCacheStats::inc_unprivileged_on_cache_size_eviction()), "LoadingCacheStats::inc_unprivileged_on_cache_size_eviction must be non-throwing");
         static_assert(noexcept(LoadingCacheStats::inc_privileged_on_cache_size_eviction()), "LoadingCacheStats::inc_privileged_on_cache_size_eviction must be non-throwing");
 
+        _logger.debug("Loading cache; max_size: {}, expiry: {}ms, refresh: {}ms", _cfg.max_size,
+                     std::chrono::duration_cast<std::chrono::milliseconds>(_cfg.expiry).count(),
+                     std::chrono::duration_cast<std::chrono::milliseconds>(_cfg.refresh).count());
+
         if (!validate_config(_cfg)) {
             throw exceptions::configuration_exception("loading_cache: caching is enabled but refresh period and/or max_size are zero");
         }
     }
 
-    bool validate_config(const loading_cache_config& cfg) const noexcept {
+    bool validate_config(const config& cfg) const noexcept {
         // Sanity check: if expiration period is given then non-zero refresh period and maximal size are required
-        if (cfg.expiry != loading_cache_clock_type::duration(0) && (cfg.max_size == 0 || cfg.refresh == loading_cache_clock_type::duration(0))) {
+        if (cfg.expiry != duration(0) && (cfg.max_size == 0 || cfg.refresh == duration(0))) {
             return false;
         }
 
@@ -231,7 +244,7 @@ private:
 public:
     template<typename Func>
     requires std::is_invocable_r_v<future<value_type>, Func, const key_type&>
-    loading_cache(loading_cache_config cfg, logging::logger& logger, Func&& load)
+    loading_cache(config cfg, logging::logger& logger, Func&& load)
         : loading_cache(std::move(cfg), logger)
     {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::yes, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::yes");
@@ -247,8 +260,8 @@ public:
         _timer.arm(_timer_period);
     }
 
-    loading_cache(size_t max_size, lowres_clock::duration expiry, logging::logger& logger)
-        : loading_cache({max_size, expiry, loading_cache_clock_type::time_point::max().time_since_epoch()}, logger)
+    loading_cache(size_t max_size, duration expiry, logging::logger& logger)
+        : loading_cache({max_size, expiry, time_point::max().time_since_epoch()}, logger)
     {
         static_assert(ReloadEnabled == loading_cache_reload_enabled::no, "This constructor should only be invoked when ReloadEnabled == loading_cache_reload_enabled::no");
 
@@ -273,7 +286,7 @@ public:
         remove_if([](const value_type&){ return true; });
     }
 
-    bool update_config(utils::loading_cache_config cfg) {
+    bool update_config(config cfg) {
         _logger.info("Updating loading cache; max_size: {}, expiry: {}ms, refresh: {}ms", cfg.max_size,
                      std::chrono::duration_cast<std::chrono::milliseconds>(cfg.expiry).count(),
                      std::chrono::duration_cast<std::chrono::milliseconds>(cfg.refresh).count());
@@ -291,8 +304,8 @@ public:
         // * If caching is disabled and it's being enabled here on update_config, we also need to arm the timer, so that the changes on config
         //   can take place
         if (_timer.armed() ||
-            (!caching_enabled() && _updated_cfg->expiry != loading_cache_clock_type::duration(0))) {
-            _timer.rearm(loading_cache_clock_type::now() + loading_cache_clock_type::duration(std::chrono::milliseconds(1)));
+            (!caching_enabled() && _updated_cfg->expiry != duration(0))) {
+            _timer.rearm(loading_cache_clock_type::now() + duration(std::chrono::milliseconds(1)));
         }
 
         return true;
@@ -469,7 +482,7 @@ private:
     }
 
     bool caching_enabled() const {
-        return _cfg.expiry != lowres_clock::duration(0);
+        return _cfg.expiry != duration(0);
     }
 
     static void destroy_ts_value(ts_value_lru_entry* val) noexcept {
@@ -676,7 +689,7 @@ private:
                 // If the config was updated after on_timer and before this continuation finished
                 // it's necessary to run on_timer again to make sure that everything will be reloaded correctly
                 if (_updated_cfg) {
-                    _timer.arm(loading_cache_clock_type::now() + loading_cache_clock_type::duration(std::chrono::milliseconds(1)));
+                    _timer.arm(loading_cache_clock_type::now() + duration(std::chrono::milliseconds(1)));
                 } else {
                     _timer.arm(loading_cache_clock_type::now() + _timer_period);
                 }
@@ -690,16 +703,16 @@ private:
     size_t _privileged_section_size = 0;
     size_t _unprivileged_section_size = 0;
     loading_cache_clock_type::duration _timer_period;
-    loading_cache_config _cfg;
-    std::optional<loading_cache_config> _updated_cfg;
+    config _cfg;
+    std::optional<config> _updated_cfg;
     logging::logger& _logger;
     std::function<future<Tp>(const Key&)> _load;
     timer<loading_cache_clock_type> _timer;
     seastar::gate _timer_reads_gate;
 };
 
-template<typename Key, typename Tp, int SectionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename LoadingCacheStats, typename Alloc>
-class loading_cache<Key, Tp, SectionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, LoadingCacheStats, Alloc>::timestamped_val::value_ptr {
+template<typename Key, typename Tp, int SectionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename LoadingCacheStats, typename Clock, typename Alloc>
+class loading_cache<Key, Tp, SectionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, LoadingCacheStats, Clock, Alloc>::timestamped_val::value_ptr {
 private:
     using loading_values_type = typename timestamped_val::loading_values_type;
 
@@ -728,8 +741,8 @@ public:
 };
 
 /// \brief This is and LRU list entry which is also an anchor for a loading_cache value.
-template<typename Key, typename Tp, int SectionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename  LoadingCacheStats, typename Alloc>
-class loading_cache<Key, Tp, SectionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, LoadingCacheStats, Alloc>::timestamped_val::lru_entry : public safe_link_list_hook {
+template<typename Key, typename Tp, int SectionHitThreshold, loading_cache_reload_enabled ReloadEnabled, typename EntrySize, typename Hash, typename EqualPred, typename LoadingSharedValuesStats, typename  LoadingCacheStats, typename Clock, typename Alloc>
+class loading_cache<Key, Tp, SectionHitThreshold, ReloadEnabled, EntrySize, Hash, EqualPred, LoadingSharedValuesStats, LoadingCacheStats, Clock, Alloc>::timestamped_val::lru_entry : public safe_link_list_hook {
 private:
     using loading_values_type = typename timestamped_val::loading_values_type;
 

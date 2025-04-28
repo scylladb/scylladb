@@ -8,13 +8,24 @@
 
 #pragma once
 
+#include <boost/test/unit_test.hpp>
+
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/manual_clock.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <seastar/util/later.hh>
 
 #include "seastarx.hh"
 
+using sleep_fn = std::function<future<>(std::chrono::milliseconds)>;
+
+extern sleep_fn seastar_sleep_fn;
+
+extern sleep_fn manual_clock_sleep_fn;
+
 inline
-void eventually(noncopyable_function<void ()> f, size_t max_attempts = 17) {
+void eventually(noncopyable_function<void ()> f, size_t max_attempts = 17, sleep_fn sleep = seastar_sleep_fn) {
     size_t attempts = 0;
     while (true) {
         try {
@@ -31,7 +42,7 @@ void eventually(noncopyable_function<void ()> f, size_t max_attempts = 17) {
 }
 
 inline
-bool eventually_true(noncopyable_function<bool ()> f) {
+bool eventually_true(noncopyable_function<bool ()> f, sleep_fn sleep = seastar_sleep_fn) {
     const unsigned max_attempts = 15;
     unsigned attempts = 0;
     while (true) {
@@ -40,7 +51,7 @@ bool eventually_true(noncopyable_function<bool ()> f) {
         }
 
         if (++attempts < max_attempts) {
-            seastar::sleep(std::chrono::milliseconds(1 << attempts)).get();
+            sleep(std::chrono::milliseconds(1 << attempts)).get();
         } else {
             return false;
         }
@@ -49,5 +60,16 @@ bool eventually_true(noncopyable_function<bool ()> f) {
     return false;
 }
 
-#define REQUIRE_EVENTUALLY_EQUAL(a, b) BOOST_REQUIRE(eventually_true([&] { return a == b; }))
-#define CHECK_EVENTUALLY_EQUAL(a, b) BOOST_CHECK(eventually_true([&] { return a == b; }))
+// Must be called in a seastar thread
+template <typename T>
+void REQUIRE_EVENTUALLY_EQUAL(std::function<T()> a, T b, sleep_fn sleep = seastar_sleep_fn) {
+    eventually_true([&] { return a() == b; }, sleep);
+    BOOST_REQUIRE_EQUAL(a(), b);
+}
+
+// Must be called in a seastar thread
+template <typename T>
+void CHECK_EVENTUALLY_EQUAL(std::function<T()> a, T b, sleep_fn sleep = seastar_sleep_fn) {
+    eventually_true([&] { return a() == b; }, sleep);
+    BOOST_CHECK_EQUAL(a(), b);
+}
