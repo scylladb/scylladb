@@ -761,8 +761,8 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, _proxy, client_state, trace_state, permit);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::DROP);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
-        // FIXME: the following needs to be in a loop. If mm.announce() below
-        // fails, we need to retry the whole thing.
+        size_t retries = mm.get_concurrent_ddl_retries();
+        for (;;) {
         auto group0_guard = co_await mm.start_group0_operation();
 
         std::optional<data_dictionary::table> tbl = p.local().data_dictionary().try_find_table(keyspace_name, table_name);
@@ -797,7 +797,18 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
         }
         std::tie(m, group0_guard) = co_await std::move(mc).extract();
 
+            try {
         co_await mm.announce(std::move(m), std::move(group0_guard), fmt::format("alternator-executor: delete {} table", table_name));
+                break;
+            } catch (const service::group0_concurrent_modification& ex) {
+                elogger.info("Failed to execute DeleteTable {} due to concurrent schema modifications. {}.",
+                        table_name, retries ? "Retrying" : "Number of retries exceeded, giving up");
+                if (retries--) {
+                    continue;
+                }
+                throw;
+            }
+        }
     });
 
     rjson::value response = rjson::empty_object();
@@ -1506,8 +1517,8 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
     }
 
-    // FIXME: the following needs to be in a loop. If mm.announce() below
-    // fails, we need to retry the whole thing.
+    size_t retries = mm.get_concurrent_ddl_retries();
+    for (;;) {
     auto group0_guard = co_await mm.start_group0_operation();
     auto ts = group0_guard.write_timestamp();
     std::vector<mutation> schema_mutations;
@@ -1548,7 +1559,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         co_await seastar::async([&sp, &ksm, &view, &schema_mutations, ts] {
             return sp.local_db().get_notifier().before_create_column_family(*ksm, *view, schema_mutations, ts);
         });
-
     }
     // If a role is allowed to create a table, we must give it permissions to
     // use (and eventually delete) the specific table it just created (and
@@ -1571,8 +1581,18 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         }
     }
     std::tie(schema_mutations, group0_guard) = co_await std::move(mc).extract();
-
+        try {
     co_await mm.announce(std::move(schema_mutations), std::move(group0_guard), fmt::format("alternator-executor: create {} table", table_name));
+            break;
+        }  catch (const service::group0_concurrent_modification& ex) {
+            elogger.info("Failed to execute CreateTable {} due to concurrent schema modifications. {}.",
+                    table_name, retries ? "Retrying" : "Number of retries exceeded, giving up");
+            if (retries--) {
+                continue;
+            }
+            throw;
+        }
+    }
 
     co_await mm.wait_for_schema_agreement(sp.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
@@ -1642,8 +1662,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
-        // FIXME: the following needs to be in a loop. If mm.announce() below
-        // fails, we need to retry the whole thing.
+        schema_ptr schema;
+        size_t retries = mm.get_concurrent_ddl_retries();
+        for (;;) {
         auto group0_guard = co_await mm.start_group0_operation();
 
         schema_ptr tab = get_table(p.local(), request);
@@ -1671,7 +1692,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
         }
 
-        auto schema = builder.build();
+            schema = builder.build();
         std::vector<view_ptr> new_views;
         std::vector<std::string> dropped_views;
 
@@ -1828,9 +1849,18 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
             std::tie(m, group0_guard) = co_await std::move(mc).extract();
         }
-
+            try {
         co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
-
+                break;
+            } catch (const service::group0_concurrent_modification& ex) {
+                elogger.info("Failed to execute UpdateTable {} due to concurrent schema modifications. {}.",
+                        tab->cf_name(), retries ? "Retrying" : "Number of retries exceeded, giving up");
+                if (retries--) {
+                    continue;
+                }
+                throw;
+            }
+        }
         co_await mm.wait_for_schema_agreement(p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
 
         rjson::value status = rjson::empty_object();
