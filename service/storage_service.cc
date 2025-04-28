@@ -3290,11 +3290,14 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 }
 
 future<> storage_service::stop() {
+    slogger.info("Stopping storage service");
     // if there is a background "isolate" shutdown
     // in progress, we need to sync with it. Mostly
     // relevant for tests
     if (_transport_stopped.has_value()) {
+        slogger.info("Waiting for transport to stop");
         co_await stop_transport();
+        slogger.info("Transport stopped");
     }
     co_await uninit_messaging_service();
     // make sure nobody uses the semaphore
@@ -7450,12 +7453,15 @@ void storage_service::init_messaging_service() {
 }
 
 future<> storage_service::uninit_messaging_service() {
-    return when_all_succeed(
+    slogger.info("Unregistering messaging service");
+    co_await when_all_succeed(
         ser::node_ops_rpc_verbs::unregister(&_messaging.local()),
         ser::storage_service_rpc_verbs::unregister(&_messaging.local()),
         ser::join_node_rpc_verbs::unregister(&_messaging.local()),
         ser::streaming_rpc_verbs::unregister_tablet_stream_files(&_messaging.local())
     ).discard_result();
+    slogger.info("Finished unregistering messaging service");
+    co_return;
 }
 
 void storage_service::do_isolate_on_error(disk_error type)
