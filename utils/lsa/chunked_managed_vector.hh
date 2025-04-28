@@ -26,16 +26,17 @@ namespace lsa {
 
 template <typename T>
 class chunked_managed_vector {
-    static const size_t max_contiguous_allocation = logalloc::segment_size * 0.1;
-    static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move constructible");
     using chunk_ptr = managed_vector<T>;
+    static constexpr size_t max_contiguous_allocation = logalloc::max_managed_object_size - chunk_ptr::metadata_size();
+    static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move constructible");
     // Each chunk holds max_chunk_capacity() items, except possibly the last
     managed_vector<chunk_ptr, 1> _chunks;
     size_t _size = 0;
     size_t _capacity = 0;
 public:
     static size_t max_chunk_capacity() {
-        return std::max(max_contiguous_allocation / sizeof(T), size_t(1));
+        static_assert(max_contiguous_allocation >= sizeof(T));
+        return max_contiguous_allocation / sizeof(T);
     }
 private:
     void reserve_for_push_back() {
