@@ -40,11 +40,6 @@ def pytest_addoption(parser):
         help='CQL server port to connect to')
     parser.addoption('--ssl', action='store_true',
         help='Connect to CQL via an encrypted TLSv1.2 connection')
-    # Used by the wrapper script only, not by pytest, added here so it appears
-    # in --help output and so that pytest's argparser won't protest against its
-    # presence.
-    parser.addoption('--omit-scylla-output', action='store_true',
-        help='Omit scylla\'s output from the test output')
     parser.addoption('--no-minio', action="store_true", help="Signal to not run S3 related tests")
     s3_options = parser.getgroup("s3-server", description="S3 Server settings")
     s3_options.addoption('--s3-server-address')

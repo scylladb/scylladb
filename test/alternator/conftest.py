@@ -48,11 +48,6 @@ def pytest_addoption(parser):
         help="communicate with given URL instead of defaults")
     parser.addoption("--runveryslow", action="store_true",
         help="run tests marked veryslow instead of skipping them")
-    # Used by the wrapper script only, not by pytest, added here so it appears
-    # in --help output and so that pytest's argparser won't protest against its
-    # presence.
-    parser.addoption('--omit-scylla-output', action='store_true',
-        help='Omit scylla\'s output from the test output')
     parser.addoption('--host', action='store', default='localhost',
         help='Scylla server host to connect to')
 def pytest_configure(config):
