@@ -9,8 +9,6 @@ from test.pylib.minio_server import MinioServer
 
 
 def pytest_addoption(parser):
-    parser.addoption('--keep-tmp', action='store_true',
-                     help="keep the whole temp path")
     # reserved for tests with real S3
     s3_options = parser.getgroup("s3-server", description="S3 Server settings")
     s3_options.addoption('--s3-server-address')
@@ -19,10 +17,6 @@ def pytest_addoption(parser):
     s3_options.addoption('--aws-secret-key')
     s3_options.addoption('--aws-region')
     s3_options.addoption('--s3-server-bucket')
-    parser.addoption("--input", action="store", default="",
-                     help="Input file")
-    parser.addoption("--output", action="store", default="",
-                     help="Output file")
 
 
 def format_tuples(tuples=None, **kwargs):
