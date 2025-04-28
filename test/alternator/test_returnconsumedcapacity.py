@@ -340,3 +340,42 @@ def test_multi_table_batch_get_items(test_table_s, test_table):
         else:
             assert cc['TableName'] == test_table.name
             assert cc["CapacityUnits"] == 1.5
+
+# A simple batch write item test
+# This test validates that when two items are inserted into the same table using BatchWriteItem,
+# the ReturnConsumedCapacity field reflects the sum of independent WCU calculations for each item.
+# The test ensures that WCU is calculated independently for each item,
+# and that the total consumed capacity is the sum of both.
+def test_simple_batch_write_item(test_table_s):
+    p1 = random_string()
+    p2 = random_string()
+    response = test_table_s.meta.client.batch_write_item(RequestItems = {
+        test_table_s.name: [{'PutRequest': {'Item': {'p': p1, 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': p2, 'a': 'hi'}}}]
+    }, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 'TableName' in response['ConsumedCapacity'][0]
+    assert response['ConsumedCapacity'][0]['TableName'] == test_table_s.name
+    assert 2 == response['ConsumedCapacity'][0]['CapacityUnits']
+
+
+# Validate that when updating a batch of requests
+# across multiple tables, we get a WCU for each table.
+# Also validate that delete operations are counted as 1 WCU.
+def test_multi_table_batch_write_item(test_table_s, test_table):
+    p = random_string()
+    c = random_string()
+    test_table.put_item(Item={'p': p, 'c': c})
+
+    table_s_items = [{'PutRequest': {'Item': {'p':  random_string(), 'a': 'hi'}}} for i in range(3)]
+    table_s_items.append({'PutRequest': {'Item': {'p':  random_string(), 'a': 'a' * KB}}})
+    table_items = [{'PutRequest': {'Item': {'p':  random_string(), 'c': random_string()}}}, {'DeleteRequest': {'Key': {'p':  p, 'c': c}}}]
+    response = test_table_s.meta.client.batch_write_item(RequestItems = {
+        test_table_s.name: table_s_items,
+        test_table.name: table_items
+    }, ReturnConsumedCapacity='TOTAL')
+    for cc in response['ConsumedCapacity']:
+        if cc['TableName'] == test_table_s.name:
+            assert cc["CapacityUnits"] == 5
+        else:
+            assert cc['TableName'] == test_table.name
+            assert cc["CapacityUnits"] == 2
