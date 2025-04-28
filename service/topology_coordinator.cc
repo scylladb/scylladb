@@ -2080,6 +2080,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             bootstrap_tokens = dht::boot_strapper::get_bootstrap_tokens(tmptr, tokens_string, num_tokens, dht::check_token_endpoint::yes);
                         } catch (...) {
                             _rollback = fmt::format("Failed to assign tokens: {}", std::current_exception());
+                            break;
                         }
 
                         auto [gen_uuid, guard_, mutation] = co_await prepare_and_broadcast_cdc_generation_data(
