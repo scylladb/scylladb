@@ -19,18 +19,15 @@ from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_
 from cassandra.policies import RoundRobinPolicy
 
 
+from test.pylib.suite.python import add_host_option, add_cql_connection_options
 from ..cqlpy.util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
 
 # By default, tests run against a Scylla server listening
 # on localhost:9042 for CQL and localhost:10000 for the REST API.
 # Add the --host, --port, --ssl, or --api-port options to allow overriding these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-        help='Scylla server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-        help='Scylla CQL port to connect to')
-    parser.addoption('--ssl', action='store_true',
-        help='Connect to CQL via an encrypted TLSv1.2 connection')
+    add_host_option(parser)
+    add_cql_connection_options(parser)
     parser.addoption('--api-port', action='store', default='10000',
         help='server REST API port to connect to')
 

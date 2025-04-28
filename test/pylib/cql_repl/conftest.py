@@ -21,6 +21,8 @@ from cassandra.policies import RoundRobinPolicy    # type: ignore # pylint: disa
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
+from test.pylib.suite.python import add_host_option, add_cql_connection_options
+
 
 logger = logging.getLogger(__name__)
 logger.warning("Driver name %s", DRIVER_NAME)
@@ -36,12 +38,8 @@ def pytest_addoption(parser) -> None:
                      help="Input file")
     parser.addoption("--output", action="store", default="",
                      help="Output file")
-    parser.addoption('--host', action='store', default='localhost',
-        help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-        help='CQL server port to connect to')
-    parser.addoption('--ssl', action='store_true',
-        help='Connect to CQL via an encrypted TLSv1.2 connection')
+    add_host_option(parser)
+    add_cql_connection_options(parser)
 
 
 # "cql" fixture: set up client object for communicating with the CQL API.

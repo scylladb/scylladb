@@ -23,6 +23,7 @@ import tempfile
 import time
 import random
 
+from test.pylib.suite.python import add_host_option, add_cql_connection_options, add_s3_options
 from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
 from .nodetool import scylla_log
 from test.pylib.minio_server import MinioServer
@@ -34,20 +35,11 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 # on localhost:9042. Add the --host and --port options to allow overriding
 # these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-        help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-        help='CQL server port to connect to')
-    parser.addoption('--ssl', action='store_true',
-        help='Connect to CQL via an encrypted TLSv1.2 connection')
+    add_host_option(parser)
+    add_cql_connection_options(parser)
     parser.addoption('--no-minio', action="store_true", help="Signal to not run S3 related tests")
-    s3_options = parser.getgroup("s3-server", description="S3 Server settings")
-    s3_options.addoption('--s3-server-address')
-    s3_options.addoption('--s3-server-port', type=int)
-    s3_options.addoption('--aws-access-key')
-    s3_options.addoption('--aws-secret-key')
-    s3_options.addoption('--aws-region')
-    s3_options.addoption('--s3-server-bucket')
+    add_s3_options(parser)
+
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
