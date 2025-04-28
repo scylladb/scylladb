@@ -78,6 +78,7 @@ namespace paxos {
     class prepare_summary;
     class proposal;
     class promise;
+    class paxos_store;
     using prepare_response = std::variant<utils::UUID, promise>;
 }
 
@@ -517,7 +518,7 @@ public:
     }
 
     // Start/stop the remote part of `storage_proxy` that is required for performing distributed queries.
-    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, raft_group0_client&, topology_state_machine&);
+    void start_remote(netw::messaging_service&, gms::gossiper&, migration_manager&, sharded<db::system_keyspace>& sys_ks, sharded<paxos::paxos_store>& paxos_store, raft_group0_client&, topology_state_machine&);
     future<> stop_remote();
 
     gms::inet_address my_address() const noexcept;
