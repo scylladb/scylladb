@@ -158,8 +158,6 @@ if [ -z "$is_podman" ]; then
        --pids-limit -1
        )
 else
-    docker_common_args+=(
-        --userns keep-id)
     # --pids-limit is not supported on podman with cgroupsv1
     # detection code from
     #   https://unix.stackexchange.com/questions/617764/how-do-i-check-if-system-is-using-cgroupv1
