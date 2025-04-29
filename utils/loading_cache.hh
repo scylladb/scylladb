@@ -639,6 +639,12 @@ private:
     }
 
     void on_timer() {
+        auto holder = _timer_reads_gate.try_hold();
+        if (!holder) {
+            // stop() was called
+            return;
+        }
+
         _logger.trace("on_timer(): start");
 
         if (_updated_cfg) {
@@ -668,7 +674,7 @@ private:
         // Reload all those which value needs to be reloaded.
         // Future is waited on indirectly in `stop()` (via `_timer_reads_gate`).
         // FIXME: error handling
-        (void)with_gate(_timer_reads_gate, [this] {
+        (void)do_with(std::move(*holder), [this] (seastar::gate::holder& h) {
             auto now = loading_cache_clock_type::now();
             auto to_reload = std::array<lru_list_type*, 2>({&_unprivileged_lru_list, &_lru_list})
                     | std::views::transform([] (auto* list_ptr) -> decltype(auto) { return *list_ptr; })
