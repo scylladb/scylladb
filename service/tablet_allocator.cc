@@ -566,6 +566,9 @@ class load_balancer {
         // If we cancel a split, that's because average size dropped so much a merge would be
         // required post completion, and vice-versa.
         bool table_needs_resize_cancellation(const table_size_desc& d) const {
+            if (utils::get_local_injector().enter("force_resize_cancellation")) {
+                return true;
+            }
             auto& way = d.resize_decision.way;
             if (std::holds_alternative<locator::resize_decision::split>(way)) {
                 return d.avg_tablet_size < d.target_max_tablet_size / 2;
