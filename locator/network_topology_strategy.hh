@@ -31,7 +31,7 @@ public:
 
     size_t get_replication_factor(const sstring& dc) const override {
         auto dc_factor = _dc_rep_factor.find(dc);
-        return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second;
+        return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second.count();
     }
 
     const std::vector<sstring>& get_datacenters() const {
@@ -58,6 +58,9 @@ protected:
 
     virtual void validate_options(const gms::feature_service&, const locator::topology& topology) const override;
 
+public:
+    using dc_rep_factor_map = std::unordered_map<sstring, replication_factor_data>;
+
 private:
     future<tablet_replica_set> reallocate_tablets(schema_ptr, token_metadata_ptr, load_sketch&, const tablet_map& cur_tablets, tablet_id tb) const;
     future<tablet_replica_set> add_tablets_in_dc(schema_ptr, token_metadata_ptr, load_sketch&, tablet_id,
@@ -69,7 +72,7 @@ private:
             sstring dc, size_t dc_node_count, size_t dc_rf) const;
 
     // map: data centers -> replication factor
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
+    dc_rep_factor_map _dc_rep_factor;
 
     std::vector<sstring> _datacenteres;
     size_t _rep_factor;

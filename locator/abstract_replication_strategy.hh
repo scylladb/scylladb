@@ -63,6 +63,21 @@ class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
 class effective_replication_map;
 
+class replication_factor_data {
+    size_t _count = 0;
+
+public:
+    explicit replication_factor_data(const sstring& rf) {
+        parse(rf);
+    }
+
+    size_t count() const noexcept {
+        return _count;
+    }
+
+private:
+    void parse(const sstring& rf);
+};
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
     friend class vnode_effective_replication_map;
@@ -113,7 +128,7 @@ public:
 
     virtual ~abstract_replication_strategy() {}
     static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params);
-    static long parse_replication_factor(sstring rf);
+    static replication_factor_data parse_replication_factor(sstring rf);
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 
@@ -476,6 +491,11 @@ struct appending_hash<locator::vnode_effective_replication_map::factory_key> {
             h.update(val.c_str(), val.size());
         }
     }
+};
+
+template <>
+struct fmt::formatter<locator::replication_factor_data> : fmt::formatter<string_view> {
+    auto format(const locator::replication_factor_data&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 namespace std {

@@ -24,7 +24,7 @@ simple_strategy::simple_strategy(replication_strategy_params params) :
         auto& val = config_pair.second;
 
         if (boost::iequals(key, "replication_factor")) {
-            _replication_factor = parse_replication_factor(val);
+            _replication_factor = parse_replication_factor(val).count();
             break;
         }
     }
