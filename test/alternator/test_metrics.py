@@ -33,6 +33,7 @@ from botocore.exceptions import ClientError
 
 from test.alternator.test_manual_requests import get_signed_request
 from test.alternator.util import random_string, new_test_table, is_aws
+from test.conftest import testpy_test_fixture_scope
 
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
@@ -41,7 +42,7 @@ from test.alternator.util import random_string, new_test_table, is_aws
 # port but no access to the metrics port (9180).
 # If metrics are *not* available, tests using this fixture will be skipped.
 # Tests using this fixture may call get_metrics(metrics).
-@pytest.fixture(scope="module")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def metrics(dynamodb):
     if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
         pytest.skip('Scylla-only feature not supported by AWS')
@@ -390,7 +391,7 @@ def test_total_operations(dynamodb, metrics):
 # this configuration does not exist, skip this test. If the configuration
 # isn't low enough (it is more than one second), skip this test unless
 # the "--runveryslow" option is used.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def alternator_ttl_period_in_seconds(dynamodb, request):
     # If not running on Scylla, skip the test
     if is_aws(dynamodb):
