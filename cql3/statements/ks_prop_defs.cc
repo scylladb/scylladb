@@ -75,6 +75,7 @@ static std::map<sstring, sstring> prepare_options(
             }
         }
 
+        // FIXME: expand rack names
         for (const auto& dc : tm.get_topology().get_datacenters()) {
             options.emplace(dc, *rf);
         }

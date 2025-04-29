@@ -53,6 +53,11 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
     process_tablet_options(*this, opts, params);
 
     size_t rep_factor = 0;
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>* dcs_opt = nullptr;
+    if (topo) {
+        dcs_opt = &topo->get_datacenter_racks();
+    }
+
     for (auto& config_pair : opts) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
@@ -74,9 +79,24 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
             }
         }
 
-        auto rf = parse_replication_factor(val, replication_factor_data::allow_racks::yes);
-        rep_factor += rf.count();
-        _dc_rep_factor.emplace(key, rf);
+        std::optional<replication_factor_data> rf;
+        if (dcs_opt && !dcs_opt->empty()) {
+            auto dc = dcs_opt->find(key);
+            if (dc == dcs_opt->end()) {
+                throw exceptions::configuration_exception(format("Unrecognized datacenter name '{}'", key));
+            }
+            std::unordered_set<sstring> racks;
+            // FIXME: use ranges::to transformation
+            for (auto& i : std::views::keys(dc->second)) {
+                racks.insert(i);
+            }
+
+            rf = parse_replication_factor(val, racks);
+        } else {
+            rf = parse_replication_factor(val);
+        }
+        rep_factor += rf->count();
+        _dc_rep_factor.emplace(key, std::move(*rf));
         _datacenteres.push_back(key);
     }
 
@@ -284,18 +304,24 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs,
     // #22688 / #20039 - we want to remove dc:s once rf=0, and we
     // also want to allow fully setting rf=0 in _all_ dc:s (hello data loss)
     // so empty options here are in fact ok. Removed check for it
-    auto dcs = topology.get_datacenters();
+    auto dcs = topology.get_datacenter_racks();
     validate_tablet_options(*this, fs, _config_options);
     for (auto& c : _config_options) {
         if (c.first == sstring("replication_factor")) {
             on_internal_error(rslogger, fmt::format("'replication_factor' tag should be unrolled into a list of DC:RF by now."
                                                     "_config_options:{}", _config_options));
         }
-        if (!dcs.contains(c.first)) {
+        auto dc = dcs.find(c.first);
+        if (dc == dcs.end()) {
             throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} "
                 "passed to NetworkTopologyStrategy", this->to_qualified_class_name(c.first)));
         }
-        parse_replication_factor(c.second, replication_factor_data::allow_racks::yes);
+        std::unordered_set<sstring> racks;
+        // FIXME: use ranges::to transformation
+        for (auto& i : std::views::keys(dc->second)) {
+            racks.insert(i);
+        }
+        parse_replication_factor(c.second, racks);
     }
 }
 

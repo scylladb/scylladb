@@ -257,8 +257,8 @@ void check_tablets_balance(const tablet_map& tmap,
 locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
     // This resembles rack_inferring_snitch dc/rack generation which is
     // still in use by this test via token_metadata internals
-    auto dc = std::to_string(uint8_t(endpoint.bytes()[1]));
-    auto rack = std::to_string(uint8_t(endpoint.bytes()[2]));
+    auto dc = fmt::format("dc{}", (uint8_t(endpoint.bytes()[1])));
+    auto rack = fmt::format("rack{}", uint8_t(endpoint.bytes()[2]));
     return locator::endpoint_dc_rack{dc, rack};
 }
 
@@ -310,9 +310,9 @@ void simple_test() {
     /////////////////////////////////////
     // Create the replication strategy
     std::map<sstring, sstring> options323 = {
-        {"100", "3"},
-        {"101", "2"},
-        {"102", "3"}
+        {"dc100", "3"},
+        {"dc101", "2"},
+        {"dc102", "3"}
     };
     locator::replication_strategy_params params323(options323, std::nullopt);
 
@@ -324,9 +324,9 @@ void simple_test() {
     ///////////////
     // Create the replication strategy
     std::map<sstring, sstring> options320 = {
-        {"100", "3"},
-        {"101", "2"},
-        {"102", "0"}
+        {"dc100", "3"},
+        {"dc101", "2"},
+        {"dc102", "0"}
     };
     locator::replication_strategy_params params320(options320, std::nullopt);
 
@@ -387,7 +387,7 @@ void heavy_origin_test() {
     std::shuffle(token_points.begin(), token_points.end(), random_engine);
     auto token_point_iterator = token_points.begin();
     for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
-        config_options.emplace(to_sstring(dc),
+        config_options.emplace(fmt::format("dc{}", dc),
                                 to_sstring(dc_replication[dc]));
         for (int rack = 0; rack < dc_racks[dc]; ++rack) {
             for (int ep = 1; ep <= dc_endpoints[dc]/dc_racks[dc]; ++ep) {
@@ -502,7 +502,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             for (size_t i = 0; i < num_option_dcs; ++i) {
                 const auto& dc = option_dcs[i];
                 size_t node_count = tests::random::get_int(node_count_per_dc[dc]);
-                options.emplace(dc, fmt::to_string(node_count));
+                options.emplace(fmt::format("dc{}", dc), fmt::to_string(node_count));
             }
             return options;
         };
@@ -594,7 +594,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     auto make_options = [&] (size_t rf_per_dc) {
         std::map<sstring, sstring> options;
         for (const auto& dc : dcs) {
-            options.emplace(dc, fmt::to_string(rf_per_dc));
+            options.emplace(fmt::format("dc{}", dc), fmt::to_string(rf_per_dc));
         }
         return options;
     };
@@ -869,7 +869,7 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_or_update_endpoint(node, endpoint_dc_rack{dc, to_sstring(r)}, locator::node::state::normal);
+        topo.add_or_update_endpoint(node, endpoint_dc_rack{dc, fmt::format("rack{}", r)}, locator::node::state::normal);
     }
 }
 
@@ -1290,7 +1290,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
             auto num_racks = node_count_per_rack.at(dc).size();
             auto max_rf_factor = std::ranges::min(std::ranges::views::transform(node_count_per_rack.at(dc), [] (auto& x) { return x.second; }));
             auto rf = num_racks * tests::random::get_int(1UL, max_rf_factor);
-            options.emplace(dc, fmt::to_string(rf));
+            options.emplace(fmt::format("dc{}", dc), fmt::to_string(rf));
         }
         return options;
     };
@@ -1444,7 +1444,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
             auto rf = more_or_less ?
                     tests::random::get_int(num_racks, node_count_per_dc[dc]) :
                     tests::random::get_int(1UL, num_racks);
-            options.emplace(dc, fmt::to_string(rf));
+            options.emplace(fmt::format("dc{}", dc), fmt::to_string(rf));
         }
         return options;
     };

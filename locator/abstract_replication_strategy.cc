@@ -165,44 +165,43 @@ static std::pair<std::string_view, std::optional<std::string_view>> next_token(s
         return ch == ',' || isspace(ch);
     };
 
-    auto isquote = [] (char ch) -> char {
-        if (ch == '\'' || ch == '"') {
-            return ch;
-        }
-        return 0;
+    auto isvalid = [] (char ch) -> bool {
+        static const std::unordered_set<char> special_chars({'-', '_', '.', ':', '/', '@', '#', '$', '%', '^', '&', '*', '(', ')', '+', '=', '?', '!', '~'});
+        return isalnum(ch) || special_chars.contains(ch);
     };
 
     for (begin = s.begin(); begin != s.end() && isdelim(*begin); ++begin) {
     }
     if (begin == s.end()) {
-        throw exceptions::configuration_exception(fmt::format("Invalid string token '{}'", s));
     }
-    if (auto q = isquote(*begin)) {
-        for (end = ++begin; end != s.end() && *end != q; ++end) {
-            if (*end == '\\') {
-                if (++end == s.end()) {
-                    throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': bad terminator '{}'", s, *(end - 1)));
-                }
-            }
-        }
-        if (end == s.end()) {
-            throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': unterminated string", s));
-        }
-        if (begin == end - 1) {
-            throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': empty string", s));
-        }
-        return std::make_pair(std::string_view(begin, end - 1), std::make_optional<std::string_view>(end + 1, s.end()));
+    if (!isalnum(*begin)) {
+        throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': must start with an alphanumeric character", s));
     }
     for (end = begin; end != s.end() && !isdelim(*end); ++end) {
+        auto ch = *end;
+        if (ch == '\\') {
+            if (++end == s.end()) {
+                throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': bad terminator '{}'", s, *(end - 1)));
+            }
+        }
+        if (!isvalid(ch)) {
+            throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': invalid character '{}'", s, ch));
+        }
     }
     return std::make_pair(std::string_view(begin, end), end == s.end() ? std::nullopt : std::make_optional<std::string_view>(end + 1, s.end()));
 }
 
-void replication_factor_data::parse(const sstring& rf, allow_racks ar) {
+void replication_factor_data::parse(const sstring& rf, const std::unordered_set<sstring>* allowed_racks) {
     bool is_numeric = std::all_of(rf.begin(), rf.end(), [] (char c) {return isdigit(c);});
-    if (rf.empty() || (!is_numeric && !ar)) {
+    rslogger.info("replication_factor_data::parse: {}: is_numeric={} allowed_racks={}", rf, is_numeric,
+        allowed_racks ? fmt::format("{}", fmt::join(*allowed_racks, ",")) : "<null>");
+    if (rf.empty() || (!is_numeric && !allowed_racks)) {
         throw exceptions::configuration_exception(
                 format("Replication factor must be numeric and non-negative, found '{}'", rf));
+    }
+    if (is_numeric && allowed_racks && allowed_racks->contains(rf)) {
+        throw exceptions::configuration_exception(
+            fmt::format("Numeric replication factor '{}' is ambiguous. allowed_racks='{}'", rf, fmt::join(*allowed_racks, ",")));
     }
     try {
         if (is_numeric) {
@@ -211,8 +210,12 @@ void replication_factor_data::parse(const sstring& rf, allow_racks ar) {
             std::vector<sstring> racks;
 
             for (std::optional<std::string_view> opt = rf; opt; ) {
-                auto [tok, next_opt] = next_token(*opt);
-                racks.emplace_back(tok);
+                auto [name, next_opt] = next_token(*opt);
+                if (!allowed_racks->contains(sstring(name))) {
+                    throw exceptions::configuration_exception(
+                        fmt::format("Unrecognized rack name '{}'. allowed_racks={}", name, fmt::join(*allowed_racks, ",")));
+                }
+                racks.emplace_back(name);
                 opt = next_opt;
             }
 
@@ -220,13 +223,17 @@ void replication_factor_data::parse(const sstring& rf, allow_racks ar) {
         }
     } catch (...) {
         throw exceptions::configuration_exception(
-            format("Replication factor must be numeric{}; found '{}': {}", ar ? " or a comma-separated list of rack names" : "",  rf, std::current_exception()));
+            format("Replication factor must be numeric{}; found '{}': {}", allowed_racks ? " or a comma-separated list of rack names" : "",  rf, std::current_exception()));
     }
 }
 
-replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf, replication_factor_data::allow_racks ar)
+replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf)
 {
-    return replication_factor_data(rf, ar);
+    return replication_factor_data(rf);
+}
+
+replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf, const std::unordered_set<sstring>& racks) {
+    return replication_factor_data(rf, &racks);
 }
 
 static

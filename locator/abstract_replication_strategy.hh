@@ -71,10 +71,8 @@ class replication_factor_data {
     std::variant<size_t, std::vector<sstring>> _data;
 
 public:
-    using allow_racks = bool_class<struct allow_racks_tag>;
-
-    explicit replication_factor_data(const sstring& rf, allow_racks ar = allow_racks::no) {
-        parse(rf, ar);
+    explicit replication_factor_data(const sstring& rf, const std::unordered_set<sstring>* allowed_racks = nullptr) {
+        parse(rf, allowed_racks);
     }
 
     size_t count() const noexcept {
@@ -85,7 +83,7 @@ public:
     }
 
 private:
-    void parse(const sstring& rf, allow_racks ar);
+    void parse(const sstring& rf, const std::unordered_set<sstring>* allowed_racks);
 };
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
@@ -140,7 +138,8 @@ public:
     static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology& topo) {
         return create_replication_strategy(strategy_name, std::move(params), &topo);
     }
-    static replication_factor_data parse_replication_factor(sstring rf, replication_factor_data::allow_racks ar = replication_factor_data::allow_racks::no);
+    static replication_factor_data parse_replication_factor(sstring rf);
+    static replication_factor_data parse_replication_factor(sstring rf, const std::unordered_set<sstring>& racks);
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 

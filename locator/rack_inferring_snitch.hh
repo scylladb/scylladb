@@ -35,12 +35,12 @@ struct rack_inferring_snitch : public snitch_base {
 
     virtual sstring get_rack() const override {
         auto& endpoint = _cfg.broadcast_address;
-        return std::to_string(uint8_t(endpoint.bytes()[2]));
+        return fmt::format("rack{}", uint8_t(endpoint.bytes()[2]));
     }
 
     virtual sstring get_datacenter() const override {
         auto& endpoint = _cfg.broadcast_address;
-        return std::to_string(uint8_t(endpoint.bytes()[1]));
+        return fmt::format("dc{}", uint8_t(endpoint.bytes()[1]));
     }
 
     virtual sstring get_name() const override {
