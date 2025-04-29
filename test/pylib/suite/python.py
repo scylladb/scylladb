@@ -11,6 +11,7 @@ import logging
 import os
 import pathlib
 import xml.etree.ElementTree as ET
+from contextlib import asynccontextmanager
 from functools import cache
 from typing import TYPE_CHECKING
 
@@ -23,7 +24,7 @@ from test.pylib.util import LogPrefixAdapter
 
 if TYPE_CHECKING:
     import argparse
-    from collections.abc import Callable, Awaitable
+    from collections.abc import Callable, Awaitable, AsyncGenerator
     from typing import Optional, Union
 
     from pytest import Parser
@@ -200,8 +201,14 @@ class PythonTest(Test):
             print("Server log of the first server:")
             print(self.server_log)
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    @asynccontextmanager
+    async def run_ctx(self, options: argparse.Namespace) -> AsyncGenerator[None]:
+        """A test's setup/teardown context manager.
 
+        Important part of this code is getting a ScyllaDB node from the pool and providing an address to the host
+        as a `--host` argument.  This node returned to the pool after test is finished.  If the test was failed then
+        the node will be marked as dirty.
+        """
         self._prepare_pytest_params(options)
 
         loggerPrefix = self.mode + '/' + self.uname
@@ -219,19 +226,19 @@ class PythonTest(Test):
                 cluster.prepare_cql_executed = True
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
             self.args.insert(0, f"--host={cluster.endpoint()}")
-            log_filename = next(server.log_filename for server in cluster.running.values())
-            self.args.insert(0, f"--scylla-log-filename={log_filename}")
+            self.server_log_filename = cluster.server_log_filename()
+            self.args.insert(0, f"--scylla-log-filename={self.server_log_filename}")
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
-            status = await run_test(self, options, env=self.suite.scylla_env)
+
+            yield
+
             if self.shortname in self.suite.dirties_cluster:
                 cluster.is_dirty = True
-            cluster.after_test(self.uname, status)
+            cluster.after_test(self.uname, self.success)
             self.is_after_test_ok = True
-            self.success = status
         except Exception as e:
             self.server_log = cluster.read_server_log()
-            self.server_log_filename = cluster.server_log_filename()
             if not self.is_before_test_ok:
                 print("Test {} pre-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
@@ -242,6 +249,10 @@ class PythonTest(Test):
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
         await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+
+    async def run(self, options: argparse.Namespace) -> Test:
+        async with self.run_ctx(options=options):
+            self.success = await run_test(test=self, options=options, env=self.suite.scylla_env)
         return self
 
     def write_junit_failure_report(self, xml_res: ET.Element) -> None:
