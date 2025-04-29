@@ -300,6 +300,7 @@ private:
     }
 
     friend struct ::node_ops_ctl;
+    friend void check_raft_rpc_scheduling_group(storage_service&, std::string_view);
 public:
 
     const gms::gossiper& gossiper() const noexcept {
