@@ -520,9 +520,8 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
 
         async def revoke_resize(log, mark):
             await log.wait_for('tablet_virtual_task: wait until tablet operation is finished', from_mark=mark)
-            await asyncio.gather(*[cql.run_async(f"DELETE FROM {keyspace}.{table1} WHERE pk={k};") for k in keys])
-
-            await manager.api.flush_keyspace(servers[0].ip_addr, keyspace)
+            revoke_injection = "force_resize_cancellation"
+            await enable_injection(manager, servers, revoke_injection)
 
         async def wait_for_task(task_id):
             status = await tm.wait_for_task(servers[0].ip_addr, task_id)

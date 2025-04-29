@@ -556,6 +556,9 @@ class load_balancer {
         // If we cancel a split, that's because average size dropped so much a merge would be
         // required post completion, and vice-versa.
         bool table_needs_resize_cancellation(const table_size_desc& d) const {
+            if (utils::get_local_injector().enter("force_resize_cancellation")) {
+                return true;
+            }
             return d.resize_decision.split_or_merge() && to_resize_decision(d).way != d.resize_decision.way;
         }
 
