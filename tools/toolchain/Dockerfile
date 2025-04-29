@@ -9,6 +9,7 @@ RUN dnf -y update \
     && dnf -y install ccache \
     && dnf -y install devscripts debhelper fakeroot file rpm-build \
     && ./install-dependencies.sh && dnf clean all \
+    && rm -rf /root/.cache /root/.cargo \
     && echo 'ALL ALL=(ALL:ALL) NOPASSWD: ALL' >> /etc/sudoers \
     && cp ./tools/toolchain/system-auth /etc/pam.d \
     && echo 'Defaults !requiretty' >> /etc/sudoers
