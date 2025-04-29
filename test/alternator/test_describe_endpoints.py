@@ -5,12 +5,11 @@
 # Test for the DescribeEndpoints operation
 
 import boto3
-from test.alternator.conftest import get_valid_alternator_role
 
 # Test that the DescribeEndpoints operation works as expected: that it
 # returns one endpoint (it may return more, but it never does this in
 # Amazon), and this endpoint can be used to make more requests.
-def test_describe_endpoints(request, dynamodb):
+def test_describe_endpoints(request, dynamodb, get_valid_alternator_role):
     endpoints = dynamodb.meta.client.describe_endpoints()['Endpoints']
     # It is not strictly necessary that only a single endpoint be returned,
     # but this is what Amazon DynamoDB does today (and so does Alternator).
