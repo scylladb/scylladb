@@ -268,6 +268,10 @@ def add_cql_connection_options(parser: Parser) -> None:
                           help="CQL port to connect to")
     cql_options.addoption("--ssl", action="store_true",
                           help="Connect to CQL via an encrypted TLSv1.2 connection")
+    cql_options.addoption("--auth_username",
+                          help="username for authentication")
+    cql_options.addoption("--auth_password",
+                          help="password for authentication")
 
 
 # Use cache to execute this function once per pytest session.
