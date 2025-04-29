@@ -112,19 +112,19 @@ void production_snitch_base::parse_property_file(std::string contents) {
 
 [[noreturn]]
 void production_snitch_base::throw_double_declaration(const sstring& key) const {
-    logger().error("double \"{}\" declaration in {}", key, _prop_file_name);
+    logger().warn("double \"{}\" declaration in {}", key, _prop_file_name);
     throw bad_property_file_error();
 }
 
 [[noreturn]]
 void production_snitch_base::throw_bad_format(const sstring& line) const {
-    logger().error("Bad format in properties file {}: {}", _prop_file_name, line);
+    logger().warn("Bad format in properties file {}: {}", _prop_file_name, line);
     throw bad_property_file_error();
 }
 
 [[noreturn]]
 void production_snitch_base::throw_incomplete_file() const {
-    logger().error("Property file {} is incomplete. Some obligatory fields are missing.", _prop_file_name);
+    logger().warn("Property file {} is incomplete. Some obligatory fields are missing.", _prop_file_name);
     throw bad_property_file_error();
 }
 
