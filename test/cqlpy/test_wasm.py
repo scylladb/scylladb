@@ -494,10 +494,9 @@ def test_abi_v2(cql, test_keyspace, table1, scylla_with_wasm_only):
         assert len(res) == 1 and res[0].result == 'doggo'
 
 @pytest.fixture(scope="module")
-def metrics(request, scylla_with_wasm_only):
-    url = request.config.getoption('host')
+def metrics(request, scylla_with_wasm_only, cql):
     # The Prometheus API is on port 9180, and always http
-    url = 'http://' + url + ':9180/metrics'
+    url = f'http://{cql.cluster.contact_points[0]}:9180/metrics'
     resp = requests.get(url)
     if resp.status_code != 200:
         pytest.skip('Metrics port 9180 is not available')

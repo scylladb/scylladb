@@ -150,6 +150,7 @@ class PythonTest(Test):
         self.core_args = ["-m", "pytest"]
         self.casename = casename
         self.xmlout = self.suite.log_dir / "xml" / f"{self.uname}.xunit.xml"
+        self.server_address: str | None = None
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
         self.is_before_test_ok = False
@@ -225,7 +226,8 @@ class PythonTest(Test):
                     cc.execute(stmt)
                 cluster.prepare_cql_executed = True
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(0, f"--host={cluster.endpoint()}")
+            self.server_address = cluster.endpoint()
+            self.args.insert(0, f"--host={self.server_address}")
             self.server_log_filename = cluster.server_log_filename()
             self.args.insert(0, f"--scylla-log-filename={self.server_log_filename}")
             self.is_before_test_ok = True

@@ -457,7 +457,7 @@ def test_update_table_non_existent(dynamodb, test_table):
 # option enabled, and pass with it enabled (and also pass on Cassandra).
 # These tests should use the "fails_without_consistent_cluster_management"
 # fixture. When consistent mode becomes the default, this fixture can be removed.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def check_pre_consistent_cluster_management(dynamodb):
     # If not running on Scylla, return false.
     if is_aws(dynamodb):
