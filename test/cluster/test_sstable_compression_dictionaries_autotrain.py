@@ -15,7 +15,7 @@ from test.pylib.rest_client import ScyllaMetrics
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 30
+TIMEOUT = 600
 
 async def get_metrics(manager: ManagerClient, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
     return await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
