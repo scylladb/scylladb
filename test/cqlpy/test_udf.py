@@ -16,7 +16,7 @@ from cassandra.protocol import InvalidRequest
 # Cassandra supports Java and ScyllaDB doesn't - but ScyllaDB supports
 # Lua. The following fixture can be used to check if the server supports
 # Java UDFs - and if it doesn't, the test should use Lua.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def has_java_udf(cql, test_keyspace):
     try:
         with new_function(cql, test_keyspace, "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"):

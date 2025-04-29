@@ -12,6 +12,7 @@ import logging
 import ssl
 import uuid
 import pytest
+from pathlib import Path
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore
 from cassandra.cluster import Cluster              # type: ignore # pylint: disable=no-name-in-module
 from cassandra.cluster import ConsistencyLevel     # type: ignore # pylint: disable=no-name-in-module
@@ -20,7 +21,8 @@ from cassandra.policies import RoundRobinPolicy    # type: ignore # pylint: disa
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
-from test.cqlpy.conftest import cql, this_dc  # add required fixtures
+from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
+from test.pylib.suite.base import find_suite_config
 from test.pylib.suite.python import add_host_option, add_scylla_cql_connection_options
 
 
@@ -40,6 +42,11 @@ def pytest_addoption(parser) -> None:
                      help="Output file")
     add_host_option(parser)
     add_scylla_cql_connection_options(parser)
+
+
+@pytest.fixture(scope="module")
+def testpy_suite_config(request: pytest.FixtureRequest) -> Path:
+    return find_suite_config(path=Path(request.config.getoption("--input")))
 
 
 # A function-scoped autouse=True fixture allows us to test after every test
@@ -62,7 +69,7 @@ def cql_test_connection(cql, request):  # pylint: disable=redefined-outer-name
 # used in tests that need a keyspace. The keyspace is created with RF=1,
 # and automatically deleted at the end. We use scope="session" so that all
 # tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def keyspace(cql, this_dc):             # pylint: disable=redefined-outer-name
     """Fixture to create a test kespace for this pytest session"""
     keyspace_name = f"test_{uuid.uuid4().hex}"

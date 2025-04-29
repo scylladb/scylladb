@@ -15,7 +15,7 @@ from cassandra.protocol import FunctionFailure, InvalidRequest
 import pytest
 import time
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
     table = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {table} (k int PRIMARY KEY, v int, w int)")
