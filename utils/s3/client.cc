@@ -28,7 +28,6 @@
 #include <seastar/core/units.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/coroutine/exception.hh>
-#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/lazy.hh>
@@ -1091,112 +1090,6 @@ data_sink client::make_upload_sink(sstring object_name, seastar::abort_source* a
 
 data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
     return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), max_parts_per_piece, as));
-}
-
-class client::chunked_download_source final : public seastar::data_source_impl {
-    struct claimed_buffer {
-        temporary_buffer<char> _buffer;
-        semaphore_units<> _claimed_memory;
-        s3_clock::duration _consumption_time;
-        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory, s3_clock::duration consumption_time)
-            : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)), _consumption_time(consumption_time) {}
-    };
-    shared_ptr<client> _client;
-    sstring _object_name;
-    seastar::abort_source* _as;
-    range _range;
-    static constexpr size_t _max_buffers_size = 5_MiB;
-    std::deque<claimed_buffer> _buffers;
-    size_t _buffers_size = 0;
-    bool _is_closing = false;
-    seastar::condition_variable _buffer_cv;
-    future<> _filling_fiber = make_ready_future<>();
-
-    future<> make_filling_fiber() {
-        while (true) {
-            try {
-                s3l.trace("Fiber starts cycle for object '{}'", _object_name);
-                if (_is_closing) {
-                    s3l.trace("Abandoning fiber for object '{}'", _object_name);
-                    co_return;
-                }
-                auto req = http::request::make("GET", _client->_host, _object_name);
-                auto range_header = format_range_header(_range);
-                req._headers["Range"] = std::move(range_header);
-                s3l.trace("Fiber for object '{}' will make HTTP request within range {}-{}", _object_name, _range.off, _range.len);
-                co_await _client->make_request(
-                    std::move(req),
-                    [this](group_client&, const http::reply&, input_stream<char>&& in_) mutable -> future<> {
-                        auto in = std::move(in_);
-                        co_return co_await in.consume([this, start = s3_clock::now()](temporary_buffer<char> buf) -> future<consumption_result<char>> {
-                            auto recap_start = start;
-                            while (_buffers_size < _max_buffers_size && !_is_closing) {
-                                s3l.trace("Fiber for object '{}' will try to download within range {}-{}", _object_name, _range.off, _range.len);
-                                auto buff_size = buf.size();
-                                _range.off += buff_size;
-                                _range.len -= buff_size;
-                                _buffers_size += buff_size;
-                                s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size), s3_clock::now() - start);
-                                _buffer_cv.broadcast();
-                                if (buff_size == 0) {
-                                    s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                    co_return consumption_result(stop_consuming(temporary_buffer<char>()));
-                                }
-                                co_await coroutine::maybe_yield();
-                                recap_start = s3_clock::now();
-                                co_return consumption_result<char>(continue_consuming());
-                            }
-                            co_return consumption_result(stop_consuming(temporary_buffer<char>()));
-                        });
-                    },
-                    {},
-                    _as);
-                co_await _buffer_cv.when();
-            } catch (...) {
-                s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
-                _buffer_cv.broken(std::current_exception());
-                co_return;
-            }
-        }
-    }
-
-public:
-    chunked_download_source(shared_ptr<client> cln, sstring object_name, std::optional<range> range, seastar::abort_source* as)
-        : _client(std::move(cln)), _object_name(std::move(object_name)), _as(as), _range(range.value_or(s3::range{0, std::numeric_limits<uint64_t>::max()})) {
-        _filling_fiber = make_filling_fiber();
-        _buffer_cv.signal();
-        s3l.trace("Constructing chunked_download_source for object '{}'", _object_name);
-    }
-
-    future<temporary_buffer<char>> get() override {
-        while (true) {
-            if (!_buffers.empty()) {
-                auto claimed_buff = std::move(_buffers.front());
-                _buffers.pop_front();
-                _buffers_size -= claimed_buff._buffer.size();
-                _buffer_cv.broadcast();
-                s3l.trace("get() for object '{}' popped buffer of {} bytes", _object_name, claimed_buff._buffer.size());
-                // Report the time it took to consume the buffer here and not in the fiber, otherwise our read amplification checks will go haywire
-                _client->find_or_create_client().read_stats.update(claimed_buff._buffer.size(), claimed_buff._consumption_time);
-                co_return std::move(claimed_buff._buffer);
-            }
-            _buffer_cv.signal();
-            s3l.trace("get() for object '{}' waiting for buffer", _object_name);
-            co_await coroutine::maybe_yield();
-        }
-    }
-
-    future<> close() override {
-        _is_closing = true;
-        _buffer_cv.signal();
-        s3l.trace("Closing chunked_download_source for object '{}'", _object_name);
-        co_await std::move(_filling_fiber);
-    }
-};
-
-data_source client::make_chunked_download_source(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
-    return data_source(std::make_unique<chunked_download_source>(shared_from_this(), std::move(object_name), range, as));
 }
 
 class client::download_source final : public seastar::data_source_impl {
