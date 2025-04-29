@@ -10,6 +10,7 @@
 
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <source_location>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/random_utils.hh"
@@ -2545,18 +2546,24 @@ allocate_replicas_in_racks(const std::vector<endpoint_dc_rack>& racks, int rf,
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
-  do_with_cql_env_thread([] (auto& e) {
+  auto do_test_case = [] (const shard_id rf) {
+    return do_with_cql_env_thread([rf] (auto& e) {
     topology_builder topo(e);
     const int n_hosts = 6;
     auto shard_count = 2;
 
+        // Sanity check just in case someone modifies the caller of this lambda
+        // and starts providing RF > n_hosts. In that case, we wouldn't be able
+        // to create an RF-rack-valid keyspace.
+        assert(rf <= n_hosts);
+
     std::vector<host_id> hosts;
     std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
 
-    std::vector<endpoint_dc_rack> racks {
-        topo.rack(),
-        topo.start_new_rack(),
-    };
+        std::vector<endpoint_dc_rack> racks{topo.rack()};
+        for (shard_id i = 1; i < rf; ++i) {
+            racks.push_back(topo.start_new_rack());
+        }
 
     for (int i = 0; i < n_hosts; ++i) {
         auto rack = racks[(i + 1) % racks.size()];
@@ -2569,11 +2576,9 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
 
     auto& stm = e.shared_token_metadata().local();
 
-    for (int i = 0; i < 13; ++i) {
         size_t total_tablet_count = 0;
         std::vector<sstring> keyspaces;
         size_t tablet_count_bits = 8;
-        int rf = tests::random::get_int<shard_id>(2, 4);
         for (size_t log2_tablets = 0; log2_tablets < tablet_count_bits; ++log2_tablets) {
             if (tests::random::get_bool()) {
                 continue;
@@ -2634,8 +2639,15 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         seastar::parallel_for_each(keyspaces, [&] (const sstring& ks) {
             return e.execute_cql(fmt::format("DROP KEYSPACE {}", ks)).discard_result();
         }).get();
-    }
-  }).get();
+    });
+  };
+
+  const int test_case_number = 13;
+  for (int i = 0; i < test_case_number; ++i) {
+    const shard_id rf = tests::random::get_int<shard_id>(2, 4);
+    testlog.info("{}: Starting test case {} for RF={}", std::source_location::current().function_name(), i + 1, rf);
+    do_test_case(rf).get();
+  }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
