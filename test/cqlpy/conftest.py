@@ -47,20 +47,23 @@ def pytest_addoption(parser):
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
 def cql(request):
+    host = request.config.getoption("--host")
+    port = request.config.getoption("--port")
     try:
         # Use the default superuser credentials, which work for both Scylla and Cassandra
-        with cql_session(request.config.getoption('host'),
-            request.config.getoption('port'),
-            request.config.getoption('ssl'),
-            username="cassandra",
-            password="cassandra"
+        with cql_session(
+                host=host,
+                port=port,
+                is_ssl=request.config.getoption("--ssl"),
+                username=request.config.getoption("--auth_username") or "cassandra",
+                password=request.config.getoption("--auth_password") or "cassandra",
         ) as session:
             yield session
             session.shutdown()
     except NoHostAvailable:
         # We couldn't create a cql connection. Instead of reporting that
         # each individual test failed, let's just exit immediately.
-        pytest.exit(f"Cannot connect to Scylla at --host={request.config.getoption('host')} --port={request.config.getoption('port')}", returncode=pytest.ExitCode.INTERNAL_ERROR)
+        pytest.exit(f"Cannot connect to Scylla at --host={host} --port={port}", returncode=pytest.ExitCode.INTERNAL_ERROR)
 
 # A function-scoped autouse=True fixture allows us to test after every test
 # that the CQL connection is still alive - and if not report the test which

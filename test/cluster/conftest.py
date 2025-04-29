@@ -57,10 +57,6 @@ def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
     add_cql_connection_options(parser)
-    parser.addoption('--auth_username', action='store', default=None,
-                        help='username for authentication')
-    parser.addoption('--auth_password', action='store', default=None,
-                        help='password for authentication')
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
                           'with logs')
