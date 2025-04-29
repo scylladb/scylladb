@@ -14,7 +14,6 @@ import pytest
 import urllib3
 from botocore.exceptions import ClientError, HTTPClientError
 
-from test.alternator.conftest import new_dynamodb_session
 from test.alternator.util import random_string, full_query, multiset, scylla_inject_error
 
 
@@ -405,9 +404,9 @@ def test_batch_write_item_large(test_table_sn):
 
 # Test if client breaking connection during HTTP response
 # streaming doesn't break the server.
-def test_batch_write_item_large_broken_connection(test_table_sn, request, dynamodb):
+def test_batch_write_item_large_broken_connection(test_table_sn, new_dynamodb_session):
     fn_name = sys._getframe().f_code.co_name
-    ses = new_dynamodb_session(request, dynamodb)
+    ses = new_dynamodb_session()
 
     p = random_string()
     long_content = random_string(100)*500
