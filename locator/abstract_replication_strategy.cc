@@ -154,8 +154,7 @@ const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as
     return dynamic_cast<const tablet_aware_replication_strategy*>(this);
 }
 
-long abstract_replication_strategy::parse_replication_factor(sstring rf)
-{
+size_t replication_factor_data::parse(const sstring& rf) {
     if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
         throw exceptions::configuration_exception(
                 format("Replication factor must be numeric and non-negative, found '{}'", rf));
@@ -166,6 +165,11 @@ long abstract_replication_strategy::parse_replication_factor(sstring rf)
         throw exceptions::configuration_exception(
             sstring("Replication factor must be numeric; found ") + rf);
     }
+}
+
+replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf)
+{
+    return replication_factor_data(rf);
 }
 
 static
@@ -711,4 +715,8 @@ auto fmt::formatter<locator::static_effective_replication_map::factory_key>::for
         sep = ',';
     }
     return out;
+}
+
+auto fmt::formatter<locator::replication_factor_data>::format(const locator::replication_factor_data& rf, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", rf.count());
 }
