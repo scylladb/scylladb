@@ -67,7 +67,7 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
         }
 
         auto rf = parse_replication_factor(val);
-        rep_factor += rf;
+        rep_factor += rf.count();
         _dc_rep_factor.emplace(key, rf);
         _datacenteres.push_back(key);
     }
@@ -165,7 +165,7 @@ class natural_endpoints_tracker {
 
     const token_metadata& _tm;
     const topology& _tp;
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
+    network_topology_strategy::dc_rep_factor_map _dc_rep_factor;
 
     //
     // We want to preserve insertion order so that the first added endpoint
@@ -192,7 +192,7 @@ class natural_endpoints_tracker {
     size_t _dcs_to_fill;
 
 public:
-    natural_endpoints_tracker(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
+    natural_endpoints_tracker(const token_metadata& tm, const network_topology_strategy::dc_rep_factor_map& dc_rep_factor)
         : _tm(tm)
         , _tp(_tm.get_topology())
         , _dc_rep_factor(dc_rep_factor)
@@ -208,8 +208,9 @@ public:
         };
 
         // Create a data_center_endpoints object for each non-empty DC.
-        for (auto& [dc, rf] : _dc_rep_factor) {
+        for (auto& [dc, rf_data] : _dc_rep_factor) {
             auto node_count = size_for(_token_owners, dc);
+            auto rf = rf_data.count();
 
             if (rf == 0 || node_count == 0) {
                 continue;
@@ -237,13 +238,14 @@ public:
         return _replicas;
     }
 
-    static void check_enough_endpoints(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rf) {
+    static void check_enough_endpoints(const token_metadata& tm, const network_topology_strategy::dc_rep_factor_map& dc_rf) {
         auto dc_endpoints = tm.get_datacenter_token_owners();
         auto endpoints_in = [&dc_endpoints](sstring dc) {
             auto i = dc_endpoints.find(dc);
             return i != dc_endpoints.end() ? i->second.size() : size_t(0);
         };
-        for (const auto& [dc, rf] : dc_rf) {
+        for (const auto& [dc, rf_data] : dc_rf) {
+            auto rf = rf_data.count();
             if (rf > endpoints_in(dc)) {
                 throw exceptions::configuration_exception(seastar::format(
                         "Datacenter {} doesn't have enough token-owning nodes for replication_factor={}", dc, rf));
