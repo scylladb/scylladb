@@ -32,6 +32,7 @@ here="$(realpath $(dirname "$0"))"
 toplevel="$(realpath "$here/../..")"
 group_args=()
 docker_args=()
+tmpfiles=()
 image="$(<"$here/image")"
 
 for gid in $(id -G); do
@@ -161,8 +162,22 @@ else
     # --pids-limit is not supported on podman with cgroupsv1
     # detection code from
     #   https://unix.stackexchange.com/questions/617764/how-do-i-check-if-system-is-using-cgroupv1
+    containers_conf="$(mktemp)"
+    tmpfiles+=("$containers_conf")
+    cat > "$containers_conf" <<EOF
+[engine]
+static_dir = "$HOME/.local/share/containers/storage/libpod"
+volume_path = "$HOME/.local/share/containers/storage/libpod"
+
+[containers]
+# netns = private, the default, doesn't work in nested containers,
+# and we don't mind using the host network anyway.
+netns = "host"
+EOF
     if grep -q 'cgroup2.*/sys/fs/cgroup ' /proc/mounts; then
         docker_common_args+=(
+            -v "$HOME/.local/share/containers:$HOME/.local/share/containers"
+            -v "$containers_conf:/etc/containers/containers.conf.d/nested.conf"
             --pids-limit -1
             --annotation run.oci.keep_original_groups=1
         )
@@ -222,6 +237,7 @@ cleanup() {
     if [ -v TMP_PASSWD ]; then
         rm -f "$TMP_PASSWD"
     fi
+    rm -f "${tmpfiles[@]}"
 }
 
 if [[ -n "$interactive" || -n "$is_podman" ]]; then

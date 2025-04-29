@@ -4,6 +4,7 @@ ARG CLANG_BUILD="SKIP"
 ARG CLANG_ARCHIVES
 
 WORKDIR /mnt
+RUN echo install_weak_deps=False >> /etc/dnf/dnf.conf
 RUN dnf -y update \
     && dnf -y install 'dnf-command(copr)' \
     && dnf -y install ccache \
