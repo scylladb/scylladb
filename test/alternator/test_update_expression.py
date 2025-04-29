@@ -1179,3 +1179,51 @@ def test_update_expression_when_rmw(test_table_s_forbid_rmw):
     with pytest.raises(ClientError, match='ValidationException.*write isolation policy'):
         table.update_item(Key={'p': p},
             UpdateExpression='SET b = a')
+
+# The DynamoDB documentation for UpdateExpression says about "ADD" that:
+# "In general, we recommend using SET rather than ADD". However, it's worth
+# noting that unlike ADD which can treat an attribute or an item that doesn't
+# yet exist as zero (we tested this in test_update_expression_add_numbers_new)
+# SET can't do this and must be combined together with is_not_exists() to do
+# what ADD does. In this test we'll check that the SET alternative works as
+# it does in DynamoDB.
+def test_update_expression_set_implement_add(test_table_s):
+    p = random_string()
+    # "SET a = a + :val" works when a is already set
+    test_table_s.put_item(Item={'p': p, 'a': 42})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = a + :val',
+        ExpressionAttributeValues={':val': 7})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 49}
+    # But "SET b = b + :val" doesn't work (resulting in ValidationException)
+    # if an attribute "b" is not set in the item. It also doesn't work if
+    # the whole item doesn't exist.
+    # We tested something similar in test_update_expression_set_copy.
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET b = b + :val',
+            ExpressionAttributeValues={':val': 7})
+    p1 = random_string()
+    with pytest.raises(ClientError, match='ValidationException'):
+        test_table_s.update_item(Key={'p': p1},
+            UpdateExpression='SET b = b + :val',
+            ExpressionAttributeValues={':val': 7})
+    # Finally, we can use the trick "SET a = if_not_exists(a, :zero) + :val"
+    # to allow us to treat a non-existent attribute (or even non-existent item)
+    # as zero, and the same expression will work for both the existing and
+    # non-existing cases, and behave like "ADD" does.
+    # Case 1. p's a exists and its value (49) is used:
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = if_not_exists(a, :zero) + :val',
+        ExpressionAttributeValues={':val': 3, ':zero': 0})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 52}
+    # Case 2. p's b does not exist so zero will be used. a=52 isn't modified.
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET b = if_not_exists(b, :zero) + :val',
+        ExpressionAttributeValues={':val': 5, ':zero': 0})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 52, 'b': 5}
+    # Case 3. Item p1 doesn't exist at all, so zero will be used
+    test_table_s.update_item(Key={'p': p1},
+        UpdateExpression='SET a = if_not_exists(a, :zero) + :val',
+        ExpressionAttributeValues={':val': 7, ':zero': 0})
+    assert test_table_s.get_item(Key={'p': p1}, ConsistentRead=True)['Item'] == {'p': p1, 'a': 7}
