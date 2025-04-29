@@ -2541,33 +2541,33 @@ allocate_replicas_in_racks(const std::vector<endpoint_dc_rack>& racks, int rf,
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
   auto do_test_case = [] (const shard_id rf) {
     return do_with_cql_env_thread([rf] (auto& e) {
-    topology_builder topo(e);
-    const int n_hosts = 6;
-    auto shard_count = 2;
+        topology_builder topo(e);
+        const int n_hosts = 6;
+        auto shard_count = 2;
 
         // Sanity check just in case someone modifies the caller of this lambda
         // and starts providing RF > n_hosts. In that case, we wouldn't be able
         // to create an RF-rack-valid keyspace.
         assert(rf <= n_hosts);
 
-    std::vector<host_id> hosts;
-    std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
+        std::vector<host_id> hosts;
+        std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
 
         std::vector<endpoint_dc_rack> racks{topo.rack()};
         for (shard_id i = 1; i < rf; ++i) {
             racks.push_back(topo.start_new_rack());
         }
 
-    for (int i = 0; i < n_hosts; ++i) {
-        auto rack = racks[(i + 1) % racks.size()];
-        auto h = topo.add_node(node_state::normal, shard_count, rack);
-        if (i) {
-            // Leave the first host empty by making it invisible to allocation algorithm.
-            hosts_by_rack[rack.rack].push_back(h);
+        for (int i = 0; i < n_hosts; ++i) {
+            auto rack = racks[(i + 1) % racks.size()];
+            auto h = topo.add_node(node_state::normal, shard_count, rack);
+            if (i) {
+                // Leave the first host empty by making it invisible to allocation algorithm.
+                hosts_by_rack[rack.rack].push_back(h);
+            }
         }
-    }
 
-    auto& stm = e.shared_token_metadata().local();
+        auto& stm = e.shared_token_metadata().local();
 
         size_t total_tablet_count = 0;
         std::vector<sstring> keyspaces;
