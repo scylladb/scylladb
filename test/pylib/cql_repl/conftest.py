@@ -20,7 +20,7 @@ from cassandra.policies import RoundRobinPolicy    # type: ignore # pylint: disa
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
 
-from test.cqlpy.conftest import cql, this_dc  # add required fixtures
+from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
 from test.pylib.suite.python import add_host_option, add_cql_connection_options
 
 

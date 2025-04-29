@@ -15,6 +15,8 @@ import requests
 import re
 
 from test.alternator.util import create_test_table, is_aws, scylla_log
+from test.conftest import testpy_test_fixture_scope
+from test.cqlpy.conftest import host  # add required fixtures
 from test.pylib.suite.python import add_host_option
 from urllib.parse import urlparse
 from functools import cache
@@ -72,7 +74,7 @@ def pytest_collection_modifyitems(config, items):
 # If this function can't connect to CQL, it will return an arbitrary
 # user/secret pair, and hope it would work if alternator-enforce-authorization
 # is off.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def get_valid_alternator_role():
     from cassandra.cluster import Cluster, NoHostAvailable
     from cassandra.auth import PlainTextAuthProvider
@@ -114,8 +116,7 @@ def get_valid_alternator_role():
 # or a local Alternator installation on http://localhost:8080 - depending on the
 # existence of the "--aws" option. In the future we should provide options
 # for choosing other Amazon regions or local installations.
-# We use scope="session" so that all tests will reuse the same client object.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def dynamodb(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
@@ -130,9 +131,9 @@ def dynamodb(request, get_valid_alternator_role):
         # for local runs.
         if request.config.getoption('url') != None:
             local_url = request.config.getoption('url')
-        elif request.config.getoption('host') is not None:
+        elif address := request.getfixturevalue("host"):
             # this argument needed for compatibility with PythonTestSuite without modifying the previous behavior
-            local_url = f"http://{request.config.getoption('host')}:8000"
+            local_url = f"http://{address}:8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
@@ -144,7 +145,7 @@ def dynamodb(request, get_valid_alternator_role):
     yield res
     res.meta.client.close()
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
     def _new_dynamodb_session(user='cassandra', password='secret_pass'):
         ses = boto3.Session()
@@ -160,7 +161,7 @@ def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
             config=conf)
     return _new_dynamodb_session
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def dynamodbstreams(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
@@ -175,9 +176,9 @@ def dynamodbstreams(request, get_valid_alternator_role):
         # for local runs.
         if request.config.getoption('url') != None:
             local_url = request.config.getoption('url')
-        elif request.config.getoption('host') is not None:
+        elif address := request.getfixturevalue("host"):
             # this argument needed for compatibility with PythonTestSuite without modifying the previous behavior
-            local_url = f"http://{request.config.getoption('host')}:8000"
+            local_url = f"http://{address}:8000"
         else:
             local_url = 'https://localhost:8043' if request.config.getoption('https') else 'http://localhost:8000'
         # Disable verifying in order to be able to use self-signed TLS certificates
@@ -213,7 +214,6 @@ dynamodb_test_connection.scylla_crashed = False
 
 # "test_table" fixture: Create and return a temporary table to be used in tests
 # that need a table to work on. The table is automatically deleted at the end.
-# We use scope="session" so that all tests will reuse the same client object.
 # This "test_table" creates a table which has a specific key schema: both a
 # partition key and a sort key, and both are strings. Other fixtures (below)
 # can be used to create different types of tables.
@@ -228,7 +228,7 @@ dynamodb_test_connection.scylla_crashed = False
 # time, we can also remove just tables older than a particular age. Such
 # mechanism will allow running tests in parallel, without the risk of deleting
 # a parallel run's temporary tables.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -247,7 +247,7 @@ def test_table(dynamodb):
 
 # The following fixtures test_table_* are similar to test_table but create
 # tables with different key schemas.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table_s(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
@@ -256,35 +256,35 @@ def test_table_s(dynamodb):
     table.delete()
 # test_table_s_2 has exactly the same schema as test_table_s, and is useful
 # for tests which need two different tables with the same schema.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table_s_2(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ])
     yield table
     table.delete()
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table_b(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'B' } ])
     yield table
     table.delete()
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table_sb(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'B' } ])
     yield table
     table.delete()
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table_sn(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'N' } ])
     yield table
     table.delete()
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table_ss(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
@@ -301,7 +301,7 @@ def test_table_ss(dynamodb):
 # This table is supposed to be read from, not updated nor overwritten.
 # This fixture returns both a table object and the description of all items
 # inserted into it.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def filled_test_table(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
@@ -336,7 +336,7 @@ def filled_test_table(dynamodb):
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on AWS DynamoDB. A test using this fixture will be
 # skipped if running with "--aws".
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def scylla_only(dynamodb):
     if is_aws(dynamodb):
         pytest.skip('Scylla-only feature not supported by AWS')
@@ -347,7 +347,7 @@ def scylla_only(dynamodb):
 # not need it.
 # Because forbid_rmw is a Scylla-only feature, this test is skipped when not
 # running against Scylla.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_table_s_forbid_rmw(dynamodb, scylla_only):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
@@ -361,12 +361,12 @@ def test_table_s_forbid_rmw(dynamodb, scylla_only):
 # If we're not testing Scylla, or the REST API port (10000) is not available,
 # the test using this fixture will be skipped with a message about the REST
 # API not being available.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def rest_api(dynamodb, optional_rest_api):
     if optional_rest_api is None:
         pytest.skip('Cannot connect to Scylla REST API')
     return optional_rest_api
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def optional_rest_api(dynamodb):
     if is_aws(dynamodb):
         return None
@@ -387,7 +387,7 @@ def optional_rest_api(dynamodb):
 # below to xfail or skip a test which is known to be failing with tablets.
 # This is a temporary measure - eventually everything in Scylla should work
 # correctly with tablets, and these fixtures can be removed.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def has_tablets(dynamodb, test_table):
     # We rely on some knowledge of Alternator internals:
     # 1. For table with name X, Scylla creates a keyspace called alternator_X
@@ -425,7 +425,7 @@ def skip_tablets(has_tablets):
 # If we're not testing Scylla, or the CQL port is not available on the same
 # IP address as the Alternator IP address, a test using this fixture will
 # be skipped with a message about the CQL API not being available.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def cql(dynamodb):
     from cassandra.auth import PlainTextAuthProvider
     from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT, NoHostAvailable
