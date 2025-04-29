@@ -11,6 +11,9 @@
 #include <memory>
 #include <functional>
 #include <unordered_map>
+
+#include <seastar/util/bool_class.hh>
+
 #include "gms/inet_address.hh"
 #include "locator/token_range_splitter.hh"
 #include "dht/token-sharding.hh"
@@ -18,6 +21,7 @@
 #include "utils/maybe_yield.hh"
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
+#include "utils/overloaded_functor.hh"
 #include "tablets.hh"
 
 // forward declaration since replica/database.hh includes this file
@@ -64,19 +68,24 @@ class tablet_aware_replication_strategy;
 class effective_replication_map;
 
 class replication_factor_data {
-    size_t _count = 0;
+    std::variant<size_t, std::vector<sstring>> _data;
 
 public:
-    explicit replication_factor_data(const sstring& rf) {
-        parse(rf);
+    using allow_racks = bool_class<struct allow_racks_tag>;
+
+    explicit replication_factor_data(const sstring& rf, allow_racks ar = allow_racks::no) {
+        parse(rf, ar);
     }
 
     size_t count() const noexcept {
-        return _count;
+        return std::visit(overloaded_functor {
+        [] (const size_t& count) { return count; },
+        [] (const std::vector<sstring>& racks) { return racks.size(); },
+        }, _data);
     }
 
 private:
-    void parse(const sstring& rf);
+    void parse(const sstring& rf, allow_racks ar);
 };
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
@@ -131,7 +140,7 @@ public:
     static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology& topo) {
         return create_replication_strategy(strategy_name, std::move(params), &topo);
     }
-    static replication_factor_data parse_replication_factor(sstring rf);
+    static replication_factor_data parse_replication_factor(sstring rf, replication_factor_data::allow_racks ar = replication_factor_data::allow_racks::no);
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 

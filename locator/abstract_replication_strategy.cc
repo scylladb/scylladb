@@ -155,22 +155,78 @@ const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as
     return dynamic_cast<const tablet_aware_replication_strategy*>(this);
 }
 
-void replication_factor_data::parse(const sstring& rf) {
-    if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
+// Get the next string, optionally surrounded in single or double quates
+// using comma or space delimiters.
+static std::pair<std::string_view, std::optional<std::string_view>> next_token(std::string_view s) {
+    const char* begin;
+    const char* end = s.end();
+
+    auto isdelim = [] (char ch) -> bool {
+        return ch == ',' || isspace(ch);
+    };
+
+    auto isquote = [] (char ch) -> char {
+        if (ch == '\'' || ch == '"') {
+            return ch;
+        }
+        return 0;
+    };
+
+    for (begin = s.begin(); begin != s.end() && isdelim(*begin); ++begin) {
+    }
+    if (begin == s.end()) {
+        throw exceptions::configuration_exception(fmt::format("Invalid string token '{}'", s));
+    }
+    if (auto q = isquote(*begin)) {
+        for (end = ++begin; end != s.end() && *end != q; ++end) {
+            if (*end == '\\') {
+                if (++end == s.end()) {
+                    throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': bad terminator '{}'", s, *(end - 1)));
+                }
+            }
+        }
+        if (end == s.end()) {
+            throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': unterminated string", s));
+        }
+        if (begin == end - 1) {
+            throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': empty string", s));
+        }
+        return std::make_pair(std::string_view(begin, end - 1), std::make_optional<std::string_view>(end + 1, s.end()));
+    }
+    for (end = begin; end != s.end() && !isdelim(*end); ++end) {
+    }
+    return std::make_pair(std::string_view(begin, end), end == s.end() ? std::nullopt : std::make_optional<std::string_view>(end + 1, s.end()));
+}
+
+void replication_factor_data::parse(const sstring& rf, allow_racks ar) {
+    bool is_numeric = std::all_of(rf.begin(), rf.end(), [] (char c) {return isdigit(c);});
+    if (rf.empty() || (!is_numeric && !ar)) {
         throw exceptions::configuration_exception(
                 format("Replication factor must be numeric and non-negative, found '{}'", rf));
     }
     try {
-        _count = std::stol(rf);
+        if (is_numeric) {
+            _data.emplace<size_t>(std::stol(rf));
+        } else {
+            std::vector<sstring> racks;
+
+            for (std::optional<std::string_view> opt = rf; opt; ) {
+                auto [tok, next_opt] = next_token(*opt);
+                racks.emplace_back(tok);
+                opt = next_opt;
+            }
+
+            _data.emplace<std::vector<sstring>>(std::move(racks));
+        }
     } catch (...) {
         throw exceptions::configuration_exception(
-            sstring("Replication factor must be numeric; found ") + rf);
+            format("Replication factor must be numeric{}; found '{}': {}", ar ? " or a comma-separated list of rack names" : "",  rf, std::current_exception()));
     }
 }
 
-replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf)
+replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf, replication_factor_data::allow_racks ar)
 {
-    return replication_factor_data(rf);
+    return replication_factor_data(rf, ar);
 }
 
 static

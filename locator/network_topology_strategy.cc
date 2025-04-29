@@ -74,7 +74,7 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
             }
         }
 
-        auto rf = parse_replication_factor(val);
+        auto rf = parse_replication_factor(val, replication_factor_data::allow_racks::yes);
         rep_factor += rf.count();
         _dc_rep_factor.emplace(key, rf);
         _datacenteres.push_back(key);
@@ -295,7 +295,7 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs,
             throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} "
                 "passed to NetworkTopologyStrategy", this->to_qualified_class_name(c.first)));
         }
-        parse_replication_factor(c.second);
+        parse_replication_factor(c.second, replication_factor_data::allow_racks::yes);
     }
 }
 

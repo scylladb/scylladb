@@ -464,3 +464,47 @@ async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager
 
     await manager.server_stop_gracefully(s_info.server_id)
     await manager.server_start(s_info.server_id)
+
+async def test_create_keyspace_with_rack_names(manager: ManagerClient):
+    """
+    This test verifies that rack names can be specified for NetworkTopologyStrategy replication options.
+    """
+
+    cfg_false = {"rf_rack_valid_keyspaces": "false", "tablets_mode_for_new_keyspaces": "enabled"}
+
+    s1 = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r1"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r2"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc1", "rack": "r3"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc2", "rack": "r4"})
+    _ = await manager.server_add(config=cfg_false, property_file={"dc": "dc2", "rack": "r5"})
+
+    cql = manager.get_cql()
+
+    async def create_keyspace(rfs: List[List[str] | str]) -> str:
+        dcs = ", ".join([f"'dc{i + 1}': '{", ".join(rf) if type(rf) == list and rf else '0' if type(rf) == list else rf}'" for i, rf in enumerate(rfs)])
+        name = unique_name()
+        stmt = f"CREATE KEYSPACE {name} WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', {dcs}}}"
+        logger.info(stmt)
+        await cql.run_async(stmt)
+        res = await cql.run_async(f"DESCRIBE KEYSPACE {name}")
+        cr_stmt = res[0].create_statement
+        assert dcs in stmt
+        return name
+
+    valid_keyspaces = [
+        # For each DC: RF \in {0, 1, #racks}.
+        ([['r1']]),
+        ([['r1'], []]),
+        ([['r1'], 1]),
+        ([['r1', 'r2']]),
+        ([['r1', 'r3']]),
+        ([['r1', 'r2', 'r3']]),
+        ([['r1'], ['r4']]),
+        ([3, ['r4']]),
+        ([['r2', 'r3'], ['r4', 'r5']]),
+    ]
+
+    # Populate valid keyspaces.
+    async with asyncio.TaskGroup() as tg:
+        for rfs in valid_keyspaces:
+            _ = tg.create_task(create_keyspace(rfs))
