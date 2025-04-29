@@ -72,37 +72,42 @@ def pytest_collection_modifyitems(config, items):
 # If this function can't connect to CQL, it will return an arbitrary
 # user/secret pair, and hope it would work if alternator-enforce-authorization
 # is off.
-@cache
-def get_valid_alternator_role(url, role='cassandra'):
+@pytest.fixture(scope="session")
+def get_valid_alternator_role():
     from cassandra.cluster import Cluster, NoHostAvailable
     from cassandra.auth import PlainTextAuthProvider
-    auth_provider = PlainTextAuthProvider(
-        username='cassandra', password='cassandra')
-    try:
-        with (
-            Cluster([urlparse(url).hostname], auth_provider=auth_provider,
-                connect_timeout = 60, control_connection_timeout = 60) as cluster,
-            cluster.connect() as session
-        ):
-            # Newer Scylla places the "roles" table in the "system" keyspace, but
-            # older versions used "system_auth_v2" or "system_auth"
-            for ks in ['system', 'system_auth_v2', 'system_auth']:
-                try:
-                    # We could have looked for any role/salted_hash pair, but we
-                    # already know a role "cassandra" exists (we just used it to
-                    # connect to CQL!), so let's just use that role.
-                    salted_hash = list(session.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))[0].salted_hash
-                    if salted_hash is None:
-                        break
-                    return (role, salted_hash)
-                except:
-                    pass
-    except NoHostAvailable:
-        # CQL is not available, so we can't find a valid role.
-        pass
-    # If we couldn't find a valid role, let's hope that
-    # alternator-enforce-authorization is not enabled so anything will work
-    return ('unknown_user', 'unknown_secret')
+
+    auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
+
+    @cache
+    def _get_valid_alternator_role(url, role='cassandra'):
+        try:
+            with (
+                Cluster([urlparse(url).hostname], auth_provider=auth_provider,
+                    connect_timeout = 60, control_connection_timeout = 60) as cluster,
+                cluster.connect() as session
+            ):
+                # Newer Scylla places the "roles" table in the "system" keyspace, but
+                # older versions used "system_auth_v2" or "system_auth"
+                for ks in ['system', 'system_auth_v2', 'system_auth']:
+                    try:
+                        # We could have looked for any role/salted_hash pair, but we
+                        # already know a role "cassandra" exists (we just used it to
+                        # connect to CQL!), so let's just use that role.
+                        salted_hash = list(session.execute(f"SELECT salted_hash FROM {ks}.roles WHERE role = '{role}'"))[0].salted_hash
+                        if salted_hash is None:
+                            break
+                        return (role, salted_hash)
+                    except:
+                        pass
+        except NoHostAvailable:
+            # CQL is not available, so we can't find a valid role.
+            pass
+        # If we couldn't find a valid role, let's hope that
+        # alternator-enforce-authorization is not enabled so anything will work
+        return ('unknown_user', 'unknown_secret')
+
+    return _get_valid_alternator_role
 
 # "dynamodb" fixture: set up client object for communicating with the DynamoDB
 # API. Currently this chooses either Amazon's DynamoDB in the default region
@@ -111,7 +116,7 @@ def get_valid_alternator_role(url, role='cassandra'):
 # for choosing other Amazon regions or local installations.
 # We use scope="session" so that all tests will reuse the same client object.
 @pytest.fixture(scope="session")
-def dynamodb(request):
+def dynamodb(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
     # because boto3 checks them before we can get the server to check them.
@@ -139,21 +144,24 @@ def dynamodb(request):
     yield res
     res.meta.client.close()
 
-def new_dynamodb_session(request, dynamodb, user='cassandra', password='secret_pass'):
-    ses = boto3.Session()
-    host = urlparse(dynamodb.meta.client._endpoint.host)
-    conf = botocore.client.Config(parameter_validation=False)
-    if request.config.getoption('aws'):
-        return boto3.resource('dynamodb', config=conf)
-    if host.hostname == 'localhost':
-        conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
-    user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host, role=user)
-    return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'http',
-        region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
-        config=conf)
+@pytest.fixture(scope="session")
+def new_dynamodb_session(request, dynamodb, get_valid_alternator_role):
+    def _new_dynamodb_session(user='cassandra', password='secret_pass'):
+        ses = boto3.Session()
+        host = urlparse(dynamodb.meta.client._endpoint.host)
+        conf = botocore.client.Config(parameter_validation=False)
+        if request.config.getoption('aws'):
+            return boto3.resource('dynamodb', config=conf)
+        if host.hostname == 'localhost':
+            conf = conf.merge(botocore.client.Config(retries={"max_attempts": 0}, read_timeout=300))
+        user, secret = get_valid_alternator_role(dynamodb.meta.client._endpoint.host, role=user)
+        return ses.resource('dynamodb', endpoint_url=dynamodb.meta.client._endpoint.host, verify=host.scheme != 'http',
+            region_name='us-east-1', aws_access_key_id=user, aws_secret_access_key=secret,
+            config=conf)
+    return _new_dynamodb_session
 
 @pytest.fixture(scope="session")
-def dynamodbstreams(request):
+def dynamodbstreams(request, get_valid_alternator_role):
     # Disable boto3's client-side validation of parameters. This validation
     # only makes it impossible for us to test various error conditions,
     # because boto3 checks them before we can get the server to check them.
