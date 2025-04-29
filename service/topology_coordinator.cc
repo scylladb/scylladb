@@ -2021,6 +2021,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             throw;
                         } catch (group0_concurrent_modification&) {
                             throw;
+                        } catch (raft::request_aborted&) {
+                            throw;
                         } catch (...) {
                             rtlogger.error("transition_state::join_group0, "
                                             "global_token_metadata_barrier failed, error {}",
@@ -2157,6 +2159,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     throw;
                 } catch (group0_concurrent_modification&) {
                     throw;
+                } catch (raft::request_aborted&) {
+                    throw;
                 } catch (...) {
                     rtlogger.error("transition_state::commit_cdc_generation, "
                                     "raft_topology_cmd::command::barrier failed, error {}", std::current_exception());
@@ -2236,6 +2240,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     throw;
                 } catch (group0_concurrent_modification&) {
                     throw;
+                } catch (raft::request_aborted&) {
+                    throw;
                 } catch (...) {
                     rtlogger.error("tablets draining failed with {}. Aborting the topology operation", std::current_exception());
                     _rollback = fmt::format("Failed to drain tablets: {}", std::current_exception());
@@ -2250,6 +2256,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (term_changed_error&) {
                     throw;
                 } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (raft::request_aborted&) {
                     throw;
                 } catch (...) {
                     rtlogger.error("transition_state::write_both_read_old, "
@@ -2297,6 +2305,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                 } catch (term_changed_error&) {
                     throw;
+                } catch (raft::request_aborted&) {
+                    throw;
                 } catch (...) {
                     rtlogger.error("send_raft_topology_cmd(stream_ranges) failed with exception"
                                     " (node state is {}): {}", state, std::current_exception());
@@ -2326,6 +2336,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (term_changed_error&) {
                     throw;
                 } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (raft::request_aborted&) {
                     throw;
                 } catch (...) {
                     rtlogger.error("transition_state::write_both_read_new, "
@@ -2465,6 +2477,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 } catch (term_changed_error&) {
                     throw;
                 } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (raft::request_aborted&) {
                     throw;
                 } catch (...) {
                     rtlogger.error("transition_state::left_token_ring, "
