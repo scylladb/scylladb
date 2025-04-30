@@ -233,7 +233,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
 void keyspace_metadata::validate(const gms::feature_service& fs, const locator::topology& topology) const {
     using namespace locator;
     locator::replication_strategy_params params(strategy_options(), initial_tablets());
-    auto strategy = locator::abstract_replication_strategy::create_replication_strategy(strategy_name(), params);
+    auto strategy = locator::abstract_replication_strategy::create_replication_strategy(strategy_name(), params, topology);
     strategy->validate_options(fs, topology);
 }
 
