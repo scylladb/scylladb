@@ -80,7 +80,7 @@ function(get_padded_dynamic_linker_option output length)
   endif()
   # prefixing a path with "/"s does not actually change it means
   pad_at_begin(padded_dynamic_linker "/" "${dynamic_linker}" ${length})
-  set(${output} "${dynamic_linker_option}=${padded_dynamic_linker}" PARENT_SCOPE)
+  set(${output} "--dynamic-linker=${padded_dynamic_linker}" PARENT_SCOPE)
 endfunction()
 
 # We want to strip the absolute build paths from the binary,
@@ -287,7 +287,7 @@ else()
   # that. The 512 includes the null at the end, hence the 511 below.
   get_padded_dynamic_linker_option(dynamic_linker_option 511)
 endif()
-add_link_options("${dynamic_linker_option}")
+add_link_options("LINKER:${dynamic_linker_option}")
 
 if(Scylla_ENABLE_LTO)
   include(CheckIPOSupported)
