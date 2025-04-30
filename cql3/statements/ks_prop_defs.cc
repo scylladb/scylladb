@@ -22,6 +22,8 @@ namespace cql3 {
 
 namespace statements {
 
+static logging::logger logger("ks_prop_defs");
+
 static std::map<sstring, sstring> prepare_options(
         const sstring& strategy_class,
         const locator::token_metadata& tm,
@@ -29,7 +31,15 @@ static std::map<sstring, sstring> prepare_options(
         const std::map<sstring, sstring>& old_options = {}) {
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
-    if (locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) != "org.apache.cassandra.locator.NetworkTopologyStrategy") {
+    auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
+
+    logger.info("prepare_options: {}: is_nts={} {{{}}}", strategy_class, is_nts,
+            fmt::join(options | std::views::transform([] (auto& x) {
+                            return fmt::format("{}:{}", x.first, x.second);
+                    }),
+                    ","));
+
+    if (!is_nts) {
         return options;
     }
 

@@ -17,7 +17,7 @@
 
 namespace locator {
 
-simple_strategy::simple_strategy(replication_strategy_params params) :
+simple_strategy::simple_strategy(replication_strategy_params params, const locator::topology*) :
         abstract_replication_strategy(params, replication_strategy_type::simple) {
     for (auto& config_pair : _config_options) {
         auto& key = config_pair.first;
@@ -85,7 +85,8 @@ sstring simple_strategy::sanity_check_read_replicas(const effective_replication_
     return {};
 }
 
-using registry = class_registrator<abstract_replication_strategy, simple_strategy, replication_strategy_params>;
+// Note: signature must match the class_registry signature defined and used by abstract_replication_strategy::to_qualified_class_name
+using registry = class_registrator<abstract_replication_strategy, simple_strategy, replication_strategy_params, const locator::topology*>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");
 

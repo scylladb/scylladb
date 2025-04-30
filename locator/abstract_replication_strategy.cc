@@ -67,17 +67,19 @@ abstract_replication_strategy::abstract_replication_strategy(
     }
 }
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology* topo) {
     try {
-        return create_object<abstract_replication_strategy, replication_strategy_params>(strategy_name, std::move(params));
+        return create_object<abstract_replication_strategy, replication_strategy_params, const locator::topology*>(strategy_name, std::move(params), std::move(topo));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
 }
 
+// class registry signature must match the actual replication strategies' signature
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    replication_strategy_params>;
+    replication_strategy_params,
+    const topology*>;
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);

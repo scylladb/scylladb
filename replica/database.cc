@@ -855,7 +855,7 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
 }
 
 future<keyspace_change> database::prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const {
-    auto strategy = keyspace::create_replication_strategy(metadata);
+    auto strategy = keyspace::create_replication_strategy(get_token_metadata().get_topology(), metadata);
     locator::vnode_effective_replication_map_ptr erm = nullptr;
     if (!strategy->is_per_table()) {
         erm = co_await ks.create_effective_replication_map(strategy,
@@ -1379,12 +1379,12 @@ bool database::column_family_exists(const table_id& uuid) const {
 }
 
 locator::replication_strategy_ptr
-keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata) {
+keyspace::create_replication_strategy(const locator::topology& topology, lw_shared_ptr<keyspace_metadata> metadata) {
     using namespace locator;
     replication_strategy_params params(metadata->strategy_options(), metadata->initial_tablets());
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
             metadata->name(), metadata->strategy_name(), metadata->strategy_options());
-    return abstract_replication_strategy::create_replication_strategy(metadata->strategy_name(), params);
+    return abstract_replication_strategy::create_replication_strategy(metadata->strategy_name(), params, topology);
 }
 
 future<locator::vnode_effective_replication_map_ptr> keyspace::create_effective_replication_map(locator::replication_strategy_ptr strategy, const locator::shared_token_metadata& stm) const {

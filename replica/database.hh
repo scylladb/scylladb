@@ -1394,6 +1394,7 @@ public:
     lw_shared_ptr<keyspace_metadata> metadata() const;
 
     static locator::replication_strategy_ptr create_replication_strategy(
+            const locator::topology& topology,
             lw_shared_ptr<keyspace_metadata> metadata);
     future<locator::vnode_effective_replication_map_ptr> create_effective_replication_map(
             locator::replication_strategy_ptr strategy,
