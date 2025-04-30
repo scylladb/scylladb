@@ -235,6 +235,13 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
         });
     }
     co_await _role_manager->start();
+    if (this_shard_id() == 0) {
+        // Role manager and password authenticator have this odd startup
+        // mechanism where they asynchronously create the superuser role
+        // in the background. Correct password creation depends on role
+        // creation therefore we need to wait here.
+        co_await _role_manager->ensure_superuser_is_created();
+    }
     co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
     _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
     co_await once_among_shards([this] {
