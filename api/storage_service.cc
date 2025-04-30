@@ -470,7 +470,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto coordinator = std::hash<sstring>()(cf) % smp::count;
         return sst_loader.invoke_on(coordinator,
                 [ks = std::move(ks), cf = std::move(cf),
-                load_and_stream, primary_replica_only] (sstables_loader& loader) {
+                load_and_stream, primary_replica_only, scope] (sstables_loader& loader) {
             return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only, scope);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
