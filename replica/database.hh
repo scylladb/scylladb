@@ -96,6 +96,9 @@ namespace gms {
 class feature_service;
 }
 
+namespace alternator {
+class table_stats;
+}
 namespace sstables {
 
 enum class sstable_state;
@@ -391,6 +394,7 @@ struct table_stats {
     utils::timed_rate_moving_average_and_histogram tombstone_scanned;
     utils::timed_rate_moving_average_and_histogram live_scanned;
     utils::estimated_histogram estimated_coordinator_read;
+    shared_ptr<alternator::table_stats> alternator_stats;
 };
 
 using storage_options = data_dictionary::storage_options;
