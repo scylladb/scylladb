@@ -38,7 +38,7 @@ struct hash<locator::endpoint_dc_rack> {
 
 namespace locator {
 
-network_topology_strategy::network_topology_strategy(replication_strategy_params params) :
+network_topology_strategy::network_topology_strategy(replication_strategy_params params, const topology* topo) :
         abstract_replication_strategy(params,
                                       replication_strategy_type::network_topology) {
     auto opts = _config_options;
@@ -551,7 +551,8 @@ sstring network_topology_strategy::sanity_check_read_replicas(const effective_re
     return {};
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;
+// Note: signature must match the class_registry signature defined and used by abstract_replication_strategy::to_qualified_class_name
+using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params, const topology*>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

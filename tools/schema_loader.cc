@@ -161,7 +161,7 @@ private:
         return is_system_keyspace(unwrap(ks).metadata->name());
     }
     virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
-        static const locator::local_strategy strategy{locator::replication_strategy_params{locator::replication_strategy_config_options{}, 0}};
+        static const locator::local_strategy strategy{locator::replication_strategy_params{locator::replication_strategy_config_options{}, 0}, nullptr};
         return strategy;
     }
     virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
