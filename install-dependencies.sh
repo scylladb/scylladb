@@ -132,7 +132,7 @@ fedora_packages=(
     fipscheck
     cpp-jwt-devel
 
-    https://github.com/scylladb/cassandra-stress/releases/download/v3.17.5/cassandra-stress-3.17.5-1.noarch.rpm
+    https://github.com/scylladb/cassandra-stress/releases/download/v3.18.0/cassandra-stress-java21-3.18.0-1.noarch.rpm
 )
 
 # lld is not available on s390x, see

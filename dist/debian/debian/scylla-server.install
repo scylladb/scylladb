@@ -11,9 +11,9 @@ usr/bin/scylla
 usr/bin/iotune
 usr/bin/scyllatop
 usr/bin/nodetool
-usr/sbin/scylla*
-usr/sbin/node_health_check
-usr/sbin/seastar-cpu-map.sh
+usr/bin/scylla*
+usr/bin/node_health_check
+usr/bin/seastar-cpu-map.sh
 opt/scylladb/scripts/*
 opt/scylladb/swagger-ui/dist/*
 opt/scylladb/api/api-doc/*
