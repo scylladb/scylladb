@@ -900,8 +900,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             break;
         case global_topology_request::keyspace_rf_change: {
             rtlogger.info("keyspace_rf_change requested");
-            sstring ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
-            std::unordered_map<sstring, sstring> saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
+            sstring ks_name;
+            std::unordered_map<sstring, sstring> saved_ks_props;
+            if (_topo_sm._topology.new_keyspace_rf_change_ks_name) {
+                ks_name = *_topo_sm._topology.new_keyspace_rf_change_ks_name;
+                saved_ks_props = *_topo_sm._topology.new_keyspace_rf_change_data;
+            } else {
+                const auto topology_requests_entry = co_await _sys_ks.get_topology_request_entry(*_topo_sm._topology.global_request_id, true);
+                ks_name = *topology_requests_entry.new_keyspace_rf_change_ks_name;
+                saved_ks_props = *topology_requests_entry.new_keyspace_rf_change_data;
+            }
             cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
 
             auto repl_opts = new_ks_props.get_replication_options();
