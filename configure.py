@@ -2091,7 +2091,7 @@ libs = ' '.join([maybe_static(args.staticyamlcpp, '-lyaml-cpp'), '-latomic', '-l
                  '-ldeflate',
                 ])
 
-args.user_cflags += " " + pkg_config('p11-kit-1', '--cflags')
+user_cflags += " " + pkg_config('p11-kit-1', '--cflags')
 
 if not args.staticboost:
     user_cflags += ' -DBOOST_ALL_DYN_LINK'
