@@ -260,8 +260,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("request_id", timeuuid_type)
             .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
-            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column)
-            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column) // deprecated
+            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column) // deprecated
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
@@ -292,6 +292,8 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("error", utf8_type)
             .with_column("end_time", timestamp_type)
             .with_column("truncate_table_id", uuid_type)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type)
+            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false))
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3486,6 +3488,11 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("truncate_table_id")) {
         entry.truncate_table_id = table_id(row.get_as<utils::UUID>("truncate_table_id"));
     }
+    if (row.has("new_keyspace_rf_change_data")) {
+        entry.new_keyspace_rf_change_ks_name = row.get_as<sstring>("new_keyspace_rf_change_ks_name");
+        entry.new_keyspace_rf_change_data = row.get_map<sstring,sstring>("new_keyspace_rf_change_data");
+    }
+
     return entry;
 }
 
