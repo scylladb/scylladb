@@ -171,6 +171,9 @@ public:
     using client_state = service::client_state;
     using request_return_type = std::variant<json::json_return_type, api_error>;
     stats _stats;
+    // The metric_groups object holds this stat object's metrics registered
+    // as long as the stats object is alive.
+    seastar::metrics::metric_groups _metrics;
     static constexpr auto ATTRS_COLUMN_NAME = ":attrs";
     static constexpr auto KEYSPACE_NAME_PREFIX = "alternator_";
     static constexpr std::string_view INTERNAL_TABLE_PREFIX = ".scylla.alternator.";
