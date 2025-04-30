@@ -615,6 +615,42 @@ def test_deeply_nested_expression_2(test_table_s):
                 ConditionExpression=condition,
                 ExpressionAttributeValues={':val': 1})
 
+# Same as above test, but without parentheses, just a lot of OR - like
+# "a<b or a<b or a<b or a<b or ...". Alternator's parser actually implements
+# parsing all these ORs in a loop (a "*" on the "(OR boolean_expression)"),
+# without using recursion, so even if we can fit more than MAX_DEPTH "OR"s in
+# our 4096 byte expression size, such expression is allowed by Scylla.
+# In DynamoDB, there is a limit of 300 on the number of OR operators, so this
+# expression will not be allowed, but we decided not to implement this
+# specific limit in Scylla. So this test is Scylla-only.
+def test_deeply_nested_expression_2a(test_table_s, scylla_only):
+    p = random_string()
+    test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'},
+                              'b': {'Value': 2, 'Action': 'PUT'}})
+    # repeating the "OR a<b" n=584 times generates an expression which is still
+    # just below 4096 bytes. This expression is rejected by DynamoDB because
+    # it has more than 300 operators, but because no recursion is involved in
+    # parsing it, it is not rejected by Alternator even though n > MAX_DEPTH(=400).
+    n = 584
+    condition = "a<b " + "or a<b "*n
+    assert len(condition) < 4096
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET z = :val',
+            ConditionExpression=condition,
+            ExpressionAttributeValues={':val': 1})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['z'] == 1
+    # n=585 results in an expression longer than 4096, so will be rejected
+    # because of that limitation.
+    n = 585
+    condition = "a<b " + "or a<b "*n
+    assert len(condition) > 4096
+    with pytest.raises(ClientError, match='ValidationException.*expression size'):
+        test_table_s.update_item(Key={'p': p},
+            UpdateExpression='SET z = :val',
+                ConditionExpression=condition,
+                ExpressionAttributeValues={':val': 1})
+
 # Another deeply-recursive expression, (((((((((a<b))))))))), that used to
 # crash Scylla when the expression was very long but shouldn't crash it
 # for expressions shorter than the 4096-byte limit.
