@@ -401,7 +401,7 @@ class topo:
         self.dcs = dcs
 
 async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_server=None):
-    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks')
+    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
 
     cfg = {'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
     if s3_server:
@@ -521,7 +521,6 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     '''Check that restoring of a cluster with stream scopes works'''
 
     topology, rf_rack_valid_keyspaces = topology_rf_validity
-    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
 
     servers, host_ids = await create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_server)
 
