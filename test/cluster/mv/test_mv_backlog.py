@@ -57,7 +57,11 @@ async def test_view_backlog_increased_after_write(manager: ManagerClient) -> Non
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_gossip_same_backlog(manager: ManagerClient) -> None:
     node_count = 2
-    servers = await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'update_backlog_immediately'], 'tablets_mode_for_new_keyspaces': 'enabled'})
+    servers = await manager.servers_add(node_count, config={'error_injections_at_startup': [{
+                'name': 'pending_view_updates_memory_admission_limit',
+                'value': 200000,
+            }, 'update_backlog_immediately'
+        ], 'tablets_mode_for_new_keyspaces': 'enabled'})
     cql, hosts = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -101,8 +105,12 @@ async def test_gossip_same_backlog(manager: ManagerClient) -> None:
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> None:
     node_count = 2
-    servers = await manager.servers_add(node_count,
-                                        config={'error_injections_at_startup': ['update_backlog_immediately', 'view_update_limit', 'skip_updating_local_backlog_via_view_update_backlog_broker'], 'tablets_mode_for_new_keyspaces': 'enabled'},
+    servers = await manager.servers_add(node_count, config={'error_injections_at_startup': [
+            'update_backlog_immediately', {
+                'name': 'pending_view_updates_memory_admission_limit',
+                'value': 200000,
+            }, 'skip_updating_local_backlog_via_view_update_backlog_broker'
+        ], 'tablets_mode_for_new_keyspaces': 'enabled'},
                                         cmdline=['--smp=1'])
     cql, hosts = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:

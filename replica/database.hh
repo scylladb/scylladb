@@ -1496,11 +1496,11 @@ private:
     static constexpr size_t max_count_system_concurrent_reads{10};
     size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
     size_t max_memory_pending_view_updates() const {
-        auto ret = _dbcfg.available_memory * 0.1;
-        utils::get_local_injector().inject("view_update_limit", [&ret] {
-            ret = 250000;
-        });
-        return ret;
+        if (const auto limit = utils::get_local_injector().inject_parameter<size_t>("pending_view_updates_memory_admission_limit"); limit) {
+            // The limit for admission is 80% of the kill limit.
+            return *limit / 0.8;
+        }
+        return _dbcfg.available_memory * 0.1;
     }
 
     struct db_stats {

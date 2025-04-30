@@ -454,7 +454,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
 
             co_await seastar::sleep(throttle_delay);
 
-            if (utils::get_local_injector().enter("view_update_limit") && _db.view_update_sem().current() == 0) {
+            if (utils::get_local_injector().enter("pending_view_updates_memory_admission_limit") && _db.view_update_sem().current() == 0) {
                 err = std::make_exception_ptr(std::runtime_error("View update backlog exceeded the limit"));
                 break;
             }
