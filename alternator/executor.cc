@@ -192,6 +192,7 @@ executor::executor(gms::gossiper& gossiper,
       _ssg(ssg)
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
+    register_metrics(_metrics, _stats);
 }
 
 
