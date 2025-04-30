@@ -422,7 +422,7 @@ def create_dataset(manager, ks, cf, topology, logger):
     for k in keys:
         cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
 
-    return schema, keys
+    return schema, keys, replication_opts
 
 def compute_scope(topology, servers):
     if topology.dcs > 1:
@@ -499,7 +499,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     cql = manager.get_cql()
     ks = 'ks'
     cf = 'cf'
-    schema, keys = create_dataset(manager, ks, cf, topology, logger)
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
 
