@@ -191,6 +191,14 @@ def test_wcu(test_table_s, metrics):
         val2 = 'a' * (2 * KB - total_length + 1) # message length 2K + 1
         test_table_s.put_item(Item={'p': p, 'att': val, 'another': val2})
 
+def test_wcu_batch_write_item(test_table_s, metrics):
+    with check_increases_operation(metrics, ['PutItem'], 'scylla_alternator_wcu_total', 3):
+        p1 = random_string()
+        p2 = random_string()
+        response = test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': p1, 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': p2, 'a': 'a' * KB}}}]
+        })
+
 # Test counters for CreateTable, DescribeTable, UpdateTable and DeleteTable
 def test_table_operations(dynamodb, metrics):
     with check_increases_operation(metrics, ['CreateTable', 'DescribeTable', 'UpdateTable', 'DeleteTable']):
