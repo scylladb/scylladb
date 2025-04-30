@@ -529,7 +529,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
 
     ks = 'ks'
     cf = 'cf'
-
+    
     schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
