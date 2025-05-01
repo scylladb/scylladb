@@ -35,6 +35,10 @@ using value_set = std::variant<value_list, interval<managed_bytes>>;
 // clause to TRUE.
 using solve_for_t = std::function<value_set (const query_options&)>;
 
+struct on_row {
+    bool operator==(const on_row&) const = default;
+};
+
 struct on_column {
     const column_definition* column;
 
@@ -65,6 +69,7 @@ struct predicate {
     expr::expression filter;
     // What column the predicate can be solved for
     std::variant<
+            on_row,                        // cannot determine, so predicate is on entire row
             on_column,                     // solving for a single column: e.g. c1 = 3
             on_partition_key_token,        // solving for the token, e.g. token(pk1, pk2) >= :var
             on_clustering_key_prefix       // solving for a clustering key prefix: e.g. (ck1, ck2) >= (3, 4)
