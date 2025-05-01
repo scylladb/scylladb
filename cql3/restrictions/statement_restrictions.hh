@@ -35,6 +35,10 @@ using value_set = std::variant<value_list, interval<managed_bytes>>;
 // clause to TRUE.
 using solve_for_t = std::function<value_set (const query_options&)>;
 
+struct on_row {
+    bool operator==(const on_row&) const = default;
+};
+
 struct on_column {
     const column_definition* column;
 
@@ -65,6 +69,7 @@ struct predicate {
     expr::expression filter;
     // What column the predicate can be solved for
     std::variant<
+            on_row,                        // cannot determine, so predicate is on entire row
             on_column,                     // solving for a single column: e.g. c1 = 3
             on_partition_key_token,        // solving for the token, e.g. token(pk1, pk2) >= :var
             on_clustering_key_prefix       // solving for a clustering key prefix: e.g. (ck1, ck2) >= (3, 4)
@@ -73,6 +78,29 @@ struct predicate {
     bool is_singleton = false;
     // Whether the returned value_set follows CQL comparison semantics
     bool comparable = true;
+};
+
+// A composite predicate that is decomposed into a set of predicates
+// Example: (A, B) = (1, 2) is decomposed into (A = 1) AND (B = 2)
+// All of the predicates must be satisfied.
+struct all_predicates {
+    std::vector<predicate> predicates;
+};
+
+
+// A predicate that can be solved in different ways.
+// Example: (A, C) == (1, 2) can be solved in two ways:
+// 1.  (A, C) = (1, 2)
+// 2.  A = 1 AND (A, C) = (1, 2)
+// The second option is usedful when A is the first clustering key column.
+// And can be used as an index key.
+//
+// It is sufficient to evaluate one of the alternatives to satisfy the predicate.
+struct predicate_alternatives {
+    predicate_alternatives(predicate p);
+    predicate_alternatives(std::vector<all_predicates> p);
+
+    std::vector<all_predicates> alternatives;
 };
 
 ///In some cases checking if columns have indexes is undesired of even
