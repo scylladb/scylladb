@@ -3474,36 +3474,30 @@ future<> topology_coordinator::stop() {
     co_await coroutine::parallel_for_each(_tablets, [] (auto& tablet) -> future<> {
         auto& [gid, tablet_state] = tablet;
         rtlogger.debug("Checking tablet migration state for {}", gid);
+
+        auto stop_background_action = [] (background_action_holder& holder, locator::global_tablet_id gid, std::function<std::string()> fmt_desc) -> future<> {
+            if (holder) {
+                try {
+                    co_await std::move(*holder);
+                } catch (...) {
+                    rtlogger.warn("Tablet '{}' migration failed {}: {}",
+                                    gid, fmt_desc(), std::current_exception());
+                }
+            }
+        };
+
         // we should have at most only a single active barrier for each tablet,
         // but let's check all of them because we never reset these holders
         // once they are added as barriers
         for (auto& [stage, barrier]: tablet_state.barriers) {
             SCYLLA_ASSERT(barrier.has_value());
-            try {
-                co_await std::move(*barrier);
-            } catch (...) {
-                rtlogger.warn("Tablet '{}' migration failed at stage {}: {}",
-                              gid, tablet_transition_stage_to_string(stage), std::current_exception());
-            }
+            co_await stop_background_action(barrier, gid, [stage] { return format("at stage {}", tablet_transition_stage_to_string(stage)); });
         }
 
-        if (tablet_state.streaming) {
-            try {
-                co_await std::move(*tablet_state.streaming);
-            } catch (...) {
-                rtlogger.warn("Tablet '{}' migration failed when streaming: {}",
-                              gid, std::current_exception());
-
-            }
-        }
-        if (tablet_state.cleanup) {
-            try {
-                co_await std::move(*tablet_state.cleanup);
-            } catch (...) {
-                rtlogger.warn("Tablet '{}' migration failed when cleanup: {}",
-                              gid, std::current_exception());
-            }
-        }
+        co_await stop_background_action(tablet_state.streaming, gid, [] { return "during streaming"; });
+        co_await stop_background_action(tablet_state.cleanup, gid, [] { return "during cleanup"; });
+        co_await stop_background_action(tablet_state.rebuild_repair, gid, [] { return "during rebuild_repair"; });
+        co_await stop_background_action(tablet_state.repair, gid, [] { return "during repair"; });
     });
 }
 
