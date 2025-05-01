@@ -365,6 +365,9 @@ cdc::topology_description make_new_generation_description(
         const noncopyable_function<std::pair<size_t, uint8_t>(dht::token)>& get_sharding_info,
         const locator::token_metadata_ptr tmptr) {
     const auto tokens = get_tokens(bootstrap_tokens, tmptr);
+    if (tokens.empty()) {
+        on_internal_error(cdc_log, "Attempted to create a CDC generation from an empty list of tokens");
+    }
 
     utils::chunked_vector<token_range_description> vnode_descriptions;
     vnode_descriptions.reserve(tokens.size());
