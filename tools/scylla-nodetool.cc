@@ -1498,12 +1498,17 @@ void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         params["skip_cleanup"] = "true";
     }
     if (vm.contains("scope")) {
-        if (!vm.contains("load-and-stream")) {
-            throw std::invalid_argument("--scope takes no effect without --load-and-stream|-las");
-        }
         if (vm.contains("primary-replica-only")) {
             throw std::invalid_argument("Scoped streaming of primary replica only is not supported yet");
         }
+        if (!vm.contains("load-and-stream")) {
+            throw std::invalid_argument("--scope takes no effect without --load-and-stream|-las");
+        }
+        std::unordered_set<sstring> allowed_scopes = {"all", "dc", "rack", "node"};
+        if (!allowed_scopes.contains(vm["scope"].as<sstring>())) {
+            throw std::invalid_argument("Invalid scope parameter value");
+        }
+        
         params["scope"] = vm["scope"].as<sstring>();
     }
     client.post(format("/storage_service/sstables/{}", vm["keyspace"].as<sstring>()), std::move(params));
