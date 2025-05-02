@@ -84,18 +84,6 @@ def test_initial_tablets_number(dynamodb):
     with new_test_table(dynamodb, **schema) as table:
         assert not uses_tablets(dynamodb, table)
 
-# Before Alternator TTL is supported with tablets (#16567), let's verify
-# that enabling TTL results in an orderly error. This test should be deleted
-# when #16567 is fixed.
-def test_ttl_enable_error_with_tablets(dynamodb):
-    with new_test_table(dynamodb,
-        Tags=[{'Key': initial_tablets_tag, 'Value': '4'}],
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
-        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
-        with pytest.raises(ClientError, match='ValidationException.*tablets'):
-            table.meta.client.update_time_to_live(TableName=table.name,
-                TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
-
 # Before Alternator Streams is supported with tablets (#16317), let's verify
 # that enabling Streams results in an orderly error. This test should be
 # deleted when #16317 is fixed.
