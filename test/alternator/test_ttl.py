@@ -15,12 +15,24 @@ from botocore.exceptions import ClientError
 
 from .util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform, multiset
 
-# All tests in this file are expected to fail with tablets due to #16567.
-# To ensure that Alternator TTL is still being tested, instead of
-# xfailing these tests, we temporarily coerce the tests below to avoid
-# using default tablets setting, even if it's available. We do this by
-# using the following tags when creating each table below:
-TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+# The following fixture is to ensure that Alternator TTL is being tested with both vnodes and tablets.
+# This fixture will run automatically for every test in the module.
+# It sets the TAGS variable in the module’s global namespace to the current parameter value before each test.
+# All tests that use the global TAGS variable will see the correct value, and each test will be run for
+# both values. Thanks to this, the tests will run for both vnodes and tables without the need to change
+# their argument list.
+@pytest.fixture(params=[
+    [{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
+    # This enables tablets and disables LWT. It is meant as a temporary means of enabling regression tests
+    # with tablets until LWT is supported with tablets (#18068).
+    # FIXME After #18068 is resolved,
+    # 'system:write_isolation' should no longer be set and 'without LWT' part inside 'ids' should be removed.
+    [{'Key': 'experimental:initial_tablets', 'Value': '0'}, {'Key': 'system:write_isolation', 'Value': 'unsafe_rmw'}],
+], ids=["using vnodes", "using tablets without LWT"], autouse=True)
+def tags_param(request):
+    # Set TAGS in the global namespace of this module
+    global TAGS
+    TAGS = request.param
 
 # passes_or_raises() is similar to pytest.raises(), except that while raises()
 # expects a certain exception must happen, the new passes_or_raises()
