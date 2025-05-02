@@ -15,7 +15,7 @@ from cassandra.query import SimpleStatement  # type: ignore
 from test.topology.conftest import skip_mode
 from test.topology.util import new_test_keyspace
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
 
     host1, host2, host3 = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 30)
 
+<<<<<<< HEAD:test/topology_custom/test_data_resurrection_in_memtable.py
     def execute_with_tracing(cql, statement, *args, **kwargs):
         kwargs['trace'] = True
         query_result = cql.execute(statement, *args, **kwargs)
@@ -61,15 +62,33 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
         logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
 
     async with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+||||||| parent of 51025de755 (test/cluster: extract execute_with_tracing() into pylib/util.py):test/cluster/test_data_resurrection_in_memtable.py
+    def execute_with_tracing(cql, statement, *args, **kwargs):
+        kwargs['trace'] = True
+        query_result = cql.execute(statement, *args, **kwargs)
+
+        tracing = query_result.get_all_query_traces(max_wait_sec_per=900)
+        page_traces = []
+        for trace in tracing:
+            trace_events = []
+            for event in trace.events:
+                trace_events.append(f"  {event.source} {event.source_elapsed} {event.description}")
+            page_traces.append("\n".join(trace_events))
+        logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = { 'enabled': true }") as ks:
+=======
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = { 'enabled': true }") as ks:
+>>>>>>> 51025de755 (test/cluster: extract execute_with_tracing() into pylib/util.py):test/cluster/test_data_resurrection_in_memtable.py
         cql.execute(f"CREATE TABLE {ks}.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
                     "     WITH speculative_retry = 'NONE'"
                     "     AND tombstone_gc = {'mode': 'immediate', 'propagation_delay_in_seconds': 0}"
                     "     AND compaction = {'class': 'NullCompactionStrategy'}")
 
         for write_statement, delete_statement in statement_pairs:
-            execute_with_tracing(cql, write_statement.format(ks=ks))
+            execute_with_tracing(cql, write_statement.format(ks=ks), log = True)
             await manager.api.enable_injection(node3.ip_addr, "database_apply", one_shot=False)
-            execute_with_tracing(cql, delete_statement.format(ks=ks))
+            execute_with_tracing(cql, delete_statement.format(ks=ks), log = True)
             await manager.api.disable_injection(node3.ip_addr, "database_apply")
 
         def check_data(host, data):
