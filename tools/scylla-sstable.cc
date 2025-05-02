@@ -923,7 +923,7 @@ private:
     sstables::shared_sstable do_make_sstable() const {
         const auto format = sstables::sstable_format_types::big;
         const auto version = sstables::get_highest_sstable_version();
-        auto generation = _generation_generator();
+        auto generation = _generation_generator(uuid_identifiers::yes);
         auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, format, component_type::Data);
         if (file_exists(sst_name).get()) {
             throw std::runtime_error(fmt::format("cannot create output sstable {}, file already exists", sst_name));
