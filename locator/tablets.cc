@@ -427,6 +427,14 @@ tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
     return replicas.at(size_t(id) % replicas.size());
 }
 
+tablet_replica tablet_map::get_secondary_replica(tablet_id id) const {
+    if (get_tablet_info(id).replicas.size() < 2) {
+        throw std::runtime_error(format("No secondary replica for tablet id {}", id));
+    }
+    const auto& replicas = get_tablet_info(id).replicas;
+    return replicas.at((size_t(id)+1) % replicas.size());
+}
+
 tablet_replica tablet_map::get_primary_replica_within_dc(tablet_id id, const topology& topo, sstring dc) const {
     return maybe_get_primary_replica(id, get_tablet_info(id).replicas, [&] (const auto& tr) {
         const auto& node = topo.get_node(tr.host);
