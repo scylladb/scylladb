@@ -20,6 +20,7 @@
 #include <seastar/core/thread_cputime_clock.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/core/with_timeout.hh>
+#include <seastar/core/metrics_api.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/random.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -753,6 +754,33 @@ SEASTAR_THREAD_TEST_CASE(test_decay_reserves) {
     BOOST_REQUIRE_LE(reclaims, expected_reclaims);
 }
 
+class metric_change_monitor {
+    metrics::impl::metric_function _get_metric;
+    double _last = _get_metric().d();
+public:
+    metric_change_monitor(std::string_view name, metrics::impl::labels_type labels)
+        : _get_metric(std::invoke([&] {
+            auto value_map = metrics::impl::get_value_map();
+            auto family = value_map.at(sstring(name));
+            return family.at(labels)->get_function();
+        })) {}
+    future<> wait_for_change() {
+        auto check = [&] {
+            auto next = _get_metric().d();
+            auto last = std::exchange(_last, next);
+            return next != last;
+        };
+        while (!check()) {
+            co_await sleep(1ms);
+        }
+    }
+    future<> wait_for_zero() {
+        while (_get_metric().d() != 0) {
+            co_await sleep(1ms);
+        }
+    }
+};
+
 SEASTAR_THREAD_TEST_CASE(background_reclaim) {
     prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();  // if previous test cases muddied the pool
 
@@ -812,9 +840,21 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
         logalloc::shard_tracker().stop().get();
     });
 
-    sleep(500ms).get(); // sleep a little, to give the reclaimer a head start
+    auto reactor_polls_metric = metric_change_monitor("reactor_polls", {{"shard", "0"}});
+    auto reactor_tasks_pending_metric = metric_change_monitor("reactor_tasks_pending", {{"shard", "0"}});
+
+    sleep(100ms).get(); // sleep a little, to give the reclaimer a head start
+
+    // Make sure the reclaimer catches up
+    reactor_polls_metric.wait_for_change().get();
+    reactor_tasks_pending_metric.wait_for_zero().get();
 
     std::vector<managed_bytes> std_allocs;
+    unsigned sleep_counts = 0;
+    auto count_sleeps_and_wait = [&] (future<> f) {
+        sleep_counts += !f.available();
+        f.get();
+    };
     size_t std_alloc_size = 1000000; // note that managed_bytes fragments these, even in std
     for (int i = 0; i < 50; ++i) {
         auto compacted_pre = logalloc::shard_tracker().statistics().memory_compacted;
@@ -833,7 +873,14 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
         while (thread_cputime_clock::now() < deadline) {
             thread::maybe_yield();
         }
+        if (memory::stats().free_memory() < 50'000'000) {
+            // Make sure the reclaimer catches up, but count how many times we had to do it.
+            reactor_polls_metric.wait_for_change().get();
+            count_sleeps_and_wait(reactor_tasks_pending_metric.wait_for_zero());
+        }
     }
+    // Allow the reclaimer not too keep up due to the machine being overloaded, but not all the time.
+    BOOST_REQUIRE_LE(sleep_counts, 10);
 }
 
 inline
