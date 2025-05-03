@@ -229,7 +229,7 @@ The script contents is  as follows:
    export report_uuid=$(uuidgen)
    echo $report_uuid
    tar c report | xz > report.tar.xz
-   curl --request PUT --upload-file report.tar.xz "scylladb-users-upload.s3.amazonaws.com/$report_uuid/report.tar.xz"
+   curl --request PUT --upload-file report.tar.xz "upload.scylladb.com/$report_uuid/report.tar.xz"
    echo $report_uuid
 
 You can also see the results in `./report` dir
