@@ -26,6 +26,12 @@ namespace locator {
 class effective_replication_map;
 }
 
+namespace db {
+
+class replay_position;
+
+}
+
 namespace replica {
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
@@ -117,7 +123,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush() noexcept;
+    future<> flush(std::optional<db::replay_position> rp) noexcept;
     bool can_flush() const;
 
     const dht::token_range& token_range() const noexcept {

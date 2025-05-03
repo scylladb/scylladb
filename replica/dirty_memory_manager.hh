@@ -16,6 +16,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/semaphore.hh>
 #include "db/timeout_clock.hh"
+#include "db/commitlog/replay_position.hh"
 #include "replica/database_fwd.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
@@ -526,7 +527,7 @@ public:
         return _region_group.unspooled_throttle_threshold();
     }
 
-    future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;
+    future<> flush_one(replica::memtable_list& cf, flush_permit&& permit, std::optional<db::replay_position> rp) noexcept;
 
     future<flush_permit> get_flush_permit() noexcept {
         return get_units(_background_work_flush_serializer, 1).then([this] (auto&& units) {

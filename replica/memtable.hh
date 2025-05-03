@@ -316,6 +316,11 @@ public:
     const db::replay_position& replay_position() const noexcept {
         return _replay_position;
     }
+
+    bool intersects_with(const db::replay_position& rp) const {
+        return rp <= _replay_position;
+    }
+
     /**
      * Returns the current rp_set, and resets the
      * stored one to empty. Only used for flushing

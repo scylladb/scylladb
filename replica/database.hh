@@ -200,6 +200,10 @@ private:
 public:
     using iterator = decltype(_memtables)::iterator;
     using const_iterator = decltype(_memtables)::const_iterator;
+private:
+    bool active_memtable_intersects_with(const db::replay_position& rp) const noexcept {
+        return _memtables.back()->intersects_with(rp);
+    }
 public:
     memtable_list(
             seal_immediate_fn_type seal_immediate_fn,
@@ -277,6 +281,13 @@ public:
         return _seal_immediate_fn(std::move(permit));
     }
 
+    future<> seal_active_memtable_with_rp(flush_permit&& permit, std::optional<db::replay_position> rp) {
+        if (rp && !active_memtable_intersects_with(*rp)) {
+            return make_ready_future<>();
+        }
+        return _seal_immediate_fn(std::move(permit));
+    }
+
     auto begin() noexcept {
         return _memtables.begin();
     }
@@ -309,7 +320,7 @@ public:
     // wouldn't happen anyway. Keeping the memtable in memory will potentially increase the time it
     // spends in memory allowing for more coalescing opportunities.
     // The returned future<> resolves when any pending flushes are complete and the memtable is sealed.
-    future<> flush();
+    future<> flush(std::optional<db::replay_position> rp) noexcept;
 private:
     lw_shared_ptr<memtable> new_memtable();
 };

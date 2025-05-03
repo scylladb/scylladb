@@ -992,7 +992,7 @@ future<> storage_group::split(sstables::compaction_type_options::split opt, task
             continue;
         }
         auto holder = cg->async_gate().hold();
-        co_await cg->flush();
+        co_await cg->flush(std::nullopt);
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
         co_await cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tablet_split_task_info);
         co_await cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tablet_split_task_info);
@@ -1261,7 +1261,7 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
         // deadlock might occur due to memtable flush backpressure waiting on
         // compaction to reduce the backlog.
 
-        co_await cg->flush();
+        co_await cg->flush(std::nullopt);
 
         // The sstable set must be obtained *after* the deletion lock is taken,
         // otherwise components of sstables in the set might be unlinked from the filesystem
@@ -2450,7 +2450,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     }
     auto closed_gate_fut = _async_gate.close();
 
-    auto flush_future = co_await seastar::coroutine::as_future(flush());
+    auto flush_future = co_await seastar::coroutine::as_future(flush(std::nullopt));
     co_await _t._compaction_manager.remove(as_table_state(), reason);
 
     if (flush_future.failed()) {
@@ -2614,7 +2614,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
                     // Also, disabling compaction provides stability on the sstable set.
                     co_await group->stop("tablet merge");
                     // Flushes memtable, so all the data can be moved.
-                    co_await group->flush();
+                    co_await group->flush(std::nullopt);
                     co_await main_group->merge_sstables_from(*group);
                 }
                 co_await sg.remove_empty_merging_groups();
@@ -3064,9 +3064,9 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     co_return details;
 }
 
-future<> compaction_group::flush() noexcept {
+future<> compaction_group::flush(std::optional<db::replay_position> rp) noexcept {
     try {
-        return _memtables->flush();
+        return _memtables->flush(rp);
     } catch (...) {
         return current_exception_as_future<>();
     }
@@ -3074,7 +3074,7 @@ future<> compaction_group::flush() noexcept {
 
 future<> storage_group::flush() noexcept {
     for (auto& cg : compaction_groups()) {
-        co_await cg->flush();
+        co_await cg->flush(std::nullopt);
     }
 }
 
@@ -3104,7 +3104,8 @@ future<> table::flush(std::optional<db::replay_position> pos) {
     }
     auto op = _pending_flushes_phaser.start();
     auto fp = _highest_rp;
-    co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::flush));
+    using namespace std::placeholders;
+    co_await parallel_foreach_compaction_group(std::bind(&compaction_group::flush, _1, pos));
     _flush_rp = std::max(_flush_rp, fp);
 }
 
@@ -4073,7 +4074,7 @@ future<> table::stop_compaction_groups(storage_group& sg) {
 
 future<> table::flush_compaction_groups(storage_group& sg) {
     for (auto& cg_ptr : sg.compaction_groups()) {
-        co_await cg_ptr->flush();
+        co_await cg_ptr->flush(std::nullopt);
     }
 }
 
