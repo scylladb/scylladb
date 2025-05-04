@@ -1714,6 +1714,8 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
 
     slogger.info("Starting up server gossip");
 
+    co_await utils::get_local_injector().inject("sleep_before_start_gossiping", std::chrono::milliseconds{500});
+
     co_await _gossiper.start_gossiping(new_generation, app_states);
 
     utils::get_local_injector().inject("stop_after_starting_gossiping",
