@@ -2751,12 +2751,42 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     rjson::value& request_items = request["RequestItems"];
     auto start_time = std::chrono::steady_clock::now();
 
+<<<<<<< HEAD
+||||||| parent of 68db77643f (alternator/executor: add WCU for batch_write_items)
+    const auto maximum_batch_write_size = _proxy.data_dictionary().get_config().alternator_max_items_in_batch_write();
+
+    size_t total_items = 0;
+    for (auto it = std::as_const(request_items).MemberBegin(); it != std::as_const(request_items).MemberEnd(); ++it) {
+        total_items += it->value.Size();
+    }
+    if (total_items > maximum_batch_write_size) {
+        co_return api_error::validation(fmt::format("Invalid length of BatchWriteItem command, got {} items, "
+            "maximum is {} (from configuration variable alternator_max_items_in_batch_write)", total_items, maximum_batch_write_size));
+    }
+
+=======
+    const auto maximum_batch_write_size = _proxy.data_dictionary().get_config().alternator_max_items_in_batch_write();
+
+    size_t total_items = 0;
+    for (auto it = std::as_const(request_items).MemberBegin(); it != std::as_const(request_items).MemberEnd(); ++it) {
+        total_items += it->value.Size();
+    }
+    if (total_items > maximum_batch_write_size) {
+        co_return api_error::validation(fmt::format("Invalid length of BatchWriteItem command, got {} items, "
+            "maximum is {} (from configuration variable alternator_max_items_in_batch_write)", total_items, maximum_batch_write_size));
+    }
+    bool should_add_wcu = wcu_consumed_capacity_counter::should_add_capacity(request);
+    size_t wcu_put_units = 0;
+    size_t wcu_delete_units = 0;
+    rjson::value consumed_capacity = rjson::empty_array();
+>>>>>>> 68db77643f (alternator/executor: add WCU for batch_write_items)
     std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders;
     mutation_builders.reserve(request_items.MemberCount());
     uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
         tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+        size_t wcu_units = 0;
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
@@ -2768,9 +2798,13 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             if (r_name == "PutRequest") {
                 const rjson::value& put_request = r->value;
                 const rjson::value& item = put_request["Item"];
-                mutation_builders.emplace_back(schema, put_or_delete_item(
+                auto&& put_item = put_or_delete_item(
                         item, schema, put_or_delete_item::put_item{},
-                        si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name()))));
+                        si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name())));
+                auto units = wcu_consumed_capacity_counter::get_units(put_item.length_in_bytes());
+                wcu_units += units;
+                wcu_put_units += units;
+                mutation_builders.emplace_back(schema, std::move(put_item));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
                     co_return api_error::validation("Provided list of item keys contains duplicates");
@@ -2779,6 +2813,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 batch_size++;
             } else if (r_name == "DeleteRequest") {
                 const rjson::value& key = (r->value)["Key"];
+                wcu_units++; // Delete is always 1 unit
+                wcu_delete_units++;
                 mutation_builders.emplace_back(schema, put_or_delete_item(
                         key, schema, put_or_delete_item::delete_item{}));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(),
@@ -2792,11 +2828,17 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 co_return api_error::validation(fmt::format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
+        if (should_add_wcu) {
+            rjson::value entry = rjson::empty_object();
+            rjson::add(entry, "TableName", rjson::from_string(rjson::to_string_view(it->name)));
+            rjson::add(entry, "CapacityUnits", wcu_units);
+            rjson::push_back(consumed_capacity, std::move(entry));
+        }
     }
-
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, client_state, b.first, auth::permission::MODIFY);
     }
+<<<<<<< HEAD
 
     _stats.api_operations.batch_write_item_batch_total += batch_size;
     co_return co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([start_time, this] () {
@@ -2808,6 +2850,35 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
         return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
     });
+||||||| parent of 68db77643f (alternator/executor: add WCU for batch_write_items)
+    _stats.api_operations.batch_write_item_batch_total += total_items;
+    _stats.api_operations.batch_write_item_histogram.add(total_items);
+    co_return co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats).then([start_time, this] () {
+        // FIXME: Issue #5650: If we failed writing some of the updates,
+        // need to return a list of these failed updates in UnprocessedItems
+        // rather than fail the whole write (issue #5650).
+        rjson::value ret = rjson::empty_object();
+        rjson::add(ret, "UnprocessedItems", rjson::empty_object());
+        _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    });
+=======
+    _stats.wcu_total[stats::PUT_ITEM] += wcu_put_units;
+    _stats.wcu_total[stats::DELETE_ITEM] += wcu_delete_units;
+    _stats.api_operations.batch_write_item_batch_total += total_items;
+    _stats.api_operations.batch_write_item_histogram.add(total_items);
+    co_await do_batch_write(_proxy, _ssg, std::move(mutation_builders), client_state, trace_state, std::move(permit), _stats);
+    // FIXME: Issue #5650: If we failed writing some of the updates,
+    // need to return a list of these failed updates in UnprocessedItems
+    // rather than fail the whole write (issue #5650).
+    rjson::value ret = rjson::empty_object();
+    rjson::add(ret, "UnprocessedItems", rjson::empty_object());
+    if (should_add_wcu) {
+        rjson::add(ret, "ConsumedCapacity", std::move(consumed_capacity));
+    }
+    _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    co_return make_jsonable(std::move(ret));
+>>>>>>> 68db77643f (alternator/executor: add WCU for batch_write_items)
 }
 
 static std::string get_item_type_string(const rjson::value& v) {
