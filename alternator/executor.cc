@@ -2275,7 +2275,7 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
 static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes, const consumed_capacity_counter& consumed_capacity, uint64_t& metric) {
     rjson::value ret = rjson::empty_object();
     consumed_capacity.add_consumed_capacity_to_response_if_needed(ret);
-    metric += consumed_capacity.get_half_units();
+    metric += consumed_capacity.get_consumed_capacity_units();
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
@@ -4045,7 +4045,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
 
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
 
-        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, _stats.rcu_total)));
+        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, _stats.rcu_half_units_total)));
     });
 }
 
@@ -4265,7 +4265,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             }
             pos++;
         }
-        _stats.rcu_total += rcu_half_units;
+        _stats.rcu_half_units_total += rcu_half_units;
         if (should_add_rcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", table);
