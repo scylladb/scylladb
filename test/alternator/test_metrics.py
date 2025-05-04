@@ -174,7 +174,7 @@ def test_batch_get_item_count(test_table_s, metrics):
 
 KB = 1024
 def test_rcu(test_table_s, metrics):
-    with check_increases_metric_exact(metrics, 'scylla_alternator_rcu_total', [[4, None]]):
+    with check_increases_metric_exact(metrics, 'scylla_alternator_rcu_total', [[2, None]]):
         p = random_string()
         val = random_string()
         total_length = len(p) + len(val) + len("pattanother")
@@ -184,7 +184,7 @@ def test_rcu(test_table_s, metrics):
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
 
 def test_wcu(test_table_s, metrics):
-    with check_increases_operation(metrics, ['PutItem'], 'scylla_alternator_wcu_total', 6):
+    with check_increases_operation(metrics, ['PutItem'], 'scylla_alternator_wcu_total', 3):
         p = random_string()
         val = random_string()
         total_length = len(p) + len(val) + len("pattanother")
