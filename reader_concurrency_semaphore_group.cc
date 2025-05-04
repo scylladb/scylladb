@@ -61,6 +61,16 @@ reader_concurrency_semaphore* reader_concurrency_semaphore_group::get_or_null(sc
         return &(it->second.sem);
     }
 }
+
+const reader_concurrency_semaphore* reader_concurrency_semaphore_group::get_or_null(scheduling_group sg) const {
+    auto it = _semaphores.find(sg);
+    if (it == _semaphores.end()) {
+        return nullptr;
+    } else {
+        return &(it->second.sem);
+    }
+}
+
 reader_concurrency_semaphore& reader_concurrency_semaphore_group::add_or_update(scheduling_group sg, size_t shares) {
     auto result = _semaphores.try_emplace(
             sg,

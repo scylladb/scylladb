@@ -74,6 +74,7 @@ public:
     future<> stop() noexcept;
     reader_concurrency_semaphore& get(scheduling_group sg);
     reader_concurrency_semaphore* get_or_null(scheduling_group sg);
+    const reader_concurrency_semaphore* get_or_null(scheduling_group sg) const;
     reader_concurrency_semaphore& add_or_update(scheduling_group sg, size_t shares);
     future<> remove(scheduling_group sg);
     size_t size();
