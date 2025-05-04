@@ -495,10 +495,16 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
                 auto old_ip = it->second;
                 sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(old_ip));
+<<<<<<< HEAD
 
                 if (const auto ep = _gossiper.get_endpoint_state_ptr(old_ip); ep && ep->get_host_id() == id) {
                     co_await _gossiper.force_remove_endpoint(old_ip, gms::null_permit_id);
                 }
+||||||| parent of ecd14753c0 (storage_service: Do not remove gossiper entry on address change)
+
+                co_await _gossiper.force_remove_endpoint(id, gms::null_permit_id);
+=======
+>>>>>>> ecd14753c0 (storage_service: Do not remove gossiper entry on address change)
             }
         }
         break;
@@ -948,10 +954,10 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
         if (prev_ip == endpoint) {
             co_return;
         }
-
         if (_address_map.find(id) != endpoint) {
             // Address map refused to update IP for the host_id,
             // this means prev_ip has higher generation than endpoint.
+<<<<<<< HEAD
             // We can immediately remove endpoint from gossiper
             // since it represents an old IP (before an IP change)
             // for the given host_id. This is not strictly
@@ -960,9 +966,20 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
             // expectations of the gossiper state in tests.
 
             co_await _ss._gossiper.force_remove_endpoint(endpoint, permit_id);
+||||||| parent of ecd14753c0 (storage_service: Do not remove gossiper entry on address change)
+            // We can immediately remove endpoint from gossiper
+            // since it represents an old IP (before an IP change)
+            // for the given host_id. This is not strictly
+            // necessary, but it reduces the noise circulated
+            // in gossiper messages and allows for clearer
+            // expectations of the gossiper state in tests.
+
+            co_await _ss._gossiper.force_remove_endpoint(id, permit_id);
+=======
+            // Do not update address.
+>>>>>>> ecd14753c0 (storage_service: Do not remove gossiper entry on address change)
             co_return;
         }
-
 
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
         if (_ss.raft_topology_change_enabled()) {
