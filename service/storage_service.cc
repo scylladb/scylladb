@@ -457,7 +457,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
     switch (rs.state) {
         case node_state::normal: {
-            if (is_me(ip)) {
+            if (is_me(id)) {
                 co_return;
             }
             // In replace-with-same-ip scenario the replaced node IP will be the same
