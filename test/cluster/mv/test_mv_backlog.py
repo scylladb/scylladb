@@ -26,8 +26,13 @@ logger = logging.getLogger(__name__)
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_view_backlog_increased_after_write(manager: ManagerClient) -> None:
     node_count = 2
+    max_backlog = 400000
     # Use a higher smp to make it more likely that the writes go to a different shard than the coordinator.
-    servers = await manager.servers_add(node_count, cmdline=['--smp', '5'], config={'error_injections_at_startup': ['never_finish_remote_view_updates'], 'tablets_mode_for_new_keyspaces': 'enabled'})
+    servers = await manager.servers_add(node_count, cmdline=['--smp', '5'], config={'error_injections_at_startup': [{
+                'name': 'pending_view_updates_memory_admission_limit',
+                'value': max_backlog,
+            }, 'never_finish_remote_view_updates'
+        ], 'tablets_mode_for_new_keyspaces': 'enabled'})
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (base_key int, view_key int, v text, PRIMARY KEY (base_key, view_key))")
@@ -48,7 +53,7 @@ async def test_view_backlog_increased_after_write(manager: ManagerClient) -> Non
             local_metrics = await manager.metrics.query(servers[0].ip_addr)
             view_backlog = local_metrics.get('scylla_storage_proxy_replica_view_update_backlog', shard=str(shard))
             # The read view_backlog might still contain backlogs from the previous iterations, so we only assert that it is large enough
-            assert view_backlog > v
+            assert view_backlog > v / max_backlog
 
 # This test reproduces issues #18461 and #18783
 # In the test, we create a table and perform a write to it that fills the view update backlog.

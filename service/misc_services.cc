@@ -252,7 +252,7 @@ future<> view_update_backlog_broker::start() {
                 //FIXME: discarded future.
                 (void)_gossiper.add_local_application_state(
                         gms::application_state::VIEW_BACKLOG,
-                        gms::versioned_value(seastar::format("{}:{}:{}", backlog->get_current_bytes(), backlog->get_max_bytes(), now)));
+                        gms::versioned_value(seastar::format("{}:{}:{}", backlog->get_current_size(), backlog->get_max_size(), now)));
                 sleep_abortable(gms::gossiper::INTERVAL, _as).get();
             }
         }).handle_exception_type([] (const seastar::sleep_aborted& ignored) { });

@@ -50,11 +50,11 @@ public:
         return float(_current) / float(_max) / admission_control_threshold;
     }
 
-    const size_t& get_current_bytes() const {
+    const size_t& get_current_size() const {
         return _current;
     }
 
-    const size_t& get_max_bytes() const {
+    const size_t& get_max_size() const {
         return _max;
     }
 

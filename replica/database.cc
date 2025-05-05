@@ -604,8 +604,9 @@ database::setup_metrics() {
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
-        sm::make_current_bytes("view_update_backlog", [this] { return get_view_update_backlog().get_current_bytes(); },
-                       sm::description("Holds the current size in bytes of the pending view updates for all tables"))(basic_level),
+        sm::make_gauge("view_update_backlog", [this] { return get_view_update_backlog().relative_size(); },
+                       sm::description("Holds the fraction of resources used up for view updates. This may refer to the size of pending updates,"
+                                       "the number of updates waiting for reads or the size of reads for view updates that weren't sent yet."))(basic_level),
 
         sm::make_counter("querier_cache_lookups", _querier_cache.get_stats().lookups,
                        sm::description("Counts querier cache lookups (paging queries)")),
@@ -1645,6 +1646,33 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
     ++semaphore.get_stats().total_successful_reads;
     _stats->short_mutation_queries += bool(result.is_short_read());
     co_return std::tuple(std::move(result), hit_rate);
+}
+
+db::view::update_backlog database::get_view_update_backlog() const {
+    size_t current = 0;
+    size_t max = 1;
+    auto update_backlog = [&current, &max] (size_t new_current, size_t new_max) {
+        if (new_max == 0) {
+            return;
+        }
+        if ((double)new_current / new_max > (double)current / max) {
+            current = new_current;
+            max = new_max;
+        }
+    };
+    const reader_concurrency_semaphore* sem_ptr = _view_update_read_concurrency_semaphores_group.get_or_null(seastar::current_scheduling_group());
+    // First calculate the pressure on reader_concurrency_semaphore
+    if (sem_ptr) {
+        // Check the read queue size
+        update_backlog(sem_ptr->get_stats().waiters, sem_ptr->get_max_queue_length());
+        // Check the memory usage
+        update_backlog(sem_ptr->consumed_resources().memory, sem_ptr->get_kill_limit());
+    }
+    // Now check the pending view updates
+    if (max_memory_pending_view_updates() > 0) {
+        update_backlog(max_memory_pending_view_updates() - _view_update_concurrency_sem.current(), max_memory_pending_view_updates());
+    }
+    return {current, max};
 }
 
 query::max_result_size database::get_query_max_result_size() const {

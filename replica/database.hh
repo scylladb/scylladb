@@ -1938,9 +1938,7 @@ public:
         return _querier_cache;
     }
 
-    db::view::update_backlog get_view_update_backlog() const {
-        return {max_memory_pending_view_updates() - _view_update_concurrency_sem.current(), max_memory_pending_view_updates()};
-    }
+    db::view::update_backlog get_view_update_backlog() const;
 
     db::data_listeners& data_listeners() const {
         return *_data_listeners;
