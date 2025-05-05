@@ -776,7 +776,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
     };
 
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, {});
-    auto sstable_set = make_lw_shared<sstables::sstable_set>(cs.make_sstable_set(s.schema()));
+    auto sstable_set = make_lw_shared<sstables::sstable_set>(env.make_sstable_set(cs, s.schema()));
 
     std::vector<mutation_reader> sstable_mutation_readers;
 

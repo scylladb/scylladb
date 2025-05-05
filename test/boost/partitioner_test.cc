@@ -784,3 +784,19 @@ SEASTAR_THREAD_TEST_CASE(test_split_token_range_msb) {
         }
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_token_range_overlap_ratio) {
+    static auto full_range = dht::token_range::make(dht::first_token(), dht::last_token());
+    static auto full_open_ended_range = dht::token_range::make_open_ended_both_sides();
+    static auto token_midpoint = dht::token::midpoint(dht::first_token(), dht::last_token());
+
+    BOOST_REQUIRE(dht::overlap_ratio(full_range, full_range) == 1.0f);
+    BOOST_REQUIRE(dht::overlap_ratio(full_range, full_open_ended_range) == 1.0f);
+
+    BOOST_REQUIRE(dht::overlap_ratio(dht::token_range::make(dht::first_token(), token_midpoint),
+                  dht::token_range::make(token_midpoint.next(), dht::last_token())) == 0.0f);
+
+    BOOST_CHECK_CLOSE(dht::overlap_ratio(full_range, dht::token_range::make(dht::first_token(), token_midpoint)), 0.5f, 0.001);
+    // returns 1.0f since base (half full) range is 100% covered by the full range.
+    BOOST_REQUIRE(dht::overlap_ratio(dht::token_range::make(dht::first_token(), token_midpoint), full_range) == 1.0f);
+}
