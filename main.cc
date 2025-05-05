@@ -1545,7 +1545,117 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 tsm.stop().get();
             });
 
+<<<<<<< HEAD
             supervisor::notify("initializing storage service");
+||||||| parent of 9c03255fd2 (cql_test_env: main: move stream_manager initialization)
+            auto compression_dict_updated_callback = [&sstable_compressor_factory] (std::string_view name) -> future<> {
+                auto dict = co_await sys_ks.local().query_dict(name);
+                auto sstables_prefix = std::string_view("sstables/");
+                if (name.starts_with(sstables_prefix)) {
+                    auto table = table_id(utils::UUID(name.substr(sstables_prefix.size())));
+                    co_await sstable_compressor_factory.local().set_recommended_dict(table, std::move(dict.data));
+                } else if (name == dictionary_service::rpc_compression_dict_name) {
+                    co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+                }
+            };
+
+            checkpoint(stop_signal, "starting system distributed keyspace");
+            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
+            });
+
+            checkpoint(stop_signal, "starting view update generator");
+            view_update_generator.start(std::ref(db), std::ref(proxy), std::ref(stop_signal.as_sharded_abort_source())).get();
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
+                view_update_generator.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting the view builder");
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
+                view_builder.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting repair service");
+            auto max_memory_repair = memory::stats().total_memory() * 0.1;
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
+                repair.stop().get();
+            });
+            repair.invoke_on_all(&repair_service::start).get();
+            api::set_server_repair(ctx, repair, gossip_address_map).get();
+            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
+                api::unset_server_repair(ctx).get();
+            });
+
+            utils::get_local_injector().inject("stop_after_starting_repair", [] { std::raise(SIGSTOP); });
+
+            checkpoint(stop_signal, "initializing storage service");
+=======
+            auto compression_dict_updated_callback = [&sstable_compressor_factory] (std::string_view name) -> future<> {
+                auto dict = co_await sys_ks.local().query_dict(name);
+                auto sstables_prefix = std::string_view("sstables/");
+                if (name.starts_with(sstables_prefix)) {
+                    auto table = table_id(utils::UUID(name.substr(sstables_prefix.size())));
+                    co_await sstable_compressor_factory.local().set_recommended_dict(table, std::move(dict.data));
+                } else if (name == dictionary_service::rpc_compression_dict_name) {
+                    co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+                }
+            };
+
+            checkpoint(stop_signal, "starting system distributed keyspace");
+            sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
+            auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
+                sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::stop).get();
+            });
+
+            checkpoint(stop_signal, "starting view update generator");
+            view_update_generator.start(std::ref(db), std::ref(proxy), std::ref(stop_signal.as_sharded_abort_source())).get();
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [] {
+                view_update_generator.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting the view builder");
+            view_builder.start(std::ref(db), std::ref(sys_ks), std::ref(sys_dist_ks), std::ref(mm_notifier), std::ref(view_update_generator), std::ref(group0_client), std::ref(qp)).get();
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [cfg] {
+                view_builder.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting repair service");
+            auto max_memory_repair = memory::stats().total_memory() * 0.1;
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
+                repair.stop().get();
+            });
+            repair.invoke_on_all(&repair_service::start).get();
+            api::set_server_repair(ctx, repair, gossip_address_map).get();
+            auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
+                api::unset_server_repair(ctx).get();
+            });
+
+            utils::get_local_injector().inject("stop_after_starting_repair", [] { std::raise(SIGSTOP); });
+
+            debug::the_stream_manager = &stream_manager;
+            checkpoint(stop_signal, "starting streaming service");
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
+            auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
+                // FIXME -- keep the instances alive, just call .stop on them
+                stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
+            });
+
+            checkpoint(stop_signal, "starting streaming manager");
+            stream_manager.invoke_on_all([&stop_signal] (streaming::stream_manager& sm) {
+                return sm.start(stop_signal.as_local_abort_source());
+            }).get();
+
+            api::set_server_stream_manager(ctx, stream_manager).get();
+            auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
+                api::unset_server_stream_manager(ctx).get();
+            });
+
+            checkpoint(stop_signal, "initializing storage service");
+>>>>>>> 9c03255fd2 (cql_test_env: main: move stream_manager initialization)
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
                 std::ref(db), std::ref(gossiper), std::ref(sys_ks), std::ref(sys_dist_ks),
@@ -1706,6 +1816,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });
 
+<<<<<<< HEAD
             debug::the_stream_manager = &stream_manager;
             supervisor::notify("starting streaming service");
             stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
@@ -1724,6 +1835,29 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             supervisor::notify("starting hinted handoff manager");
+||||||| parent of 9c03255fd2 (cql_test_env: main: move stream_manager initialization)
+            debug::the_stream_manager = &stream_manager;
+            checkpoint(stop_signal, "starting streaming service");
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
+            auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
+                // FIXME -- keep the instances alive, just call .stop on them
+                stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
+            });
+
+            checkpoint(stop_signal, "starting streaming manager");
+            stream_manager.invoke_on_all([&stop_signal] (streaming::stream_manager& sm) {
+                return sm.start(stop_signal.as_local_abort_source());
+            }).get();
+
+            api::set_server_stream_manager(ctx, stream_manager).get();
+            auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
+                api::unset_server_stream_manager(ctx).get();
+            });
+
+            checkpoint(stop_signal, "starting hinted handoff manager");
+=======
+            checkpoint(stop_signal, "starting hinted handoff manager");
+>>>>>>> 9c03255fd2 (cql_test_env: main: move stream_manager initialization)
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_rebalanced().get();
             }
