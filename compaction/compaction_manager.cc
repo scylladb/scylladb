@@ -395,7 +395,7 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
     auto compound_set = t.sstable_set_for_tombstone_gc();
     // Compound set will be linearized into a single set, since compaction might add or remove sstables
     // to it for incremental compaction to work.
-    auto new_set = sstables::make_partitioned_sstable_set(t.schema(), false);
+    auto new_set = sstables::make_partitioned_sstable_set(t.schema(), t.token_range());
     co_await compound_set->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
         auto inserted = new_set.insert(sst);
         if (!inserted) {

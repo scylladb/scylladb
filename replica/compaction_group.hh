@@ -159,9 +159,11 @@ public:
     future<> merge_sstables_from(compaction_group& group);
 
     const lw_shared_ptr<sstables::sstable_set>& main_sstables() const noexcept;
+    sstables::sstable_set make_main_sstable_set() const;
     void set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables);
 
     const lw_shared_ptr<sstables::sstable_set>& maintenance_sstables() const noexcept;
+    lw_shared_ptr<sstables::sstable_set> make_maintenance_sstable_set() const;
     void set_maintenance_sstables(lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables);
 
     // Makes a sstable set, which includes all sstables managed by this group

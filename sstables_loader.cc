@@ -412,7 +412,7 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
     const auto cf_id = s->id();
     const auto reason = streaming::stream_reason::repair;
 
-    auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+    auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, std::move(token_range)));
     size_t estimated_partitions = 0;
     for (auto& sst : sstables) {
         estimated_partitions += sst->estimated_keys_for_range(token_range);

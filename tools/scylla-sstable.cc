@@ -941,8 +941,8 @@ public:
         , _permit(std::move(permit))
         , _sst_man(sst_man)
         , _output_dir(std::move(output_dir))
-        , _main_set(sstables::make_partitioned_sstable_set(_schema, false))
-        , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, false))
+        , _main_set(sstables::make_partitioned_sstable_set(_schema, token_range()))
+        , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, token_range()))
         , _compaction_strategy(sstables::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
         , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
         , _tombstone_gc_state(nullptr)
@@ -950,6 +950,7 @@ public:
         , _group_id("dummy-group")
         , _generation_generator(0)
     { }
+    virtual dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     virtual const schema_ptr& schema() const noexcept override { return _schema; }
     virtual unsigned min_compaction_threshold() const noexcept override { return _schema->min_compaction_threshold(); }
     virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }

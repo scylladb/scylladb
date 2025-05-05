@@ -154,7 +154,8 @@ private:
         const auto start = perf_sstable_test_env::now();
 
         // mimic the behavior of sstable_streamer::stream_sstable_mutations()
-        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+        auto full_token_range = dht::token_range::make(dht::first_token(), dht::last_token());
+        auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, std::move(full_token_range)));
         // stream all previously loaded sstables
         for (auto& sst : _sst) {
             sst_set->insert(sst);
