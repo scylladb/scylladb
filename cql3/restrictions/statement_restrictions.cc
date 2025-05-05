@@ -1403,6 +1403,7 @@ statement_restrictions::statement_restrictions(private_tag,
     : statement_restrictions(private_tag{}, schema, allow_filtering)
 {
     _check_indexes = do_check_indexes;
+    std::vector<binary_operator> prepared_where_clause;
     for (auto&& relation_expr : boolean_factors(where_clause)) {
         const expr::binary_operator* relation_binop = expr::as_if<expr::binary_operator>(&relation_expr);
 
@@ -1411,7 +1412,10 @@ statement_restrictions::statement_restrictions(private_tag,
         }
 
         expr::binary_operator prepared_restriction = expr::validate_and_prepare_new_restriction(*relation_binop, db, schema, ctx);
+        prepared_where_clause.push_back(std::move(prepared_restriction));
+    }
 
+    for (auto& prepared_restriction : prepared_where_clause) {
         auto& restr = prepared_restriction;
         if (restr.op == expr::oper_t::IS_NOT) {
             // Handle IS NOT NULL restrictions separately
