@@ -514,8 +514,8 @@ install -d -m755 "$retc"/bash_completion.d
 install -m644 dist/common/nodetool-completion "$retc"/bash_completion.d
 install -m755 bin/nodetool "$rprefix/bin"
 
-SBINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_kernel_check)
-SBINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
+BINFILES=$(cd dist/common/scripts/; ls scylla_*setup node_health_check scylla_kernel_check)
+BINFILES+=" $(cd seastar/scripts; ls seastar-cpu-map.sh)"
 
 cat << EOS > "$rprefix"/scripts/scylla_product.py
 PRODUCT="$product"
@@ -604,9 +604,9 @@ EOS
     ln -srf "$rprefix/bin/iotune" "$rusr/bin/iotune"
     ln -srf "$rprefix/bin/scyllatop" "$rusr/bin/scyllatop"
     ln -srf "$rprefix/bin/nodetool" "$rusr/bin/nodetool"
-    install -d -m755 "$rusr"/sbin
-    for i in $SBINFILES; do
-        ln -srf "$rprefix/scripts/$i" "$rusr/sbin/$i"
+    install -d -m755 "$rusr"/bin
+    for i in $BINFILES; do
+        ln -srf "$rprefix/scripts/$i" "$rusr/bin/$i"
     done
 
     # we need keep /usr/lib/scylla directory to support upgrade/downgrade
@@ -628,9 +628,9 @@ else
 SYSCONFDIR="$sysconfdir"
 EOS
     chmod 644 "$rprefix"/scripts/scylla_sysconfdir.py
-    install -d -m755 "$rprefix"/sbin
-    for i in $SBINFILES; do
-        ln -srf "$rprefix/scripts/$i" "$rprefix/sbin/$i"
+    install -d -m755 "$rprefix"/bin
+    for i in $BINFILES; do
+        ln -srf "$rprefix/scripts/$i" "$rprefix/bin/$i"
     done
 fi
 

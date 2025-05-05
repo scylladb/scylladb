@@ -128,9 +128,9 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %{_bindir}/iotune
 %{_bindir}/scyllatop
 %{_bindir}/nodetool
-%{_sbindir}/scylla*
-%{_sbindir}/node_health_check
-%{_sbindir}/seastar-cpu-map.sh
+%{_bindir}/scylla*
+%{_bindir}/node_health_check
+%{_bindir}/seastar-cpu-map.sh
 /opt/scylladb/scripts/*
 /opt/scylladb/swagger-ui/dist/*
 /opt/scylladb/api/api-doc/*
