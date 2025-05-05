@@ -55,6 +55,45 @@ async def test_view_backlog_increased_after_write(manager: ManagerClient) -> Non
             # The read view_backlog might still contain backlogs from the previous iterations, so we only assert that it is large enough
             assert view_backlog > v / max_backlog
 
+# This test verifies the fix for #21553
+# In the test, we create a table with a view and perform a writes to it with a high concurrency.
+# By using the error injections, we make sure that the read queue is close to the limit and should be throttled.
+# The test checks that the writes are now indeed throttled due to the read queue growing too large.
+@pytest.mark.asyncio
+@skip_mode('release', "error injections aren't enabled in release mode")
+@skip_mode('debug', "debug mode is too time-sensitive and takes too long")
+async def test_writes_throttled_due_to_mv_read_queue(manager: ManagerClient) -> None:
+    # Increase the max memory for pending view updates so that all throttling is caused by the read queue instead
+    server = await manager.server_add(cmdline=['--smp', '1'], config={'error_injections_at_startup': [{
+                'name': 'pending_view_updates_memory_admission_limit',
+                'value': 1000_000_000_000,
+            }, {
+                'name': 'max_view_update_read_queue',
+                'value': 200,
+            }, 'prolong_view_reads_100ms'
+        ], 'tablets_mode_for_new_keyspaces': 'enabled'})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (base_key int, view_key int, v text, PRIMARY KEY (base_key, view_key))")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE view_key IS NOT NULL and base_key IS NOT NULL PRIMARY KEY (view_key, base_key) ")
+
+        async def do_inserts(i: int):
+            for _ in range(10):
+                await manager.cql.run_async(f"INSERT INTO {ks}.tab(base_key, view_key, v) VALUES ({i}, {i}, '{'a'}')")
+
+        # Measure the number of delayed writes during the inserts
+        local_metrics = await manager.metrics.query(server.ip_addr)
+        before_total_throttled_writes = local_metrics.get("scylla_storage_proxy_coordinator_throttled_base_writes_total") or 0.0
+
+        await asyncio.gather(*[asyncio.create_task(do_inserts(i)) for i in range(200)])
+
+        local_metrics = await manager.metrics.query(server.ip_addr)
+        after_total_throttled_writes = local_metrics.get("scylla_storage_proxy_coordinator_throttled_base_writes_total") or 0.0
+
+        # The limit for concurrent view update reads is 50, so with 200 concurrent inserts, significantly prolonged reads and a lowered read queue limit we should observe some throttling
+        assert after_total_throttled_writes > before_total_throttled_writes
+
 # This test reproduces issues #18461 and #18783
 # In the test, we create a table and perform a write to it that fills the view update backlog.
 # After a gossip round is performed, the following write should succeed.
