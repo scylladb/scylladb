@@ -36,9 +36,14 @@
 #include <utility>
 #include <algorithm>
 
-const sstring KEYSPACE_NAME = "ks";
-
 namespace {
+
+sstring create_vnodes_keyspace(cql_test_env& env) {
+    env.execute_cql("CREATE KEYSPACE ks_vnodes"
+            " WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+            " AND tablets = {'enabled': 'false'};").get();
+    return "ks_vnodes";
+}
 
 static cql_test_config cql_config_with_extensions() {
     auto ext = std::make_shared<db::extensions>();
@@ -202,7 +207,9 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
             db.set_querier_cache_entry_ttl(1s);
         }).get();
 
-        auto [s, _] = create_test_table(env, KEYSPACE_NAME, get_name());
+        const auto ks = create_vnodes_keyspace(env);
+
+        auto [s, _] = create_test_table(env, ks, get_name());
         (void)_;
 
         auto cmd = query::read_command(
@@ -544,7 +551,9 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
+        const auto ks = create_vnodes_keyspace(env);
+
+        auto [s, pkeys] = create_test_table(env, ks, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
@@ -599,7 +608,9 @@ SEASTAR_THREAD_TEST_CASE(test_read_all_multi_range) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
+        const auto ks = create_vnodes_keyspace(env);
+
+        auto [s, pkeys] = create_test_table(env, ks, get_name());
 
         const auto limit = std::numeric_limits<uint64_t>::max();
 
@@ -659,7 +670,9 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name(), 2, 10);
+        const auto ks = create_vnodes_keyspace(env);
+
+        auto [s, pkeys] = create_test_table(env, ks, get_name(), 2, 10);
 
         unsigned i = 0;
 
@@ -677,12 +690,16 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             // First read all partition-by-partition (not paged).
             auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
-            uint64_t lookups = 0;
-            uint64_t misses = 0;
+            auto misses = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses);
+            auto lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
             auto saved_readers = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::population);
 
-            // Then do a paged range-query, with reader caching
-            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
+            // Then do a paged range-query
+            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, page_size, stateful, [&] (size_t page) {
+                if (!stateful) {
+                    return;
+                }
+
                 const auto new_misses = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses);
                 const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
 
@@ -690,7 +707,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
                     tests::require(new_lookups > lookups);
                 }
 
-                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
                 tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
                 tests::require_less_equal(new_misses - misses, smp::count - saved_readers);
 
@@ -720,7 +736,9 @@ SEASTAR_THREAD_TEST_CASE(test_evict_a_shard_reader_on_each_page) {
             db.set_querier_cache_entry_ttl(2s);
         }).get();
 
-        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name());
+        const auto ks = create_vnodes_keyspace(env);
+
+        auto [s, pkeys] = create_test_table(env, ks, get_name());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
@@ -769,7 +787,9 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
 
         auto& db = env.db();
 
-        auto [s, pkeys] = create_test_table(env, KEYSPACE_NAME, get_name(), 4, 8);
+        const auto ks = create_vnodes_keyspace(env);
+
+        auto [s, pkeys] = create_test_table(env, ks, get_name(), 4, 8);
         s = s->make_reversed();
 
         unsigned i = 0;
@@ -1128,7 +1148,9 @@ SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
         const auto seed = tests::random::get_int<uint32_t>();
         testlog.info("fuzzy test seed: {}", seed);
 
-        auto tbl = create_test_table(env, seed, "ks", get_name(), false,
+        const auto ks = create_vnodes_keyspace(env);
+
+        auto tbl = create_test_table(env, seed, ks, get_name(), false,
 #ifdef DEBUG
                 std::uniform_int_distribution<size_t>(8, 32), // partitions
                 std::uniform_int_distribution<size_t>(0, 100), // clustering-rows
