@@ -677,12 +677,16 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
             // First read all partition-by-partition (not paged).
             auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
 
-            uint64_t lookups = 0;
-            uint64_t misses = 0;
+            auto misses = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses);
+            auto lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
             auto saved_readers = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::population);
 
-            // Then do a paged range-query, with reader caching
-            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, 4, stateful_query::yes, [&] (size_t page) {
+            // Then do a paged range-query
+            auto results2 = read_all_partitions_with_paged_scan(env.db(), s, page_size, stateful, [&] (size_t page) {
+                if (!stateful) {
+                    return;
+                }
+
                 const auto new_misses = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::misses);
                 const auto new_lookups = aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::lookups);
 
@@ -690,7 +694,6 @@ SEASTAR_THREAD_TEST_CASE(test_read_with_partition_row_limits) {
                     tests::require(new_lookups > lookups);
                 }
 
-                tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
                 tests::require_equal(aggregate_querier_cache_stat(env.db(), &query::querier_cache::stats::drops), 0u);
                 tests::require_less_equal(new_misses - misses, smp::count - saved_readers);
 
