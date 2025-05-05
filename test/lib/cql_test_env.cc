@@ -831,9 +831,6 @@ private:
                 std::ref(_ms), std::ref(_fd)).get();
             auto stop_raft_gr = deferred_stop(_group0_registry);
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
-            auto stop_streaming = defer([this] { _stream_manager.stop().get(); });
-
             _feature_service.invoke_on_all([] (auto& fs) {
                 return fs.enable(fs.supported_feature_set());
             }).get();
@@ -862,6 +859,9 @@ private:
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
             auto compression_dict_updated_callback = [] { return make_ready_future<>(); };
+
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            auto stop_streaming = defer([this] { _stream_manager.stop().get(); });
 
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
