@@ -10,6 +10,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/map_reduce.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/shared_mutex.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -588,6 +589,7 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
         // progress tracking while maintaining the base interface.
         shared_ptr<stream_progress> progress = make_shared<stream_progress>();
     };
+    mutable shared_mutex _progress_mutex;
     // user could query for the progress even before _progress_per_shard
     // is completed started, and this._status.state does not reflect the
     // state of progress, so we have to track it separately.
@@ -639,31 +641,35 @@ public:
         // preserve the final progress, so we can access it after the task is
         // finished
         _final_progress = co_await get_progress();
-        if (std::exchange(_progress_state, progress_state::finalized) == progress_state::initialized) {
-            co_await _progress_per_shard.stop();
-        }
+        co_await with_lock(_progress_mutex, [this] -> future<> {
+            if (std::exchange(_progress_state, progress_state::finalized) == progress_state::initialized) {
+                co_await _progress_per_shard.stop();
+            }
+        });
     }
 
     virtual future<tasks::task_manager::task::progress> get_progress() const override {
-        switch (_progress_state) {
-        case progress_state::uninitialized:
-            co_return tasks::task_manager::task::progress{};
-        case progress_state::finalized:
-            co_return _final_progress;
-        case progress_state::initialized:
-            break;
-        }
-        auto p = co_await _progress_per_shard.map_reduce(
-            adder<stream_progress>{},
-            [] (const progress_holder& holder) -> stream_progress {
-              auto p = holder.progress;
-              SCYLLA_ASSERT(p);
-              return *p;
-            });
-        co_return tasks::task_manager::task::progress {
-            .completed = p.completed,
-            .total = p.total,
-        };
+        co_return co_await with_shared(_progress_mutex, [this] -> future<tasks::task_manager::task::progress> {
+            switch (_progress_state) {
+            case progress_state::uninitialized:
+                co_return tasks::task_manager::task::progress{};
+            case progress_state::finalized:
+                co_return _final_progress;
+            case progress_state::initialized:
+                break;
+            }
+            auto p = co_await _progress_per_shard.map_reduce(
+                adder<stream_progress>{},
+                [] (const progress_holder& holder) -> stream_progress {
+                  auto p = holder.progress;
+                  SCYLLA_ASSERT(p);
+                  return *p;
+                });
+            co_return tasks::task_manager::task::progress {
+                .completed = p.completed,
+                .total = p.total,
+            };
+        });
     }
 };
 
