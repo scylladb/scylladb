@@ -50,6 +50,7 @@ public:
             , _group_id("table_for_tests::table_state")
     {
     }
+    dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     const schema_ptr& schema() const noexcept override {
         return table().schema();
     }
@@ -487,6 +488,12 @@ test_env::make_table_for_tests(schema_ptr s) {
     cfg.datadir = _impl->dir.path().native();
     cfg.enable_commitlog = false;
     return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), _impl->storage);
+}
+
+sstables::sstable_set test_env::make_sstable_set(sstables::compaction_strategy& cs, schema_ptr s) {
+    auto t = make_table_for_tests(s);
+    auto close_t = deferred_stop(t);
+    return cs.make_sstable_set(t.as_table_state());
 }
 
 void test_env::request_abort() {
