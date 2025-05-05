@@ -28,6 +28,7 @@ import random
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
+from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
@@ -816,3 +817,80 @@ async def test_concurrent_modify_tags(manager: ManagerClient, op):
                 barrier.reset()
     finally:
         alternators[0].meta.client.delete_table(TableName=table_name)
+
+async def nodes_with_data(manager, ks, cf, host):
+    """Retrieves a set of node uuids which contain *any* data for the given
+       table. If the table uses tablets, we use the system.tablets (via
+       the convenience function get_all_tablet_replicas()). But if the table
+       uses vnodes, we use a REST API request /storage_service/tokens_endpoint
+       which returns the primary node for each token (with vnodes, if a node
+       has any data at all, it is also primary for some of the data).
+       The information is retrieved using requests to the given "host",
+       which can be any live node.
+    """
+    r = await get_all_tablet_replicas(manager, host, ks, cf)
+    if r:
+        # If table uses tablets it will have a non-empty list of tablets (r)
+        # and we return it here.
+        return { item[0] for entry in r for item in entry.replicas }
+    else:
+        # Otherwise, the table uses vnodes. Use the REST API that only
+        # makes sense with vnodes. Convert the host IP addresses that this
+        # API returns to uuids like we have in the system tables
+        j = await manager.api.client.get_json('/storage_service/tokens_endpoint', host=host.ip_addr)
+        return { await manager.api.get_host_id(entry['value']) for entry in j }
+
+@pytest.mark.parametrize("tablets", [True, False])
+@pytest.mark.asyncio
+async def test_zero_token_node_load_balancer(manager, tablets):
+    """Test that a zero-token node (a.k.a. coordinator-only or proxy node),
+       can be used as an Alternator server-side load balancer as proposed in
+       issue #6527. We set up a cluster with four ordinary nodes (one DC and
+       one rack), and a fifth node which doesn't have any data (a zero-token
+       node), and make different Alternator requests (CreateTable, PutItem,
+       GetItem) to this data-less fifth node, and they should work. Finally
+       we verify that the fifth node really does not have any data (and
+       wasn't just created as a normal data-holding node).
+       Because the implementation of zero-token nodes is very different
+       for the tablets and vnodes cases, this test has two parametrized
+       versions - tablets=True and tablets=False.
+    """
+    if tablets:
+        tags = [{'Key': 'experimental:initial_tablets', 'Value': '0'}]
+    else:
+        tags = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+    # Start a cluster with 4 nodes. Alternator uses RF=3, so with 4 nodes
+    # the assignment of data (tablets or vnodes) to nodes isn't trivial,
+    # which will allow us to check that non-trivial request forwarding works.
+    servers = await manager.servers_add(4, config=alternator_config)
+    # Add a fifth node, with zero tokens (no data), by setting join_ring=false:
+    zero_token_server = await manager.server_add(config=alternator_config | {'join_ring': False})
+
+    # Get an Alternator connection to the zero-token node:
+    alternator = get_alternator(zero_token_server.ip_addr)
+
+    # Create a new table, write 10 different items to it and then read them
+    # back - doing all of this through the zero-token node:
+    table = alternator.create_table(TableName=unique_table_name(),
+        Tags=tags,
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH' },
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'N' },
+        ])
+    items = [{'p': i, 'x': f'hello {i}'} for i in range(10)]
+    for item in items:
+        table.put_item(Item=item)
+    for item in items:
+        assert item == table.get_item(Key={'p': item['p']}, ConsistentRead=True)['Item']
+    # Verify that the zero-token node is really "zero-token", i.e., does not
+    # have any data for our table. The nodes_with_data() function returns
+    # the list of node uuids which contain *any* data for the given table -
+    # we want this to be just the first four nodes in "servers", not the
+    # fifth node zero_token_server.
+    expected = { await manager.get_host_id(s.server_id) for s in servers }
+    got = await nodes_with_data(manager, 'alternator_'+table.name, table.name, zero_token_server)
+    assert got == expected
+    table.delete()
