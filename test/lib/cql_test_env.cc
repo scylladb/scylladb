@@ -817,6 +817,41 @@ private:
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
 
+<<<<<<< HEAD
+||||||| parent of 9c03255fd2 (cql_test_env: main: move stream_manager initialization)
+            auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
+
+            _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
+
+            _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [this] {
+                _view_update_generator.stop().get();
+            });
+
+            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [this] {
+                _view_builder.stop().get();
+            });
+
+=======
+            auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
+
+            _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
+
+            _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
+            auto stop_view_update_generator = defer_verbose_shutdown("view update generator", [this] {
+                _view_update_generator.stop().get();
+            });
+
+            _view_builder.start(std::ref(_db), std::ref(_sys_ks), std::ref(_sys_dist_ks), std::ref(_mnotifier), std::ref(_view_update_generator), std::ref(group0_client), std::ref(_qp)).get();
+            auto stop_view_builder = defer_verbose_shutdown("view builder", [this] {
+                _view_builder.stop().get();
+            });
+
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
+
+>>>>>>> 9c03255fd2 (cql_test_env: main: move stream_manager initialization)
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),
                 std::ref(_sys_ks),
