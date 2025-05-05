@@ -232,6 +232,7 @@ def check_repairs(row_num_before: list[int], row_num_after: list[int], expected_
 @skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.parametrize("included_host_count", [2, 1, 0])
 async def test_tablet_repair_hosts_filter(manager: ManagerClient, included_host_count):
+    injection = "handle_tablet_migration_repair_fail"
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     hosts_filter = "00000000-0000-0000-0000-000000000000"
     if included_host_count == 1:
@@ -243,7 +244,7 @@ async def test_tablet_repair_hosts_filter(manager: ManagerClient, included_host_
 
     token = -1
     async def repair_task():
-        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await inject_error_on(manager, injection, servers)
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, hosts_filter=hosts_filter)
 
     async def check_filter():
@@ -255,7 +256,7 @@ async def test_tablet_repair_hosts_filter(manager: ManagerClient, included_host_
         assert len(res) == 1
         assert res[str(token)].repair_hosts_filter.split(",").sort() == hosts_filter.split(",").sort()
 
-        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await inject_error_off(manager, injection, servers)
 
     await asyncio.gather(repair_task(), check_filter())
 
