@@ -209,6 +209,11 @@ private:
     encryption_context& _ctxt;
     std::string _name;
     host_options _options;
+    
+    // session may or nay not be present.
+    // for example, with temporary credentials a session (a.k.a token) is required
+    std::string _session;
+
     utils::loading_cache<attr_cache_key, key_and_id_type, 2, utils::loading_cache_reload_enabled::yes,
         utils::simple_entry_size<key_and_id_type>, attr_cache_key_hash> _attr_cache;
     utils::loading_cache<id_cache_key, bytes, 2, utils::loading_cache_reload_enabled::yes, 
@@ -441,6 +446,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
     if (should_resolve_options_credentials()) {
         auto key_id = std::getenv("AWS_ACCESS_KEY_ID");
         auto key = std::getenv("AWS_SECRET_ACCESS_KEY");
+        _session = std::getenv("AWS_SESSION_TOKEN");
         if (_options.aws_access_key_id.empty() && key_id) {
             kms_log.debug("No aws id specified. Using environment AWS_ACCESS_KEY_ID");
             _options.aws_access_key_id = key_id;
@@ -448,6 +454,11 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
         if (_options.aws_secret_access_key.empty() && key) {
             kms_log.debug("No aws secret specified. Using environment AWS_SECRET_ACCESS_KEY");
             _options.aws_secret_access_key = key;
+        }
+        // for debug only, we already set if exist in ENV the value for _session
+        if (not _session.empty()) {
+            kms_log.debug("Using environment AWS_SESSION_TOKEN");
+            // note: _session is NOT in _options, it is just a member variable here
         }
     }
 
@@ -479,6 +490,8 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
                                 id = val;
                             } else if (key == "aws_secret_access_key") {
                                 secret = val;
+                            } else if (key == "aws_session_token") {
+                                _session = val;
                             }
                         }
                         ++i;
@@ -509,7 +522,6 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
 
     auto aws_access_key_id = _options.aws_access_key_id;
     auto aws_secret_access_key = _options.aws_secret_access_key;
-    auto session = ""s;
 
     if (_options.aws_use_ec2_credentials) {
         auto [res, token] = co_await query_ec2_meta("/latest/meta-data/iam/security-credentials/", gtoken);
@@ -521,7 +533,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
         try {
             aws_access_key_id = rjson::get<std::string>(body, "AccessKeyId");
             aws_secret_access_key = rjson::get<std::string>(body, "SecretAccessKey");
-            session = rjson::get<std::string>(body, "Token");
+            _session = rjson::get<std::string>(body, "Token");
         } catch (rjson::malformed_value&) {
             std::throw_with_nested(kms_error("AccessDenied", fmt::format("Code={}, Message={}"
                 , rjson::get_opt<std::string>(body, "Code")
@@ -550,7 +562,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
                 + "&RoleSessionName=" + role_session,
             .aws_access_key_id = aws_access_key_id,
             .aws_secret_access_key = aws_secret_access_key,
-            .security_token = session,
+            .security_token = _session,
             .port = _options.port,
         });
 
@@ -582,7 +594,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
 
             aws_access_key_id = keyid->value();
             aws_secret_access_key = key->value();
-            session = token->value();
+            _session = token->value();
 
         } catch (const rapidxml::parse_error& e) {
             std::throw_with_nested(kms_error("XML parse error", "AssumeRole"));
@@ -597,7 +609,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
         .content = rjson::print(query),
         .aws_access_key_id = aws_access_key_id,
         .aws_secret_access_key = aws_secret_access_key,
-        .security_token = session,
+        .security_token = _session,
         .port = _options.port,
     });
 
