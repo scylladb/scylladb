@@ -405,7 +405,7 @@ class background_reclaimer {
     promise<>* _main_loop_wait = nullptr;
     future<> _done;
     bool _stopping = false;
-    static constexpr size_t free_memory_threshold = 60'000'000;
+    static constexpr size_t free_memory_threshold = background_reclaim_free_memory_threshold;
 private:
     bool have_work() const {
 #ifndef SEASTAR_DEFAULT_ALLOCATOR

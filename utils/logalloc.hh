@@ -29,6 +29,8 @@ constexpr int segment_size_shift = 17; // 128K; see #151, #152
 constexpr size_t segment_size = 1 << segment_size_shift;
 constexpr size_t max_zone_segments = 256;
 
+constexpr size_t background_reclaim_free_memory_threshold = 60'000'000;
+
 //
 // Frees some amount of objects from the region to which it's attached.
 //
