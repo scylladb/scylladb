@@ -113,7 +113,7 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         }
         auto cd = schema->get_column_definition((*ident)->name());
 
-        if (cd == nullptr) {
+        if (cd == nullptr || cd->is_internal()) {
             throw exceptions::invalid_request_exception(
                     format("No column definition found for column {}", target->column_name()));
         }
