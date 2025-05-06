@@ -88,7 +88,7 @@ public:
     uint64_t shard_bounce_for_lwt = 0;
     uint64_t requests_blocked_memory = 0;
     uint64_t requests_shed = 0;
-    uint64_t rcu_total = 0;
+    uint64_t rcu_half_units_total = 0;
     // wcu can results from put, update, delete and index
     // Index related will be done on top of the operation it comes with
     enum wcu_types {
