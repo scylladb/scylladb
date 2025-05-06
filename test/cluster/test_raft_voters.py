@@ -15,7 +15,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
 from test.cluster.conftest import cluster_con, skip_mode
-from test.cluster.util import get_current_group0_config
+from test.cluster.util import get_coordinator_host_ids, get_current_group0_config
 
 
 GROUP0_VOTERS_LIMIT = 5
@@ -176,3 +176,60 @@ async def test_raft_limited_voters_upgrade(manager: ManagerClient):
 
     num_voters = await get_number_of_voters(manager, servers[0])
     assert num_voters == GROUP0_VOTERS_LIMIT, f"The number of voters should be limited to {GROUP0_VOTERS_LIMIT} (but is {num_voters})"
+
+
+@pytest.mark.asyncio
+async def test_raft_limited_voters_retain_coordinator(manager: ManagerClient):
+    """
+    Test that the topology coordinator is retained as a voter when possible.
+
+    This test ensures that if a voter needs to be removed and the topology coordinator
+    is among the candidates for removal, the coordinator is prioritized to remain a voter.
+
+    Arrange:
+        - Create 2 DCs with 3 nodes each.
+        - Retrieve the current topology coordinator.
+    Act:
+        - Add a third DC with 1 node.
+        - This will require removing one voter from either DC1 or DC2.
+    Assert:
+        - Verify that the topology coordinator is retained as a voter.
+    """
+
+    # Arrange: Create a 3-node cluster with the limited voters feature disabled
+
+    dc_setup = [
+        {
+            'property_file': {'dc': 'dc1', 'rack': 'rack1'},
+            'num_nodes': 3,
+        },
+        {
+            'property_file': {'dc': 'dc2', 'rack': 'rack2'},
+            'num_nodes': 3,
+        },
+    ]
+
+    dc_servers = []
+    for dc in dc_setup:
+        logging.info(
+            f"Creating {dc['property_file']['dc']} with {dc['num_nodes']} nodes")
+        dc_servers.append(await manager.servers_add(dc['num_nodes'],
+                                                    property_file=dc['property_file']))
+
+    assert len(dc_servers) == len(dc_setup)
+
+    coordinator_ids = await get_coordinator_host_ids(manager)
+    assert coordinator_ids, "At least 1 coordinator id should be found"
+
+    coordinator_id = coordinator_ids[0]
+
+    # Act: Add a new DC with one node
+
+    logging.info('Adding a new DC with one node')
+    await manager.servers_add(1, property_file={'dc': 'dc3', 'rack': 'rack3'})
+
+    # Assert: Verify that the topology coordinator is still the voter
+
+    group0_members = await get_current_group0_config(manager, dc_servers[0][0])
+    assert any(m[0] == coordinator_id and m[1] for m in group0_members), \
+        f"The coordinator {coordinator_id} should be a voter (but is not)"
