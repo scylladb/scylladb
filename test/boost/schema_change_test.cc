@@ -285,6 +285,20 @@ SEASTAR_THREAD_TEST_CASE(test_inject_internal_columns) {
                     return std::string_view(e.what()).starts_with(expected_error);
                 });
         }
+
+        // Check can't use internal columns in secondary indexes.
+        {
+            const char* cql = R"(
+                create index index1 on tests_ks.table1 ("$test_set_c1")
+            )";
+            BOOST_REQUIRE_EXCEPTION(
+                e.execute_cql(cql).get();,
+                exceptions::invalid_request_exception,
+                [](const exceptions::invalid_request_exception& e) {
+                    const char* expected_error = "No column definition found for column $test_set_c1";
+                    return std::string_view(e.what()).starts_with(expected_error);
+                });
+        }
     }).get();
 }
 
