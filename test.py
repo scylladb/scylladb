@@ -252,7 +252,7 @@ def parse_cmd_line() -> argparse.Namespace:
         args.coverage = True
 
     args.tmpdir = os.path.abspath(args.tmpdir)
-    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes)
+    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics)
 
     # Get the list of tests configured by configure.py
     try:
@@ -541,7 +541,6 @@ async def main() -> int:
     options = parse_cmd_line()
 
     open_log(options.tmpdir, f"test.py.{'-'.join(options.modes)}.log", options.log_level)
-    setup_cgroup(options.gather_metrics)
 
     init_testsuite_globals()
 

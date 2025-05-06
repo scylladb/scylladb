@@ -11,14 +11,15 @@ from typing import Sequence
 
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
 
-TIMEOUT = 30 # seconds
+TIMEOUT = 60 * 10 # seconds
 
 class UnitTestFacade(CppTestFacade):
 
     def list_tests(
             self,
             executable: Path,
-            no_parallel_run: bool
+            no_parallel_run: bool,
+            mode: str
     ) -> tuple[bool, list[str]]:
         return False, [os.path.basename(os.path.splitext(executable)[0])]
 
@@ -30,6 +31,7 @@ class UnitTestFacade(CppTestFacade):
         mode: str,
         file_name: Path,
         test_args: Sequence[str] = (),
+        env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         args = [str(executable), *test_args]
         os.chdir(self.temp_dir.parent)

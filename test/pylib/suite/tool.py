@@ -60,6 +60,8 @@ class ToolTest(Test):
             "--mode={}".format(self.mode),
             "--run_id={}".format(self.id)
         ]
+        if options.gather_metrics:
+            self.args.append("--gather-metrics")
         self.args.append(f"--alluredir={self.allure_dir}")
         if not options.save_log_on_success:
             self.args.append("--allure-no-capture")
