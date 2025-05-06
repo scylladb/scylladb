@@ -2481,6 +2481,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     node = retake_node(co_await start_operation(), node.id);
                 }
 
+                // Make decommissioning node a non voter before reporting operation completion below.
+                // Otherwise the decommissioned node may see the completion and exit before it is removed from
+                // the config at which point the removal from the config will hang if the cluster had only two
+                // nodes before the decommission.
+                co_await _voter_handler.on_node_removed(node.id, _as);
+
                 topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
 
                 rtbuilder.done();
