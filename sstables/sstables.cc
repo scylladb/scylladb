@@ -1552,7 +1552,7 @@ void sstable::disable_component_memory_reload() {
     _total_memory_reclaimed = 0;
 }
 
-future<> sstable::load_metadata(sstable_open_config cfg, bool validate) noexcept {
+future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
     co_await read_toc();
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
@@ -1564,17 +1564,15 @@ future<> sstable::load_metadata(sstable_open_config cfg, bool validate) noexcept
             [&] { return read_compression(); },
             [&] { return read_filter(cfg); },
             [&] { return read_summary(); });
-    if (validate) {
-        validate_min_max_metadata();
-        validate_max_local_deletion_time();
-        validate_partitioner();
-    }
 }
 
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
 future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noexcept {
-    co_await load_metadata(cfg, true);
+    co_await load_metadata(cfg);
+    validate_min_max_metadata();
+    validate_max_local_deletion_time();
+    validate_partitioner();
     if (_shards.empty()) {
         set_first_and_last_keys();
         _shards = cfg.current_shard_as_sstable_owner ?
