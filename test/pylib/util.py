@@ -24,6 +24,7 @@ from typing import Optional, TypeVar, Any
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
+from cassandra.query import Statement # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
 from test import BUILD_DIR, TOP_SRC_DIR
@@ -315,3 +316,29 @@ async def gather_safely(*awaitables: Awaitable):
 
 def get_xdist_worker_id() -> str | None:
     return os.environ.get("PYTEST_XDIST_WORKER")
+
+
+def execute_with_tracing(cql : Session, statement : str | Statement, log : bool = False, *cql_execute_extra_args, **cql_execute_extra_kwargs):
+    """ Execute statement via cql session and log the tracing output. """
+
+    cql_execute_extra_kwargs['trace'] = True
+    query_result = cql.execute(statement, *cql_execute_extra_args, **cql_execute_extra_kwargs)
+
+    tracing = query_result.get_all_query_traces(max_wait_sec_per=900)
+
+    ret = []
+    page_traces = []
+    for trace in tracing:
+        ret.append(trace.events)
+        if not log:
+            continue
+
+        trace_events = []
+        for event in trace.events:
+            trace_events.append(f"  {event.source} {event.source_elapsed} {event.description}")
+        page_traces.append("\n".join(trace_events))
+
+    if log:
+        logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
+
+    return ret
