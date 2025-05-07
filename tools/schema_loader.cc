@@ -513,7 +513,7 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     auto local = data_dictionary::make_local_options(dir_path);
     auto bootstrap_sst = sst_man.make_sstable(bootstrap_schema, local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
-    bootstrap_sst->load_metadata({}, false).get();
+    bootstrap_sst->load_metadata().get();
 
     const auto& serialization_header = bootstrap_sst->get_serialization_header();
     const auto& compression = bootstrap_sst->get_compression();

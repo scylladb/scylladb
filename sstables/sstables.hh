@@ -238,7 +238,7 @@ public:
     // load sstable using components shared by a shard
     future<> load(foreign_sstable_open_info info) noexcept;
     // Load metadata components from disk
-    future<> load_metadata(sstable_open_config cfg = {}, bool validate = true) noexcept;
+    future<> load_metadata(sstable_open_config cfg = {}) noexcept;
     // load all components from disk
     // this variant will be useful for testing purposes and also when loading
     // a new sstable from scratch for sharing its components.
