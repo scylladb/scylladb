@@ -652,14 +652,23 @@ private:
 
     // Select a storage group from a given token.
     storage_group& storage_group_for_token(dht::token token) const;
+    // Return storage groups, present in this shard, that own a particular token range.
+    // This is a much safer interface to view all data belonging to a tablet replica since data can be
+    // moved across compaction groups belonging to the same replica. So data could escape an iteration
+    // on compaction groups. Iterating on storage groups instead, allows the caller to see all the
+    // data at any point in time. In short, writes can operate on compaction group level, but reads
+    // must operate on storage group level.
+    utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const;
     storage_group& storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();
     compaction_group* get_compaction_group(size_t id) const;
+    // NOTE: all readers must only operate on storage groups, which can provide all data belonging to
+    // a given tablet replica. Interfaces below should only be used in the context of writes, for
+    // example, to append data to memtable. Iterating on compaction groups is susceptible to races
+    // since sstables might move across compaction groups in background.
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const;
-    // Return compaction groups, present in this shard, that own a particular token range.
-    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const;
     // Select a compaction group from a given key.
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const;
     // Select a compaction group from a given sstable based on its token range.

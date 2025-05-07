@@ -366,12 +366,12 @@ public:
     virtual void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) = 0;
 
     virtual compaction_group& compaction_group_for_token(dht::token token) const = 0;
-    virtual utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const = 0;
     virtual compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const = 0;
     virtual compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const = 0;
 
     virtual size_t log2_storage_groups() const = 0;
     virtual storage_group& storage_group_for_token(dht::token) const = 0;
+    virtual utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const = 0;
 
     virtual locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept = 0;
     virtual bool all_storage_groups_split() = 0;
