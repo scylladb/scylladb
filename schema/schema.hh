@@ -573,6 +573,9 @@ private:
         bool _in_memory = false;
         std::optional<std::map<sstring, sstring>> _tablet_options;
         std::optional<raw_view_info> _view_info;
+
+        // creation time
+        db_clock::time_point _creation_timestamp;
     };
     raw_schema _raw;
     schema_static_props _static_props;
@@ -674,6 +677,13 @@ public:
     }
     bool is_counter() const {
         return _raw._is_counter;
+    }
+
+    db_clock::time_point creation_time() const {
+        return _raw._creation_timestamp;
+    }
+    double creation_timestamp() const {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(_raw._creation_timestamp.time_since_epoch()).count() / (1000.0 * 1000.0 * 1000.0);
     }
 
     cf_type type() const {

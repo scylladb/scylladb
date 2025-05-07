@@ -315,6 +315,8 @@ schema_ptr scylla_tables(schema_features features) {
 
         sb.with_column("cdc", map_type_impl::get_instance(utf8_type, utf8_type, false));
 
+        sb.with_column("creation_timestamp_seconds", timestamp_type);
+
         // PER_TABLE_PARTITIONERS
         sb.with_column("partitioner", utf8_type);
 
@@ -1719,6 +1721,9 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     mutation m(scylla_tables(), pkey);
     m.set_clustered_cell(ckey, "version", table->version().uuid(), timestamp);
+    if (!table->is_view())
+        m.set_clustered_cell(ckey, "creation_timestamp_seconds", table->creation_time(), timestamp);
+
     // Since 4.0, we stopped using cdc column in scylla tables. Extensions are
     // used instead. Since we stopped reading this column in commit 861c7b5, we
     // can now keep it always empty.
@@ -2160,6 +2165,13 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
 
     if (auto val = table_row.get<int32_t>("memtable_flush_period_in_ms")) {
         builder.set_memtable_flush_period(*val);
+    }
+
+    if (auto val = table_row.get<db_clock::time_point>("creation_timestamp_seconds")) {
+        builder.set_creation_time(*val);
+    }
+    else {
+        builder.set_creation_time({});
     }
 
     if (auto val = table_row.get<int>("max_index_interval")) {

@@ -411,6 +411,7 @@ schema::raw_schema::raw_schema(table_id id)
     : _id(id)
     , _partitioner(::get_partitioner(default_partitioner_name))
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
+    , _creation_timestamp(db_clock::now())
 { }
 
 schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props)

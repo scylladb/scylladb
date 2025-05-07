@@ -17,7 +17,7 @@
 import pytest
 from botocore.exceptions import ClientError
 import re
-import time
+import time, datetime
 from test.alternator.util import multiset
 
 # Test that DescribeTable correctly returns the table's name and state
@@ -57,16 +57,22 @@ def test_describe_table_billing(test_table):
     assert 'LastUpdateToPayPerRequestDateTime' in got['BillingModeSummary']
     assert got['BillingModeSummary']['LastUpdateToPayPerRequestDateTime'] == got['CreationDateTime']
 
-# Test that DescribeTable correctly returns the table's creation time.
-# We don't know what this creation time is supposed to be, so this test
-# cannot be very thorough... We currently just tests against something we
-# know to be wrong - returning the *current* time, which changes on every
-# call.
-@pytest.mark.xfail(reason="DescribeTable does not return table creation time")
+before_time = time.time()
+# Test that DescribeTable correctly returns the table's creation time - 
+# timestamp in seconds as double with as much precision as the operating system will provide
 def test_describe_table_creation_time(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert 'CreationDateTime' in got
     time1 = got['CreationDateTime']
+    time.sleep(1)
+    
+    after_time = time.time()
+    assert before_time < time1.timestamp() < after_time, (before_time, time1, time1.timestamp(), after_time)
+
+    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+    time2 = got['CreationDateTime']
+    assert time1 == time2
+    
     time.sleep(1) 
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     time2 = got['CreationDateTime']
