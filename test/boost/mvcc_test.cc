@@ -530,6 +530,22 @@ static void reverse(schema_ptr s, mutation_partition& m) {
     m = std::move(reverse(mutation(s, std::move(dk), std::move(m))).partition());
 }
 
+void assert_has_same_squashed_continuity(const mutation_partition& actual, mvcc_partition& expected) {
+    const schema& s = *expected.schema();
+    auto expected_cont = expected.entry().squashed_continuity(s);
+    auto actual_cont = actual.get_continuity(s);
+    bool actual_static_cont = actual.static_row_continuous();
+    bool expected_static_cont = expected.squashed().static_row_continuous();
+    if (actual_static_cont != expected_static_cont) {
+        BOOST_FAIL(format("Static row continuity doesn't match, expected: {}\nbut got: {}, partition entry (expected): {}\n ...and mutation (actual): {}",
+                            expected_static_cont, actual_static_cont, partition_entry::printer(expected.entry()), mutation_partition::printer(s, actual)));
+    }
+    if (!expected_cont.equals(s, actual_cont)) {
+        BOOST_FAIL(format("Continuity doesn't match, expected: {}\nbut got: {}, partition entry (expected): {}\n ...and mutation (actual): {}",
+                            expected_cont, actual_cont, partition_entry::printer(expected.entry()), mutation_partition::printer(s, actual)));
+    }
+}
+
 SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
     // Tests that reading many versions using a cursor gives the logical mutation back.
     return seastar::async([] {
@@ -558,7 +574,21 @@ SEASTAR_TEST_CASE(test_snapshot_cursor_is_consistent_with_merging) {
                 auto snap = e.read();
                 auto actual = read_using_cursor(*snap);
 
-                assert_that(s, actual).has_same_continuity(expected);
+                // Checks that the squashed continuity of `e` is equal to continuity of `actual`.
+                // Note: squashed continuity of an entry is slightly different than the continuity
+                // of a squashed entry.
+                //
+                // Squashed continuity is the union of continuities of all versions in the entry,
+                // and in particular it includes empty dummy rows resulting in the logical merge
+                // of version.
+                // The process of actually squashing an entry is allowed to
+                // remove those empty dummies, so the squashed entry can have slightly
+                // smaller continuity.
+                //
+                // Since a cursor isn't allowed to remove dummy rows, the strongest test
+                // we can do here is to compare the continuity of the cursor-read mutation
+                // with the squashed continuity of the entry.
+                assert_has_same_squashed_continuity(actual, e);
                 assert_that(s, actual).is_equal_to_compacted(expected);
 
                 // Reversed iteration
