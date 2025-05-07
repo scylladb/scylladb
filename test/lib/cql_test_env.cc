@@ -1061,6 +1061,8 @@ private:
                 startlog.info("All keyspaces are RF-rack-valid");
             }
 
+            _db.local().check_tablet_mvs_indexes();
+
             utils::loading_cache_config perm_cache_config;
             perm_cache_config.max_size = cfg->permissions_cache_max_entries();
             perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
