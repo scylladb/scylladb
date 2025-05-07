@@ -34,7 +34,7 @@ END
 )
 
 DATE=""
-PRINT_VERSION=false
+PRINT_VERSION=true
 
 while [ $# -gt 0 ]; do
 	opt="$1"
