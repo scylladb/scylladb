@@ -3092,7 +3092,7 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
         return rd;
     });
     auto&& full_slice = schema->full_slice();
-    return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
+    return make_multi_range_reader(schema, std::move(permit), std::move(ms),
             std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
 }
 

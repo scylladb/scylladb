@@ -647,7 +647,7 @@ struct page_consume_result {
 // A special-purpose multi-range reader for multishard reads
 //
 // It is different from the "stock" multi-range reader
-// (make_flat_multi_range_reader()) in the following ways:
+// (make_multi_range_reader()) in the following ways:
 // * It guarantees that a buffer never crosses two ranges.
 // * It guarantees that after calling `fill_buffer()` the underlying reader's
 //   buffer's *entire* content is moved into its own buffer. In other words,

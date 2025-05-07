@@ -304,7 +304,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
     });
 
     return maybe_compact_for_streaming(
-            make_flat_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no),
+            make_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no),
             get_compaction_manager(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),

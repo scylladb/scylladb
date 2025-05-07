@@ -497,7 +497,7 @@ mutation_reader make_nonforwardable(mutation_reader r, bool single_partition) {
 }
 
 template<typename Generator>
-class flat_multi_range_mutation_reader : public mutation_reader::impl {
+class multi_range_mutation_reader : public mutation_reader::impl {
     std::optional<Generator> _generator;
     mutation_reader _reader;
 
@@ -509,7 +509,7 @@ class flat_multi_range_mutation_reader : public mutation_reader::impl {
     }
 
 public:
-    flat_multi_range_mutation_reader(
+    multi_range_mutation_reader(
             schema_ptr s,
             reader_permit permit,
             mutation_source source,
@@ -635,7 +635,7 @@ public:
     }
 };
 mutation_reader
-make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
+make_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
                         const query::partition_slice& slice,
                         tracing::trace_state_ptr trace_state,
                         mutation_reader::forwarding fwd_mr)
@@ -665,13 +665,13 @@ make_flat_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source
     } else if (ranges.size() == 1) {
         return source.make_reader_v2(std::move(s), std::move(permit), ranges.front(), slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
     } else {
-        return make_mutation_reader<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
+        return make_mutation_reader<multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
                 ranges.front(), adapter(std::next(ranges.cbegin()), ranges.cend()), slice, std::move(trace_state));
     }
 }
 
 mutation_reader
-make_flat_multi_range_reader(
+make_multi_range_reader(
         schema_ptr s,
         reader_permit permit,
         mutation_source source,
@@ -710,7 +710,7 @@ make_flat_multi_range_reader(
             return make_empty_mutation_reader(std::move(s), std::move(permit));
         }
     } else {
-        return make_mutation_reader<flat_multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
+        return make_mutation_reader<multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
                 *first_range, std::move(adapted_generator), slice, std::move(trace_state));
     }
 }

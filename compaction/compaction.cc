@@ -762,7 +762,7 @@ private:
             return dht::to_partition_range(*r);
         };
 
-        return make_flat_multi_range_reader(_schema, _permit, std::move(source),
+        return make_multi_range_reader(_schema, _permit, std::move(source),
                                             std::move(owned_range_generator),
                                             _schema->full_slice(),
                                             tracing::trace_state_ptr());
