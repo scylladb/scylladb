@@ -1104,10 +1104,11 @@ private:
                                     .set_global_topology_request_id(global_request_id)
                                     .build());
 
-            updates.emplace_back(topology_request_tracking_mutation_builder(global_request_id)
+            updates.emplace_back(topology_request_tracking_mutation_builder(global_request_id, _sp._features.topology_requests_type_column)
                                     .set_truncate_table_data(table_id)
                                     .set("done", false)
                                     .set("start_time", db_clock::now())
+                                    .set("request_type", global_topology_request::truncate_table)
                                     .build());
 
             slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
