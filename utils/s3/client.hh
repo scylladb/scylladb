@@ -12,14 +12,12 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/queue.hh>
 #include <seastar/http/client.hh>
 #include <filesystem>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
-#include "s3_retry_strategy.hh"
-#include "utils/exceptions.hh"
+#include "utils/client_utils.hh"
 #include "retryable_http_client.hh"
 #include "utils/s3/client_fwd.hh"
 
@@ -27,28 +25,6 @@ using namespace seastar;
 class memory_data_sink_buffers;
 
 namespace s3 {
-
-using s3_clock = std::chrono::steady_clock;
-
-struct range {
-    uint64_t off;
-    size_t len;
-};
-
-struct tag {
-    std::string key;
-    std::string value;
-    auto operator<=>(const tag&) const = default;
-};
-using tag_set = std::vector<tag>;
-
-struct stats {
-    uint64_t size;
-    std::time_t last_modified;
-};
-
-future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
-[[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
 class client : public enable_shared_from_this<client> {
     class multipart_upload;
@@ -141,41 +117,10 @@ public:
 
     future<> update_config(endpoint_config_ptr);
 
-    struct handle {
-        std::string _host;
-        global_factory _gf;
-    public:
-        handle(const client& cln)
-                : _host(cln._host)
-                , _gf(cln._gf)
-        {}
-
-        shared_ptr<client> to_client() && {
-            return _gf(std::move(_host));
-        }
-    };
-
-    class bucket_lister final : public abstract_lister::impl {
-        shared_ptr<client> _client;
-        sstring _bucket;
-        sstring _prefix;
-        sstring _max_keys;
-        std::optional<future<>> _opt_done_fut;
-        lister::filter_type _filter;
-        seastar::queue<std::optional<directory_entry>> _queue;
-
-        future<> start_listing();
-
-    public:
-
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix = "", size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
-        bucket_lister(shared_ptr<client> client, sstring bucket, sstring prefix, lister::filter_type filter, size_t objects_per_page = 64, size_t entries_batch = 512 / sizeof(std::optional<directory_entry>));
-
-        future<std::optional<directory_entry>> get() override;
-        future<> close() noexcept override;
-    };
-
     future<> close();
+
+    class bucket_lister;
+
 };
 
 } // s3 namespace
