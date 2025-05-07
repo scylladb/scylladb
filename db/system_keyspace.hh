@@ -395,7 +395,7 @@ public:
     struct topology_requests_entry {
         utils::UUID id;
         utils::UUID initiating_host;
-        std::optional<service::topology_request> request_type;
+        std::variant<std::monostate, service::topology_request, service::global_topology_request> request_type;
         db_clock::time_point start_time;
         bool done;
         sstring error;

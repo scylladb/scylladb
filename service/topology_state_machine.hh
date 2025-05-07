@@ -283,6 +283,7 @@ struct topology_request_state {
 
 topology::transition_state transition_state_from_string(const sstring& s);
 node_state node_state_from_string(const sstring& s);
+std::optional<topology_request> try_topology_request_from_string(const sstring& s);
 topology_request topology_request_from_string(const sstring& s);
 global_topology_request global_topology_request_from_string(const sstring&);
 cleanup_status cleanup_status_from_string(const sstring& s);

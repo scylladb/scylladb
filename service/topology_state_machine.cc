@@ -192,11 +192,19 @@ static std::unordered_map<topology_request, sstring> topology_request_to_name_ma
     {topology_request::rebuild, "rebuild"}
 };
 
-topology_request topology_request_from_string(const sstring& s) {
+std::optional<topology_request> try_topology_request_from_string(const sstring& s) {
     for (auto&& e : topology_request_to_name_map) {
         if (e.second == s) {
             return e.first;
         }
+    }
+    return std::nullopt;
+}
+
+topology_request topology_request_from_string(const sstring& s) {
+    auto r = try_topology_request_from_string(s);
+    if (r) {
+        return *r;
     }
     throw std::runtime_error(fmt::format("cannot map name {} to topology_request", s));
 }
