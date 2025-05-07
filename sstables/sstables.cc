@@ -3565,10 +3565,10 @@ public:
         if (!_sst) {
             co_return;
         }
-        auto filename = fs::path(_sst->_storage->prefix()) / std::string_view(_sst->component_basename(_type));
+        auto filename = fmt::to_string(_sst->filename(_type));
         // TODO: if we are the last component (or really always), should we remove all component files?
         // For now, this remains the responsibility of calling code (see handle_tablet_migration etc)
-        co_await remove_file(filename.native());
+        co_await remove_file(filename);
     }
 };
 
