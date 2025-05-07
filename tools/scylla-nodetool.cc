@@ -1534,9 +1534,9 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         keyspaces.push_back(std::move(res.keyspace));
         tables = std::move(res.tables);
     } else {
-        keyspaces = get_keyspaces(client, "non_local_strategy");
+        keyspaces = get_keyspaces(client, "non_local_strategy", "vnodes");
         if (!get_keyspaces(client, "non_local_strategy", "tablets").empty()) {
-            fmt::print("WARNING: Do not use nodetool repair for tablet keyspaces! To repair tablet keyspaces use nodetool cluster repair.");
+            fmt::print("WARNING: nodetool repair does not repair tablet keyspaces! To repair tablet keyspaces use nodetool cluster repair.");
         }
     }
 
