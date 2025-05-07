@@ -210,7 +210,6 @@ private:
     // when both of which sit on the same node. So all the movement is local.
     future<> clone_locally_tablet_storage(locator::global_tablet_id, locator::tablet_replica leaving, locator::tablet_replica pending);
     future<> cleanup_tablet(locator::global_tablet_id);
-    inet_address host2ip(locator::host_id) const;
     // Handler for table load stats RPC.
     future<locator::load_stats> load_stats_for_tablet_based_tables();
     future<> process_tablet_split_candidate(table_id) noexcept;
