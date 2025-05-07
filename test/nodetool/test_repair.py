@@ -51,7 +51,7 @@ def _remove_log_timestamp(res):
 
 def test_repair_all_single_keyspace(nodetool):
     res = nodetool("repair", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"}, response=["ks1"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=["ks1"]),
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=[]),
         expected_request("GET", "/storage_service/keyspaces", response=["ks1"], multiple=expected_request.ANY),
         JMX_COLUMN_FAMILIES_REQUEST,
@@ -79,7 +79,7 @@ Repair session 1 finished
 
 def test_repair_all_two_keyspaces(nodetool):
     res = nodetool("repair", expected_requests=[
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"},
                          response=["ks1", "ks2"]),
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=[]),
         expected_request("GET", "/storage_service/keyspaces", multiple=expected_request.ANY, response=["ks1", "ks2"]),
@@ -268,7 +268,7 @@ def test_repair_all_three_keyspaces_failed(nodetool):
     """Check that given three keyspaces to repair, if the second one fails, the
     third one isn't even started."""
     expected_requests = [
-        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy"},
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"},
                          response=["ks1", "ks2", "ks3"]),
         expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"},
                          response=[]),
