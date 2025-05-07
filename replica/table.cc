@@ -196,10 +196,12 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
         return;
     }
     auto token_range = range.transform(std::mem_fn(&dht::ring_position::token));
-    auto cgs = compaction_groups_for_token_range(token_range);
-    reserve_fn(std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::memtable_count)), uint64_t(0), std::plus{}));
-    for (auto& cg : cgs) {
-        add_memtables_from_cg(*cg);
+    auto sgs = storage_groups_for_token_range(token_range);
+    reserve_fn(std::ranges::fold_left(sgs | std::views::transform(std::mem_fn(&storage_group::memtable_count)), uint64_t(0), std::plus{}));
+    for (auto& sg : sgs) {
+        for (auto& cg : sg->compaction_groups()) {
+            add_memtables_from_cg(*cg);
+        }
     }
 }
 
@@ -670,7 +672,7 @@ storage_group* storage_group_manager::maybe_storage_group_for_id(const schema_pt
 
 class single_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
-    storage_group* _single_sg;
+    storage_group_ptr _single_sg;
     compaction_group* _single_cg;
 
     compaction_group& get_compaction_group() const noexcept {
@@ -690,7 +692,7 @@ public:
         auto cg = make_lw_shared<compaction_group>(_t, size_t(0), std::move(full_token_range));
         _single_cg = cg.get();
         auto sg = make_lw_shared<storage_group>(std::move(cg));
-        _single_sg = sg.get();
+        _single_sg = sg;
         r[0] = std::move(sg);
         _storage_groups = std::move(r);
     }
@@ -704,9 +706,9 @@ public:
     compaction_group& compaction_group_for_token(dht::token token) const override {
         return get_compaction_group();
     }
-    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override {
-        utils::chunked_vector<compaction_group*> ret;
-        ret.push_back(&get_compaction_group());
+    utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override {
+        utils::chunked_vector<storage_group_ptr> ret;
+        ret.push_back(_single_sg);
         return ret;
     }
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override {
@@ -856,7 +858,7 @@ public:
     void update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) override;
 
     compaction_group& compaction_group_for_token(dht::token token) const override;
-    utils::chunked_vector<compaction_group*> compaction_groups_for_token_range(dht::token_range tr) const override;
+    utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const override;
     compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const override;
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const override;
 
@@ -1162,8 +1164,8 @@ compaction_group& table::compaction_group_for_token(dht::token token) const {
     return _sg_manager->compaction_group_for_token(token);
 }
 
-utils::chunked_vector<compaction_group*> tablet_storage_group_manager::compaction_groups_for_token_range(dht::token_range tr) const {
-    utils::chunked_vector<compaction_group*> ret;
+utils::chunked_vector<storage_group_ptr> tablet_storage_group_manager::storage_groups_for_token_range(dht::token_range tr) const {
+    utils::chunked_vector<storage_group_ptr> ret;
     auto cmp = dht::token_comparator();
 
     size_t candidate_start = tr.start() ? tablet_id_for_token(tr.start()->value()) : size_t(0);
@@ -1175,18 +1177,16 @@ utils::chunked_vector<compaction_group*> tablet_storage_group_manager::compactio
             continue;
         }
         auto& sg = it->second;
-        for (auto& cg : sg->compaction_groups()) {
-            if (cg && tr.overlaps(cg->token_range(), cmp)) {
-                ret.push_back(cg.get());
-            }
+        if (sg && tr.overlaps(sg->token_range(), cmp)) {
+            ret.push_back(sg);
         }
     }
 
     return ret;
 }
 
-utils::chunked_vector<compaction_group*> table::compaction_groups_for_token_range(dht::token_range tr) const {
-    return _sg_manager->compaction_groups_for_token_range(tr);
+utils::chunked_vector<storage_group_ptr> table::storage_groups_for_token_range(dht::token_range tr) const {
+    return _sg_manager->storage_groups_for_token_range(tr);
 }
 
 compaction_group& tablet_storage_group_manager::compaction_group_for_key(partition_key_view key, const schema_ptr& s) const {
@@ -1268,20 +1268,24 @@ const storage_group_map& table::storage_groups() const {
 future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
     utils::chunked_vector<sstables::sstable_files_snapshot> ret;
 
-    for (auto& cg : compaction_groups_for_token_range(tr)) {
+    for (auto& sg : storage_groups_for_token_range(tr)) {
+        co_await utils::get_local_injector().inject("take_storage_snapshot", utils::wait_for_message(60s));
+
         // We don't care about sstables in snapshot being unlinked, as the file
         // descriptors remain opened until last reference to them are gone.
         // Also, we should be careful with taking a deletion lock here as a
         // deadlock might occur due to memtable flush backpressure waiting on
         // compaction to reduce the backlog.
 
-        co_await cg->flush();
+        co_await sg->flush();
 
         // The sstable set must be obtained *after* the deletion lock is taken,
         // otherwise components of sstables in the set might be unlinked from the filesystem
         // by compaction while we are waiting for the lock.
         auto deletion_guard = co_await get_sstable_list_permit();
-        co_await cg->make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
+        // It's vital that we build a set on the storage group level, since sstables
+        // might move across compaction groups in the background.
+        co_await sg->make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
            ret.push_back({
                .sst = sst,
                .files = co_await sst->readable_file_for_all_components(),
@@ -2626,6 +2630,8 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
 
     while (!_t.async_gate().is_closed()) {
         try {
+            co_await utils::get_local_injector().inject("merge_completion_fiber", utils::wait_for_message(60s));
+
             co_await for_each_storage_group_gently([] (storage_group& sg) -> future<> {
                 auto main_group = sg.main_compaction_group();
                 for (auto& group : sg.merging_groups()) {
