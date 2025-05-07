@@ -7,7 +7,7 @@
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import wait_for
 from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace
@@ -387,3 +387,75 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count < old_tablet_count or None
     await wait_for(finished_merging, time.time() + 120)
+
+# Reproduces use-after-free when migration right after merge, but concurrently to background
+# merge completion handler.
+# See: https://github.com/scylladb/scylladb/issues/24045
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_migration_running_concurrently_to_merge_completion_handling(manager: ManagerClient):
+    cmdline = []
+    cfg = {}
+    servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert tablet_count == 2
+
+        old_tablet_count = tablet_count
+
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH tablets = {{'initial': 1}};")
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+
+        await manager.api.enable_injection(servers[0].ip_addr, "merge_completion_fiber", one_shot=True)
+        await manager.api.enable_injection(servers[0].ip_addr, "replica_merge_completion_wait", one_shot=True)
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+        servers.append(await manager.server_add(cmdline=cmdline, config=cfg))
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+        async def finished_merging():
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            return tablet_count < old_tablet_count or None
+
+        await wait_for(finished_merging, time.time() + 120)
+
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        await manager.api.enable_injection(servers[0].ip_addr, "take_storage_snapshot", one_shot=True)
+
+        await s0_log.wait_for(f"merge_completion_fiber: waiting", from_mark=s0_mark)
+
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        assert tablet_count == 1
+
+        tablet_token = 0 # Doesn't matter since there is one tablet
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+
+        s0_host_id = await manager.get_host_id(servers[0].server_id)
+        src_shard = replica[1]
+        dst_shard = src_shard
+
+        migration = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], src_shard, s1_host_id, dst_shard, tablet_token))
+
+        await s0_log.wait_for(f"take_storage_snapshot: waiting", from_mark=s0_mark)
+
+        await manager.api.message_injection(servers[0].ip_addr, "merge_completion_fiber")
+        await s0_log.wait_for(f"Merge completion fiber finished", from_mark=s0_mark)
+
+        await manager.api.message_injection(servers[0].ip_addr, "take_storage_snapshot")
+
+        await migration
+
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test;")
+        assert len(rows) == len(keys)
