@@ -696,7 +696,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
     // If --version is requested, print it out and exit immediately to avoid
     // Seastar-specific warnings that may occur when running the app
-    if (!isatty(fileno(stdin))) {
+    if (!isatty(fileno(stdin)) || tcgetpgrp(fileno(stdin)) != getpgrp()) {
         auto parsed_opts = bpo::command_line_parser(ac, av).options(app.get_options_description()).allow_unregistered().run();
         print_starting_message(ac, av, parsed_opts);
     }
