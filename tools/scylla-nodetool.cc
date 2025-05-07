@@ -4841,6 +4841,20 @@ with a logger called {}.
 Supported Nodetool operations:
 {}
 
+The tool can exit with a few different exit codes:
+* 0 - operation completed successfully;
+* 1 - failed to parse command-line arguments -- the arguments, their
+      values or the specific combination is invalid;
+* 2 - unspecified error which doesn't fall into any of the other
+      categories;
+* 3 - operation failed or was aborted in the ScyllaDB node/cluster;
+* 4 - a REST API request sent to ScyllaDB failed, most common cause is a
+      problem with the request path/parameters or some generic internal
+      error;
+
+Some operations have specific exit codes of their own, consult the help
+of individual operations to find out more about it.
+
 For more information, see: {})";
 
     const auto operations = get_operations_with_func() | std::views::keys | std::ranges::to<std::vector>();
