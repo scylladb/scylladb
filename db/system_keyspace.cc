@@ -3471,7 +3471,13 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
         entry.initiating_host = row.get_as<utils::UUID>("initiating_host");
     }
     if (row.has("request_type")) {
-        entry.request_type = service::topology_request_from_string(row.get_as<sstring>("request_type"));
+        auto rts = row.get_as<sstring>("request_type");
+        auto rt = service::try_topology_request_from_string(rts);
+        if (rt) {
+            entry.request_type = *rt;
+        } else {
+            entry.request_type = service::global_topology_request_from_string(rts);
+        }
     }
     if (row.has("start_time")) {
         entry.start_time = row.get_as<db_clock::time_point>("start_time");

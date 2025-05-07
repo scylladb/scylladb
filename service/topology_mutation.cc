@@ -92,6 +92,11 @@ Builder& topology_mutation_builder_base<Builder>::set(const char* cell, topology
 }
 
 template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, global_topology_request value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const sstring& value) {
     return apply_atomic(cell, value);
 }
@@ -302,6 +307,10 @@ api::timestamp_type topology_request_tracking_mutation_builder::timestamp() cons
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(const char* cell, topology_request value) {
+    return _set_type ? builder_base::set(cell, value) : *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(const char* cell, global_topology_request value) {
     return _set_type ? builder_base::set(cell, value) : *this;
 }
 
