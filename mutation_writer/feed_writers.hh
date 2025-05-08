@@ -14,16 +14,16 @@
 
 namespace mutation_writer {
 
-class bucket_writer_v2 {
+class bucket_writer {
     schema_ptr _schema;
     queue_reader_handle _handle;
     future<> _consume_fut;
 
 private:
-    bucket_writer_v2(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle> queue_reader, reader_consumer_v2& consumer);
+    bucket_writer(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle> queue_reader, reader_consumer_v2& consumer);
 
 public:
-    bucket_writer_v2(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer);
+    bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer);
 
     future<> consume(mutation_fragment_v2 mf);
 

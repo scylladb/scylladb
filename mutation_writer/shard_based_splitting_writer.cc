@@ -15,7 +15,7 @@
 namespace mutation_writer {
 
 class shard_based_splitting_mutation_writer {
-    using shard_writer = bucket_writer_v2;
+    using shard_writer = bucket_writer;
 
 private:
     schema_ptr _schema;

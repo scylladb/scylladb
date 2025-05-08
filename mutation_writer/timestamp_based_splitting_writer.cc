@@ -95,12 +95,12 @@ small_flat_map<Key, Value, Size>::find(const key_type& k) {
 class timestamp_based_splitting_mutation_writer {
     using bucket_id = int64_t;
 
-    class timestamp_bucket_writer : public bucket_writer_v2 {
+    class timestamp_bucket_writer : public bucket_writer {
         bool _has_current_partition = false;
 
     public:
         timestamp_bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer)
-            : bucket_writer_v2(schema, std::move(permit), consumer) {
+            : bucket_writer(schema, std::move(permit), consumer) {
         }
         void set_has_current_partition() {
             _has_current_partition = true;

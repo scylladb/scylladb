@@ -23,7 +23,7 @@ class token_group_based_splitting_mutation_writer {
     classify_by_token_group _classify;
     reader_consumer_v2 _consumer;
     token_group_id _current_group_id = 0;
-    std::optional<bucket_writer_v2> _current_writer;
+    std::optional<bucket_writer> _current_writer;
 private:
     future<> write(mutation_fragment_v2&& mf) {
         return _current_writer->consume(std::move(mf));
@@ -31,7 +31,7 @@ private:
 
     inline void allocate_new_writer_if_needed() {
         if (!_current_writer) [[unlikely]] {
-            _current_writer = bucket_writer_v2(_schema, _permit, _consumer);
+            _current_writer = bucket_writer(_schema, _permit, _consumer);
         }
     }
 

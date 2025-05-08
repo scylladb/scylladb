@@ -21,7 +21,7 @@ class partition_sorting_mutation_writer {
     reader_permit _permit;
     reader_consumer_v2 _consumer;
     size_t _max_memory;
-    bucket_writer_v2 _bucket_writer;
+    bucket_writer _bucket_writer;
     std::optional<dht::decorated_key> _last_bucket_key;
     lw_shared_ptr<replica::memtable> _memtable;
     future<> _background_memtable_flush = make_ready_future<>();
