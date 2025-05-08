@@ -28,6 +28,7 @@
 #include "ent/encryption/encryption.hh"
 #include "ent/encryption/symmetric_key.hh"
 #include "ent/encryption/local_file_provider.hh"
+#include "ent/encryption/encryption_exceptions.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/cql_test_env.hh"
@@ -620,10 +621,20 @@ SEASTAR_TEST_CASE(test_kms_provider_with_master_key_in_cf, *check_run_test_decor
         );
 
         // should fail
-        BOOST_REQUIRE_THROW(
-            co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
-            , std::exception
-        );
+        try {
+            try {
+                co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', "
+                                       "'secret_key_strength': 128",
+                        tmp, yaml);
+            } catch (std::nested_exception& ex) {
+                std::rethrow_if_nested(ex);
+            }
+            BOOST_FAIL("Required an exception to be re-thrown");
+        } catch (encryption::configuration_error&) {
+            // EXPECTED
+        } catch (...) {
+            BOOST_FAIL(format("Unexpected exception: {}", std::current_exception()));
+        }
 
         // should be ok
         co_await test_provider(fmt::format("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", kms_key_alias)
@@ -920,10 +931,21 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_master_key_in_cf, *check_run_test_decor
         );
 
         // should fail
-        BOOST_REQUIRE_THROW(
-            co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
-            , std::exception
-        );
+        try {
+            try {
+                co_await test_provider(
+                    "'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
+                    tmp,
+                    yaml);
+            } catch (std::nested_exception& ex) {
+                std::rethrow_if_nested(ex);
+            }
+            BOOST_FAIL("Required an exception to be re-thrown");
+        } catch (encryption::configuration_error&) {
+            // EXPECTED
+        } catch (...) {
+            BOOST_FAIL(format("Unexpected exception: {}", std::current_exception()));
+        }
 
         // should be ok
         co_await test_provider(fmt::format("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", gcp.key_name)
@@ -1043,7 +1065,7 @@ static future<> network_error_test_helper(const tmpdir& tmp, const std::string& 
 
     BOOST_REQUIRE_THROW(
         co_await test_broken_encrypted_commitlog(args, scopts);
-        , std::exception
+        , exceptions::mutation_write_timeout_exception
     );
 
     co_await proxy.stop();
