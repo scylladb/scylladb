@@ -87,9 +87,9 @@ public:
 };
 } //anon namespace
 
-class empty_flat_reader_v2 final : public mutation_reader::impl {
+class empty_mutation_reader final : public mutation_reader::impl {
 public:
-    empty_flat_reader_v2(schema_ptr s, reader_permit permit) : impl(std::move(s), std::move(permit)) { _end_of_stream = true; }
+    empty_mutation_reader(schema_ptr s, reader_permit permit) : impl(std::move(s), std::move(permit)) { _end_of_stream = true; }
     virtual future<> fill_buffer() override { return make_ready_future<>(); }
     virtual future<> next_partition() override { return make_ready_future<>(); }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override { return make_ready_future<>(); };
@@ -98,7 +98,7 @@ public:
 };
 
 mutation_reader make_empty_mutation_reader(schema_ptr s, reader_permit permit) {
-    return make_mutation_reader<empty_flat_reader_v2>(std::move(s), std::move(permit));
+    return make_mutation_reader<empty_mutation_reader>(std::move(s), std::move(permit));
 }
 
 mutation_reader make_forwardable(mutation_reader m) {
