@@ -3420,7 +3420,7 @@ void view_updating_consumer::maybe_flush_buffer_mid_partition() {
 }
 
 view_updating_consumer::view_updating_consumer(view_update_generator& gen, schema_ptr schema, reader_permit permit, replica::table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
-        evictable_reader_handle_v2& staging_reader_handle)
+        evictable_reader_handle& staging_reader_handle)
     : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables), gen = gen.shared_from_this()] (mutation m) mutable {
         auto s = m.schema();

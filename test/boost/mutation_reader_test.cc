@@ -2710,7 +2710,7 @@ SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
                 tracing::trace_state_ptr trace_state,
                 streamed_mutation::forwarding fwd_sm,
                 mutation_reader::forwarding fwd_mr) mutable {
-            auto mr = make_auto_paused_evictable_reader_v2(mt->as_data_source(), std::move(s), permit, range, slice, std::move(trace_state), fwd_mr);
+            auto mr = make_auto_paused_evictable_reader(mt->as_data_source(), std::move(s), permit, range, slice, std::move(trace_state), fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(mr));
             }
@@ -2724,7 +2724,7 @@ SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
 SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source) {
     class maybe_pausing_reader : public mutation_reader::impl {
         mutation_reader _reader;
-        std::optional<evictable_reader_handle_v2> _handle;
+        std::optional<evictable_reader_handle> _handle;
 
     private:
         void maybe_pause() {
@@ -2743,7 +2743,7 @@ SEASTAR_THREAD_TEST_CASE(test_manual_paused_evictable_reader_is_mutation_source)
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr)
             : impl(std::move(query_schema), std::move(permit)), _reader(nullptr) {
-            std::tie(_reader, _handle) = make_manually_paused_evictable_reader_v2(mt.as_data_source(), _schema, _permit, pr, ps,
+            std::tie(_reader, _handle) = make_manually_paused_evictable_reader(mt.as_data_source(), _schema, _permit, pr, ps,
                     std::move(trace_state), fwd_mr);
         }
         virtual future<> fill_buffer() override {
@@ -2861,7 +2861,7 @@ mutation_reader create_evictable_reader_and_evict_after_first_buffer(
     };
     auto ms = mutation_source(factory(schema, permit, std::move(buffers), max_buffer_size));
 
-    auto rd = make_auto_paused_evictable_reader_v2(
+    auto rd = make_auto_paused_evictable_reader(
             std::move(ms),
             schema,
             permit,
@@ -3267,7 +3267,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
     });
 
     auto pr0 = dht::partition_range::make({pkeys[0], true}, {pkeys[3], true});
-    auto [reader, handle] = make_manually_paused_evictable_reader_v2(std::move(ms), s.schema(), permit, pr0, s.schema()->full_slice(),
+    auto [reader, handle] = make_manually_paused_evictable_reader(std::move(ms), s.schema(), permit, pr0, s.schema()->full_slice(),
             {}, mutation_reader::forwarding::yes);
 
     auto reader_assert = assert_that(std::move(reader));
@@ -3559,7 +3559,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_non_monotonic_positions) {
         reader.set_max_buffer_size(1);
         return reader;
     });
-    auto reader = make_auto_paused_evictable_reader_v2(std::move(ms), schema, permit, prange, schema->full_slice(),
+    auto reader = make_auto_paused_evictable_reader(std::move(ms), schema, permit, prange, schema->full_slice(),
             nullptr, mutation_reader::forwarding::no);
     auto close_reader = deferred_close(reader);
 
@@ -3638,7 +3638,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
             reader.set_max_buffer_size(buffer_size);
             return reader;
         });
-        auto reader = make_auto_paused_evictable_reader_v2(std::move(ms), schema, permit, prange, schema->full_slice(),
+        auto reader = make_auto_paused_evictable_reader(std::move(ms), schema, permit, prange, schema->full_slice(),
                 nullptr, mutation_reader::forwarding::no);
         auto close_reader = deferred_close(reader);
 
@@ -3698,7 +3698,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_next_pos_is_partition_start) {
         return rd;
     });
 
-    auto [rd, handle] = make_manually_paused_evictable_reader_v2(ms, schema, permit, prange, schema->full_slice(), {},
+    auto [rd, handle] = make_manually_paused_evictable_reader(ms, schema, permit, prange, schema->full_slice(), {},
             mutation_reader::forwarding::no);
     auto stop_rd = deferred_close(rd);
     rd.set_max_buffer_size(max_buf_size);

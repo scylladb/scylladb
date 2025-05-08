@@ -831,7 +831,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         auto permit = sem.obtain_permit(schema, get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get();
 
         auto mt = make_memtable(schema, muts);
-        auto p = make_manually_paused_evictable_reader_v2(
+        auto p = make_manually_paused_evictable_reader(
                 mt->as_data_source(),
                 schema,
                 permit,
@@ -930,7 +930,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
     const abort_source as;
     auto mt = make_memtable(schema, {mut});
     auto permit = sem.obtain_permit(schema, get_name(), replica::new_reader_base_cost, db::no_timeout, {}).get();
-    auto p = make_manually_paused_evictable_reader_v2(
+    auto p = make_manually_paused_evictable_reader(
             mt->as_data_source(),
             schema,
             permit,
@@ -993,7 +993,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_empty_mutatio
     auto stop_sem = deferred_stop(sem);
     auto permit = sem.make_tracking_only_permit(schema, "test", db::no_timeout, {});
     abort_source as;
-    auto [staging_reader, staging_reader_handle] = make_manually_paused_evictable_reader_v2(make_empty_mutation_source(), schema, permit,
+    auto [staging_reader, staging_reader_handle] = make_manually_paused_evictable_reader(make_empty_mutation_source(), schema, permit,
             query::full_partition_range, schema->full_slice(), {}, mutation_reader::forwarding::no);
     auto close_staging_reader = deferred_close(staging_reader);
     bool buffer_flushed = false;

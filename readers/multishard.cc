@@ -204,14 +204,14 @@ static void require(bool condition, fmt::format_string<Arg...> fmt, Arg&&... arg
 
 // Encapsulates all data and logic that is local to the remote shard the
 // reader lives on.
-class evictable_reader_v2 : public mutation_reader::impl {
+class evictable_reader : public mutation_reader::impl {
 public:
     using auto_pause = bool_class<class auto_pause_tag>;
 
     class auto_pause_disable_guard {
-        evictable_reader_v2& _reader;
+        evictable_reader& _reader;
     public:
-        auto_pause_disable_guard(evictable_reader_v2& reader) : _reader(reader) {
+        auto_pause_disable_guard(evictable_reader& reader) : _reader(reader) {
             _reader._auto_pause = auto_pause::no;
         }
         ~auto_pause_disable_guard() {
@@ -254,7 +254,7 @@ private:
     void examine_first_fragments(mutation_fragment_v2_opt& mf1, mutation_fragment_v2_opt& mf2, mutation_fragment_v2_opt& mf3);
 
 public:
-    evictable_reader_v2(
+    evictable_reader(
             auto_pause ap,
             mutation_source ms,
             mutation_reader_opt reader,
@@ -292,12 +292,12 @@ public:
     }
 };
 
-void evictable_reader_v2::do_pause(mutation_reader reader) noexcept {
+void evictable_reader::do_pause(mutation_reader reader) noexcept {
     SCYLLA_ASSERT(!_irh);
     _irh = _permit.semaphore().register_inactive_read(std::move(reader));
 }
 
-void evictable_reader_v2::maybe_pause(mutation_reader reader) noexcept {
+void evictable_reader::maybe_pause(mutation_reader reader) noexcept {
     if (_auto_pause) {
         do_pause(std::move(reader));
     } else {
@@ -305,14 +305,14 @@ void evictable_reader_v2::maybe_pause(mutation_reader reader) noexcept {
     }
 }
 
-mutation_reader_opt evictable_reader_v2::try_resume() {
+mutation_reader_opt evictable_reader::try_resume() {
     if (auto reader_opt = _permit.semaphore().unregister_inactive_read(std::move(_irh))) {
         return std::move(*reader_opt);
     }
     return {};
 }
 
-void evictable_reader_v2::update_next_position() {
+void evictable_reader::update_next_position() {
     if (is_buffer_empty()) {
         return;
     }
@@ -345,7 +345,7 @@ void evictable_reader_v2::update_next_position() {
     }
 }
 
-void evictable_reader_v2::adjust_partition_slice() {
+void evictable_reader::adjust_partition_slice() {
     _slice_override = _ps;
 
     auto ranges = _slice_override->default_row_ranges();
@@ -355,7 +355,7 @@ void evictable_reader_v2::adjust_partition_slice() {
     _slice_override->set_range(*_schema, _last_pkey->key(), std::move(ranges));
 }
 
-mutation_reader evictable_reader_v2::recreate_reader() {
+mutation_reader evictable_reader::recreate_reader() {
     const dht::partition_range* range = _pr;
     const query::partition_slice* slice = &_ps;
 
@@ -407,7 +407,7 @@ mutation_reader evictable_reader_v2::recreate_reader() {
             _fwd_mr);
 }
 
-future<mutation_reader> evictable_reader_v2::resume_or_create_reader() {
+future<mutation_reader> evictable_reader::resume_or_create_reader() {
     if (_reader) {
         co_return std::move(*_reader);
     }
@@ -429,7 +429,7 @@ future<mutation_reader> evictable_reader_v2::resume_or_create_reader() {
     co_return recreate_reader();
 }
 
-void evictable_reader_v2::validate_partition_start(const partition_start& ps) {
+void evictable_reader::validate_partition_start(const partition_start& ps) {
     const auto tri_cmp = dht::ring_position_comparator(*_schema);
     // If we recreated the reader after fast-forwarding it we won't have
     // _last_pkey set. In this case it is enough to check if the partition
@@ -471,7 +471,7 @@ void evictable_reader_v2::validate_partition_start(const partition_start& ps) {
             ps.key());
 }
 
-void evictable_reader_v2::validate_position_in_partition(position_in_partition_view pos) const {
+void evictable_reader::validate_position_in_partition(position_in_partition_view pos) const {
     require(
             _tri_cmp(_next_position_in_partition, pos) <= 0,
             "{}(): validation failed, expected position in partition that is larger-than-equal than _next_position_in_partition {}, but got {}",
@@ -500,7 +500,7 @@ void evictable_reader_v2::validate_position_in_partition(position_in_partition_v
     }
 }
 
-void evictable_reader_v2::examine_first_fragments(mutation_fragment_v2_opt& mf1, mutation_fragment_v2_opt& mf2, mutation_fragment_v2_opt& mf3) {
+void evictable_reader::examine_first_fragments(mutation_fragment_v2_opt& mf1, mutation_fragment_v2_opt& mf2, mutation_fragment_v2_opt& mf3) {
     if (!mf1) {
         return; // the reader is at EOS
     }
@@ -536,7 +536,7 @@ void evictable_reader_v2::examine_first_fragments(mutation_fragment_v2_opt& mf1,
     }
 }
 
-evictable_reader_v2::evictable_reader_v2(
+evictable_reader::evictable_reader(
         auto_pause ap,
         mutation_source ms,
         mutation_reader_opt reader,
@@ -557,7 +557,7 @@ evictable_reader_v2::evictable_reader_v2(
     , _reader(std::move(reader)) {
 }
 
-future<> evictable_reader_v2::fill_buffer() {
+future<> evictable_reader::fill_buffer() {
     if (is_end_of_stream()) {
         co_return;
     }
@@ -623,7 +623,7 @@ future<> evictable_reader_v2::fill_buffer() {
     maybe_pause(std::move(*_reader));
 }
 
-future<> evictable_reader_v2::next_partition() {
+future<> evictable_reader::next_partition() {
     _next_position_in_partition = position_in_partition::for_partition_start();
     clear_buffer_to_next_partition();
     if (!is_buffer_empty()) {
@@ -634,7 +634,7 @@ future<> evictable_reader_v2::next_partition() {
     maybe_pause(std::move(reader));
 }
 
-future<> evictable_reader_v2::fast_forward_to(const dht::partition_range& pr) {
+future<> evictable_reader::fast_forward_to(const dht::partition_range& pr) {
     _pr = &pr;
     _last_pkey.reset();
     _next_position_in_partition = position_in_partition::for_partition_start();
@@ -662,14 +662,14 @@ future<> evictable_reader_v2::fast_forward_to(const dht::partition_range& pr) {
     }
 }
 
-evictable_reader_handle_v2::evictable_reader_handle_v2(evictable_reader_v2& r) : _r(&r)
+evictable_reader_handle::evictable_reader_handle(evictable_reader& r) : _r(&r)
 { }
 
-void evictable_reader_handle_v2::evictable_reader_handle_v2::pause() {
+void evictable_reader_handle::evictable_reader_handle::pause() {
     _r->pause();
 }
 
-mutation_reader make_auto_paused_evictable_reader_v2(
+mutation_reader make_auto_paused_evictable_reader(
         mutation_source ms,
         schema_ptr schema,
         reader_permit permit,
@@ -677,11 +677,11 @@ mutation_reader make_auto_paused_evictable_reader_v2(
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    return make_mutation_reader<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
+    return make_mutation_reader<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
             std::move(trace_state), fwd_mr);
 }
 
-std::pair<mutation_reader, evictable_reader_handle_v2> make_manually_paused_evictable_reader_v2(
+std::pair<mutation_reader, evictable_reader_handle> make_manually_paused_evictable_reader(
         mutation_source ms,
         schema_ptr schema,
         reader_permit permit,
@@ -689,9 +689,9 @@ std::pair<mutation_reader, evictable_reader_handle_v2> make_manually_paused_evic
         const query::partition_slice& ps,
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr) {
-    auto reader = std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::no, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
+    auto reader = std::make_unique<evictable_reader>(evictable_reader::auto_pause::no, std::move(ms), std::nullopt, std::move(schema), std::move(permit), pr, ps,
             std::move(trace_state), fwd_mr);
-    auto handle = evictable_reader_handle_v2(*reader.get());
+    auto handle = evictable_reader_handle(*reader.get());
     return std::pair(mutation_reader(std::move(reader)), handle);
 }
 
@@ -720,10 +720,10 @@ private:
     tracing::global_trace_state_ptr _trace_state;
     const mutation_reader::forwarding _fwd_mr;
     std::optional<future<>> _read_ahead;
-    foreign_ptr<std::unique_ptr<evictable_reader_v2>> _reader;
+    foreign_ptr<std::unique_ptr<evictable_reader>> _reader;
 
 private:
-    future<remote_fill_buffer_result_v2> fill_reader_buffer(evictable_reader_v2& reader, std::optional<buffer_fill_hint> hint);
+    future<remote_fill_buffer_result_v2> fill_reader_buffer(evictable_reader& reader, std::optional<buffer_fill_hint> hint);
     future<> do_fill_buffer(std::optional<buffer_fill_hint> hint);
 
 public:
@@ -811,8 +811,8 @@ future<> shard_reader_v2::close() noexcept {
     }
 }
 
-future<remote_fill_buffer_result_v2> shard_reader_v2::fill_reader_buffer(evictable_reader_v2& reader, std::optional<buffer_fill_hint> hint) {
-    evictable_reader_v2::auto_pause_disable_guard auto_pause_guard{reader};
+future<remote_fill_buffer_result_v2> shard_reader_v2::fill_reader_buffer(evictable_reader& reader, std::optional<buffer_fill_hint> hint) {
+    evictable_reader::auto_pause_disable_guard auto_pause_guard{reader};
     reader_permit::need_cpu_guard ncpu_guard{reader.permit()};
 
     co_await reader.fill_buffer();
@@ -846,7 +846,7 @@ future<remote_fill_buffer_result_v2> shard_reader_v2::fill_reader_buffer(evictab
 
 future<> shard_reader_v2::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
     struct reader_and_buffer_fill_result {
-        foreign_ptr<std::unique_ptr<evictable_reader_v2>> reader;
+        foreign_ptr<std::unique_ptr<evictable_reader>> reader;
         remote_fill_buffer_result_v2 result;
     };
 
@@ -890,7 +890,7 @@ future<> shard_reader_v2::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                     std::rethrow_exception(std::move(ex));
                 }
 
-                auto rreader = make_foreign(std::make_unique<evictable_reader_v2>(evictable_reader_v2::auto_pause::yes, std::move(ms),
+                auto rreader = make_foreign(std::make_unique<evictable_reader>(evictable_reader::auto_pause::yes, std::move(ms),
                             std::move(underlying_reader), s, std::move(permit), *_pr, _ps, _trace_state, _fwd_mr));
 
                 try {

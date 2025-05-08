@@ -286,7 +286,7 @@ mutation_reader repair_reader::make_reader(
                 return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr, compaction_time);
             });
             mutation_reader rd(nullptr);
-            std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
+            std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader(
                 std::move(ms),
                 _schema,
                 _permit,

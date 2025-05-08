@@ -28,7 +28,7 @@ private:
     // Only needed for local readers, the multishard reader takes care
     // of pinning tables on used shards.
     std::optional<utils::phased_barrier::operation> _local_read_op;
-    std::optional<evictable_reader_handle_v2> _reader_handle;
+    std::optional<evictable_reader_handle> _reader_handle;
     // Fragment stream of either local or multishard reader for the range
     mutation_fragment_v1_stream _reader;
     // Current partition read from disk
