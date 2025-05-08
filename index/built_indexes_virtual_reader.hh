@@ -113,7 +113,7 @@ class built_indexes_virtual_reader {
                 , _db(db)
                 , _schema(std::move(schema))
                 , _view_names_slice(index_slice_to_view_slice(slice, *built_views.schema(), *_schema))
-                , _underlying(built_views.make_reader_v2(
+                , _underlying(built_views.make_mutation_reader(
                         built_views.schema(),
                         std::move(permit),
                         range,

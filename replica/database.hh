@@ -780,14 +780,14 @@ public:
     // Note: for data queries use query() instead.
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_reader_v2(schema_ptr schema,
+    mutation_reader make_mutation_reader(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state = nullptr,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
-    mutation_reader make_reader_v2_excluding_staging(schema_ptr schema,
+    mutation_reader make_mutation_reader_excluding_staging(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -795,9 +795,9 @@ public:
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
 
-    mutation_reader make_reader_v2(schema_ptr schema, reader_permit permit, const dht::partition_range& range = query::full_partition_range) const {
+    mutation_reader make_mutation_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range = query::full_partition_range) const {
         auto& full_slice = schema->full_slice();
-        return make_reader_v2(std::move(schema), std::move(permit), range, full_slice);
+        return make_mutation_reader(std::move(schema), std::move(permit), range, full_slice);
     }
 
     // The streaming mutation reader differs from the regular mutation reader in that:

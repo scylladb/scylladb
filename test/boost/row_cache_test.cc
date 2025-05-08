@@ -5045,12 +5045,12 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario(c
 
     db.apply({ freeze(mut_v2) }, db::no_timeout).get();
 
-    auto reader1 = tbl.make_reader_v2(schema, db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(), pr, schema->full_slice());
+    auto reader1 = tbl.make_mutation_reader(schema, db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(), pr, schema->full_slice());
     const auto close_reader1 = deferred_close(reader1);
 
     reader1.fill_buffer().get();
 
-    auto reader2 = tbl.make_reader_v2(schema, db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(), pr, schema->full_slice());
+    auto reader2 = tbl.make_mutation_reader(schema, db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(), pr, schema->full_slice());
     const auto close_reader2 = deferred_close(reader2);
 
     reader2.fill_buffer().get();
@@ -5118,7 +5118,7 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(c
     assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", table_name, pk2, ck1, 0)).get()).is_rows();
 
     testlog.info("read 1");
-    auto reader1 = tbl.make_reader_v2(
+    auto reader1 = tbl.make_mutation_reader(
             schema,
             db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(),
             query::full_partition_range,
@@ -5128,7 +5128,7 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(c
     reader1.fill_buffer().get();
 
     testlog.info("read 2");
-    auto reader2 = tbl.make_reader_v2(
+    auto reader2 = tbl.make_mutation_reader(
             schema,
             db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(),
             query::full_partition_range,

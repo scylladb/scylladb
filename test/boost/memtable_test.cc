@@ -1543,7 +1543,7 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
 
             testlog.info("create reader -- first buffer fill");
 
-            auto reader = tbl.make_reader_v2(schema, co_await db.obtain_reader_permit(tbl, "read", db::no_timeout, {}), query::full_partition_range, schema->full_slice());
+            auto reader = tbl.make_mutation_reader(schema, co_await db.obtain_reader_permit(tbl, "read", db::no_timeout, {}), query::full_partition_range, schema->full_slice());
 
             std::exception_ptr ex;
             try {

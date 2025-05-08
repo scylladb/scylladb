@@ -605,15 +605,15 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
             std::sort(mutations.begin(), mutations.end(), mutation_decorated_key_less_comparator());
 
             // Flush will happen in the middle of reading for this scanner
-            auto assert_that_scanner1 = assert_that(cf.make_reader_v2(s, env.make_reader_permit(),
+            auto assert_that_scanner1 = assert_that(cf.make_mutation_reader(s, env.make_reader_permit(),
                         query::full_partition_range));
 
             // Flush will happen before it is invoked
-            auto assert_that_scanner2 = assert_that(cf.make_reader_v2(s, env.make_reader_permit(),
+            auto assert_that_scanner2 = assert_that(cf.make_mutation_reader(s, env.make_reader_permit(),
                         query::full_partition_range));
 
             // Flush will happen after all data was read, but before EOS was consumed
-            auto assert_that_scanner3 = assert_that(cf.make_reader_v2(s, env.make_reader_permit(),
+            auto assert_that_scanner3 = assert_that(cf.make_mutation_reader(s, env.make_reader_permit(),
                         query::full_partition_range));
 
             assert_that_scanner1.produces(mutations[0]);
