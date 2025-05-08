@@ -306,6 +306,7 @@ def run_scylla_cmd(pid, dir):
         '--write-request-timeout-in-ms', '300000',
         '--request-timeout-in-ms', '300000',
         '--user-defined-function-time-limit-ms', '1000',
+        '--group0-raft-op-timeout-in-ms=300000',
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
         # Note that Alternator-specific experimental features are listed in
@@ -390,6 +391,16 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--max-networking-io-control-blocks=1000')
     if major == [5,4] or major == [2024,1]:
         cmd.append('--force-schema-commit-log=true')
+<<<<<<< HEAD
+||||||| parent of fbcf77d134 (raft: make group0 Raft operation timeout configurable)
+    if major < [2025,1]:
+        cmd.remove('--tablets-initial-scale-factor=1')
+=======
+    if major < [2025,1]:
+        cmd.remove('--tablets-initial-scale-factor=1')
+    if major < [2025,2]:
+        cmd.remove('--group0-raft-op-timeout-in-ms=300000')
+>>>>>>> fbcf77d134 (raft: make group0 Raft operation timeout configurable)
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with
