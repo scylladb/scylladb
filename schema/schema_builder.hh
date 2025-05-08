@@ -159,6 +159,7 @@ public:
     }
 
     schema_builder& set_creation_time(db_clock::time_point t) {
+        std::cout << "QWERTY " << t.time_since_epoch().count() << "\n";
         _raw._creation_timestamp = t;
         return *this;
     }

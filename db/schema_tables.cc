@@ -1721,8 +1721,10 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     auto ckey = clustering_key::from_singular(*s, table->cf_name());
     mutation m(scylla_tables(), pkey);
     m.set_clustered_cell(ckey, "version", table->version().uuid(), timestamp);
-    if (!table->is_view())
+    if (!table->is_view()) {
+        diff_logger.error("QWERTY storing creation timestamp to table {}.{}", table->ks_name(), table->cf_name());
         m.set_clustered_cell(ckey, "creation_timestamp_seconds", table->creation_time(), timestamp);
+    }
 
     // Since 4.0, we stopped using cdc column in scylla tables. Extensions are
     // used instead. Since we stopped reading this column in commit 861c7b5, we
@@ -2167,13 +2169,6 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
         builder.set_memtable_flush_period(*val);
     }
 
-    if (auto val = table_row.get<db_clock::time_point>("creation_timestamp_seconds")) {
-        builder.set_creation_time(*val);
-    }
-    else {
-        builder.set_creation_time({});
-    }
-
     if (auto val = table_row.get<int>("max_index_interval")) {
         builder.set_max_index_interval(*val);
     }
@@ -2198,6 +2193,13 @@ static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, sche
         auto tablet_options = db::tablet_options(*opt_map);
         builder.set_tablet_options(tablet_options.to_map());
     }
+    if (auto val = table_row.get<db_clock::time_point>("creation_timestamp_seconds")) {
+        builder.set_creation_time(*val);
+    }
+    else {
+        builder.set_creation_time({});
+    }
+
 }
 
 schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, std::optional<table_schema_version> version)
