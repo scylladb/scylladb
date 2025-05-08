@@ -201,7 +201,7 @@ struct test_env::impl {
     ::cache_tracker cache_tracker;
     gms::feature_service feature_service;
     db::nop_large_data_handler nop_ld_handler;
-    std::unique_ptr<sstable_compressor_factory> scf;
+    sstable_compressor_factory& scf;
     test_env_sstables_manager mgr;
     std::unique_ptr<test_env_compaction_manager> cmgr;
     reader_concurrency_semaphore semaphore;
@@ -210,7 +210,7 @@ struct test_env::impl {
     data_dictionary::storage_options storage;
     abort_source abort;
 
-    impl(test_env_config cfg, sstables::storage_manager* sstm, tmpdir* tdir);
+    impl(test_env_config cfg, sstable_compressor_factory&, sstables::storage_manager* sstm, tmpdir* tdir);
     impl(impl&&) = delete;
     impl(const impl&) = delete;
 
@@ -219,16 +219,16 @@ struct test_env::impl {
     }
 };
 
-test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm, tmpdir* tdir)
+test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, sstables::storage_manager* sstm, tmpdir* tdir)
     : local_dir(tdir == nullptr ? std::optional<tmpdir>(std::in_place) : std::optional<tmpdir>(std::nullopt))
     , dir(tdir == nullptr ? local_dir.value() : *tdir)
     , db_config(make_db_config(dir.path().native(), cfg.storage))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
-    , scf(make_sstable_compressor_factory())
+    , scf(scfarg)
     , mgr("test_env", cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config,
         feature_service, cache_tracker, cfg.available_memory, dir_sem,
-        [host_id = locator::host_id::create_random_id()]{ return host_id; }, *scf, abort, current_scheduling_group(), sstm)
+        [host_id = locator::host_id::create_random_id()]{ return host_id; }, scf, abort, current_scheduling_group(), sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
     , use_uuid(cfg.use_uuid)
     , storage(std::move(cfg.storage))
@@ -242,8 +242,8 @@ test_env::impl::impl(test_env_config cfg, sstables::storage_manager* sstm, tmpdi
     }
 }
 
-test_env::test_env(test_env_config cfg, sstables::storage_manager* sstm, tmpdir* tmp)
-        : _impl(std::make_unique<impl>(std::move(cfg), sstm, tmp))
+test_env::test_env(test_env_config cfg, sstable_compressor_factory& scf, sstables::storage_manager* sstm, tmpdir* tmp)
+        : _impl(std::make_unique<impl>(std::move(cfg), scf, sstm, tmp))
 {
 }
 
@@ -325,7 +325,8 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
             sharded<sstables::storage_manager> sstm;
             sstm.start(std::ref(*db_cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = defer([&] { sstm.stop().get(); });
-            test_env env(std::move(cfg), &sstm.local());
+            auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+            test_env env(std::move(cfg), *scf, &sstm.local());
             auto close_env = defer([&] { env.stop().get(); });
             env.manager().plug_sstables_registry(std::make_unique<mock_sstables_registry>());
             auto unplu = defer([&env] { env.manager().unplug_sstables_registry(); });
@@ -334,7 +335,8 @@ future<> test_env::do_with_async(noncopyable_function<void (test_env&)> func, te
     }
 
     return seastar::async([func = std::move(func), cfg = std::move(cfg)] () mutable {
-        test_env env(std::move(cfg));
+        auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+        test_env env(std::move(cfg), *scf);
         auto close_env = defer([&] { env.stop().get(); });
         func(env);
     });
@@ -476,7 +478,8 @@ test_env::do_with_sharded_async(noncopyable_function<void (sharded<test_env>&)> 
     return seastar::async([func = std::move(func)] {
         tmpdir tdir;
         sharded<test_env> env;
-        env.start(test_env_config{}, nullptr, &tdir).get();
+        auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+        env.start(test_env_config{}, std::ref(*scf), nullptr, &tdir).get();
         auto stop = defer([&] { env.stop().get(); });
         func(env);
     });

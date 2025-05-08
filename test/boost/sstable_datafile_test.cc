@@ -466,8 +466,8 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 }
 
 SEASTAR_TEST_CASE(check_read_indexes) {
-    return test_env::do_with([] (test_env& env) {
-        return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+    return test_env::do_with_async([] (test_env& env) {
+        for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
             return seastar::async([&env, version] {
                 auto builder = schema_builder("test", "summary_test")
                     .with_column("a", int32_type, column_kind::partition_key);
@@ -478,7 +478,7 @@ SEASTAR_TEST_CASE(check_read_indexes) {
                     auto list = sstables::test(sst).read_indexes(env.make_reader_permit()).get();
                         BOOST_REQUIRE(list.size() == 130);
             });
-        });
+        }).get();
     });
 }
 
@@ -499,8 +499,8 @@ SEASTAR_TEST_CASE(check_multi_schema) {
     //        d int,
     //        e blob
     //);
-    return test_env::do_with([] (test_env& env) {
-        return for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+    return test_env::do_with_async([] (test_env& env) {
+        for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
             return seastar::async([&env, version] {
                 auto set_of_ints_type = set_type_impl::get_instance(int32_type, true);
                 auto builder = schema_builder("test", "test_multi_schema")
@@ -532,7 +532,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                     BOOST_REQUIRE(!m);
                 });
             });
-        });
+        }).get();
     });
 }
 
@@ -2413,7 +2413,7 @@ SEASTAR_TEST_CASE(sstable_run_identifier_correctness) {
 }
 
 SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
 
@@ -2441,8 +2441,6 @@ SEASTAR_TEST_CASE(sstable_run_disjoint_invariant_test) {
         BOOST_REQUIRE(insert(2, 2) == true);
         BOOST_REQUIRE(insert(5, 5) == true);
         BOOST_REQUIRE(run.all().size() == 5);
-
-        return make_ready_future<>();
     });
 }
 

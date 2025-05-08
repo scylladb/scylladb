@@ -3559,7 +3559,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         }
 
         gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
-        auto scf = make_sstable_compressor_factory();
+        auto scf = make_sstable_compressor_factory_for_tests_in_thread();
         cache_tracker tracker;
         sstables::directory_semaphore dir_sem(1);
         abort_source abort;

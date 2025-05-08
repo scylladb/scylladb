@@ -64,6 +64,8 @@ public:
 
     virtual algorithm get_algorithm() const = 0;
 
+    virtual std::optional<unsigned> get_dict_owner_for_test() const;
+
     using ptr_type = std::unique_ptr<compressor>;
 };
 
