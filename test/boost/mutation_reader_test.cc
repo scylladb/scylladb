@@ -2392,7 +2392,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
             });
         };
 
-        auto write_all = [&semaphore] (queue_reader_handle_v2& handle, const std::vector<mutation>& muts) {
+        auto write_all = [&semaphore] (queue_reader_handle& handle, const std::vector<mutation>& muts) {
             return async([&] {
                 auto reader = make_mutation_reader_from_mutations(muts.front().schema(), semaphore.make_permit(), muts);
                 auto close_reader = deferred_close(reader);
@@ -2406,7 +2406,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         auto actual_muts = std::vector<mutation>{};
         actual_muts.reserve(20);
 
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
@@ -2419,7 +2419,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
     // abort() -- check that consumer is aborted
     {
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
@@ -2441,7 +2441,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
     // abort() -- check that producer is aborted
     {
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
@@ -2466,7 +2466,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
     // Detached handle
     {
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto fill_buffer_fut = reader.fill_buffer();
@@ -2483,7 +2483,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
     // Abandoned handle aborts, move-assignment
     {
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
@@ -2497,7 +2497,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
         BOOST_REQUIRE(!fill_buffer_fut.available());
 
         {
-            auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+            auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
             auto& throwaway_reader = std::get<0>(p);
             auto& throwaway_handle = std::get<1>(p);
             auto close_throwaway_reader = deferred_close(throwaway_reader);
@@ -2511,7 +2511,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
     // Abandoned handle aborts, destructor
     {
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
@@ -2526,7 +2526,7 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
         {
             // Destroy handle
-            queue_reader_handle_v2 throwaway_handle(std::move(handle));
+            queue_reader_handle throwaway_handle(std::move(handle));
         }
 
         BOOST_REQUIRE_THROW(fill_buffer_fut.get(), std::runtime_error);
@@ -2535,19 +2535,19 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
 
     // Life-cycle, relies on ASAN for error reporting
     {
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);
         {
-            auto throwaway_p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+            auto throwaway_p = make_queue_reader(gen.schema(), semaphore.make_permit());
             auto& throwaway_reader = std::get<0>(throwaway_p);
             auto& throwaway_handle = std::get<1>(throwaway_p);
             auto close_throwaway_reader = deferred_close(throwaway_reader);
             // Overwrite handle
             handle = std::move(throwaway_handle);
 
-            auto another_throwaway_p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+            auto another_throwaway_p = make_queue_reader(gen.schema(), semaphore.make_permit());
             auto& another_throwaway_reader = std::get<0>(another_throwaway_p);
             auto& another_throwaway_handle = std::get<1>(another_throwaway_p);
             auto close_another_throwaway_reader = deferred_close(another_throwaway_reader);
@@ -2556,13 +2556,13 @@ SEASTAR_THREAD_TEST_CASE(test_queue_reader) {
             another_throwaway_handle = std::move(throwaway_handle);
 
             // Overwrite with moved-from handle (move constructor)
-            queue_reader_handle_v2 yet_another_throwaway_handle(std::move(throwaway_handle));
+            queue_reader_handle yet_another_throwaway_handle(std::move(throwaway_handle));
         }
     }
 
     // push_end_of_stream() detaches handle from reader, relies on ASAN for error reporting
     {
-        auto p = make_queue_reader_v2(gen.schema(), semaphore.make_permit());
+        auto p = make_queue_reader(gen.schema(), semaphore.make_permit());
         auto& reader = std::get<0>(p);
         auto& handle = std::get<1>(p);
         auto close_reader = deferred_close(reader);

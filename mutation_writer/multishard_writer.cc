@@ -47,7 +47,7 @@ private:
     const dht::sharder& _sharder;
     std::vector<foreign_ptr<std::unique_ptr<shard_writer>>> _shard_writers;
     std::vector<future<>> _pending_consumers;
-    std::vector<std::optional<queue_reader_handle_v2>> _queue_reader_handles;
+    std::vector<std::optional<queue_reader_handle>> _queue_reader_handles;
     dht::shard_replica_set _current_shards;
     uint64_t _consumed_partitions = 0;
     mutation_reader _producer;
@@ -112,7 +112,7 @@ multishard_writer::multishard_writer(
 }
 
 future<> multishard_writer::make_shard_writer(unsigned shard) {
-    auto [reader, handle] = make_queue_reader_v2(_s, _producer.permit());
+    auto [reader, handle] = make_queue_reader(_s, _producer.permit());
     _queue_reader_handles[shard] = std::move(handle);
     return smp::submit_to(shard, [gs = global_schema_ptr(_s),
             consumer = _consumer,

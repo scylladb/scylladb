@@ -1221,11 +1221,11 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
     });
 }
 
-class queue_reader_v2 final : public mutation_reader::impl {
-    friend class queue_reader_handle_v2;
+class queue_reader final : public mutation_reader::impl {
+    friend class queue_reader_handle;
 
 private:
-    queue_reader_handle_v2* _handle = nullptr;
+    queue_reader_handle* _handle = nullptr;
     std::optional<promise<>> _not_full;
     std::optional<promise<>> _full;
     std::exception_ptr _ex;
@@ -1240,10 +1240,10 @@ private:
     }
 
 public:
-    explicit queue_reader_v2(schema_ptr s, reader_permit permit)
+    explicit queue_reader(schema_ptr s, reader_permit permit)
         : impl(std::move(s), std::move(permit)) {
     }
-    virtual ~queue_reader_v2() {
+    virtual ~queue_reader() {
         if (_handle) {
             _handle->_reader = nullptr;
         }
@@ -1321,31 +1321,31 @@ public:
     }
 };
 
-void queue_reader_handle_v2::abandon() noexcept {
+void queue_reader_handle::abandon() noexcept {
     std::exception_ptr ex;
     try {
-        ex = std::make_exception_ptr<std::runtime_error>(std::runtime_error("Abandoned queue_reader_handle_v2"));
+        ex = std::make_exception_ptr<std::runtime_error>(std::runtime_error("Abandoned queue_reader_handle"));
     } catch (...) {
         ex = std::current_exception();
     }
     abort(std::move(ex));
 }
 
-std::exception_ptr queue_reader_handle_v2::check_abort() const noexcept {
+std::exception_ptr queue_reader_handle::check_abort() const noexcept {
     if (_ex) [[unlikely]] {
         return _ex;
     }
     if (!_reader) [[unlikely]] {
-        return std::make_exception_ptr(std::runtime_error("Dangling queue_reader_handle_v2"));
+        return std::make_exception_ptr(std::runtime_error("Dangling queue_reader_handle"));
     }
     return {};
 }
 
-queue_reader_handle_v2::queue_reader_handle_v2(queue_reader_v2& reader) noexcept : _reader(&reader) {
+queue_reader_handle::queue_reader_handle(queue_reader& reader) noexcept : _reader(&reader) {
     _reader->_handle = this;
 }
 
-queue_reader_handle_v2::queue_reader_handle_v2(queue_reader_handle_v2&& o) noexcept
+queue_reader_handle::queue_reader_handle(queue_reader_handle&& o) noexcept
         : _reader(std::exchange(o._reader, nullptr))
         , _ex(std::exchange(o._ex, nullptr))
 {
@@ -1354,11 +1354,11 @@ queue_reader_handle_v2::queue_reader_handle_v2(queue_reader_handle_v2&& o) noexc
     }
 }
 
-queue_reader_handle_v2::~queue_reader_handle_v2() {
+queue_reader_handle::~queue_reader_handle() {
     abandon();
 }
 
-queue_reader_handle_v2& queue_reader_handle_v2::operator=(queue_reader_handle_v2&& o) {
+queue_reader_handle& queue_reader_handle::operator=(queue_reader_handle&& o) {
     abandon();
     _reader = std::exchange(o._reader, nullptr);
     _ex = std::exchange(o._ex, {});
@@ -1368,14 +1368,14 @@ queue_reader_handle_v2& queue_reader_handle_v2::operator=(queue_reader_handle_v2
     return *this;
 }
 
-future<> queue_reader_handle_v2::push(mutation_fragment_v2 mf) {
+future<> queue_reader_handle::push(mutation_fragment_v2 mf) {
     if (auto ex = check_abort(); ex) [[unlikely]] {
         return make_exception_future<>(std::move(ex));
     }
     return _reader->push(std::move(mf));
 }
 
-void queue_reader_handle_v2::push_end_of_stream() {
+void queue_reader_handle::push_end_of_stream() {
     if (auto ex = check_abort(); ex)  [[unlikely]] {
         std::rethrow_exception(std::move(ex));
     }
@@ -1384,11 +1384,11 @@ void queue_reader_handle_v2::push_end_of_stream() {
     _reader = nullptr;
 }
 
-bool queue_reader_handle_v2::is_terminated() const {
+bool queue_reader_handle::is_terminated() const {
     return _reader == nullptr;
 }
 
-void queue_reader_handle_v2::abort(std::exception_ptr ep) {
+void queue_reader_handle::abort(std::exception_ptr ep) {
     _ex = std::move(ep);
     if (_reader) {
         _reader->abort(_ex);
@@ -1397,13 +1397,13 @@ void queue_reader_handle_v2::abort(std::exception_ptr ep) {
     }
 }
 
-std::exception_ptr queue_reader_handle_v2::get_exception() const noexcept {
+std::exception_ptr queue_reader_handle::get_exception() const noexcept {
     return _ex;
 }
 
-std::pair<mutation_reader, queue_reader_handle_v2> make_queue_reader_v2(schema_ptr s, reader_permit permit) {
-    auto impl = std::make_unique<queue_reader_v2>(std::move(s), std::move(permit));
-    auto handle = queue_reader_handle_v2(*impl);
+std::pair<mutation_reader, queue_reader_handle> make_queue_reader(schema_ptr s, reader_permit permit) {
+    auto impl = std::make_unique<queue_reader>(std::move(s), std::move(permit));
+    auto handle = queue_reader_handle(*impl);
     return {mutation_reader(std::move(impl)), std::move(handle)};
 }
 
