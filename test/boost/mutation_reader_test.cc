@@ -1666,7 +1666,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
             return make_empty_mutation_reader(s, std::move(permit));
         };
 
-        assert_that(make_multishard_combining_reader_v2(
+        assert_that(make_multishard_combining_reader(
                     seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
                     s.schema(),
                     erm,
@@ -1939,7 +1939,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
                 dht::ring_position::ending_at(pkeys_by_tokens.rbegin()->first)));
 
     auto sharder = std::make_unique<dummy_sharder>(s.schema()->get_sharder(), std::move(pkeys_by_tokens));
-    auto reader = make_multishard_combining_reader_v2_for_tests(*sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
+    auto reader = make_multishard_combining_reader_for_tests(*sharder, seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
             s.schema(), permit, *pr, s.schema()->full_slice());
 
     return {std::move(reader), std::move(sharder), std::move(remote_controls), std::move(pr)};
@@ -1969,7 +1969,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_custom_shard_number) {
             return make_empty_mutation_reader(s, std::move(permit));
         };
 
-        assert_that(make_multishard_combining_reader_v2_for_tests(
+        assert_that(make_multishard_combining_reader_for_tests(
                 *sharder,
                 seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
                 s.schema(),
@@ -2039,7 +2039,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_only_reads_from_needed
         testlog.info("{}: including {} additional shards out of a total of {}, with an {} end", get_name(), additional_shards, smp::count,
                 inclusive_end ? "inclusive" : "exclusive");
 
-        assert_that(make_multishard_combining_reader_v2(
+        assert_that(make_multishard_combining_reader(
                 seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
                 s.schema(),
                 erm,
@@ -2265,7 +2265,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
             return reader;
         };
         auto& table = env.db().local().find_column_family(schema);
-        auto reader = make_multishard_combining_reader_v2(
+        auto reader = make_multishard_combining_reader(
                 seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory)),
                 schema,
                 table.get_effective_replication_map(),
@@ -2346,7 +2346,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
         auto& table = env.db().local().find_column_family(schema);
         auto erm = table.get_effective_replication_map();
         auto reference_reader = make_filtering_reader(
-                make_multishard_combining_reader_v2(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)),
+                make_multishard_combining_reader(seastar::make_shared<test_reader_lifecycle_policy>(std::move(reader_factory)),
                     schema, erm, make_reader_permit(env), partition_range, schema->full_slice()),
                 [&remote_partitioner] (const dht::decorated_key& pkey) {
                     return remote_partitioner.shard_of(pkey.token()) == 0;
@@ -4355,7 +4355,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_safe_to_create_with_admitted_permit) {
         auto permit = semaphores.at(this_shard_id())->obtain_permit(s.schema(), "multishard_reader", 128 * 1024, db::timeout_clock::now() + 60s, {}).get();
         auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(reader_factory, std::make_unique<semaphore_factory>(semaphores));
 
-        auto reader = make_multishard_combining_reader_v2_for_tests(*sharder, std::move(lifecycle_policy), s.schema(), std::move(permit),
+        auto reader = make_multishard_combining_reader_for_tests(*sharder, std::move(lifecycle_policy), s.schema(), std::move(permit),
                 query::full_partition_range, s.schema()->full_slice());
         auto close_reader = deferred_close(reader);
 
@@ -4459,7 +4459,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
                 seastar::compat::source_location sl = seastar::compat::source_location::current()) {
             testlog.info("run_test(): buffer_size: {}, buffer_hint: {} @ {}:{}", buffer_size, bool(buffer_hint), sl.file_name(), sl.line());
 
-            auto reader = make_multishard_combining_reader_v2_for_tests(
+            auto reader = make_multishard_combining_reader_for_tests(
                     *sharder,
                     seastar::make_shared<test_reader_lifecycle_policy>(reader_factory, std::make_unique<evicting_semaphore_factory>(semaphore_registry)),
                     schema,
@@ -4601,7 +4601,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_small_partitions) {
             return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(muts), ps);
         };
 
-        auto reader = make_multishard_combining_reader_v2_for_tests(
+        auto reader = make_multishard_combining_reader_for_tests(
                 *sharder,
                 seastar::make_shared<test_reader_lifecycle_policy>(reader_factory, std::make_unique<evicting_semaphore_factory>(semaphore_registry)),
                 schema,

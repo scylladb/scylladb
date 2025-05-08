@@ -2975,7 +2975,7 @@ void view_builder::init_virtual_table() {
 
         auto& table_v2 = _db.find_column_family(db::system_keyspace::view_build_status_v2());
 
-        mutation_reader ms_reader = make_multishard_combining_reader_v2(
+        mutation_reader ms_reader = make_multishard_combining_reader(
                 seastar::make_shared<streaming_reader_lifecycle_policy>(_db.container(), table_v2.schema()->id(), gc_clock::now()),
                 table_v2.schema(),
                 table_v2.get_effective_replication_map(),

@@ -2016,7 +2016,7 @@ future<> start_large_data_handler(sharded<replica::database>& db);
 // Opt-in for compacting the output by passing `compaction_time`, see
 // make_streaming_reader() for more details.
 // Setting multishard_reader_buffer_size enables the multishard reader's buffer
-// size optimization (see make_multishard_combining_reader_v2()), using the
+// size optimization (see make_multishard_combining_reader()), using the
 // given size.
 mutation_reader make_multishard_streaming_reader(
         distributed<replica::database>& db,
@@ -2039,7 +2039,7 @@ mutation_reader make_multishard_streaming_reader(
 bool is_internal_keyspace(std::string_view name);
 
 class streaming_reader_lifecycle_policy
-    : public reader_lifecycle_policy_v2
+    : public reader_lifecycle_policy
         , public enable_shared_from_this<streaming_reader_lifecycle_policy> {
 
     template <typename T>

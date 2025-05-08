@@ -55,7 +55,7 @@ using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 /// 3) Both, `read_context::lookup_readers()` and `read_context::save_readers()`
 ///    knows to do nothing when the query is not stateful and just short
 ///    circuit.
-class read_context : public reader_lifecycle_policy_v2 {
+class read_context : public reader_lifecycle_policy {
 
     //              ( )    (O)
     //               |      ^
@@ -718,7 +718,7 @@ future<page_consume_result<ResultBuilder>> read_page(
     auto compaction_state = make_lw_shared<compact_for_query_state_v2>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
-    auto reader = make_multishard_combining_reader_v2(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,
+    auto reader = make_multishard_combining_reader(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,
             trace_state, mutation_reader::forwarding(ranges.size() > 1));
     if (ranges.size() > 1) {
         reader = make_mutation_reader<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);
