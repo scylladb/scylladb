@@ -31,9 +31,9 @@ extern logging::logger qrlogger;
 /// or std::nullopt if the last row wasn't a clustering row, and whatever the
 /// consumer's `consume_end_of_stream()` method returns.
 template <typename Consumer>
-requires CompactedFragmentsConsumerV2<Consumer>
+requires CompactedFragmentsConsumer<Consumer>
 auto consume_page(mutation_reader& reader,
-        lw_shared_ptr<compact_for_query_state_v2> compaction_state,
+        lw_shared_ptr<compact_for_query_state> compaction_state,
         const query::partition_slice& slice,
         Consumer&& consumer,
         uint64_t row_limit,
@@ -44,7 +44,7 @@ auto consume_page(mutation_reader& reader,
         const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_start;
         compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
 
-        auto reader_consumer = compact_for_query_v2<Consumer>(compaction_state, std::move(consumer));
+        auto reader_consumer = compact_for_query<Consumer>(compaction_state, std::move(consumer));
 
         return reader.consume(std::move(reader_consumer));
     });
@@ -148,7 +148,7 @@ class querier : public querier_base {
     static thread_local logger::rate_limit row_tombstone_warn_rate_limit;
     static thread_local logger::rate_limit cell_tombstone_warn_rate_limit;
 
-    lw_shared_ptr<compact_for_query_state_v2> _compaction_state;
+    lw_shared_ptr<compact_for_query_state> _compaction_state;
 
 private:
     void maybe_log_tombstone_warning(std::string_view what, uint64_t live, uint64_t dead, logger::rate_limit& rl);
@@ -162,7 +162,7 @@ public:
             tracing::trace_state_ptr trace_ptr,
             querier_config config = {})
         : querier_base(schema, permit, std::move(range), std::move(slice), ms, std::move(trace_ptr), std::move(config))
-        , _compaction_state(make_lw_shared<compact_for_query_state_v2>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
+        , _compaction_state(make_lw_shared<compact_for_query_state>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
     }
 
     bool are_limits_reached() const {
@@ -170,7 +170,7 @@ public:
     }
 
     template <typename Consumer>
-    requires CompactedFragmentsConsumerV2<Consumer>
+    requires CompactedFragmentsConsumer<Consumer>
     auto consume_page(Consumer&& consumer,
             uint64_t row_limit,
             uint32_t partition_limit,

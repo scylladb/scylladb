@@ -3214,13 +3214,13 @@ public:
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     gc_clock::time_point now = gc_clock::now();
-    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
+    auto compaction_state = make_lw_shared<compact_for_query_state>(
             *step.reader.schema(),
             now,
             step.pslice,
             batch_size,
             query::max_partitions);
-    auto consumer = compact_for_query_v2<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
+    auto consumer = compact_for_query<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
     if (auto ds = std::move(*compaction_state).detach_state()) {
         if (ds->current_tombstone) {

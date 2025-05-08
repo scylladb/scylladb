@@ -634,10 +634,10 @@ requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_typ
 struct page_consume_result {
     typename ResultBuilder::result_type result;
     mutation_reader::tracked_buffer unconsumed_fragments;
-    lw_shared_ptr<compact_for_query_state_v2> compaction_state;
+    lw_shared_ptr<compact_for_query_state> compaction_state;
 
     page_consume_result(typename ResultBuilder::result_type&& result, mutation_reader::tracked_buffer&& unconsumed_fragments,
-            lw_shared_ptr<compact_for_query_state_v2>&& compaction_state) noexcept
+            lw_shared_ptr<compact_for_query_state>&& compaction_state) noexcept
         : result(std::move(result))
         , unconsumed_fragments(std::move(unconsumed_fragments))
         , compaction_state(std::move(compaction_state)) {
@@ -715,7 +715,7 @@ future<page_consume_result<ResultBuilder>> read_page(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         noncopyable_function<ResultBuilder()> result_builder_factory) {
-    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
+    auto compaction_state = make_lw_shared<compact_for_query_state>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
     auto reader = make_multishard_combining_reader(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,

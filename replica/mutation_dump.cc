@@ -605,12 +605,12 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> dump_mutations(
     auto accounter = co_await db.local().get_result_memory_limiter().new_data_read(permit.max_result_size(), short_read_allowed);
     query_state qs(output_schema, cmd, opts, prs, std::move(accounter));
 
-    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(*output_schema, qs.cmd.timestamp, qs.cmd.slice, qs.remaining_rows(), qs.remaining_partitions());
+    auto compaction_state = make_lw_shared<compact_for_query_state>(*output_schema, qs.cmd.timestamp, qs.cmd.slice, qs.remaining_rows(), qs.remaining_partitions());
     auto partition_key_generator = make_partition_key_generator(db, underlying_schema, prs, ts, timeout);
 
     auto dk_opt = co_await partition_key_generator();
     while (dk_opt) {
-        auto reader_consumer = compact_for_query_v2<query_result_builder>(compaction_state, query_result_builder(*output_schema, qs.builder));
+        auto reader_consumer = compact_for_query<query_result_builder>(compaction_state, query_result_builder(*output_schema, qs.builder));
         auto reader = co_await make_partition_mutation_dump_reader(output_schema, underlying_schema, permit, db, *dk_opt, cmd.slice, ts, timeout);
 
         std::exception_ptr ex;
