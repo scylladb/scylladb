@@ -24,6 +24,7 @@
 #include "auth/service.hh"
 #include "cdc/generation.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
 #include "dht/boot_strapper.hh"
@@ -918,12 +919,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 auto tables_with_mvs = ks.metadata()->tables();
                 auto views = ks.metadata()->views();
                 tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
+                std::optional<std::unordered_map<sstring, std::set<sstring>>> dc_racks;
+                if (_db.get_config().rf_rack_valid_keyspaces() && !tables_with_mvs.empty()) {
+                    auto first_table_id = (*tables_with_mvs.begin())->id();
+                    auto first_table_tablet_map = tmptr->tablets().get_tablet_map(first_table_id);
+                    locator::replication_strategy_params params{repl_opts, first_table_tablet_map.tablet_count()};
+                    auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
+                    dc_racks = co_await new_strategy->maybe_as_tablet_aware()->choose_racks(*tables_with_mvs.begin(), tmptr, first_table_tablet_map);
+                }
                 for (const auto& table_or_mv : tables_with_mvs) {
                     try {
                         locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table_or_mv->id());
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, old_tablets);
+                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, old_tablets, std::move(dc_racks));
                     } catch (const std::exception& e) {
                         error = e.what();
                         rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
