@@ -425,6 +425,17 @@ cql_server::connection::read_frame() {
     }
 }
 
+// This function intentionally sleeps to the end of the query timeout in CQL server.
+// It was introduced to remove similar waiting in storage_proxy (ref. scylladb#3699),
+// because storage proxy was blocking ERM (thus topology changes).
+future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const {
+    auto time_left = timeout - seastar::lowres_clock::now();
+    return seastar::sleep_abortable(time_left, _server._abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
+        // Return timeout error no matter if sleep was aborted or not
+        return utils::result_into_future<result_with_foreign_response_ptr>(std::move(resp));
+    });
+}
+
 future<foreign_ptr<std::unique_ptr<cql_server::response>>>
     cql_server::connection::process_request_one(fragmented_temporary_buffer::istream fbuf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit) {
     using auth_state = service::client_state::auth_state;
@@ -500,10 +511,10 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         });
         --_server._stats.requests_serving;
 
-        return utils::result_into_future<result_with_foreign_response_ptr>(utils::result_try([&] () -> result_with_foreign_response_ptr {
+        return seastar::futurize_invoke([&] () {
             result_with_foreign_response_ptr res = f.get();
             if (!res) {
-                return res;
+                res.assume_error().throw_me();
             }
 
             auto response = std::move(res).assume_value();
@@ -537,82 +548,93 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             tracing::set_response_size(trace_state, response->size());
             cql_stats.response_size += response->size();
             return response;
-        },  utils::result_catch<exceptions::unavailable_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in unavailable_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_unavailable_error(stream, ex.code(), ex.what(), ex.consistency, ex.required, ex.alive, trace_state);
-        }), utils::result_catch<exceptions::read_timeout_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in read_timeout_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_read_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.data_present, trace_state);
-        }), utils::result_catch<exceptions::read_failure_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in read_failure_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_read_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.data_present, trace_state);
-        }), utils::result_catch<exceptions::mutation_write_timeout_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in mutation_write_timeout_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_mutation_write_timeout_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.block_for, ex.type, trace_state);
-        }), utils::result_catch<exceptions::mutation_write_failure_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in mutation_write_failure_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_mutation_write_failure_error(stream, ex.code(), ex.what(), ex.consistency, ex.received, ex.failures, ex.block_for, ex.type, trace_state);
-        }), utils::result_catch<exceptions::already_exists_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in already_exists_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_already_exists_error(stream, ex.code(), ex.what(), ex.ks_name, ex.cf_name, trace_state);
-        }), utils::result_catch<exceptions::prepared_query_not_found_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in unprepared_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_unprepared_error(stream, ex.code(), ex.what(), ex.id, trace_state);
-        }), utils::result_catch<exceptions::function_execution_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in function_failure_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_function_failure_error(stream, ex.code(), ex.what(), ex.ks_name, ex.func_name, ex.args, trace_state);
-        }), utils::result_catch<exceptions::rate_limit_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in rate_limit_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_rate_limit_error(stream, ex.code(), ex.what(), ex.op_type, ex.rejected_by_coordinator, trace_state, client_state);
-        }), utils::result_catch<exceptions::cassandra_exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in cassandra_error, stream {}, code {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.code(), ex.what());
-            // Note: the CQL protocol specifies that many types of errors have
-            // mandatory parameters. These cassandra_exception subclasses MUST
-            // be handled above. This default "cassandra_exception" case is
-            // only appropriate for the specific types of errors which do not have
-            // additional information, such as invalid_request_exception.
-            // TODO: consider listing those types explicitly, instead of the
-            // catch-all type cassandra_exception.
-            try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-            return make_error(stream, ex.code(), ex.what(), trace_state);
-        }), utils::result_catch<std::exception>([&] (const auto& ex) {
-            clogger.debug("{}: request resulted in error, stream {}, message [{}]",
-                _client_state.get_remote_address(), stream, ex.what());
-            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-            sstring msg = ex.what();
-            try {
-                std::rethrow_if_nested(ex);
-            } catch (...) {
-                std::ostringstream ss;
-                ss << msg << ": " << std::current_exception();
-                msg = ss.str();
+        }).handle_exception([this, stream, &client_state, trace_state] (std::exception_ptr eptr) {
+            if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
+                clogger.debug("{}: request resulted in unavailable_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_unavailable_error(stream, exp->code(), exp->what(), exp->consistency, exp->required, exp->alive, trace_state));
+            } else if (auto* exp = try_catch<exceptions::read_failure_exception_with_timeout>(eptr)) {
+                clogger.debug("{}: request resulted in read_failure_exception_with_timeout, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                // Return read timeout exception, as we wait here until the timeout passes
+                return sleep_until_timeout_passes(
+                    exp->_timeout,
+                    make_read_timeout_error(stream, exp->_timeout_exception.code(), exp->_timeout_exception.what(), exp->_timeout_exception.consistency, exp->_timeout_exception.received, exp->_timeout_exception.block_for, exp->_timeout_exception.data_present, trace_state)
+                );
+            } else if (auto* exp = try_catch<exceptions::read_timeout_exception>(eptr)) {
+                clogger.debug("{}: request resulted in read_timeout_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_read_timeout_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->block_for, exp->data_present, trace_state));
+            } else if (auto* exp = try_catch<exceptions::read_failure_exception>(eptr)) {
+                clogger.debug("{}: request resulted in read_failure_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_read_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->data_present, trace_state));
+            } else if (auto* exp = try_catch<exceptions::mutation_write_timeout_exception>(eptr)) {
+                clogger.debug("{}: request resulted in mutation_write_timeout_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_mutation_write_timeout_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->block_for, exp->type, trace_state));
+            } else if (auto* exp = try_catch<exceptions::mutation_write_failure_exception>(eptr)) {
+                clogger.debug("{}: request resulted in mutation_write_failure_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_mutation_write_failure_error(stream, exp->code(), exp->what(), exp->consistency, exp->received, exp->failures, exp->block_for, exp->type, trace_state));
+            } else if (auto* exp = try_catch<exceptions::already_exists_exception>(eptr)) {
+                clogger.debug("{}: request resulted in already_exists_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_already_exists_error(stream, exp->code(), exp->what(), exp->ks_name, exp->cf_name, trace_state));
+            } else if (auto* exp = try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
+                clogger.debug("{}: request resulted in unprepared_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_unprepared_error(stream, exp->code(), exp->what(), exp->id, trace_state));
+            } else if (auto* exp = try_catch<exceptions::function_execution_exception>(eptr)) {
+                clogger.debug("{}: request resulted in function_failure_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_function_failure_error(stream, exp->code(), exp->what(), exp->ks_name, exp->func_name, exp->args, trace_state));
+            } else if (auto* exp = try_catch<exceptions::rate_limit_exception>(eptr)) {
+                clogger.debug("{}: request resulted in rate_limit_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_rate_limit_error(stream, exp->code(), exp->what(), exp->op_type, exp->rejected_by_coordinator, trace_state, client_state));
+            } else if (auto* exp = try_catch<exceptions::cassandra_exception>(eptr)) {
+                clogger.debug("{}: request resulted in cassandra_error, stream {}, code {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->code(), exp->what());
+                // Note: the CQL protocol specifies that many types of errors have
+                // mandatory parameters. These cassandra_exception subclasses MUST
+                // be handled above. This default "cassandra_exception" case is
+                // only appropriate for the specific types of errors which do not have
+                // additional information, such as invalid_request_exception.
+                // TODO: consider listing those types explicitly, instead of the
+                // catch-all type cassandra_exception.
+                try { ++_server._stats.errors[exp->code()]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exp->code(), exp->what(), trace_state));
+            } else if (auto* exp = try_catch<std::exception>(eptr)) {
+                clogger.debug("{}: request resulted in error, stream {}, message [{}]",
+                    _client_state.get_remote_address(), stream, exp->what());
+                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
+                sstring msg = exp->what();
+                try {
+                    std::rethrow_if_nested(*exp);
+                } catch (...) {
+                    std::ostringstream ss;
+                    ss << msg << ": " << std::current_exception();
+                    msg = ss.str();
+                }
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state));
+            } else {
+                clogger.debug("{}: request resulted in unknown error, stream {}",
+                    _client_state.get_remote_address(), stream);
+                try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
+                return utils::result_into_future<result_with_foreign_response_ptr>(make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state));
             }
-            return make_error(stream, exceptions::exception_code::SERVER_ERROR, msg, trace_state);
-        }), utils::result_catch_dots([&] () {
-            clogger.debug("{}: request resulted in unknown error, stream {}",
-                _client_state.get_remote_address(), stream);
-            try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-            return make_error(stream, exceptions::exception_code::SERVER_ERROR, "unknown error", trace_state);
-        })));
+        });
     });
 }
 

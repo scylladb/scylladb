@@ -22,7 +22,7 @@ from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, 
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession, \
     ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore # pylint: disable=no-name-in-module
-from cassandra.policies import WhiteListRoundRobinPolicy
+from cassandra.policies import LoadBalancingPolicy, RoundRobinPolicy, WhiteListRoundRobinPolicy
 from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pylint: disable=no-name-in-module
 from cassandra.auth import AuthProvider
 import aiohttp
@@ -41,12 +41,13 @@ class ManagerClient():
     # pylint: disable=too-many-public-methods
 
     def __init__(self, sock_path: str, port: int, use_ssl: bool, auth_provider: Any|None,
-                 con_gen: Callable[[List[IPAddress], int, bool, Any], CassandraCluster]) \
+                 con_gen: Callable[[List[IPAddress], int, bool, Any, LoadBalancingPolicy], CassandraCluster]) \
                          -> None:
         self.test_log_fh: Optional[logging.FileHandler] = None
         self.port = port
         self.use_ssl = use_ssl
         self.auth_provider = auth_provider
+        self.load_balancing_policy = RoundRobinPolicy()
         self.con_gen = con_gen
         self.ccluster: Optional[CassandraCluster] = None
         self.cql: Optional[CassandraSession] = None
@@ -88,7 +89,7 @@ class ManagerClient():
         self.driver_close()
         logger.debug("driver connecting to %s", servers)
         self.ccluster = self.con_gen(servers, self.port, self.use_ssl,
-                                     auth_provider if auth_provider else self.auth_provider)
+                                     auth_provider if auth_provider else self.auth_provider, self.load_balancing_policy)
         self.cql = self.ccluster.connect()
 
     def driver_close(self) -> None:
@@ -113,6 +114,12 @@ class ManagerClient():
         await self.servers_see_each_other(servers)
         hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
         return cql, hosts
+
+    async def get_cql_exclusive(self, server: ServerInfo):
+        cql = self.con_gen([server.ip_addr], self.port, self.use_ssl, self.auth_provider,
+                                     WhiteListRoundRobinPolicy([server.ip_addr])).connect()
+        await wait_for_cql_and_get_hosts(cql, [server], time() + 60)
+        return cql
 
     # Make driver update endpoints from remote connection
     def _driver_update(self) -> None:

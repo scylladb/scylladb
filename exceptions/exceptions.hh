@@ -15,6 +15,7 @@
 #include "db/operation_type.hh"
 #include <stdexcept>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/lowres_clock.hh>
 #include "bytes_fwd.hh"
 
 namespace exceptions {
@@ -196,6 +197,17 @@ struct read_failure_exception : public request_failure_exception {
     read_failure_exception(const sstring& msg, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_) noexcept
         : request_failure_exception{exception_code::READ_FAILURE, msg, consistency_, received_, failures_, block_for_}
         , data_present{data_present_}
+    { }
+};
+
+struct read_failure_exception_with_timeout : public read_failure_exception {
+    const seastar::lowres_clock::time_point _timeout;
+    read_timeout_exception _timeout_exception;
+
+    read_failure_exception_with_timeout(const sstring& ks, const sstring& cf, db::consistency_level consistency_, int32_t received_, int32_t failures_, int32_t block_for_, bool data_present_, seastar::lowres_clock::time_point timeout_) noexcept
+        : read_failure_exception{ks, cf, consistency_, received_, failures_, block_for_, data_present_}
+        , _timeout(timeout_)
+        , _timeout_exception(ks, cf, consistency_, received_, block_for_, data_present_)
     { }
 };
 

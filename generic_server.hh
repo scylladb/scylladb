@@ -120,6 +120,7 @@ protected:
     std::list<gentle_iterator> _gentle_iterators;
     std::vector<server_socket> _listeners;
     shared_ptr<seastar::tls::server_credentials> _credentials;
+    seastar::abort_source _abort_source;
 private:
     utils::updateable_value<uint32_t> _conns_cpu_concurrency;
     uint32_t _prev_conns_cpu_concurrency;
