@@ -57,7 +57,7 @@ def passes_or_raises(expected_exception, match=None):
 # very slow on Scylla or reasonably fast depends on the
 # alternator_ttl_period_in_seconds configuration - test/alternator/run sets
 # it very low, but Scylla may have been run manually.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def waits_for_expiration(dynamodb, request):
     if is_aws(dynamodb):
         if request.config.getoption('runveryslow'):
@@ -77,7 +77,7 @@ def waits_for_expiration(dynamodb, request):
 # always reasonably fast on Scylla. If fastness on Scylla requires a
 # specific setting of alternator_ttl_period_in_seconds, don't use this
 # fixture - use the above waits_for_expiration instead.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def veryslow_on_aws(dynamodb, request):
     if is_aws(dynamodb) and not request.config.getoption('runveryslow'):
         pytest.skip('need --runveryslow option to run')

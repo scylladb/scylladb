@@ -89,7 +89,7 @@ def build_mode(request: pytest.FixtureRequest) -> str:
     mode = request.config.getoption("modes")
     if mode:
         return mode[0]
-    return mode
+    return "unknown"
 
 
 @pytest.fixture(autouse=True)
@@ -107,9 +107,13 @@ def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]
 
 
 @pytest.fixture(scope="module")
-async def testpy_testsuite(request: pytest.FixtureRequest, build_mode: str) -> TestSuite:
-    suite_config = find_suite_config(path=request.path)
-    return TestSuite.opt_create(path=str(suite_config.parent), options=request.config.option, mode=build_mode)
+def testpy_suite_config(request: pytest.FixtureRequest) -> Path:
+    return find_suite_config(path=request.path)
+
+
+@pytest.fixture(scope="module")
+async def testpy_testsuite(request: pytest.FixtureRequest, build_mode: str, testpy_suite_config: Path) -> TestSuite:
+    return TestSuite.opt_create(path=str(testpy_suite_config.parent), options=request.config.option, mode=build_mode)
 
 
 @pytest.fixture(scope="module")

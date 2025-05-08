@@ -291,7 +291,7 @@ def test_scan_paging_bytes(test_table_b):
 # A fixture to read query_tombstone_page_limit from Scylla's configuration.
 # A test using this fixture will be skipped if the test is not running
 # against Scylla.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def query_tombstone_page_limit(dynamodb, scylla_only):
     config_table = dynamodb.Table('.scylla.alternator.system.config')
     return int(config_table.query(

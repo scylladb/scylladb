@@ -31,7 +31,7 @@ def test_localnodes(scylla_only, dynamodb):
 
 # The "this_dc" fixture figures out the name of Scylla DC to which "dynamodb"
 # is connected. Any test using this fixture automatically becomes scylla_only.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def this_dc(dynamodb, scylla_only):
     tbl = dynamodb.Table('.scylla.alternator.system.local')
     dc = tbl.scan(AttributesToGet=['data_center'])['Items'][0]['data_center']
@@ -39,7 +39,7 @@ def this_dc(dynamodb, scylla_only):
 
 # The "this_rack" fixture figures out the name of Scylla rack to which "dynamodb"
 # is connected. Any test using this fixture automatically becomes scylla_only.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def this_rack(dynamodb, scylla_only):
     tbl = dynamodb.Table('.scylla.alternator.system.local')
     rack = tbl.scan(AttributesToGet=['rack'])['Items'][0]['rack']
