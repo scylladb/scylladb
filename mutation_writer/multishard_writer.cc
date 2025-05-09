@@ -25,12 +25,12 @@ private:
     schema_ptr _s;
     std::unique_ptr<reader_concurrency_semaphore> _semaphore;
     mutation_reader _reader;
-    reader_consumer_v2 _consumer;
+    mutation_reader_consumer _consumer;
 public:
     shard_writer(schema_ptr s,
         std::unique_ptr<reader_concurrency_semaphore> semaphore,
         mutation_reader reader,
-        reader_consumer_v2 consumer);
+        mutation_reader_consumer consumer);
     future<> consume();
     future<> close() noexcept;
 };
@@ -51,7 +51,7 @@ private:
     dht::shard_replica_set _current_shards;
     uint64_t _consumed_partitions = 0;
     mutation_reader _producer;
-    reader_consumer_v2 _consumer;
+    mutation_reader_consumer _consumer;
 private:
     dht::shard_replica_set shard_for_mf(const mutation_fragment_v2& mf) {
         auto token = mf.as_partition_start().key().token();
@@ -68,7 +68,7 @@ public:
         schema_ptr s,
         const dht::sharder& sharder,
         mutation_reader producer,
-        reader_consumer_v2 consumer);
+        mutation_reader_consumer consumer);
     future<uint64_t> operator()();
     future<> close() noexcept;
 };
@@ -76,7 +76,7 @@ public:
 shard_writer::shard_writer(schema_ptr s,
     std::unique_ptr<reader_concurrency_semaphore> semaphore,
     mutation_reader reader,
-    reader_consumer_v2 consumer)
+    mutation_reader_consumer consumer)
     : _s(s)
     , _semaphore(std::move(semaphore))
     , _reader(std::move(reader))
@@ -102,7 +102,7 @@ multishard_writer::multishard_writer(
     schema_ptr s,
     const dht::sharder& sharder,
     mutation_reader producer,
-    reader_consumer_v2 consumer)
+    mutation_reader_consumer consumer)
     : _s(std::move(s))
     , _sharder(sharder)
     , _queue_reader_handles(_sharder.shard_count())
@@ -221,7 +221,7 @@ future<uint64_t> multishard_writer::operator()() {
 future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
     const dht::sharder& sharder,
     mutation_reader producer,
-    reader_consumer_v2 consumer,
+    mutation_reader_consumer consumer,
     utils::phased_barrier::operation&& op) {
     return do_with(multishard_writer(std::move(s), sharder, std::move(producer), std::move(consumer)), std::move(op), [] (multishard_writer& writer, utils::phased_barrier::operation&) {
         return seastar::futurize_invoke(writer).finally([&writer] {

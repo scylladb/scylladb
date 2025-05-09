@@ -897,7 +897,7 @@ private:
     // if the derived compaction wants to opt in for this behavior, in addition
     // to overriding `make_interposer_consumer()`, it would have to override
     // `use_interposer_consumer()` so it returns true.
-    virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
+    virtual mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) {
         return _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
     }
 
@@ -1388,7 +1388,7 @@ public:
     {
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
             return mutation_writer::segregate_by_token_group(std::move(reader),
                     _options.classifier,
@@ -1682,7 +1682,7 @@ public:
         }
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         if (!use_interposer_consumer()) {
             return end_consumer;
         }
@@ -1778,7 +1778,7 @@ public:
 
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         return [end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
             return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
         };

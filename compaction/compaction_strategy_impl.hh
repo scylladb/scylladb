@@ -82,7 +82,7 @@ public:
     /// @return A new functor that wraps the end consumer with additional processing capabilities
     /// @note The returned functor preserves the original consumer's semantics while allowing
     ///       preprocessing of data
-    virtual reader_consumer_v2 make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const;
+    virtual mutation_reader_consumer make_interposer_consumer(const mutation_source_metadata& ms_meta, mutation_reader_consumer end_consumer) const;
 
     virtual bool use_interposer_consumer() const {
         return false;

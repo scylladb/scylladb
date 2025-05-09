@@ -10,13 +10,13 @@
 
 namespace mutation_writer {
 
-bucket_writer::bucket_writer(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle> queue_reader, reader_consumer_v2& consumer)
+bucket_writer::bucket_writer(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle> queue_reader, mutation_reader_consumer& consumer)
     : _schema(schema)
     , _handle(std::move(queue_reader.second))
     , _consume_fut(consumer(std::move(queue_reader.first)))
 { }
 
-bucket_writer::bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer)
+bucket_writer::bucket_writer(schema_ptr schema, reader_permit permit, mutation_reader_consumer& consumer)
     : bucket_writer(schema, make_queue_reader(schema, std::move(permit)), consumer)
 { }
 

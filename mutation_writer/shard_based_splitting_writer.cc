@@ -20,7 +20,7 @@ class shard_based_splitting_mutation_writer {
 private:
     schema_ptr _schema;
     reader_permit _permit;
-    reader_consumer_v2 _consumer;
+    mutation_reader_consumer _consumer;
     unsigned _current_shard;
     std::vector<std::optional<shard_writer>> _shards;
 
@@ -29,7 +29,7 @@ private:
         return writer.consume(std::move(mf));
     }
 public:
-    shard_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2 consumer)
+    shard_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, mutation_reader_consumer consumer)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _consumer(std::move(consumer))
@@ -81,7 +81,7 @@ public:
     }
 };
 
-future<> segregate_by_shard(mutation_reader producer, reader_consumer_v2 consumer) {
+future<> segregate_by_shard(mutation_reader producer, mutation_reader_consumer consumer) {
     auto schema = producer.schema();
     auto permit = producer.permit();
     return feed_writer(

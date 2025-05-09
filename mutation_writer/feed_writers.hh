@@ -20,10 +20,10 @@ class bucket_writer {
     future<> _consume_fut;
 
 private:
-    bucket_writer(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle> queue_reader, reader_consumer_v2& consumer);
+    bucket_writer(schema_ptr schema, std::pair<mutation_reader, queue_reader_handle> queue_reader, mutation_reader_consumer& consumer);
 
 public:
-    bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer);
+    bucket_writer(schema_ptr schema, reader_permit permit, mutation_reader_consumer& consumer);
 
     future<> consume(mutation_fragment_v2 mf);
 
