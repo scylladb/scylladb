@@ -52,8 +52,10 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         logger.info(f'{ks}.test replicas: {base_replicas}')
         view_replicas = await get_tablet_replicas(manager, servers[0], ks, "tv", 0)
         logger.info(f'{ks}.tv replicas: {view_replicas}')
-        server_to_replace = await find_server_by_host_id(manager, servers, HostID(str(view_replicas[0][0])))
-        server_to_down = await find_server_by_host_id(manager, servers, HostID(str(base_replicas[0][0])))
+        replica_to_replace = view_replicas[0][0]
+        server_to_replace = await find_server_by_host_id(manager, servers, HostID(str(replica_to_replace)))
+        replica_to_down = base_replicas[0][0]
+        server_to_down = await find_server_by_host_id(manager, servers, HostID(str(replica_to_down)))
 
         logger.info('Downing a node to be replaced')
         await manager.server_stop(server_to_replace.server_id)
@@ -74,7 +76,8 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
 
         await coord_log.wait_for('tablet_transition_updates: waiting', from_mark=coord_mark)
 
-        if server_to_down.server_id != server_to_replace.server_id:
+        # Don't stop both replicas of either base or view table
+        if replica_to_down not in [replica[0] for replica in view_replicas] and replica_to_replace not in [replica[0] for replica in base_replicas]:
             await manager.server_stop(server_to_down.server_id)
 
         # The update is supposed to go to the second replica only, since the other one is downed.
@@ -85,7 +88,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         logger.info('Querying the view')
         assert [(4,3)] == list(await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv WHERE c=4", consistency_level=ConsistencyLevel.ONE)))
 
-        if server_to_down.server_id != server_to_replace.server_id:
+        if replica_to_down not in [replica[0] for replica in view_replicas] and replica_to_replace not in [replica[0] for replica in base_replicas]:
             await manager.server_start(server_to_down.server_id)
 
         logger.info('Unblocking tablet rebuild')
