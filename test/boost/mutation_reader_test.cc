@@ -1694,7 +1694,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_reading_empty_table) {
 // fine-grained control over which shard will fill the multishard reader's
 // buffer and how much read-ahead it launches and consequently when the
 // read-ahead terminates.
-class puppet_reader_v2 : public mutation_reader::impl {
+class puppet_reader : public mutation_reader::impl {
 public:
     struct control {
         promise<> buffer_filled;
@@ -1737,7 +1737,7 @@ private:
     }
 
 public:
-    puppet_reader_v2(simple_schema s, reader_permit permit, control& ctrl, std::vector<fill_buffer_action> actions, std::vector<uint32_t> pkeys)
+    puppet_reader(simple_schema s, reader_permit permit, control& ctrl, std::vector<fill_buffer_action> actions, std::vector<uint32_t> pkeys)
         : impl(s.schema(), std::move(permit))
         , _s(std::move(s))
         , _ctrl(ctrl)
@@ -1747,7 +1747,7 @@ public:
         _end_of_stream = false;
         _ctrl.destroyed = false;
     }
-    ~puppet_reader_v2() {
+    ~puppet_reader() {
         _ctrl.destroyed = true;
     }
 
@@ -1821,14 +1821,14 @@ SEASTAR_THREAD_TEST_CASE(test_stopping_reader_with_pending_read_ahead) {
         const auto shard_of_interest = (this_shard_id() + 1) % smp::count;
         auto s = simple_schema();
         auto remote_control_remote_reader = smp::submit_to(shard_of_interest, [&env, gs = global_simple_schema(s)] {
-            using control_type = foreign_ptr<std::unique_ptr<puppet_reader_v2::control>>;
+            using control_type = foreign_ptr<std::unique_ptr<puppet_reader::control>>;
             using reader_type = foreign_ptr<std::unique_ptr<mutation_reader>>;
 
-            auto control = make_foreign(std::make_unique<puppet_reader_v2::control>());
-            auto reader = make_foreign(std::make_unique<mutation_reader>(make_mutation_reader<puppet_reader_v2>(gs.get(),
+            auto control = make_foreign(std::make_unique<puppet_reader::control>());
+            auto reader = make_foreign(std::make_unique<mutation_reader>(make_mutation_reader<puppet_reader>(gs.get(),
                     make_reader_permit(env),
                     *control,
-                    std::vector{puppet_reader_v2::fill_buffer_action::fill, puppet_reader_v2::fill_buffer_action::block},
+                    std::vector{puppet_reader::fill_buffer_action::fill, puppet_reader::fill_buffer_action::block},
                     std::vector<uint32_t>{0, 1})));
 
             return make_ready_future<std::tuple<control_type, reader_type>>(std::tuple(std::move(control), std::move(reader)));
@@ -1878,12 +1878,12 @@ struct multishard_reader_for_read_ahead {
 
     mutation_reader reader;
     std::unique_ptr<dht::sharder> sharder;
-    std::vector<foreign_ptr<std::unique_ptr<puppet_reader_v2::control>>> remote_controls;
+    std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>> remote_controls;
     std::unique_ptr<dht::partition_range> pr;
 };
 
 multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(simple_schema& s, reader_permit permit) {
-    auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader_v2::control>>>();
+    auto remote_controls = std::vector<foreign_ptr<std::unique_ptr<puppet_reader::control>>>();
     remote_controls.reserve(smp::count);
     for (unsigned i = 0; i < smp::count; ++i) {
         remote_controls.emplace_back(nullptr);
@@ -1891,8 +1891,8 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
 
     parallel_for_each(std::views::iota(0u, smp::count), [&remote_controls] (unsigned shard) mutable {
         return smp::submit_to(shard, [] {
-            return make_foreign(std::make_unique<puppet_reader_v2::control>());
-        }).then([shard, &remote_controls] (foreign_ptr<std::unique_ptr<puppet_reader_v2::control>>&& ctr) mutable {
+            return make_foreign(std::make_unique<puppet_reader::control>());
+        }).then([shard, &remote_controls] (foreign_ptr<std::unique_ptr<puppet_reader::control>>&& ctr) mutable {
             remote_controls[shard] = std::move(ctr);
         });
     }).get();
@@ -1909,7 +1909,7 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
         shard_pkeys[i++ % smp::count].push_back(pkey);
     }
 
-    auto remote_control_refs = std::vector<puppet_reader_v2::control*>();
+    auto remote_control_refs = std::vector<puppet_reader::control*>();
     remote_control_refs.reserve(smp::count);
     for (auto& rc : remote_controls) {
         remote_control_refs.push_back(rc.get());
@@ -1923,16 +1923,16 @@ multishard_reader_for_read_ahead prepare_multishard_reader_for_read_ahead_test(s
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding) mutable {
         const auto shard = this_shard_id();
-        auto actions = [shard] () -> std::vector<puppet_reader_v2::fill_buffer_action> {
+        auto actions = [shard] () -> std::vector<puppet_reader::fill_buffer_action> {
             if (shard < multishard_reader_for_read_ahead::blocked_shard) {
-                return {puppet_reader_v2::fill_buffer_action::fill};
+                return {puppet_reader::fill_buffer_action::fill};
             } else if (shard == multishard_reader_for_read_ahead::blocked_shard) {
-                return {puppet_reader_v2::fill_buffer_action::block};
+                return {puppet_reader::fill_buffer_action::block};
             } else {
                 return {};
             }
         }();
-        return make_mutation_reader<puppet_reader_v2>(gs.get(), permit, *remote_controls.at(shard), std::move(actions), shard_pkeys.at(shard));
+        return make_mutation_reader<puppet_reader>(gs.get(), permit, *remote_controls.at(shard), std::move(actions), shard_pkeys.at(shard));
     };
 
     auto pr = std::make_unique<dht::partition_range>(dht::partition_range::make(dht::ring_position::starting_at(pkeys_by_tokens.begin()->first),
