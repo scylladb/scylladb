@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from scripts import coverage
 from test import path_to
 from test.pylib.pool import Pool
-from test.pylib.scylla_cluster import ScyllaCluster, ScyllaServer, merge_cmdline_options
+from test.pylib.scylla_cluster import ScyllaCluster, ScyllaServer, merge_cmdline_options, get_current_version_description
 from test.pylib.suite.base import Test, TestSuite, read_log, run_test
 from test.pylib.util import LogPrefixAdapter
 
@@ -85,7 +85,7 @@ class PythonTestSuite(TestSuite):
 
             server = ScyllaServer(
                 mode=self.mode,
-                exe=self.scylla_exe,
+                version=get_current_version_description(self.scylla_exe),
                 vardir=self.log_dir,
                 logger=create_cfg.logger,
                 cluster_name=create_cfg.cluster_name,
