@@ -488,18 +488,19 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     }
 }
 
+std::string_view to_string_view(bytes_view b) {
+    return std::string_view(reinterpret_cast<const char*>(b.data()), b.size());
+}
+
+data_type parse_type(bytes_view type_name) {
+    return db::marshal::type_parser::parse(to_string_view(type_name));
+}
+
 schema_ptr load_schema_from_statistics(sstring keyspace, sstring table, const sstables::shared_sstable& sstable) {
     const auto& serialization_header = sstable->get_serialization_header();
     const auto& compression = sstable->get_compression();
 
     auto builder = schema_builder(keyspace, table);
-
-    const auto to_string_view = [] (bytes_view b) {
-        return std::string_view(reinterpret_cast<const char*>(b.data()), b.size());
-    };
-    const auto parse_type = [&to_string_view] (bytes_view type_name) {
-        return db::marshal::type_parser::parse(to_string_view(type_name));
-    };
 
     // partition key
     {
@@ -546,6 +547,39 @@ schema_ptr load_schema_from_statistics(sstring keyspace, sstring table, const ss
     return builder.build();
 }
 
+sstring disk_string_to_string(const sstables::disk_string<uint32_t>& ds) {
+    return sstring(ds.value.begin(), ds.value.end());
+}
+
+column_kind from_sstable_column_kind(sstables::sstable_column_kind k) {
+    switch (k) {
+        case sstables::sstable_column_kind::partition_key: return column_kind::partition_key;
+        case sstables::sstable_column_kind::clustering_key: return column_kind::clustering_key;
+        case sstables::sstable_column_kind::static_column: return column_kind::static_column;
+        case sstables::sstable_column_kind::regular_column: return column_kind::regular_column;
+    }
+    on_internal_error(sllog, format("from_sstable_column_kind(): unknown column kind {}", static_cast<std::underlying_type_t<sstables::sstable_column_kind>>(k)));
+}
+
+schema_ptr load_schema_from_scylla_metadata(const sstables::shared_sstable& sstable) {
+    const auto& scylla_metadata = *sstable->get_scylla_metadata();
+    const auto& sstable_schema = *scylla_metadata.data.get<sstables::scylla_metadata_type::Schema, sstables::scylla_metadata::sstable_schema>();
+
+    auto builder = schema_builder(disk_string_to_string(sstable_schema.keyspace_name), disk_string_to_string(sstable_schema.table_name));
+
+    builder.set_uuid(sstable_schema.id);
+    builder.with_version(sstable_schema.version);
+
+    for (const auto& col_desc : sstable_schema.columns.elements) {
+        builder.with_column(col_desc.name.value, parse_type(col_desc.type.value), from_sstable_column_kind(col_desc.kind));
+    }
+
+    // compression options
+    builder.set_compressor_params(sstables::options_from_compression(sstable->get_compression()));
+
+    return builder.build();
+}
+
 schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem::path sstable_path, sstring keyspace, sstring table) {
     if (keyspace.empty()) {
         keyspace = "my_keyspace";
@@ -574,6 +608,11 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     auto bootstrap_sst = sst_man.make_sstable(bootstrap_schema, local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
 
     bootstrap_sst->load_metadata().get();
+
+    const auto scylla_metadata = bootstrap_sst->get_scylla_metadata();
+    if (scylla_metadata && scylla_metadata->data.get<sstables::scylla_metadata_type::Schema, sstables::scylla_metadata::sstable_schema>()) {
+        return load_schema_from_scylla_metadata(bootstrap_sst);
+    }
 
     return load_schema_from_statistics(keyspace, table, bootstrap_sst);
 }
