@@ -720,10 +720,10 @@ make_multi_range_reader(
  * This reader takes a get_next_fragment generator that produces mutation_fragment_opt which is returned by
  * generating_reader.
  */
-class generating_reader_v2 final : public mutation_reader::impl {
+class generating_reader final : public mutation_reader::impl {
     noncopyable_function<future<mutation_fragment_v2_opt> ()> _get_next_fragment;
 public:
-    generating_reader_v2(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_v2_opt> ()> get_next_fragment)
+    generating_reader(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_v2_opt> ()> get_next_fragment)
         : impl(std::move(s), std::move(permit)), _get_next_fragment(std::move(get_next_fragment))
     { }
     virtual future<> fill_buffer() override {
@@ -752,7 +752,7 @@ public:
 };
 
 mutation_reader make_generating_reader(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_v2_opt> ()> get_next_fragment) {
-    return make_mutation_reader<generating_reader_v2>(std::move(s), std::move(permit), std::move(get_next_fragment));
+    return make_mutation_reader<generating_reader>(std::move(s), std::move(permit), std::move(get_next_fragment));
 }
 
 mutation_reader make_generating_reader_v1(schema_ptr s, reader_permit permit, noncopyable_function<future<mutation_fragment_opt> ()> get_next_fragment) {
@@ -788,7 +788,7 @@ mutation_reader make_generating_reader_v1(schema_ptr s, reader_permit permit, no
             co_return mf;
         }
     };
-    return make_mutation_reader<generating_reader_v2>(s, permit, adaptor(s, permit, std::move(get_next_fragment)));
+    return make_mutation_reader<generating_reader>(s, permit, adaptor(s, permit, std::move(get_next_fragment)));
 }
 
 class reader_from_mutation_base : public mutation_reader::impl {
