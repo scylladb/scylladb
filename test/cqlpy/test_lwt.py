@@ -79,17 +79,15 @@ def test_lwt_empty_clustering_range(cql, table1):
         cql.execute(f"UPDATE {table1} SET r = 9000 WHERE p = 1  AND c = 2 AND c = 2000 IF r = 3")
 
 # In an LWT batch, if one of the condition fails the entire batch is not
-# applied. All conditions in a batch use the same values before the batch,
-# so if a batch has both a IF EXISTS and IF NOT EXISTS on the same row, they
-# can't possibly both be true, so this batch is guaranteed to fail
-# regardless of the data. Cassandra detects this specific conflict, and
-# prints an error instead of silently failing the batch.
-# Reproduces #13011.
-@pytest.mark.xfail(reason="issue #13011")
-def test_lwt_with_batch_conflict_1(cql, table1):
+# applied. Cassandra detects when a batch contains mixed IFs and disallows
+# such request, even though it can be finished successfully.
+# Refs. #13011.
+def test_lwt_with_batch_conflict_1(cql, table1, cassandra_bug):
     p = unique_key_int()
-    with pytest.raises(InvalidRequest, match='Cannot mix'):
-        cql.execute(f'BEGIN BATCH DELETE FROM {table1} WHERE p={p} AND c=1 IF EXISTS; INSERT INTO {table1}(p,c,r) VALUES ({p},1,2) IF NOT EXISTS; APPLY BATCH;')
+    cql.execute(f'INSERT INTO {table1}(p,c,r) VALUES ({p},1,1)')
+    rs = list(cql.execute(f'BEGIN BATCH DELETE FROM {table1} WHERE p={p} AND c=1 IF EXISTS; INSERT INTO {table1}(p,c,r) VALUES ({p},2,2) IF NOT EXISTS; APPLY BATCH;'))
+    for r in rs:
+        assert r.applied == True
 
 # However, Cassandra does not detect every case of a conflict between
 # different conditions in a batch. For example, trying both "IF r=1"
