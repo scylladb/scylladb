@@ -18,6 +18,57 @@ please manually install all Python modules it lists with `pip`.
 Additionally, `toolchain/dbuid` could be used to run `test.py`. In this
 case you don't need to run `./install-dependencies.sh`
 
+By default `test.py` has `--gather-metrics` parameter, that is used to gather
+CPU/RAM usage during tests from the cgroup.
+This means that before execute `test.py` current terminal process should be located in
+the correct cgroup where the **current user** have RW access to the group.
+Some desktop environments (DE) handle this automatically by putting the process
+to the user-owned scope or slice.
+Some DE don't do this.
+To check if the terminal has the correct cgroup, do next:
+1. Check current cgroup
+    ```shell
+    $ cat /proc/self/cgroup
+    ```
+    The output will be a string with a cgroup something like this:
+    ```
+    0::/user.slice/user-1000.slice/user@1000.service/app.slice/
+    ```
+2. Check the permission of the cgroup. Get the path after `::` from the previous
+command and add at the beginning `/sys/fs/cgroup` and check the permissions:
+   ```shell
+   $ ls -la /sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/
+   ```
+   All items should have the owner set to the current user
+
+If this requirement is satisfied you're good to go to run `test.py` with metrics.
+
+If the requirement isn't satisfied, here is how you can do to run `test.py`.
+1. Switch off the metric gathering.
+   1. Use toolchain to run `test.py`
+   2. Add `--no-gather-metrics` to the `test.py` during the run.
+      To make it persistent, it's possible to create an alias
+      ```shell
+      $ echo 'alias testpy="./test.py --no-gather-metrics"' > ~/.profile
+      $ source ~/.profile 
+      ```
+      Now it's possible to invoke `testpy` alias that will switch off 
+      gathering metrics.
+   3. Run the `test.py` with `systemd-run`
+      ```shell
+      $ systemd-run --user --scope ./test.py
+      ```
+      This can be created as an alias as well.
+   4. Create a cgroup manually and put the current terminal process to it
+      ```shell
+      $ mkdir /sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/test_py.slice 
+      $ echo $! | sudo tee /sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/test_py.slice/cgroup.procs
+      ```
+      This solution requires `sudo` permissions, because, to change a process' cgroup 
+      user needs RW permissions to both cgroups: the old one and the new one.
+      ***NOTE:*** This operation needs to be executed each time the terminal is opened
+
+
 
 ## Usage
 
