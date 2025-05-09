@@ -1312,6 +1312,15 @@ class ScyllaCluster:
         server = self.running[server_id]
         server.unpause()
 
+    def server_switch_executable(self, server_id: ServerNum, path: str) -> None:
+        """Switch the executable path of a stopped server"""
+        self.logger.info("Cluster %s upgrading server %s to executable %s", self.name, server_id, path)
+        server = self.servers[server_id]
+        assert not server.is_running, f"Server {server_id} is running: stop it first and then change its executable"
+        self.is_dirty = True
+        server.exe = pathlib.Path(path).resolve()
+        server.check_scylla_executable()
+
     def server_get_process_status(self, server_id: ServerNum) -> str:
         assert server_id in self.running
 
@@ -1574,6 +1583,7 @@ class ScyllaClusterManager:
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
         add_put('/cluster/server/{server_id}/update_cmdline', self._server_update_cmdline)
+        add_put('/cluster/server/{server_id}/switch_executable', self._server_switch_executable)
         add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
         add_put('/cluster/server/{server_id}/change_rpc_address', self._server_change_rpc_address)
         add_get('/cluster/server/{server_id}/get_log_filename', self._server_get_log_filename)
@@ -1888,6 +1898,14 @@ class ScyllaClusterManager:
         data = await request.json()
         self.cluster.update_cmdline(ServerNum(int(request.match_info["server_id"])),
                                     data['cmdline_options'])
+
+    async def _server_switch_executable(self, request: aiohttp.web.Request) -> None:
+        """Switch the executable of the server to the one specified by 'path'
+           Marks the cluster as dirty."""
+        assert self.cluster
+        path = (await request.json())["path"]
+        server_id = ServerNum(int(request.match_info["server_id"]))
+        self.cluster.server_switch_executable(server_id, path)
 
     async def _server_change_ip(self, request: aiohttp.web.Request) -> dict[str, object]:
         """Pass change_ip command for the given server to the cluster"""
