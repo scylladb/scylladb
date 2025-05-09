@@ -76,7 +76,7 @@ do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vec
             if (!verb_register) {
                 co_await smp::invoke_on_all([&] {
                     return global_ms.local().register_stream_blob([&](const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source) {
-                        auto from = netw::messaging_service::get_source(cinfo).addr;
+                        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
                         auto sink = global_ms.local().make_sink_for_stream_blob(source);
                         (void)stream_blob_handler(global_db.local(), global_ms.local(), from, meta, sink, source, [&suffix](auto&, const streaming::stream_blob_meta& meta) -> future<output_result> {
                             auto path = meta.filename + suffix;
@@ -115,10 +115,7 @@ do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vec
                     co_return make_file_input_stream(std::move(file), foptions);
                 };
             }
-            auto host2ip = [&global_db] (locator::host_id id) -> future<gms::inet_address> {
-                co_return global_db.local().get_token_metadata().get_topology().my_address();
-            };
-            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table, ops_id, host2ip, service::null_topology_guard, inject_error);
+            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table, ops_id, service::null_topology_guard, inject_error);
             co_await mark_tablet_stream_done(ops_id);
             testlog.info("do_test_file_stream[{}] status=ok files={} stream_bytes={}", ops_id, filelist.size(), stream_bytes);
             ret = true;

@@ -9,7 +9,6 @@
 #include "message/messaging_service.hh"
 #include "streaming/stream_blob.hh"
 #include "streaming/stream_plan.hh"
-#include "gms/inet_address.hh"
 #include "utils/pretty_printers.hh"
 #include "utils/error_injection.hh"
 #include "locator/host_id.hh"
@@ -120,7 +119,7 @@ static void may_inject_error(const streaming::stream_blob_meta& meta, bool may_i
 
 future<> stream_blob_handler(replica::database& db,
         netw::messaging_service& ms,
-        gms::inet_address from,
+        locator::host_id from,
         streaming::stream_blob_meta meta,
         rpc::sink<streaming::stream_blob_cmd_data> sink,
         rpc::source<streaming::stream_blob_cmd_data> source,
@@ -310,7 +309,7 @@ future<> stream_blob_handler(replica::database& db,
 
 
 future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms,
-        gms::inet_address from,
+        locator::host_id from,
         streaming::stream_blob_meta meta,
         rpc::sink<streaming::stream_blob_cmd_data> sink,
         rpc::source<streaming::stream_blob_cmd_data> source) {
@@ -374,7 +373,7 @@ namespace streaming {
 // Send files in the files list to the nodes in targets list over network
 // Returns number of bytes sent over network
 future<size_t>
-tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sources, std::vector<node_and_shard> targets, table_id table, file_stream_id ops_id, host2ip_t host2ip, service::frozen_topology_guard topo_guard, bool inject_errors) {
+tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sources, std::vector<node_and_shard> targets, table_id table, file_stream_id ops_id, service::frozen_topology_guard topo_guard, bool inject_errors) {
     size_t ops_total_size = 0;
     if (targets.empty()) {
         co_return ops_total_size;
@@ -387,7 +386,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             ops_id, sources.size(), sources, targets);
 
     struct sink_and_source {
-        gms::inet_address node;
+        locator::host_id node;
         rpc::sink<streaming::stream_blob_cmd_data> sink;
         rpc::source<streaming::stream_blob_cmd_data> source;
         bool sink_closed = false;
@@ -428,10 +427,9 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             for (auto& x : targets) {
                 const auto& node = x.node;
                 meta.dst_shard_id = x.shard;
-                auto ip = co_await host2ip(node);
-                blogger.debug("fstream[{}] Master creating sink and source for node={}/{}, file={}, targets={}", ops_id, node, ip, filename, targets);
+                blogger.debug("fstream[{}] Master creating sink and source for node={}/{}, file={}, targets={}", ops_id, node, node, filename, targets);
                 auto [sink, source] = co_await ms.make_sink_and_source_for_stream_blob(meta, node);
-                ss.push_back(sink_and_source{ip, std::move(sink), std::move(source)});
+                ss.push_back(sink_and_source{node, std::move(sink), std::move(source)});
             }
 
             // This fiber sends data to peer node
@@ -600,7 +598,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
 }
 
 
-future<stream_files_response> tablet_stream_files_handler(replica::database& db, netw::messaging_service& ms, streaming::stream_files_request req, host2ip_t host2ip) {
+future<stream_files_response> tablet_stream_files_handler(replica::database& db, netw::messaging_service& ms, streaming::stream_files_request req) {
     stream_files_response resp;
     auto& table = db.find_column_family(req.table);
     auto sstables = co_await table.take_storage_snapshot(req.range);
@@ -653,7 +651,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     blogger.debug("stream_sstables[{}] Started sending sstable_nr={} files_nr={} files={} range={}",
             req.ops_id, sstables.size(), files.size(), files, req.range);
     auto ops_start_time = std::chrono::steady_clock::now();
-    size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), req.targets, req.table, req.ops_id, std::move(host2ip), req.topo_guard);
+    size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), req.targets, req.table, req.ops_id, req.topo_guard);
     resp.stream_bytes = stream_bytes;
     auto duration = std::chrono::steady_clock::now() - ops_start_time;
     blogger.info("stream_sstables[{}] Finished sending sstable_nr={} files_nr={} files={} range={} stream_bytes={} stream_time={} stream_bw={}",

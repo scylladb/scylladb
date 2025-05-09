@@ -116,13 +116,13 @@ struct stream_blob_info {
 };
 
 // The handler for the STREAM_BLOB verb.
-seastar::future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms, gms::inet_address from, streaming::stream_blob_meta meta, rpc::sink<streaming::stream_blob_cmd_data> sink, rpc::source<streaming::stream_blob_cmd_data> source);
+seastar::future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms, locator::host_id from, streaming::stream_blob_meta meta, rpc::sink<streaming::stream_blob_cmd_data> sink, rpc::source<streaming::stream_blob_cmd_data> source);
 
 // Exposed mainly for testing
 
 future<> stream_blob_handler(replica::database& db,
         netw::messaging_service& ms,
-        gms::inet_address from,
+        locator::host_id from,
         streaming::stream_blob_meta meta,
         rpc::sink<streaming::stream_blob_cmd_data> sink,
         rpc::source<streaming::stream_blob_cmd_data> source,
@@ -163,11 +163,9 @@ public:
     size_t stream_bytes = 0;
 };
 
-using host2ip_t = std::function<future<gms::inet_address> (locator::host_id)>;
-
 // The handler for the TABLET_STREAM_FILES verb. The receiver of this verb will
 // stream sstables files specified by the stream_files_request req.
-future<stream_files_response> tablet_stream_files_handler(replica::database& db, netw::messaging_service& ms, streaming::stream_files_request req, host2ip_t host2ip);
+future<stream_files_response> tablet_stream_files_handler(replica::database& db, netw::messaging_service& ms, streaming::stream_files_request req);
 
 // Ask the src node to stream sstables to dst node for table in the given token range using TABLET_STREAM_FILES verb.
 future<stream_files_response> tablet_stream_files(const file_stream_id& ops_id, replica::table& table, const dht::token_range& range, const locator::host_id& src, const locator::host_id& dst, seastar::shard_id dst_shard_id, netw::messaging_service& ms, abort_source& as, service::frozen_topology_guard topo_guard);
@@ -178,7 +176,6 @@ future<size_t> tablet_stream_files(netw::messaging_service& ms,
     std::vector<node_and_shard> targets,
     table_id table,
     file_stream_id ops_id,
-    host2ip_t host2ip,
     service::frozen_topology_guard topo_guard,
     bool may_inject_errors = false
     );
