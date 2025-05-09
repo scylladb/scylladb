@@ -814,7 +814,7 @@ future<> expiration_service::run() {
         std::chrono::milliseconds period(long(_db.get_config().alternator_ttl_period_in_seconds() * 1000));
         if (scan_duration < period) {
             try {
-                tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count()/1000.0);
+                //tlogger.info("sleeping {} seconds until next period", (period - scan_duration).count()/1000.0);
                 co_await seastar::sleep_abortable(period - scan_duration, _abort_source);
             } catch(seastar::sleep_aborted&) {}
         } else {
