@@ -11,6 +11,8 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "index/secondary_index_manager.hh"
 #include "schema/schema.hh"
+#include <seastar/core/sstring.hh>
+#include <optional>
 
 namespace replica {
 
@@ -25,6 +27,10 @@ public:
 
     virtual bool is_index(const table_id& base_id, const schema& view_s) const override {
         return  _db.find_column_family(base_id).get_index_manager().is_index(view_s);
+    }
+
+    virtual std::optional<sstring> custom_index_class(const table_id& base_id, const schema& view_s) const override {
+        return  _db.find_column_family(base_id).get_index_manager().custom_index_class(view_s);
     }
 
     virtual schema_ptr find_schema(const table_id& id) const override {

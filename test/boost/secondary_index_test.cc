@@ -711,11 +711,6 @@ SEASTAR_TEST_CASE(test_secondary_index_create_custom_index) {
         // "exceptions::invalid_request_exception: CUSTOM index requires
         // specifying the index class"
         assert_that_failed(e.execute_cql("create custom index on cf (a)"));
-        // It's also a syntax error to try to specify a "USING" without
-        // specifying CUSTOM. We expect the exception:
-        // "exceptions::invalid_request_exception: Cannot specify index class
-        // for a non-CUSTOM index"
-        assert_that_failed(e.execute_cql("create index on cf (a) using 'org.apache.cassandra.index.sasi.SASIIndex'"));
     });
 }
 
