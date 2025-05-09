@@ -457,7 +457,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
     switch (rs.state) {
         case node_state::normal: {
-            if (is_me(ip)) {
+            if (is_me(id)) {
                 co_return;
             }
             // In replace-with-same-ip scenario the replaced node IP will be the same
@@ -490,8 +490,6 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
                 auto old_ip = it->second;
                 sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(old_ip));
-
-                co_await _gossiper.force_remove_endpoint(id, gms::null_permit_id);
             }
         }
         break;
@@ -945,21 +943,12 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
         if (prev_ip == endpoint) {
             co_return;
         }
-
         if (_address_map.find(id) != endpoint) {
             // Address map refused to update IP for the host_id,
             // this means prev_ip has higher generation than endpoint.
-            // We can immediately remove endpoint from gossiper
-            // since it represents an old IP (before an IP change)
-            // for the given host_id. This is not strictly
-            // necessary, but it reduces the noise circulated
-            // in gossiper messages and allows for clearer
-            // expectations of the gossiper state in tests.
-
-            co_await _ss._gossiper.force_remove_endpoint(id, permit_id);
+            // Do not update address.
             co_return;
         }
-
 
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
         if (_ss.raft_topology_change_enabled()) {
@@ -1690,6 +1679,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
 
     slogger.info("Starting up server gossip");
+
+    co_await utils::get_local_injector().inject("sleep_before_start_gossiping", std::chrono::milliseconds{500});
 
     co_await _gossiper.start_gossiping(new_generation, app_states);
 
