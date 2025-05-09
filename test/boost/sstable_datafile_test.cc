@@ -289,12 +289,12 @@ SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tes
 
 // mutation_reader for sstable keeping all the required objects alive.
 static mutation_reader sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit) {
-    return sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, s->full_slice());
+    return sst->as_mutation_source().make_mutation_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
 
 }
 
 static mutation_reader sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit, const dht::partition_range& pr) {
-    return sst->as_mutation_source().make_reader_v2(s, std::move(permit), pr, s->full_slice());
+    return sst->as_mutation_source().make_mutation_reader(s, std::move(permit), pr, s->full_slice());
 }
 
 SEASTAR_TEST_CASE(datafile_generation_37) {
@@ -539,7 +539,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
 void test_sliced_read_row_presence(shared_sstable sst, schema_ptr s, reader_permit permit, const query::partition_slice& ps,
     std::vector<std::pair<partition_key, std::vector<clustering_key>>> expected)
 {
-    auto reader = sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, ps);
+    auto reader = sst->as_mutation_source().make_mutation_reader(s, std::move(permit), query::full_partition_range, ps);
     auto close_reader = deferred_close(reader);
 
     partition_key::equality pk_eq(*s);
@@ -1683,7 +1683,7 @@ SEASTAR_TEST_CASE(test_repeated_tombstone_skipping) {
                 .with_range(query::clustering_range::make_singular(ck2))
                 .with_range(query::clustering_range::make_singular(ck3))
                 .build();
-            auto rd = ms.make_reader_v2(table.schema(), env.make_reader_permit(), query::full_partition_range, slice);
+            auto rd = ms.make_mutation_reader(table.schema(), env.make_reader_permit(), query::full_partition_range, slice);
             assert_that(std::move(rd)).has_monotonic_positions();
         }
       }
@@ -1720,7 +1720,7 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         cfg.promoted_index_block_size = 1; // So that every fragment is indexed
         cfg.promoted_index_auto_scale_threshold = 0; // disable auto-scaling
         auto ms = make_sstable_easy(env, make_mutation_reader_from_mutations(table.schema(), env.make_reader_permit(), partitions), cfg, version)->as_mutation_source();
-        auto rd = ms.make_reader_v2(table.schema(),
+        auto rd = ms.make_mutation_reader(table.schema(),
             env.make_reader_permit(),
             query::full_partition_range,
             table.schema()->full_slice(),
@@ -2105,7 +2105,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
 
         std::set<mutation, mutation_decorated_key_less_comparator> merged;
         merged.insert(mutations.begin(), mutations.end());
-        auto rd = assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range));
+        auto rd = assert_that(sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range));
         auto keys_read = 0;
         for (auto&& m : merged) {
             keys_read++;
@@ -2115,7 +2115,7 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
         BOOST_REQUIRE(keys_read == keys_written);
 
         auto r = dht::partition_range::make({mutations.back().decorated_key(), true}, {mutations.back().decorated_key(), true});
-        assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), r))
+        assert_that(sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), r))
             .produces(slice(mutations, r))
             .produces_end_of_stream();
     });
@@ -2267,7 +2267,7 @@ SEASTAR_TEST_CASE(test_old_format_non_compound_range_tombstone_is_read) {
 
                 {
                     auto slice = partition_slice_builder(*s).with_range(query::clustering_range::make_singular({ck})).build();
-                    assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
+                    assert_that(sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), dht::partition_range::make_singular(dk), slice))
                             .produces(m)
                             .produces_end_of_stream();
                 }
@@ -2519,7 +2519,7 @@ SEASTAR_TEST_CASE(test_reads_cassandra_static_compact) {
         m.set_clustered_cell(clustering_key::make_empty(), *s->get_column_definition("c2"),
                     atomic_cell::make_live(*utf8_type, 1551785032379079, utf8_type->decompose("cde"), {}));
 
-        assert_that(sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()))
+        assert_that(sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit()))
             .produces(m)
             .produces_end_of_stream();
     });
@@ -2587,7 +2587,7 @@ SEASTAR_TEST_CASE(test_zero_estimated_partitions) {
             sstable_writer_config cfg = env.manager().configure_writer();
             auto sst = make_sstable_easy(env, std::move(mr), cfg, version, 0);
 
-            auto sst_mr = sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+            auto sst_mr = sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             auto close_mr = deferred_close(sst_mr);
             auto sst_mut = read_mutation_from_mutation_reader(sst_mr).get();
 

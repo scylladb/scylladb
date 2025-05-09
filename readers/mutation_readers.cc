@@ -519,7 +519,7 @@ public:
             tracing::trace_state_ptr trace_state)
         : impl(s, std::move(permit))
         , _generator(std::move(generator))
-        , _reader(source.make_reader_v2(s, _permit, first_range, slice, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
+        , _reader(source.make_mutation_reader(s, _permit, first_range, slice, trace_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes))
     {
     }
 
@@ -607,7 +607,7 @@ public:
     }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         if (!_reader) {
-            _reader = _source.make_reader_v2(_schema, _permit, pr, _slice, std::move(_trace_state), streamed_mutation::forwarding::no,
+            _reader = _source.make_mutation_reader(_schema, _permit, pr, _slice, std::move(_trace_state), streamed_mutation::forwarding::no,
                     mutation_reader::forwarding::yes);
             _end_of_stream = false;
             return make_ready_future<>();
@@ -663,7 +663,7 @@ make_multi_range_reader(schema_ptr s, reader_permit permit, mutation_source sour
             return make_empty_mutation_reader(std::move(s), std::move(permit));
         }
     } else if (ranges.size() == 1) {
-        return source.make_reader_v2(std::move(s), std::move(permit), ranges.front(), slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
+        return source.make_mutation_reader(std::move(s), std::move(permit), ranges.front(), slice, std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
     } else {
         return make_mutation_reader<multi_range_mutation_reader<adapter>>(std::move(s), std::move(permit), std::move(source),
                 ranges.front(), adapter(std::next(ranges.cbegin()), ranges.cend()), slice, std::move(trace_state));
@@ -1215,7 +1215,7 @@ mutation_source make_combined_mutation_source(std::vector<mutation_source> adden
         std::vector<mutation_reader> rd;
         rd.reserve(addends.size());
         for (auto&& ms : addends) {
-            rd.emplace_back(ms.make_reader_v2(s, permit, pr, slice, tr, fwd_sm, fwd_mr));
+            rd.emplace_back(ms.make_mutation_reader(s, permit, pr, slice, tr, fwd_sm, fwd_mr));
         }
         return make_combined_reader(s, std::move(permit), std::move(rd), fwd_sm, fwd_mr);
     });

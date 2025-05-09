@@ -88,7 +88,7 @@ public:
         , _permit(std::move(permit))
         , _range(make_lw_shared<const dht::partition_range>(std::move(range)))
         , _slice(std::make_unique<const query::partition_slice>(std::move(slice)))
-        , _reader(ms.make_reader_v2(_schema, _permit, *_range, *_slice, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
+        , _reader(ms.make_mutation_reader(_schema, _permit, *_range, *_slice, std::move(trace_ptr), streamed_mutation::forwarding::no, mutation_reader::forwarding::no))
         , _query_ranges(*_range)
         , _qr_config(std::move(config))
     { }

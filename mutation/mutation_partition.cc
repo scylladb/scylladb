@@ -2385,7 +2385,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
                          const query::partition_slice& slice,
                          tracing::trace_state_ptr trace_ptr)
             : range(dht::partition_range::make_singular(dk))
-            , reader(source.make_reader_v2(s, std::move(permit), range, slice,
+            , reader(source.make_mutation_reader(s, std::move(permit), range, slice,
                                                       std::move(trace_ptr), streamed_mutation::forwarding::no,
                                                       mutation_reader::forwarding::no))
         { }

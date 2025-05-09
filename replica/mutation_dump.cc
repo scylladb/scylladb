@@ -346,7 +346,7 @@ private:
             auto ms_begin = _underlying_mutation_sources.begin();
 
             if (!_underlying_reader) {
-                _underlying_reader = ms_begin->second.ms.make_reader_v2(_underlying_schema, _permit, _underlying_pr, ms_begin->second.slice,
+                _underlying_reader = ms_begin->second.ms.make_mutation_reader(_underlying_schema, _permit, _underlying_pr, ms_begin->second.slice,
                         _ts, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
             }
 

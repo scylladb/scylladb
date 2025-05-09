@@ -3017,7 +3017,7 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
     compaction_progress_monitor progress_monitor;
     sstables::compact_sstables(std::move(desc), cdata, cf->try_get_table_state_with_static_sharding(), progress_monitor).get();
 
-    return compacted_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+    return compacted_sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }
 
 SEASTAR_TEST_CASE(compact_deleted_row) {

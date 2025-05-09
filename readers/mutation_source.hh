@@ -131,7 +131,7 @@ public:
     // All parameters captured by reference must remain live as long as returned
     // mutation_reader or streamed_mutation obtained through it are alive.
     mutation_reader
-    make_reader_v2(
+    make_mutation_reader(
             schema_ptr s,
             reader_permit permit,
             partition_range range,
@@ -144,13 +144,13 @@ public:
     }
 
     mutation_reader
-    make_reader_v2(
+    make_mutation_reader(
             schema_ptr s,
             reader_permit permit,
             partition_range range = query::full_partition_range) const
     {
         auto& full_slice = s->full_slice();
-        return make_reader_v2(std::move(s), std::move(permit), range, full_slice);
+        return make_mutation_reader(std::move(s), std::move(permit), range, full_slice);
     }
 
     partition_presence_checker make_partition_presence_checker() {

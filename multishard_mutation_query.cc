@@ -363,7 +363,7 @@ mutation_reader read_context::create_reader(
 
     rm.state = reader_state::used;
 
-    return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice,
+    return table.as_mutation_source().make_mutation_reader(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice,
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 

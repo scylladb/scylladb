@@ -998,7 +998,7 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
 
         // Treat the table as mutation_source and SCYLLA_ASSERT we get the expected mutation and end of stream
         mutation_source ms = t.as_mutation_source();
-        assert_that(ms.make_reader_v2(s, semaphore.make_permit()))
+        assert_that(ms.make_mutation_reader(s, semaphore.make_permit()))
             .produces(m2)
             .produces_end_of_stream();
     }, db_config);
@@ -1043,7 +1043,7 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
 
         // Check mutation presents in the table
         mutation_source ms = t.as_mutation_source();
-        assert_that(ms.make_reader_v2(s2, semaphore.make_permit()))
+        assert_that(ms.make_mutation_reader(s2, semaphore.make_permit()))
             .produces(m)
             .produces_end_of_stream();
     }, db_config);

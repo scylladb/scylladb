@@ -397,7 +397,7 @@ mutation_reader evictable_reader::recreate_reader() {
         _reader_recreated = true;
     }
 
-    return _ms.make_reader_v2(
+    return _ms.make_mutation_reader(
             _schema,
             _permit,
             *range,

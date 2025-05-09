@@ -263,12 +263,12 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
                 auto prange = dht::partition_range::make_singular(m.decorated_key());
 
                 {
-                    auto r1 = source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
+                    auto r1 = source.make_mutation_reader(query_schema, semaphore.make_permit(), prange,
                             slice, nullptr,
                             streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
                     auto close_r1 = deferred_action([&r1] { r1.close().get(); });
 
-                    auto r2 = rev_source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
+                    auto r2 = rev_source.make_mutation_reader(query_schema, semaphore.make_permit(), prange,
                             rev_slice, nullptr,
                             streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
                     close_r1.cancel();
@@ -276,12 +276,12 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
                     compare_readers(*query_schema, std::move(r1), std::move(r2), true);
                 }
 
-                auto r1 = source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
+                auto r1 = source.make_mutation_reader(query_schema, semaphore.make_permit(), prange,
                         query_schema->full_slice(), nullptr,
                         streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
                 auto close_r1 = deferred_action([&r1] { r1.close().get(); });
 
-                auto r2 = rev_source.make_reader_v2(query_schema, semaphore.make_permit(), prange,
+                auto r2 = rev_source.make_mutation_reader(query_schema, semaphore.make_permit(), prange,
                         rev_full_slice, nullptr,
                         streamed_mutation::forwarding::yes, mutation_reader::forwarding::no);
                 close_r1.cancel();

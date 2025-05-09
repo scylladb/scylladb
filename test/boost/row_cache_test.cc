@@ -402,7 +402,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
 
         auto do_test = [&s, &semaphore, &partitions] (const mutation_source& ds, const dht::partition_range& range,
                                           int& secondary_calls_count, int expected_calls) {
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(expected_calls, secondary_calls_count);
@@ -489,25 +489,25 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             auto range = dht::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[1].decorated_key(), true});
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(3, secondary_calls_count);
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(3, secondary_calls_count);
             auto range2 = dht::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[1].decorated_key(), false});
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range2))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range2))
                 .produces(slice(partitions, range2))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(3, secondary_calls_count);
             auto range3 = dht::partition_range::make(
                 {dht::ring_position::starting_at(key_before_all.token())},
                 {partitions[2].decorated_key(), false});
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range3))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range3))
                 .produces(slice(partitions, range3))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(5, secondary_calls_count);
@@ -529,7 +529,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
 
             cache->invalidate(row_cache::external_updater([] {}), key_after_all).get();
 
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), query::full_partition_range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), query::full_partition_range))
                 .produces(slice(partitions, query::full_partition_range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(partitions.size() + 2, secondary_calls_count);
@@ -768,7 +768,7 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
                 tracing::trace_state_ptr tr,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding mr_fwd) {
-                return ms.make_reader_v2(s, std::move(permit), pr, slice, std::move(tr), fwd, mr_fwd);
+                return ms.make_mutation_reader(s, std::move(permit), pr, slice, std::move(tr), fwd, mr_fwd);
             }, [] {
                 return [saved = managed_bytes()] (const dht::decorated_key& key) mutable {
                     // size large enough to defeat the small blob optimization
@@ -1241,7 +1241,7 @@ private:
 
         mutation_reader make_reader(schema_ptr s, reader_permit permit, const dht::partition_range& pr,
                 const query::partition_slice& slice, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-            return make_mutation_reader<reader>(_throttle, _underlying.make_reader_v2(s, std::move(permit), pr, slice, std::move(trace), std::move(fwd)));
+            return make_mutation_reader<reader>(_throttle, _underlying.make_mutation_reader(s, std::move(permit), pr, slice, std::move(trace), std::move(fwd)));
         }
     };
     lw_shared_ptr<impl> _impl;

@@ -785,7 +785,7 @@ SEASTAR_TEST_CASE(combined_mutation_reader_test) {
         sstable_set->insert(sst);
 
         sstable_mutation_readers.emplace_back(
-            sst->as_mutation_source().make_reader_v2(
+            sst->as_mutation_source().make_mutation_reader(
                 s.schema(),
                 list_permit,
                 query::full_partition_range,
@@ -1061,7 +1061,7 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
             }
             mutation_source ds = make_sstable_containing(env.make_sstable(s), muts)->as_mutation_source();
             reader_ranges.push_back(dht::partition_range::make({keys[0]}, {keys[0]}));
-            readers.push_back(ds.make_reader_v2(s,
+            readers.push_back(ds.make_mutation_reader(s,
                 permit,
                 reader_ranges.back(),
                 s->full_slice(), nullptr,
@@ -1138,8 +1138,8 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         {
             auto permit = env.make_reader_permit();
             auto slice = partition_slice_builder(*s).with_range(range).build();
-            readers.push_back(ds1.make_reader_v2(s, permit, query::full_partition_range, slice));
-            readers.push_back(ds2.make_reader_v2(s, permit, query::full_partition_range, slice));
+            readers.push_back(ds1.make_mutation_reader(s, permit, query::full_partition_range, slice));
+            readers.push_back(ds2.make_mutation_reader(s, permit, query::full_partition_range, slice));
 
             auto rd = mutation_fragment_v1_stream(make_combined_reader(s, permit, std::move(readers),
                 streamed_mutation::forwarding::no, mutation_reader::forwarding::no));
@@ -1162,9 +1162,9 @@ SEASTAR_TEST_CASE(test_combined_reader_slicing_with_overlapping_range_tombstones
         // Check fast_forward_to()
         {
             auto permit = env.make_reader_permit();
-            readers.push_back(ds1.make_reader_v2(s, permit, query::full_partition_range, s->full_slice(),
+            readers.push_back(ds1.make_mutation_reader(s, permit, query::full_partition_range, s->full_slice(),
                 nullptr, streamed_mutation::forwarding::yes));
-            readers.push_back(ds2.make_reader_v2(s, permit, query::full_partition_range, s->full_slice(),
+            readers.push_back(ds2.make_mutation_reader(s, permit, query::full_partition_range, s->full_slice(),
                 nullptr, streamed_mutation::forwarding::yes));
 
             auto rd = mutation_fragment_v1_stream(make_combined_reader(s, permit, std::move(readers),
@@ -2253,7 +2253,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) {
             auto& table = db->local().find_column_family(schema);
-            auto reader = table.as_mutation_source().make_reader_v2(
+            auto reader = table.as_mutation_source().make_mutation_reader(
                     schema,
                     std::move(permit),
                     range,
@@ -2340,7 +2340,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_streaming_reader) {
                 tracing::trace_state_ptr trace_state,
                 mutation_reader::forwarding fwd_mr) mutable {
             auto& table = db->local().find_column_family(s);
-            return table.as_mutation_source().make_reader_v2(std::move(s), std::move(permit), range, slice, std::move(trace_state),
+            return table.as_mutation_source().make_mutation_reader(std::move(s), std::move(permit), range, slice, std::move(trace_state),
                     streamed_mutation::forwarding::no, fwd_mr);
         };
         auto& table = env.db().local().find_column_family(schema);
