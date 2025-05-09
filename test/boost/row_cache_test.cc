@@ -166,23 +166,23 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
-class partition_counting_reader final : public delegating_reader_v2 {
+class partition_counting_reader final : public delegating_reader {
     int& _counter;
     bool _count_fill_buffer = true;
 public:
     partition_counting_reader(mutation_reader mr, int& counter)
-        : delegating_reader_v2(std::move(mr)), _counter(counter) { }
+        : delegating_reader(std::move(mr)), _counter(counter) { }
     virtual future<> fill_buffer() override {
         if (_count_fill_buffer) {
             ++_counter;
             _count_fill_buffer = false;
         }
-        return delegating_reader_v2::fill_buffer();
+        return delegating_reader::fill_buffer();
     }
     virtual future<> next_partition() override {
         _count_fill_buffer = false;
         ++_counter;
-        return delegating_reader_v2::next_partition();
+        return delegating_reader::next_partition();
     }
 };
 
@@ -1220,15 +1220,15 @@ private:
         mutation_source _underlying;
         utils::throttle& _throttle;
     private:
-        class reader : public delegating_reader_v2 {
+        class reader : public delegating_reader {
             utils::throttle& _throttle;
         public:
             reader(utils::throttle& t, mutation_reader r)
-                    : delegating_reader_v2(std::move(r))
+                    : delegating_reader(std::move(r))
                     , _throttle(t)
             {}
             virtual future<> fill_buffer() override {
-                return delegating_reader_v2::fill_buffer().finally([this] () {
+                return delegating_reader::fill_buffer().finally([this] () {
                     return _throttle.enter();
                 });
             }

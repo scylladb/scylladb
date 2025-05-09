@@ -8,14 +8,14 @@
 
 #include "readers/mutation_reader.hh"
 
-class delegating_reader_v2 : public mutation_reader::impl {
+class delegating_reader : public mutation_reader::impl {
     mutation_reader_opt _underlying_holder;
     mutation_reader* _underlying;
 public:
     // when passed a lvalue reference to the reader
     // we don't own it and the caller is responsible
     // for evenetually closing the reader.
-    delegating_reader_v2(mutation_reader& r)
+    delegating_reader(mutation_reader& r)
         : impl(r.schema(), r.permit())
         , _underlying_holder()
         , _underlying(&r)
@@ -23,7 +23,7 @@ public:
     // when passed a rvalue reference to the reader
     // we assume ownership of it and will close it
     // in close().
-    delegating_reader_v2(mutation_reader&& r)
+    delegating_reader(mutation_reader&& r)
         : impl(r.schema(), r.permit())
         , _underlying_holder(std::move(r))
         , _underlying(&*_underlying_holder)

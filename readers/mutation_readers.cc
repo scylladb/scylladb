@@ -36,7 +36,7 @@
 extern logging::logger mrlog;
 
 mutation_reader make_delegating_reader(mutation_reader& r) {
-    return make_mutation_reader<delegating_reader_v2>(r);
+    return make_mutation_reader<delegating_reader>(r);
 }
 
 namespace {
