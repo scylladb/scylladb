@@ -15,6 +15,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <utility>
 
 namespace generic_server {
@@ -226,14 +227,13 @@ void connection::on_connection_ready()
     _conns_cpu_concurrency.units.return_all();
 }
 
-future<> connection::shutdown()
+void connection::shutdown()
 {
     try {
         _fd.shutdown_input();
         _fd.shutdown_output();
     } catch (...) {
     }
-    return make_ready_future<>();
 }
 
 server::server(const sstring& server_name, logging::logger& logger, config cfg)
@@ -281,10 +281,10 @@ future<> server::shutdown() {
     size_t nr_conn = 0;
     auto nr_conn_total = _connections_list.size();
     _logger.debug("shutdown connection nr_total={}", nr_conn_total);
-    co_await coroutine::parallel_for_each(_connections_list, [&] (auto&& c) -> future<> {
-        co_await c.shutdown();
+    for (auto& c : _connections_list) {
+        c.shutdown();
         _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
-    });
+    }
     co_await std::move(_listeners_stopped);
     _abort_source.request_abort();
 }
@@ -367,22 +367,18 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
                     _conns_cpu_concurrency_semaphore, std::move(units));
             if (shed) {
+                // We establish a connection even during shedding to notify the client;
+                // otherwise, they might hang waiting for a response.
                 _shed_connections++;
                 static thread_local logger::rate_limit rate_limit{std::chrono::seconds(10)};
                 _logger.log(log_level::warn, rate_limit,
                         "too many in-flight connection attempts: {}, connection dropped",
                         _conns_cpu_concurrency_semaphore.waiters());
-                conn->shutdown().ignore_ready_future();
+                conn->shutdown();
+                continue;
             }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
-                return advertise_new_connection(conn); // Notify any listeners about new connection.
-            }).then_wrapped([this, conn] (future<> f) {
-                try {
-                    f.get();
-                } catch (...) {
-                    _logger.info("exception while advertising new connection: {}", std::current_exception());
-                }
                 // Block while monitoring for lifetime/errors.
                 return conn->process().then_wrapped([this, conn] (auto f) {
                     try {
@@ -395,23 +391,12 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                             _logger.info("exception while processing connection: {}", ep);
                         }
                     }
-                    return unadvertise_connection(conn);
                 });
             });
         } catch (...) {
             _logger.debug("accept failed: {}", std::current_exception());
         }
     }
-}
-
-future<>
-server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn) {
-    return make_ready_future<>();
-}
-
-future<>
-server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    return make_ready_future<>();
 }
 
 }
