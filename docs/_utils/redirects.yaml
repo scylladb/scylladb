@@ -162,3 +162,5 @@
 /stable/upgrade/upgrade-opensource/upgrade-guide-from-4.5-to-4.6/upgrade-guide-from-4.5-to-4.6-debian-10.html: /stable/upgrade/index.html
 /stable/upgrade/upgrade-opensource/upgrade-guide-from-4.5-to-4.6/metric-update-4.5-to-4.6.html: /stable/upgrade/index.html
 
+# Divice API reference to smaller files
+/stable/reference/api-reference.html: /stable/reference/api/index.html
