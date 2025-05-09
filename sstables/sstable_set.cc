@@ -945,7 +945,21 @@ filter_sstable_for_reader_by_ck(std::vector<shared_sstable>&& sstables, replica:
 
 std::vector<frozen_sstable_run>
 sstable_set_impl::all_sstable_runs() const {
-    throw_with_backtrace<std::bad_function_call>();
+    auto all_sstables = all();
+    std::unordered_map<sstables::run_id, sstable_run> runs_m;
+    std::vector<frozen_sstable_run> all_runs;
+
+    for (auto&& sst : *all_sstables) {
+        // When a run cannot accept sstable due to overlapping, treat the rejected sstable
+        // as a single-fragment run.
+        if (!runs_m[sst->run_identifier()].insert(sst)) {
+            all_runs.push_back(make_lw_shared<const sstable_run>(sst));
+        }
+    }
+    for (auto&& r : runs_m | std::views::values) {
+        all_runs.push_back(make_lw_shared<const sstable_run>(std::move(r)));
+    }
+    return all_runs;
 }
 
 mutation_reader
