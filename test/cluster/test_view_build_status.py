@@ -375,6 +375,7 @@ async def test_view_build_status_cleanup_on_remove_node(manager: ManagerClient):
 
 # Replace a node and verify that the view_build_status has rows for the new node and
 # no rows for the old node
+@skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_view_build_status_with_replace_node(manager: ManagerClient):
     node_count = 4
@@ -392,7 +393,18 @@ async def test_view_build_status_with_replace_node(manager: ManagerClient):
     removed_host_id = await manager.get_host_id(servers[0].server_id)
     await manager.server_stop_gracefully(servers[0].server_id);
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
-    servers.append(await manager.server_add(replace_cfg))
+
+    replacing_server = await manager.server_add(start=False, replace_cfg= replace_cfg, config={
+        'error_injections_at_startup': ['sleep_in_synchronize']
+    })
+    task = asyncio.create_task(manager.server_start(replacing_server.server_id))
+    servers.append(replacing_server)
+    log = await manager.server_open_log(replacing_server.server_id)
+    await log.wait_for("start_operation is waiting in synchronize phase")
+    await manager.api.message_injection(replacing_server.ip_addr, 'sleep_in_synchronize')
+
+    await task
+
     servers = servers[1:]
     added_host_id = await manager.get_host_id(servers[-1].server_id)
 
