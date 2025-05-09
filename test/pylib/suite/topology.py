@@ -54,7 +54,7 @@ class TopologyTest(PythonTest):
             try:
                 # Note: start manager here so cluster (and its logs) is available in case of failure
                 await manager.start()
-                self.success = await run_test(self, options)
+                self.success = await run_test(self, options, env=self.suite.scylla_env)
             except Exception as e:
                 self.server_log = manager.cluster.read_server_log()
                 self.server_log_filename = manager.cluster.server_log_filename()
