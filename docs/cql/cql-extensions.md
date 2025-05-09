@@ -419,3 +419,46 @@ it also describes authentication/authorization and service levels. Additionally,
 statement: `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS`, which also includes the information about hashed passwords of the roles.
 
 For more details, see [the article on DESCRIBE SCHEMA](./describe-schema.rst).
+
+## Mixing LWT IF clauses in BATCH statements
+
+`Conditional batches` are `BATCH` statements that contain one or more conditional statements.
+A batch is executed only if all conditions in all statements are true, and all conditions are evaluated against the initial database state.
+ScyllaDb allows using different conditions such as `IF EXISTS`, `IF NOT EXISTS`, and `IF expression`, in statements comprising a batch. Some examples:
+```cql
+BEGIN BATCH
+    UPDATE movies.nowshowing SET main_actor = NULL WHERE movie = 'Invisible Man' IF director = 'Leigh Whannell'
+    UPDATE movies.nowshowing SET released = NULL WHERE movie = 'Invisible Man' IF EXISTS
+APPLY BATCH;
+
+ [applied] | movie         | location | run_day | run_time | director       | main_actor     | released   | theater
+-----------+---------------+----------+---------+----------+----------------+----------------+------------+---------
+      True | Invisible Man |     null |    null |     null | Leigh Whannell | Elisabeth Moss | 2022-04-06 |    null
+      True | Invisible Man |     null |    null |     null | Leigh Whannell | Elisabeth Moss | 2022-04-06 |    null
+```
+
+```cql
+BEGIN BATCH
+    INSERT INTO movies.nowshowing (movie, location, theater, run_day, run_time) VALUES ('Invisible Man', 'Times Square', 'AMC Empire 25', 'Saturday', '23:00:00') IF NOT EXISTS
+    UPDATE movies.nowshowing SET main_actor = NULL WHERE movie = 'Invisible Man' IF director = 'Leigh Whannell'
+APPLY BATCH;
+
+ [applied] | movie         | location | run_day | run_time | director       | main_actor | released | theater
+-----------+---------------+----------+---------+----------+----------------+------------+----------+---------
+      True | Invisible Man |     null |    null |     null | Leigh Whannell |       null |     null |    null
+      True | Invisible Man |     null |    null |     null | Leigh Whannell |       null |     null |    null
+```
+
+In contrast, Cassandra disallows mixing `IF EXISTS`, `IF NOT EXISTS`, and other conditions.
+```cql
+BEGIN BATCH
+    UPDATE movies.nowshowing SET main_actor = NULL WHERE movie = 'Invisible Man' IF director = 'Leigh Whannell'
+    UPDATE movies.nowshowing SET released = NULL WHERE movie = 'Invisible Man' IF EXISTS
+APPLY BATCH;
+
+InvalidRequest: Error from server: code=2200 [Invalid query] message="Cannot mix IF conditions and IF EXISTS for the same row"
+```
+
+For more details, see:
+- [Lightweight Transactions](../features/lwt.rst)
+- [How does ScyllaDB LWT Differ from Apache Cassandra?](../kb/lwt-differences.rst)
