@@ -149,6 +149,10 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 # for them. Keep everything else in the configuration file to make
 # it easier to restart. Sic: if you make a typo on the command line,
 # Scylla refuses to boot.
+#
+# This variable is for options which are supported by *all*
+# Scylla versions which participate in the tests.
+# Other options should be instead put in ScyllaVersionDescription.
 SCYLLA_CMDLINE_OPTIONS = [
     '--smp', '2',
     '-m', '1G',
@@ -165,8 +169,30 @@ SCYLLA_CMDLINE_OPTIONS = [
     '--logger-log-level', 'raft_topology=debug',
     '--logger-log-level', 'query_processor=debug',
     '--logger-log-level', 'group0_raft_sm=trace',
-    '--logger-log-level', 'group0_voter_handler=debug',
 ]
+
+# A path to a Scylla executable, with version-specific
+# (i.e. not supported by *all* relevant versions)
+# Scylla config attached.
+class ScyllaVersionDescription(NamedTuple):
+    path: str # path to the Scylla executable
+    config: dict # a dictionary of added scylla.yaml options
+    argv: list[str] # a list of added CLI args
+
+# Returns the description of the current version.
+# (I.e. the one we just built and are now testing).
+#
+# (The path has to be passed by an argument because the current executable
+# has no fixed location -- the build directory depends on the build mode,
+# and in the case of cmake can be moved to something different than `build`.)
+def get_current_version_description(path: str) -> ScyllaVersionDescription:
+    return ScyllaVersionDescription(
+        path=path,
+        config={},
+        argv=[
+            '--logger-log-level', 'group0_voter_handler=debug',
+        ]
+    )
 
 # [--smp, 1], [--smp, 2] -> [--smp, 2]
 # [--smp, 1], [--smp] -> [--smp]
@@ -268,7 +294,7 @@ class ScyllaServer:
     host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
-    def __init__(self, mode: str, exe: str, vardir: str | pathlib.Path,
+    def __init__(self, mode: str, version: ScyllaVersionDescription, vardir: str | pathlib.Path,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
                  cluster_name: str, ip_addr: str, seeds: List[str],
                  cmdline_options: List[str],
@@ -284,10 +310,11 @@ class ScyllaServer:
             prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-"
         )
         self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
-        self.exe = pathlib.Path(exe).resolve()
+        self.exe = pathlib.Path(version.path).resolve()
         self.vardir = pathlib.Path(vardir)
         self.logger = logger
-        self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, cmdline_options)
+        self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
+        self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
         self.cluster_name = cluster_name
         self.ip_addr = IPAddress(ip_addr)
         self.seeds = seeds
@@ -321,7 +348,7 @@ class ScyllaServer:
                 cluster_name = self.cluster_name,
                 server_encryption = server_encryption,
                 socket_path=self.maintenance_socket_path) \
-            | config_options
+            | version.config | config_options
         self.property_file = property_file
         self.append_env = append_env
 
