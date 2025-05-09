@@ -812,27 +812,20 @@ SEASTAR_THREAD_TEST_CASE(background_reclaim) {
         logalloc::shard_tracker().stop().get();
     });
 
-    sleep(500ms).get(); // sleep a little, to give the reclaimer a head start
-
     std::vector<managed_bytes> std_allocs;
     size_t std_alloc_size = 1000000; // note that managed_bytes fragments these, even in std
     for (int i = 0; i < 50; ++i) {
+        // Background reclaim is supposed to eventually ensure a certain amount of free memory.
+        while (memory::free_memory() < background_reclaim_free_memory_threshold) {
+            thread::maybe_yield();
+        }
+
         auto compacted_pre = logalloc::shard_tracker().statistics().memory_compacted;
         fmt::print("compacted {} items {} (pre)\n", compacted_pre, evictable_allocs.size());
         std_allocs.emplace_back(managed_bytes::initialized_later(), std_alloc_size);
         auto compacted_post = logalloc::shard_tracker().statistics().memory_compacted;
         fmt::print("compacted {} items {} (post)\n", compacted_post, evictable_allocs.size());
         BOOST_REQUIRE_EQUAL(compacted_pre, compacted_post);
-    
-        // Pretend to do some work. Sleeping would be too easy, as the background reclaim group would use
-        // all that time.
-        //
-        // Use thread_cputime_clock to prevent overcommitted test machines from stealing CPU time
-        // and causing test failures.
-        auto deadline = thread_cputime_clock::now() + 100ms;
-        while (thread_cputime_clock::now() < deadline) {
-            thread::maybe_yield();
-        }
     }
 }
 
