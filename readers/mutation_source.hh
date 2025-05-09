@@ -41,7 +41,7 @@ partition_presence_checker make_default_partition_presence_checker() {
 // Partition-range forwarding is not yet supported in reverse mode.
 class mutation_source {
     using partition_range = const dht::partition_range&;
-    using flat_reader_v2_factory_type = std::function<mutation_reader(schema_ptr,
+    using mutation_reader_factory = std::function<mutation_reader(schema_ptr,
                                                                         reader_permit,
                                                                         partition_range,
                                                                         const query::partition_slice&,
@@ -51,15 +51,15 @@ class mutation_source {
     // We could have our own version of std::function<> that is nothrow
     // move constructible and save some indirection and allocation.
     // Probably not worth the effort though.
-    lw_shared_ptr<flat_reader_v2_factory_type> _fn;
+    lw_shared_ptr<mutation_reader_factory> _fn;
     lw_shared_ptr<std::function<partition_presence_checker()>> _presence_checker_factory;
 private:
     mutation_source() = default;
     explicit operator bool() const { return bool(_fn); }
     friend class optimized_optional<mutation_source>;
 public:
-    mutation_source(flat_reader_v2_factory_type fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
-        : _fn(make_lw_shared<flat_reader_v2_factory_type>(std::move(fn)))
+    mutation_source(mutation_reader_factory fn, std::function<partition_presence_checker()> pcf = [] { return make_default_partition_presence_checker(); })
+        : _fn(make_lw_shared<mutation_reader_factory>(std::move(fn)))
         , _presence_checker_factory(make_lw_shared<std::function<partition_presence_checker()>>(std::move(pcf)))
     { }
 
