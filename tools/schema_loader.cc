@@ -488,37 +488,9 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     }
 }
 
-schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem::path sstable_path, sstring keyspace, sstring table) {
-    if (keyspace.empty()) {
-        keyspace = "my_keyspace";
-    }
-    if (table.empty()) {
-        table = "my_table";
-    }
-
-    db::nop_large_data_handler large_data_handler;
-    db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
-    gms::feature_service feature_service({get_disabled_features_from_db_config(dbcfg)});
-    cache_tracker tracker;
-    sstables::directory_semaphore dir_sem(1);
-    abort_source abort;
-    auto scf = make_sstable_compressor_factory_for_tests_in_thread();
-    sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker,
-        memory::stats().total_memory(), dir_sem,
-        [host_id = locator::host_id::create_random_id()] { return host_id; }, *scf, abort);
-    auto close_sst_man = deferred_close(sst_man);
-
-    schema_ptr bootstrap_schema = schema_builder(keyspace, table).with_column("pk", int32_type, column_kind::partition_key).build();
-
-    const auto ed = sstables::parse_path(sstable_path, keyspace, table);
-    const auto dir_path = sstable_path.parent_path();
-    auto local = data_dictionary::make_local_options(dir_path);
-    auto bootstrap_sst = sst_man.make_sstable(bootstrap_schema, local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
-
-    bootstrap_sst->load_metadata().get();
-
-    const auto& serialization_header = bootstrap_sst->get_serialization_header();
-    const auto& compression = bootstrap_sst->get_compression();
+schema_ptr load_schema_from_statistics(sstring keyspace, sstring table, const sstables::shared_sstable& sstable) {
+    const auto& serialization_header = sstable->get_serialization_header();
+    const auto& compression = sstable->get_compression();
 
     auto builder = schema_builder(keyspace, table);
 
@@ -572,6 +544,38 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     builder.set_compressor_params(sstables::options_from_compression(compression));
 
     return builder.build();
+}
+
+schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem::path sstable_path, sstring keyspace, sstring table) {
+    if (keyspace.empty()) {
+        keyspace = "my_keyspace";
+    }
+    if (table.empty()) {
+        table = "my_table";
+    }
+
+    db::nop_large_data_handler large_data_handler;
+    db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
+    gms::feature_service feature_service({get_disabled_features_from_db_config(dbcfg)});
+    cache_tracker tracker;
+    sstables::directory_semaphore dir_sem(1);
+    abort_source abort;
+    auto scf = make_sstable_compressor_factory_for_tests_in_thread();
+    sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker,
+        memory::stats().total_memory(), dir_sem,
+        [host_id = locator::host_id::create_random_id()] { return host_id; }, *scf, abort);
+    auto close_sst_man = deferred_close(sst_man);
+
+    schema_ptr bootstrap_schema = schema_builder(keyspace, table).with_column("pk", int32_type, column_kind::partition_key).build();
+
+    const auto ed = sstables::parse_path(sstable_path, keyspace, table);
+    const auto dir_path = sstable_path.parent_path();
+    auto local = data_dictionary::make_local_options(dir_path);
+    auto bootstrap_sst = sst_man.make_sstable(bootstrap_schema, local, ed.generation, sstables::sstable_state::normal, ed.version, ed.format);
+
+    bootstrap_sst->load_metadata().get();
+
+    return load_schema_from_statistics(keyspace, table, bootstrap_sst);
 }
 
 } // anonymous namespace
