@@ -63,7 +63,7 @@ private:
 public:
     explicit partition_range_walker(std::vector<dht::partition_range> ranges) : _ranges(ranges) { }
     const dht::partition_range& initial_range() const { return _ranges[0]; }
-    void fast_forward_if_needed(flat_reader_assertions_v2& mr, const mutation& expected, bool verify_eos = true) {
+    void fast_forward_if_needed(mutation_reader_assertions& mr, const mutation& expected, bool verify_eos = true) {
         while (!current_range().contains(expected.decorated_key(), dht::ring_position_comparator(*expected.schema()))) {
             _current_position++;
             SCYLLA_ASSERT(_current_position < _ranges.size());
@@ -421,7 +421,7 @@ static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurren
 
     mutation_source ms = populate(s, std::vector<mutation>({m}), gc_clock::now());
 
-    auto new_stream = [&ms, s, &semaphore, &m] () -> flat_reader_assertions_v2 {
+    auto new_stream = [&ms, s, &semaphore, &m] () -> mutation_reader_assertions {
         testlog.info("Creating new streamed_mutation");
         auto res = assert_that(ms.make_mutation_reader(s,
             semaphore.make_permit(),
@@ -433,7 +433,7 @@ static void test_streamed_mutation_forwarding_guarantees(tests::reader_concurren
         return res;
     };
 
-    auto verify_range = [&] (flat_reader_assertions_v2& sm, int start, int end) {
+    auto verify_range = [&] (mutation_reader_assertions& sm, int start, int end) {
         sm.fast_forward_to(keys[start], keys[end]);
 
         for (; start < end; ++start) {
@@ -2726,7 +2726,7 @@ void for_each_schema_change(std::function<void(schema_ptr, const std::vector<mut
     test_mutated_schemas();
 }
 
-static bool compare_readers(const schema& s, mutation_reader& authority, flat_reader_assertions_v2& tested) {
+static bool compare_readers(const schema& s, mutation_reader& authority, mutation_reader_assertions& tested) {
     bool empty = true;
     while (auto expected = authority().get()) {
         tested.produces(s, *expected);

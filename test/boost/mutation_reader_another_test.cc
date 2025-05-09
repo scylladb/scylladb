@@ -801,7 +801,7 @@ SEASTAR_THREAD_TEST_CASE(test_make_nonforwardable) {
 
     // next_partition()
     {
-        auto check = [&] (flat_reader_assertions_v2 rd) {
+        auto check = [&] (mutation_reader_assertions rd) {
             rd.produces_partition_start(m1.decorated_key(), m1.partition().partition_tombstone());
             rd.next_partition();
             rd.produces_partition_start(m2.decorated_key(), m2.partition().partition_tombstone());

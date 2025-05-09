@@ -42,7 +42,7 @@ inline void match_compacted_mutation(const mutation_opt& mo, const mutation& m, 
 }
 
 // Intended to be called in a seastar thread
-class flat_reader_assertions_v2 {
+class mutation_reader_assertions {
     mutation_reader _reader;
     dht::partition_range _pr;
     bool _ignore_deletion_time = false;
@@ -112,18 +112,18 @@ private:
         _rt = rtc.tombstone();
     }
 public:
-    flat_reader_assertions_v2(mutation_reader reader)
+    mutation_reader_assertions(mutation_reader reader)
             : _reader(std::move(reader))
     { }
 
-    ~flat_reader_assertions_v2() {
+    ~mutation_reader_assertions() {
         _reader.close().get();
     }
 
-    flat_reader_assertions_v2(const flat_reader_assertions_v2&) = delete;
-    flat_reader_assertions_v2(flat_reader_assertions_v2&&) = default;
+    mutation_reader_assertions(const mutation_reader_assertions&) = delete;
+    mutation_reader_assertions(mutation_reader_assertions&&) = default;
 
-    flat_reader_assertions_v2& operator=(flat_reader_assertions_v2&& o) {
+    mutation_reader_assertions& operator=(mutation_reader_assertions&& o) {
         if (this != &o) {
             _reader.close().get();
             _reader = std::move(o._reader);
@@ -134,17 +134,17 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2&& ignore_deletion_time(bool ignore = true) {
+    mutation_reader_assertions&& ignore_deletion_time(bool ignore = true) {
         _ignore_deletion_time = ignore;
         return std::move(*this);
     }
 
-    flat_reader_assertions_v2&& exact(bool exact = true) {
+    mutation_reader_assertions&& exact(bool exact = true) {
         _exact = exact;
         return std::move(*this);
     }
 
-    flat_reader_assertions_v2& produces_partition_start(const dht::decorated_key& dk,
+    mutation_reader_assertions& produces_partition_start(const dht::decorated_key& dk,
                                                      std::optional<tombstone> tomb = std::nullopt) {
         testlog.trace("Expecting partition start with key {}", dk);
         auto mfopt = read_next();
@@ -164,7 +164,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_static_row() {
+    mutation_reader_assertions& produces_static_row() {
         testlog.trace("Expecting static row");
         auto mfopt = read_next();
         if (!mfopt) {
@@ -176,7 +176,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_row_with_key(const clustering_key& ck, std::optional<tombstone> active_range_tombstone = std::nullopt) {
+    mutation_reader_assertions& produces_row_with_key(const clustering_key& ck, std::optional<tombstone> active_range_tombstone = std::nullopt) {
         testlog.trace("Expect {}", ck);
         if (active_range_tombstone) {
             testlog.trace("(with active range tombstone: {})", *active_range_tombstone);
@@ -209,7 +209,7 @@ public:
         { }
     };
 
-    flat_reader_assertions_v2& produces_static_row(const std::vector<expected_column>& columns) {
+    mutation_reader_assertions& produces_static_row(const std::vector<expected_column>& columns) {
         testlog.trace("Expecting static row");
         auto mfopt = read_next();
         if (!mfopt) {
@@ -239,7 +239,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_row(const clustering_key& ck, const std::vector<expected_column>& columns) {
+    mutation_reader_assertions& produces_row(const clustering_key& ck, const std::vector<expected_column>& columns) {
         testlog.trace("Expect {}", ck);
         auto mfopt = read_next();
         if (!mfopt) {
@@ -276,7 +276,7 @@ public:
 
     using assert_function = noncopyable_function<void(const column_definition&, const atomic_cell_or_collection*)>;
 
-    flat_reader_assertions_v2& produces_row(const clustering_key& ck,
+    mutation_reader_assertions& produces_row(const clustering_key& ck,
                                          const std::vector<column_id>& column_ids,
                                          const std::vector<assert_function>& column_assert) {
         testlog.trace("Expect {}", ck);
@@ -306,7 +306,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& may_produce_tombstones(position_range range) {
+    mutation_reader_assertions& may_produce_tombstones(position_range range) {
         testlog.trace("Expect possible range tombstone changes in {}", range);
         while (auto next = peek_next()) {
             if (!next->is_range_tombstone_change()) {
@@ -324,7 +324,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_range_tombstone_change(const range_tombstone_change& rtc_) {
+    mutation_reader_assertions& produces_range_tombstone_change(const range_tombstone_change& rtc_) {
         auto rtc = maybe_drop_deletion_time(rtc_);
         testlog.trace("Expect {}", rtc);
         auto mfopt = read_next();
@@ -342,7 +342,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_partition_end() {
+    mutation_reader_assertions& produces_partition_end() {
         testlog.trace("Expecting partition end");
         BOOST_REQUIRE(!_rt);
         auto mfopt = read_next();
@@ -355,7 +355,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces(const schema& s, const mutation_fragment_v2& mf) {
+    mutation_reader_assertions& produces(const schema& s, const mutation_fragment_v2& mf) {
         if (mf.is_range_tombstone_change()) {
             return produces_range_tombstone_change(mf.as_range_tombstone_change());
         }
@@ -370,7 +370,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_end_of_stream() {
+    mutation_reader_assertions& produces_end_of_stream() {
         testlog.trace("Expecting end of stream");
         auto mfopt = read_next();
         if (bool(mfopt)) {
@@ -380,7 +380,7 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces(mutation_fragment_v2::kind k, std::vector<int> ck_elements, bool make_full_key = false) {
+    mutation_reader_assertions& produces(mutation_fragment_v2::kind k, std::vector<int> ck_elements, bool make_full_key = false) {
         testlog.trace("Expect {} {{{}}}", k, fmt::join(ck_elements, ", "));
         std::vector<bytes> ck_bytes;
         for (auto&& e : ck_elements) {
@@ -409,11 +409,11 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_partition(const mutation& m) {
+    mutation_reader_assertions& produces_partition(const mutation& m) {
         return produces(m);
     }
 
-    flat_reader_assertions_v2& produces(const mutation& m, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
+    mutation_reader_assertions& produces(const mutation& m, const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         auto mo = read_mutation_from_mutation_reader(_reader).get();
         if (!mo) {
             BOOST_FAIL(format("Expected {}, but got end of stream, at: {}", m, seastar::current_backtrace()));
@@ -423,21 +423,21 @@ public:
         return *this;
     }
 
-    flat_reader_assertions_v2& produces(const dht::decorated_key& dk) {
+    mutation_reader_assertions& produces(const dht::decorated_key& dk) {
         produces_partition_start(dk);
         next_partition();
         return *this;
     }
 
     template<typename Range>
-    flat_reader_assertions_v2& produces(const Range& range) {
+    mutation_reader_assertions& produces(const Range& range) {
         for (auto&& m : range) {
             produces(m);
         }
         return *this;
     }
 
-    flat_reader_assertions_v2& produces_eos_or_empty_mutation() {
+    mutation_reader_assertions& produces_eos_or_empty_mutation() {
         testlog.trace("Expecting eos or empty mutation");
         auto mo = read_mutation_from_mutation_reader(_reader).get();
         if (mo) {
@@ -485,27 +485,27 @@ public:
         BOOST_REQUIRE(!inside_partition);
     }
 
-    flat_reader_assertions_v2& fast_forward_to(const dht::partition_range& pr) {
+    mutation_reader_assertions& fast_forward_to(const dht::partition_range& pr) {
         testlog.trace("Fast forward to partition range: {}", pr);
         _pr = pr;
         _reader.fast_forward_to(_pr).get();
         return *this;
     }
 
-    flat_reader_assertions_v2& next_partition() {
+    mutation_reader_assertions& next_partition() {
         testlog.trace("Skip to next partition");
         _reader.next_partition().get();
         reset_rt();
         return *this;
     }
 
-    flat_reader_assertions_v2& fast_forward_to(position_range pr) {
+    mutation_reader_assertions& fast_forward_to(position_range pr) {
         testlog.trace("Fast forward to clustering range: {}", pr);
         _reader.fast_forward_to(std::move(pr)).get();
         return *this;
     }
 
-    flat_reader_assertions_v2& fast_forward_to(const clustering_key& ck1, const clustering_key& ck2) {
+    mutation_reader_assertions& fast_forward_to(const clustering_key& ck1, const clustering_key& ck2) {
         testlog.trace("Fast forward to clustering range: [{}, {})", ck1, ck2);
         return fast_forward_to(position_range{
                 position_in_partition(position_in_partition::clustering_row_tag_t(), ck1),
@@ -513,7 +513,7 @@ public:
         });
     }
 
-    flat_reader_assertions_v2& produces_compacted(const mutation& m, gc_clock::time_point query_time,
+    mutation_reader_assertions& produces_compacted(const mutation& m, gc_clock::time_point query_time,
                                                const std::optional<query::clustering_row_ranges>& ck_ranges = {}) {
         match_compacted_mutation(read_mutation_from_mutation_reader(_reader).get(), m, query_time, ck_ranges);
         return *this;
@@ -539,6 +539,6 @@ public:
 };
 
 inline
-flat_reader_assertions_v2 assert_that(mutation_reader r) {
+mutation_reader_assertions assert_that(mutation_reader r) {
     return { std::move(r) };
 }

@@ -718,7 +718,7 @@ SEASTAR_TEST_CASE(buffer_overflow) {
                 mutation_fragment_v2(*s, env.make_reader_permit(), partition_start(dk1, rt1_before.tombstone())).memory_usage()
                     + mutation_fragment_v2(*s, env.make_reader_permit(), range_tombstone_change(rt1_before)).memory_usage(),
                 mutation_fragment_v2(*s, env.make_reader_permit(), clustering_row(ck1)).memory_usage()));
-    flat_reader_assertions_v2 rd(std::move(r));
+    mutation_reader_assertions rd(std::move(r));
     rd.produces_partition_start(dk1)
         .produces_range_tombstone_change(rt1_before)
         .produces_row_with_key(ck1)

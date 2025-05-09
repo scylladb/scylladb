@@ -381,17 +381,17 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         m3.set_clustered_cell(ck3, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
 
         mt->apply(m1);
-        std::optional<flat_reader_assertions_v2> rd1 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
+        std::optional<mutation_reader_assertions> rd1 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
 
         mt->apply(m2);
-        std::optional<flat_reader_assertions_v2> rd2 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
+        std::optional<mutation_reader_assertions> rd2 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
         rd2->set_max_buffer_size(1);
         rd2->fill_buffer().get();
 
         mt->apply(m3);
-        std::optional<flat_reader_assertions_v2> rd3 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
+        std::optional<mutation_reader_assertions> rd3 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
         rd3->set_max_buffer_size(1);
         rd3->fill_buffer().get();
 
