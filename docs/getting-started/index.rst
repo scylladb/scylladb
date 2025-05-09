@@ -11,7 +11,6 @@ Getting Started
    requirements
    Migrate to ScyllaDB </using-scylla/migrate-scylla>
    Integration Solutions </using-scylla/integrations/index>
-   tutorials
 
 .. panel-box::
   :title: ScyllaDB Requirements
