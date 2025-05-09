@@ -385,7 +385,7 @@ protected:
                                     const query::partition_slice& slice,
                                     streamed_mutation::forwarding fwd,
                                     mutation_reader::forwarding fwd_mr) {
-        auto ret = _memtable->_underlying->make_reader_v2(_schema, std::move(permit), delegate, slice, nullptr, fwd, fwd_mr);
+        auto ret = _memtable->_underlying->make_mutation_reader(_schema, std::move(permit), delegate, slice, nullptr, fwd, fwd_mr);
         _last = {};
         return ret;
     }

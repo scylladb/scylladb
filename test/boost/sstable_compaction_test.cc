@@ -110,7 +110,7 @@ static future<std::vector<sstables::shared_sstable>> open_sstables(test_env& env
 
 // mutation_reader for sstable keeping all the required objects alive.
 static mutation_reader sstable_reader(shared_sstable sst, schema_ptr s, reader_permit permit) {
-    return sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, s->full_slice());
+    return sst->as_mutation_source().make_mutation_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
 }
 
 class strategy_control_for_test : public strategy_control {
@@ -2246,7 +2246,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
                                             compaction_type_options::make_cleanup(), std::move(local_ranges));
             ret = compact_sstables(env, std::move(descriptor), cf, sst_gen).get();
             BOOST_REQUIRE(ret.new_sstables.size() == 1);
-            auto reader = ret.new_sstables[0]->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+            auto reader = ret.new_sstables[0]->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
             assert_that(std::move(reader))
                     .produces(local_keys[0])
                     .produces(local_keys[10])
@@ -2298,7 +2298,7 @@ static void verify_fragments(std::vector<sstables::shared_sstable> ssts, reader_
     std::vector<mutation_reader> readers;
     readers.reserve(ssts.size());
     for (auto& sst : ssts) {
-        readers.push_back(sst->as_mutation_source().make_reader_v2(schema, permit));
+        readers.push_back(sst->as_mutation_source().make_mutation_reader(schema, permit));
     }
 
     auto r = assert_that(make_combined_reader(schema, permit, std::move(readers)));
@@ -3727,7 +3727,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             auto gc_now = gc_clock::now();
             gc_before = gc_now - s->gc_grace_seconds();
 
-            auto cfc = compact_for_compaction_v2<compacting_sstable_writer_test, compacting_sstable_writer_test>(
+            auto cfc = compact_for_compaction<compacting_sstable_writer_test, compacting_sstable_writer_test>(
                 *s, gc_now, max_purgeable_func, tombstone_gc_state(nullptr), std::move(cr), std::move(purged_cr));
 
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
@@ -5979,7 +5979,7 @@ future<> test_sstables_excluding_staging_correctness(test_env_config cfg) {
         {
             testlog.info("table::as_mutation_source_excluding_staging()");
             auto ms_excluding_staging = t->as_mutation_source_excluding_staging();
-            assert_that(ms_excluding_staging.make_reader_v2(s, env.make_reader_permit(), query::full_partition_range))
+            assert_that(ms_excluding_staging.make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range))
                 .produces(*sorted_muts.rbegin())
                 .produces_end_of_stream();
         }
@@ -5987,7 +5987,7 @@ future<> test_sstables_excluding_staging_correctness(test_env_config cfg) {
         {
             testlog.info("table::as_mutation_source()");
             auto ms_inclusive = t->as_mutation_source();
-            assert_that(ms_inclusive.make_reader_v2(s, env.make_reader_permit(), query::full_partition_range))
+            assert_that(ms_inclusive.make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range))
                     .produces(*sorted_muts.begin())
                     .produces(*sorted_muts.rbegin())
                     .produces_end_of_stream();

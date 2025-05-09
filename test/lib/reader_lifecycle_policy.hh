@@ -13,7 +13,7 @@
 #include <seastar/core/gate.hh>
 
 class test_reader_lifecycle_policy
-        : public reader_lifecycle_policy_v2
+        : public reader_lifecycle_policy
         , public enable_shared_from_this<test_reader_lifecycle_policy> {
 public:
     using reader_factory_function = std::function<mutation_reader(

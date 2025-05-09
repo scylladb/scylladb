@@ -28,7 +28,7 @@
 /// parameters because although client code is required to keep them alive as
 /// long as the top level reader lives, the shard readers might outlive the
 /// multishard reader itself.
-class reader_lifecycle_policy_v2 {
+class reader_lifecycle_policy {
 public:
     struct stopped_reader {
         reader_concurrency_semaphore::inactive_read_handle handle;
@@ -125,8 +125,8 @@ using read_ahead = bool_class<struct read_ahead_tag>;
 /// semaphore, and the avoidance of evictions is more important than low latencies.
 ///
 /// The readers' life-cycles are managed through the supplied lifecycle policy.
-mutation_reader make_multishard_combining_reader_v2(
-        shared_ptr<reader_lifecycle_policy_v2> lifecycle_policy,
+mutation_reader make_multishard_combining_reader(
+        shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
         locator::effective_replication_map_ptr erm,
         reader_permit permit,
@@ -137,9 +137,9 @@ mutation_reader make_multishard_combining_reader_v2(
         multishard_reader_buffer_hint buffer_hint = multishard_reader_buffer_hint::no,
         read_ahead read_ahead = read_ahead::yes);
 
-mutation_reader make_multishard_combining_reader_v2_for_tests(
+mutation_reader make_multishard_combining_reader_for_tests(
         const dht::sharder& sharder,
-        shared_ptr<reader_lifecycle_policy_v2> lifecycle_policy,
+        shared_ptr<reader_lifecycle_policy> lifecycle_policy,
         schema_ptr schema,
         reader_permit permit,
         const dht::partition_range& pr,

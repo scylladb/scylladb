@@ -24,7 +24,7 @@ class view_builder;
 
 namespace streaming {
 
-reader_consumer_v2 make_streaming_consumer(sstring origin,
+mutation_reader_consumer make_streaming_consumer(sstring origin,
     sharded<replica::database>& db,
     db::view::view_builder& vb,
     uint64_t estimated_partitions,

@@ -165,7 +165,7 @@ future<> view_update_generator::start() {
                                 mutation_reader::forwarding fwd_mr) {
                         return ssts->make_range_sstable_reader(s, std::move(permit), pr, ps, std::move(ts), fwd_ms, fwd_mr, *_progress_tracker);
                     });
-                    auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader_v2(
+                    auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader(
                             std::move(ms),
                             s,
                             permit,

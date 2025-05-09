@@ -19,7 +19,6 @@
 #include "mutation/mutation_rebuilder.hh"
 
 class evictable_reader_handle;
-class evictable_reader_handle_v2;
 
 namespace db::view {
 
@@ -50,7 +49,7 @@ private:
     schema_ptr _schema;
     reader_permit _permit;
     const seastar::abort_source* _as;
-    evictable_reader_handle_v2& _staging_reader_handle;
+    evictable_reader_handle& _staging_reader_handle;
     circular_buffer<mutation> _buffer;
     std::optional<mutation_rebuilder_v2> _mut_builder;
     size_t _buffer_size{0};
@@ -64,7 +63,7 @@ private:
 
 public:
     // Push updates with a custom pusher. Mainly for tests.
-    view_updating_consumer(schema_ptr schema, reader_permit permit, const seastar::abort_source& as, evictable_reader_handle_v2& staging_reader_handle,
+    view_updating_consumer(schema_ptr schema, reader_permit permit, const seastar::abort_source& as, evictable_reader_handle& staging_reader_handle,
             noncopyable_function<future<row_locker::lock_holder>(mutation)> view_update_pusher)
             : _schema(std::move(schema))
             , _permit(std::move(permit))
@@ -74,7 +73,7 @@ public:
     { }
 
     view_updating_consumer(view_update_generator& gen, schema_ptr schema, reader_permit permit, replica::table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
-            evictable_reader_handle_v2& staging_reader_handle);
+            evictable_reader_handle& staging_reader_handle);
 
     view_updating_consumer(view_updating_consumer&&) = default;
 

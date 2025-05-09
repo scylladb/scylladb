@@ -63,7 +63,7 @@ class build_progress_virtual_reader {
                 , _legacy_generation_number_col(_schema->get_column_definition("generation_number")->id)
                 , _legacy_slice(slice)
                 , _slice(adjust_partition_slice())
-                , _underlying(scylla_views_build_progress.make_reader_v2(
+                , _underlying(scylla_views_build_progress.make_mutation_reader(
                         scylla_views_build_progress.schema(),
                         std::move(permit),
                         range,

@@ -169,7 +169,7 @@ public:
 
     shared_ptr<stream_session> get_session(streaming::plan_id plan_id, locator::host_id from, const char* verb, std::optional<table_id> cf_id = {});
 
-    reader_consumer_v2 make_streaming_consumer(
+    mutation_reader_consumer make_streaming_consumer(
             uint64_t estimated_partitions, stream_reason, service::frozen_topology_guard);
 public:
     virtual future<> on_dead(inet_address endpoint, locator::host_id id, endpoint_state_ptr state, gms::permit_id) override;

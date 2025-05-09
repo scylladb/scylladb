@@ -77,7 +77,7 @@ uint64_t compaction_strategy_impl::adjust_partition_estimate(const mutation_sour
     return partition_estimate;
 }
 
-reader_consumer_v2 compaction_strategy_impl::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const {
+mutation_reader_consumer compaction_strategy_impl::make_interposer_consumer(const mutation_source_metadata& ms_meta, mutation_reader_consumer end_consumer) const {
     return end_consumer;
 }
 
@@ -741,7 +741,7 @@ uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_me
     return _compaction_strategy_impl->adjust_partition_estimate(ms_meta, partition_estimate, std::move(schema));
 }
 
-reader_consumer_v2 compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, reader_consumer_v2 end_consumer) const {
+mutation_reader_consumer compaction_strategy::make_interposer_consumer(const mutation_source_metadata& ms_meta, mutation_reader_consumer end_consumer) const {
     return _compaction_strategy_impl->make_interposer_consumer(ms_meta, std::move(end_consumer));
 }
 

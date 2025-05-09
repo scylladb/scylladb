@@ -190,7 +190,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_read) {
     BOOST_REQUIRE(val_cdef);
 
     auto to_expected = [val_cdef] (int val) {
-        return std::vector<flat_reader_assertions_v2::expected_column>{{val_cdef, int32_type->decompose(int32_t(val))}};
+        return std::vector<mutation_reader_assertions::expected_column>{{val_cdef, int32_type->decompose(int32_t(val))}};
     };
 
     // Sequential read
@@ -441,7 +441,7 @@ SEASTAR_TEST_CASE(test_uncompressed_skip_using_index_rows) {
     BOOST_REQUIRE(rc_cdef);
 
     auto to_expected = [rc_cdef] (sstring val) {
-        return std::vector<flat_reader_assertions_v2::expected_column>{{rc_cdef, utf8_type->decompose(val)}};
+        return std::vector<mutation_reader_assertions::expected_column>{{rc_cdef, utf8_type->decompose(val)}};
     };
     sstring rc_base(1024, 'b');
 
@@ -703,7 +703,7 @@ SEASTAR_TEST_CASE(test_uncompressed_filtering_and_forwarding_range_tombstones_re
     BOOST_REQUIRE(rc_cdef);
 
     auto to_expected = [rc_cdef] (int val) {
-        return std::vector<flat_reader_assertions_v2::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
+        return std::vector<mutation_reader_assertions::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
     };
 
     // Sequential read
@@ -999,7 +999,7 @@ SEASTAR_TEST_CASE(test_uncompressed_slicing_interleaved_rows_and_rts_read) {
     BOOST_REQUIRE(rc_cdef);
 
     auto to_expected = [rc_cdef] (int val) {
-        return std::vector<flat_reader_assertions_v2::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
+        return std::vector<mutation_reader_assertions::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
     };
 
     // Sequential read
@@ -1292,7 +1292,7 @@ SEASTAR_TEST_CASE(test_uncompressed_compound_static_row_read) {
     BOOST_REQUIRE(val_cdef);
 
     auto generate = [&] (int int_val, std::string_view text_val, std::string_view inet_val) {
-        std::vector<flat_reader_assertions_v2::expected_column> columns;
+        std::vector<mutation_reader_assertions::expected_column> columns;
 
         columns.push_back({s_int_cdef, int32_type->decompose(int_val)});
         columns.push_back({s_text_cdef, utf8_type->from_string(text_val)});
@@ -1508,7 +1508,7 @@ SEASTAR_TEST_CASE(test_uncompressed_counters_read) {
     BOOST_REQUIRE(cdef);
 
     auto generate = [&] (api::timestamp_type timestamp, int64_t value, int64_t clock) {
-        std::vector<flat_reader_assertions_v2::assert_function> assertions;
+        std::vector<mutation_reader_assertions::assert_function> assertions;
 
         assertions.push_back([&, timestamp, value, clock] (const column_definition& def,
                                                            const atomic_cell_or_collection* cell) {
@@ -1654,7 +1654,7 @@ static future<> test_partition_key_with_values_of_different_types_read(const sst
     auto generate = [&] (bool bool_val, double double_val, float float_val, int int_val, long long_val,
                          std::string_view timestamp_val, std::string_view timeuuid_val, std::string_view uuid_val,
                          std::string_view text_val) {
-        std::vector<flat_reader_assertions_v2::expected_column> columns;
+        std::vector<mutation_reader_assertions::expected_column> columns;
 
         columns.push_back({bool_cdef, boolean_type->decompose(bool_val)});
         columns.push_back({double_cdef, double_type->decompose(double_val)});
@@ -1784,7 +1784,7 @@ SEASTAR_TEST_CASE(test_zstd_compression) {
         return dht::decorate_key(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, pk);
     };
 
-    flat_reader_assertions_v2 assertions(sst.make_reader());
+    mutation_reader_assertions assertions(sst.make_reader());
     assertions.produces_partition_start(to_key(0));
     for (int i = 1; i <= 2000; ++i) {
         assertions.produces_row_with_key(clustering_key::from_exploded(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, {int32_type->decompose(i)}));
@@ -1893,7 +1893,7 @@ SEASTAR_TEST_CASE(test_uncompressed_subset_of_columns_read) {
                          std::optional<float> float_val, std::optional<int> int_val, std::optional<long> long_val,
                          std::optional<std::string_view> timestamp_val, std::optional<std::string_view> timeuuid_val,
                          std::optional<std::string_view> uuid_val, std::optional<std::string_view> text_val) {
-        std::vector<flat_reader_assertions_v2::expected_column> columns;
+        std::vector<mutation_reader_assertions::expected_column> columns;
 
         if (bool_val) {
             columns.push_back({bool_cdef, boolean_type->decompose(*bool_val)});
@@ -2100,7 +2100,7 @@ SEASTAR_TEST_CASE(test_uncompressed_large_subset_of_columns_sparse_read) {
     }
 
     auto generate = [&] (const std::vector<std::pair<int, int>>& column_values) {
-        std::vector<flat_reader_assertions_v2::expected_column> columns;
+        std::vector<mutation_reader_assertions::expected_column> columns;
 
         for (auto& p : column_values) {
             columns.push_back({column_defs[p.first - 1], int32_type->decompose(p.second)});
@@ -2318,7 +2318,7 @@ SEASTAR_TEST_CASE(test_uncompressed_large_subset_of_columns_dense_read) {
     }
 
     auto generate = [&] (const std::vector<std::pair<int, int>>& column_values) {
-        std::vector<flat_reader_assertions_v2::expected_column> columns;
+        std::vector<mutation_reader_assertions::expected_column> columns;
 
         for (auto& p : column_values) {
             columns.push_back({column_defs[p.first - 1], int32_type->decompose(p.second)});
@@ -2424,7 +2424,7 @@ SEASTAR_TEST_CASE(test_uncompressed_deleted_cells_read) {
     BOOST_REQUIRE(int_cdef);
 
     auto generate = [&] (uint64_t timestamp, uint64_t deletion_time) {
-        std::vector<flat_reader_assertions_v2::assert_function> assertions;
+        std::vector<mutation_reader_assertions::assert_function> assertions;
 
         assertions.push_back([timestamp, deletion_time] (const column_definition& def,
                                  const atomic_cell_or_collection* cell) {
@@ -2893,7 +2893,7 @@ SEASTAR_TEST_CASE(test_uncompressed_collections_read) {
     BOOST_REQUIRE(map_cdef);
 
     auto generate = [&] (std::vector<int> set_val, std::vector<sstring> list_val, std::vector<std::pair<int, sstring>> map_val) {
-        std::vector<flat_reader_assertions_v2::assert_function> assertions;
+        std::vector<mutation_reader_assertions::assert_function> assertions;
 
         assertions.push_back([val = std::move(set_val)] (const column_definition& def,
                                                          const atomic_cell_or_collection* cell) {
@@ -3017,7 +3017,7 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
     compaction_progress_monitor progress_monitor;
     sstables::compact_sstables(std::move(desc), cdata, cf->try_get_table_state_with_static_sharding(), progress_monitor).get();
 
-    return compacted_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+    return compacted_sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }
 
 SEASTAR_TEST_CASE(compact_deleted_row) {
@@ -4733,7 +4733,7 @@ SEASTAR_TEST_CASE(test_uncompressed_read_two_rows_fast_forwarding) {
     BOOST_REQUIRE(rc_cdef);
 
     auto to_expected = [rc_cdef] (int val) {
-        return std::vector<flat_reader_assertions_v2::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
+        return std::vector<mutation_reader_assertions::expected_column>{{rc_cdef, int32_type->decompose(int32_t(val))}};
     };
 
     auto r = assert_that(sst.make_reader(query::full_partition_range,
@@ -5587,7 +5587,7 @@ SEASTAR_TEST_CASE(test_compression_premature_eof) {
             return dht::decorate_key(*ZSTD_MULTIPLE_CHUNKS_SCHEMA, pk);
         };
 
-        flat_reader_assertions_v2 assertions(sst.make_reader());
+        mutation_reader_assertions assertions(sst.make_reader());
         try {
             assertions.produces_partition_start(to_key(0));
             BOOST_FAIL("produces_partition_start unexpectedly");

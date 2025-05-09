@@ -3084,7 +3084,7 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
             mutation_reader::forwarding fwd_mr) {
         auto table_id = s->id();
         const auto buffer_hint = multishard_reader_buffer_hint(multishard_reader_buffer_size.has_value());
-        auto rd = make_multishard_combining_reader_v2(seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
+        auto rd = make_multishard_combining_reader(seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
                 std::move(s), erm, std::move(permit), pr, ps, std::move(trace_state), fwd_mr, buffer_hint, read_ahead);
         if (multishard_reader_buffer_size) {
             rd.set_max_buffer_size(*multishard_reader_buffer_size);
@@ -3092,7 +3092,7 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
         return rd;
     });
     auto&& full_slice = schema->full_slice();
-    return make_flat_multi_range_reader(schema, std::move(permit), std::move(ms),
+    return make_multi_range_reader(schema, std::move(permit), std::move(ms),
             std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
 }
 
@@ -3107,7 +3107,7 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
     const auto table_id = schema->id();
     const auto& full_slice = schema->full_slice();
     auto erm = db.local().find_column_family(schema).get_effective_replication_map();
-    auto rd = make_multishard_combining_reader_v2(
+    auto rd = make_multishard_combining_reader(
         seastar::make_shared<streaming_reader_lifecycle_policy>(db, table_id, compaction_time),
         std::move(schema),
         std::move(erm),

@@ -2975,7 +2975,7 @@ void view_builder::init_virtual_table() {
 
         auto& table_v2 = _db.find_column_family(db::system_keyspace::view_build_status_v2());
 
-        mutation_reader ms_reader = make_multishard_combining_reader_v2(
+        mutation_reader ms_reader = make_multishard_combining_reader(
                 seastar::make_shared<streaming_reader_lifecycle_policy>(_db.container(), table_v2.schema()->id(), gc_clock::now()),
                 table_v2.schema(),
                 table_v2.get_effective_replication_map(),
@@ -3214,13 +3214,13 @@ public:
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     gc_clock::time_point now = gc_clock::now();
-    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(
+    auto compaction_state = make_lw_shared<compact_for_query_state>(
             *step.reader.schema(),
             now,
             step.pslice,
             batch_size,
             query::max_partitions);
-    auto consumer = compact_for_query_v2<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
+    auto consumer = compact_for_query<view_builder::consumer>(compaction_state, view_builder::consumer{*this, _vug.shared_from_this(), step, now});
     auto built = step.reader.consume_in_thread(std::move(consumer));
     if (auto ds = std::move(*compaction_state).detach_state()) {
         if (ds->current_tombstone) {
@@ -3420,7 +3420,7 @@ void view_updating_consumer::maybe_flush_buffer_mid_partition() {
 }
 
 view_updating_consumer::view_updating_consumer(view_update_generator& gen, schema_ptr schema, reader_permit permit, replica::table& table, std::vector<sstables::shared_sstable> excluded_sstables, const seastar::abort_source& as,
-        evictable_reader_handle_v2& staging_reader_handle)
+        evictable_reader_handle& staging_reader_handle)
     : view_updating_consumer(std::move(schema), std::move(permit), as, staging_reader_handle,
             [table = table.shared_from_this(), excluded_sstables = std::move(excluded_sstables), gen = gen.shared_from_this()] (mutation m) mutable {
         auto s = m.schema();

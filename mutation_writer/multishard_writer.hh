@@ -33,7 +33,7 @@ namespace mutation_writer {
 future<uint64_t> distribute_reader_and_consume_on_shards(schema_ptr s,
     const dht::sharder& sharder,
     mutation_reader producer,
-    reader_consumer_v2 consumer,
+    mutation_reader_consumer consumer,
     utils::phased_barrier::operation&& op = {});
 
 } // namespace mutation_writer

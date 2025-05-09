@@ -15,6 +15,6 @@
 namespace mutation_writer {
 
 using classify_by_timestamp = noncopyable_function<int64_t(api::timestamp_type)>;
-future<> segregate_by_timestamp(mutation_reader producer, classify_by_timestamp classifier, reader_consumer_v2 consumer);
+future<> segregate_by_timestamp(mutation_reader producer, classify_by_timestamp classifier, mutation_reader_consumer consumer);
 
 } // namespace mutation_writer

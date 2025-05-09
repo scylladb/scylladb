@@ -39,7 +39,7 @@
 using namespace sstables;
 
 static mutation_reader sstable_reader(reader_permit permit, shared_sstable sst, schema_ptr s) {
-    return sst->as_mutation_source().make_reader_v2(s, std::move(permit), query::full_partition_range, s->full_slice());
+    return sst->as_mutation_source().make_mutation_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
 
 }
 

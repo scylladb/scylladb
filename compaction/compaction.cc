@@ -762,7 +762,7 @@ private:
             return dht::to_partition_range(*r);
         };
 
-        return make_flat_multi_range_reader(_schema, _permit, std::move(source),
+        return make_multi_range_reader(_schema, _permit, std::move(source),
                                             std::move(owned_range_generator),
                                             _schema->full_slice(),
                                             tracing::trace_state_ptr());
@@ -859,7 +859,7 @@ private:
                 auto close_reader = deferred_close(reader);
 
                 if (enable_garbage_collected_sstable_writer()) {
-                    using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, compacted_fragments_writer>;
+                    using compact_mutations = compact_for_compaction<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
                         max_purgeable_func(),
                         get_tombstone_gc_state(),
@@ -869,7 +869,7 @@ private:
                     reader.consume_in_thread(std::move(cfc));
                     return;
                 }
-                using compact_mutations = compact_for_compaction_v2<compacted_fragments_writer, noop_compacted_fragments_consumer>;
+                using compact_mutations = compact_for_compaction<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = compact_mutations(*schema(), now,
                     max_purgeable_func(),
                     get_tombstone_gc_state(),
@@ -897,7 +897,7 @@ private:
     // if the derived compaction wants to opt in for this behavior, in addition
     // to overriding `make_interposer_consumer()`, it would have to override
     // `use_interposer_consumer()` so it returns true.
-    virtual reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) {
+    virtual mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) {
         return _table_s.get_compaction_strategy().make_interposer_consumer(_ms_metadata, std::move(end_consumer));
     }
 
@@ -1388,7 +1388,7 @@ public:
     {
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
             return mutation_writer::segregate_by_token_group(std::move(reader),
                     _options.classifier,
@@ -1682,7 +1682,7 @@ public:
         }
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         if (!use_interposer_consumer()) {
             return end_consumer;
         }
@@ -1778,7 +1778,7 @@ public:
 
     }
 
-    reader_consumer_v2 make_interposer_consumer(reader_consumer_v2 end_consumer) override {
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         return [end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
             return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
         };

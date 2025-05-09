@@ -88,7 +88,7 @@ struct expected_fragment {
     expected_fragment(range_tombstone_change rtc) : f(std::move(rtc)) { }
     expected_fragment(position_in_partition_view pos, tombstone tomb) : expected_fragment(range_tombstone_change(pos, tomb)) { }
 
-    void check(flat_reader_assertions_v2& r) {
+    void check(mutation_reader_assertions& r) {
         if (f.index() == 0) {
             r.produces_row_with_key(make_ck(std::get<int>(f)));
         } else {

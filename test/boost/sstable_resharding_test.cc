@@ -127,7 +127,7 @@ void run_sstable_resharding_test(sstables::test_env& env) {
         BOOST_REQUIRE(processed_shards.insert(shard).second == true); // check resharding created one sstable per shard.
         assert_sstable_computes_correct_owners(env, new_sst).get();
 
-        auto rd = assert_that(new_sst->as_mutation_source().make_reader_v2(s, env.make_reader_permit()));
+        auto rd = assert_that(new_sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit()));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
         for (auto k : std::views::iota(0u, keys_per_shard)) {
             rd.produces(muts[shard][k]);
