@@ -288,12 +288,12 @@ SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tes
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
-static mutation_reader sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit) {
+static mutation_reader sstable_mutation_reader(shared_sstable sst, schema_ptr s, reader_permit permit) {
     return sst->as_mutation_source().make_mutation_reader(s, std::move(permit), query::full_partition_range, s->full_slice());
 
 }
 
-static mutation_reader sstable_reader_v2(shared_sstable sst, schema_ptr s, reader_permit permit, const dht::partition_range& pr) {
+static mutation_reader sstable_mutation_reader(shared_sstable sst, schema_ptr s, reader_permit permit, const dht::partition_range& pr) {
     return sst->as_mutation_source().make_mutation_reader(s, std::move(permit), pr, s->full_slice());
 }
 
@@ -409,7 +409,7 @@ SEASTAR_TEST_CASE(datafile_generation_47) {
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(utf8_type, bytes(512*1024, 'a')));
 
         auto sstp = make_sstable_containing(env.make_sstable(s), {std::move(m)});
-        auto reader = sstable_reader_v2(sstp, s, env.make_reader_permit());
+        auto reader = sstable_mutation_reader(sstp, s, env.make_reader_permit());
         auto close_reader = deferred_close(reader);
         while (reader().get()) {
         }
@@ -452,7 +452,7 @@ SEASTAR_TEST_CASE(test_counter_write) {
         m.set_clustered_cell(c_key2, r1_col, make_dead_atomic_cell(1));
 
         auto sstp = make_sstable_containing(env.make_sstable(s), {m});
-        assert_that(sstable_reader_v2(sstp, s, env.make_reader_permit()))
+        assert_that(sstable_mutation_reader(sstp, s, env.make_reader_permit()))
             .produces(m)
             .produces_end_of_stream();
     });
@@ -511,7 +511,7 @@ SEASTAR_TEST_CASE(check_multi_schema) {
                 auto s = builder.build();
 
                 auto sst = env.reusable_sst(s, get_test_dir("multi_schema_test", s), 1, version).get();
-                auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
+                auto reader = sstable_mutation_reader(sst, s, env.make_reader_permit());
                 auto close_reader = deferred_close(reader);
                 std::invoke([&] {
                     mutation_opt m = read_mutation_from_mutation_reader(reader).get();
@@ -702,7 +702,7 @@ SEASTAR_TEST_CASE(test_wrong_range_tombstone_order) {
         auto dkey = dht::decorate_key(*s, std::move(pkey));
 
         auto sst = env.reusable_sst(s, get_test_dir("wrong_range_tombstone_order", s), 1, version).get();
-        auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
+        auto reader = sstable_mutation_reader(sst, s, env.make_reader_permit());
 
         using kind = mutation_fragment_v2::kind;
         assert_that(std::move(reader))
@@ -769,7 +769,7 @@ SEASTAR_TEST_CASE(test_counter_read) {
             auto node2 = counter_id(utils::UUID("b8a6c3f3-e222-433f-9ce9-de56a8466e07"));
 
             auto sst = env.reusable_sst(s, get_test_dir("counter_test", s), 5, version).get();
-            auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
+            auto reader = sstable_mutation_reader(sst, s, env.make_reader_permit());
             auto close_reader = deferred_close(reader);
 
             auto mfopt = reader().get();
@@ -897,7 +897,7 @@ SEASTAR_TEST_CASE(test_promoted_index_read) {
         auto ck2 = clustering_key::from_exploded(*s, {int32_type->decompose(0), int32_type->decompose(0)});
         auto ck3 = clustering_key::from_exploded(*s, {int32_type->decompose(0), int32_type->decompose(1)});
 
-        auto rd = sstable_reader_v2(sst, s, env.make_reader_permit());
+        auto rd = sstable_mutation_reader(sst, s, env.make_reader_permit());
         using kind = mutation_fragment_v2::kind;
         assert_that(std::move(rd))
                 .produces_partition_start(dkey)
@@ -1575,10 +1575,10 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
         dht::decorated_key::less_comparator cmp(s);
         std::sort(keys.begin(), keys.end(), cmp);
 
-        assert_that(sstable_reader_v2(sst, s, env.make_reader_permit())).produces(keys);
+        assert_that(sstable_mutation_reader(sst, s, env.make_reader_permit())).produces(keys);
 
         auto pr = dht::partition_range::make(dht::ring_position(keys[0]), dht::ring_position(keys[1]));
-        assert_that(sstable_reader_v2(sst, s, env.make_reader_permit(), pr))
+        assert_that(sstable_mutation_reader(sst, s, env.make_reader_permit(), pr))
             .produces(keys[0])
             .produces(keys[1])
             .produces_end_of_stream()
@@ -1588,7 +1588,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .produces_end_of_stream();
 
         pr = dht::partition_range::make(dht::ring_position(keys[1]), dht::ring_position(keys[1]));
-        assert_that(sstable_reader_v2(sst, s, env.make_reader_permit(), pr))
+        assert_that(sstable_mutation_reader(sst, s, env.make_reader_permit(), pr))
             .produces(keys[1])
             .produces_end_of_stream()
             .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[3]), dht::ring_position(keys[4])))
@@ -1608,7 +1608,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .produces_end_of_stream();
 
         pr = dht::partition_range::make({ dht::ring_position(keys[0]), false }, { dht::ring_position(keys[1]), false});
-        assert_that(sstable_reader_v2(sst, s, env.make_reader_permit(), pr))
+        assert_that(sstable_mutation_reader(sst, s, env.make_reader_permit(), pr))
             .produces_end_of_stream()
             .fast_forward_to(dht::partition_range::make(dht::ring_position(keys[6]), dht::ring_position(keys[6])))
             .produces(keys[6])
@@ -1617,7 +1617,7 @@ SEASTAR_TEST_CASE(test_partition_skipping) {
             .produces_end_of_stream();
 
         pr = dht::partition_range::make(dht::ring_position(keys[0]), dht::ring_position(keys[1]));
-        assert_that(sstable_reader_v2(sst, s, env.make_reader_permit(), pr))
+        assert_that(sstable_mutation_reader(sst, s, env.make_reader_permit(), pr))
             .fast_forward_to(dht::partition_range::make(dht::ring_position::starting_at(keys[0].token()), dht::ring_position::ending_at(keys[1].token())))
             .produces(keys[0])
             .produces(keys[1])
@@ -2150,7 +2150,7 @@ SEASTAR_TEST_CASE(test_wrong_counter_shard_order) {
                     .build();
 
             auto sst = env.reusable_sst(s, get_test_dir("wrong_counter_shard_order", s), 2, version).get();
-            auto reader = sstable_reader_v2(sst, s, env.make_reader_permit());
+            auto reader = sstable_mutation_reader(sst, s, env.make_reader_permit());
             auto close_reader = deferred_close(reader);
 
             auto verify_row = [&s] (mutation_fragment_v2_opt mfopt, int64_t expected_value) {
