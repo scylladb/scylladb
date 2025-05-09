@@ -21,3 +21,4 @@ def pytest_collect_file(file_path: PosixPath, parent: Collector):
     # execution, so it should be excluded from collecting
     if file_path.suffix == '.cc' and '.inc' not in file_path.suffixes and file_path.stem != COMBINED_TESTS.stem:
         return collect_items(file_path, parent, facade=BoostTestFacade(parent.config, combined_tests=get_combined_tests(parent.config)))
+    return None
