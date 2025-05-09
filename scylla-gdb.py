@@ -2407,8 +2407,7 @@ class scylla_memory(gdb.Command):
         lsa = get_lsa_segment_pool()
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
         lsa_free = int(lsa['_free_segments']) * segment_size
-        non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
-        lsa_used = int(lsa['_segments_in_use']) * segment_size + non_lsa_mem
+        lsa_used = int(lsa['_segments_in_use']) * segment_size
         lsa_allocated = lsa_used + lsa_free
 
         gdb.write('LSA:\n'
@@ -3025,11 +3024,8 @@ class scylla_lsa(gdb.Command):
         segment_size = int(gdb.parse_and_eval('\'logalloc::segment::size\''))
 
         lsa_mem = int(lsa['_segments_in_use']) * segment_size
-        non_lsa_mem = int(lsa['_non_lsa_memory_in_use'])
-        total_mem = lsa_mem + non_lsa_mem
         gdb.write('Log Structured Allocator\n\nLSA memory in use: {lsa_mem:>16}\n'
-                  'Non-LSA memory in use: {non_lsa_mem:>12}\nTotal memory in use: {total_mem:>14}\n\n'
-                  .format(lsa_mem=lsa_mem, non_lsa_mem=non_lsa_mem, total_mem=total_mem))
+                  .format(lsa_mem=lsa_mem))
 
         er_goal = int(lsa['_current_emergency_reserve_goal'])
         er_max = int(lsa['_emergency_reserve_max'])
@@ -3041,11 +3037,10 @@ class scylla_lsa(gdb.Command):
 
         for region in lsa_regions():
             gdb.write('    Region #{r_id} (logalloc::region_impl*) {r_addr}\n      - reclaimable: {r_en:>14}\n'
-                      '      - evictable: {r_ev:16}\n      - non-LSA memory: {r_non_lsa:>11}\n'
+                      '      - evictable: {r_ev:16}\n'
                       '      - closed LSA memory: {r_lsa:>8}\n      - unused memory: {r_unused:>12}\n'
                       .format(r_addr=str(region.dereference()), r_id=int(region['_id']), r_en=bool(region['_reclaiming_enabled']),
                               r_ev=bool(region['_evictable']),
-                              r_non_lsa=int(region['_non_lsa_occupancy']['_total_space']),
                               r_lsa=int(region['_closed_occupancy']['_total_space']),
                               r_unused=int(region['_closed_occupancy']['_free_space'])))
 
