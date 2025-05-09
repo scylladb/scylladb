@@ -338,3 +338,67 @@ def test_base64_malformed_cond_expr(dynamodb, test_table_b):
             "begins_with(:v, c)"]:
         r = scan_with_binary_data_in_cond_expr(dynamodb, test_table_b, exp, exp_attr)
         assert r.status_code == 400, "Failed on expression \"%s\"" % (exp)
+
+# The assert checks response text and expects error of type ValidationException
+# or optionally SerializationException.
+# The assert specifically forbids 'assert' word in message to check it is not a fallback
+# from RAPIDJSON_ASSERT re-implementation added in util/rjson.hh, that prevents crashing
+# on mishandled requests, but produces non-communicative message (see #23233).
+def assert_validation_exception(response_text, request_info, accept_serialization_exception=False):
+    assert "assert" not in response_text, f"RAPIDJSON_ASSERT fallback message for {request_info}"
+    r = json.loads(response_text)
+    assert "__type" in r, f"Unexpectedly no error for {request_info}"
+    assert 'ValidationException' in r['__type'] or \
+        (accept_serialization_exception and "SerializationException" in r['__type']), \
+        f"Unexpected error type {r['__type']} for {request_info}"
+
+# Tests some invalid payloads (empty values, wrong types) to BatchWriteItem. Reproduces #23233
+def test_batch_write_item_invalid_payload(dynamodb, test_table):
+    cases = [
+        '', 'null', '""', '{}',
+        '{"RequestItems": null}',
+        '{"RequestItems": ""}',
+        '{"RequestItems": []}',
+        '{"RequestItems": {"__TABLE__": null}}',
+        '{"RequestItems": {"__TABLE__": [null]}}',
+        '{"RequestItems": {"__TABLE__": [{}}]}}',
+        '{"RequestItems": {"__TABLE__": [{"PutRequest": null}]}}',
+        '{"RequestItems": {"__TABLE__": [{"PutRequest": {}}]}}',
+        '{"RequestItems": {"__TABLE__": [{"PutRequest": {"Item": null}}]}}',
+        '{"RequestItems": {"__TABLE__": [{"PutRequest": {"Item": {}}}]}}',
+        '{"RequestItems": {"__TABLE__": [{"DeleteRequest": null}]}}',
+        '{"RequestItems": {"__TABLE__": [{"DeleteRequest": {}}]}}',
+        '{"RequestItems": {"__TABLE__": [{"DeleteRequest": {"Key": null}}]}}',
+        '{"RequestItems": {"__TABLE__": [{"DeleteRequest": {"Key": {}}}]}}'
+    ]
+    for body in cases:
+        body = body.replace("__TABLE__", test_table.name)
+        req = get_signed_request(dynamodb, "BatchWriteItem", body)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        assert_validation_exception(response.text, f"payload: \'{body}\'", accept_serialization_exception=True)
+
+
+# Tests payloads with no or empty request list, that used to be handled without error by Alternator,
+# while DynamoDB returns ValidationException.
+def test_batch_write_item_empty_request_list(dynamodb, test_table, test_table_s):
+    cases = [
+        '{"RequestItems": {}}',
+        '{"RequestItems": {"__TABLE__": []}}',
+        '{"RequestItems": {"__TABLE_S__": [{"PutRequest": {"Item": {"p": {"S": "hello"}}}}], "__TABLE__": []}}'
+    ]
+    for body in cases:
+        body = body.replace("__TABLE__", test_table.name).replace("__TABLE_S__", test_table_s.name)
+        req = get_signed_request(dynamodb, "BatchWriteItem", body)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        assert_validation_exception(response.text, f"payload: \'{body}\'")
+
+# Tests that non-object payload of a request will result with ValidationException.
+def test_request_payload_must_be_object(dynamodb):
+    for body in ['null', '[]']:
+        req = get_signed_request(dynamodb, "ListTables", body)
+        response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+        assert_validation_exception(response.text, f"payload: \'{body}\'", accept_serialization_exception=True)
+    req = get_signed_request(dynamodb, "ListTables", '{}')
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    r = json.loads(response.text)
+    assert "__type" not in r and "TableNames" in r
