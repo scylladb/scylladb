@@ -954,17 +954,21 @@ future<std::set<inet_address>> gossiper::get_unreachable_members_synchronized() 
     });
 }
 
+future<> gossiper::send_echo(locator::host_id host_id, std::chrono::milliseconds timeout_ms, int64_t generation_number, bool notify_up) {
+    return ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, host_id, netw::messaging_service::clock_type::now() + timeout_ms, _abort_source, generation_number, notify_up);
+}
+
 future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, generation_type gossip_generation, uint64_t live_endpoints_version) {
     auto last = gossiper::clk::now();
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::seconds(2);
     auto max_duration = echo_interval + std::chrono::milliseconds(_gcfg.failure_detector_timeout_ms());
     auto node = _address_map.get(host_id);
-    while (is_enabled()) {
+    while (is_enabled() && !_abort_source.abort_requested()) {
         bool failed = false;
         try {
             logger.debug("failure_detector_loop: Send echo to node {}/{}, status = started", host_id, node);
-            co_await ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, host_id, netw::messaging_service::clock_type::now() + max_duration, gossip_generation.value(), false);
+            co_await send_echo(host_id, max_duration, gossip_generation.value(), false);
             logger.debug("failure_detector_loop: Send echo to node {}/{}, status = ok", host_id, node);
         } catch (...) {
             failed = true;
@@ -992,7 +996,7 @@ future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, gene
                     host_id, node, _live_endpoints, _live_endpoints_version, live_endpoints_version);
             co_return;
         } else  {
-            co_await sleep_abortable(echo_interval, _abort_source);
+            co_await sleep_abortable(echo_interval, _abort_source).handle_exception_type([] (const abort_requested_exception&) {});
         }
     }
     co_return;
@@ -1688,7 +1692,7 @@ future<> gossiper::notify_nodes_on_up(std::unordered_set<locator::host_id> dsts)
         if (dst != _gcfg.host_id) {
             try {
                 auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
-                co_await ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, dst, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), generation.value(), true);
+                co_await send_echo(dst, std::chrono::seconds(10), generation.value(), true);
             } catch (...) {
                 logger.warn("Failed to notify node {} that I am UP: {}", dst, std::current_exception());
             }
@@ -1724,7 +1728,7 @@ void gossiper::mark_alive(endpoint_state_ptr node) {
     // Enter the _background_msg gate so stop() would wait on it
     auto gh = _background_msg.hold();
     logger.debug("Sending a EchoMessage to {}/{}, with generation_number={}", id, addr, generation);
-    (void) ser::gossip_rpc_verbs::send_gossip_echo(&_messaging, id, netw::messaging_service::clock_type::now() + std::chrono::seconds(15), generation.value(), false).then([this, id] {
+    (void) send_echo(id, std::chrono::seconds(15), generation.value(), false).then([this, id] {
         logger.trace("Got EchoMessage Reply");
         return real_mark_alive(id);
     }).handle_exception([addr, gh = std::move(gh), unmark_pending = std::move(unmark_pending), id] (auto ep) {

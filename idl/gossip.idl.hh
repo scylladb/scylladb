@@ -9,7 +9,7 @@
 #include "gms/gossip_digest_syn.hh"
 
 namespace gms {
-verb [[with_client_info, with_timeout]] gossip_echo (int64_t generation_number [[version 4.6.0]], bool notify_up [[version 6.1.0]])
+verb [[with_client_info, with_timeout, cancellable]] gossip_echo (int64_t generation_number [[version 4.6.0]], bool notify_up [[version 6.1.0]])
 verb [[with_client_info, one_way]] gossip_shutdown (gms::inet_address from, int64_t generation_number [[version 4.6.0]])
 verb [[with_client_info, one_way, ip]] gossip_digest_syn (gms::gossip_digest_syn syn)
 verb [[with_client_info, one_way]] gossip_digest_ack (gms::gossip_digest_ack ask)

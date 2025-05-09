@@ -250,6 +250,41 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, locato
     return send_message_cancellable<MsgIn, MsgOut...>(ms, verb, std::optional{id}, ms->addr_for_host_id(id), as, std::forward<MsgOut>(msg)...);
 }
 
+template <typename MsgIn, typename Timeout, typename... MsgOut>
+auto send_message_timeout_cancellable(messaging_service* ms, messaging_verb verb, locator::host_id host_id, Timeout timeout, abort_source& as, MsgOut&&... msg) {
+    auto rpc_handler = ms->rpc()->make_client<MsgIn(MsgOut...)>(verb);
+    using futurator = futurize<std::invoke_result_t<decltype(rpc_handler), rpc_protocol::client&, MsgOut...>>;
+    if (ms->is_shutting_down()) {
+        return futurator::make_exception_future(rpc::closed_error());
+    }
+    auto rpc_client_ptr = ms->get_rpc_client(verb, ms->addr_for_host_id(host_id), host_id);
+    auto& rpc_client = *rpc_client_ptr;
+
+    auto c = std::make_unique<seastar::rpc::cancellable>();
+    auto& c_ref = *c;
+    auto sub = as.subscribe([c = std::move(c)] () noexcept {
+        c->cancel();
+    });
+    if (!sub) {
+        return futurator::make_exception_future(abort_requested_exception{});
+    }
+
+    return rpc_handler(rpc_client, timeout, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
+        ms->increment_dropped_messages(verb);
+        if (try_catch<rpc::closed_error>(eptr)) {
+            // This is a transport error
+            ms->remove_error_rpc_client(verb, host_id);
+            return futurator::make_exception_future(std::move(eptr));
+        } else if (try_catch<rpc::canceled_error>(eptr)) {
+            // Translate low-level canceled_error into high-level abort_requested_exception.
+            return futurator::make_exception_future(abort_requested_exception{});
+        } else {
+            // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
+            return futurator::make_exception_future(std::move(eptr));
+        }
+    });
+}
+
 // Send one way message for verb
 template <typename... MsgOut>
 auto send_message_oneway(messaging_service* ms, messaging_verb verb, msg_addr id, MsgOut&&... msg) {

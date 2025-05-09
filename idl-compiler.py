@@ -479,11 +479,9 @@ class RpcVerb(ASTBase):
     - [[with_timeout]] - an additional time_point parameter is supplied
       to the handler function and send* method uses send_message_*_timeout
       variant of internal function to actually send the message.
-      Incompatible with [[cancellable]].
     - [[cancellable]] - an additional abort_source& parameter is supplied
       to the handler function and send* method uses send_message_*_cancellable
       variant of internal function to actually send the message.
-      Incompatible with [[with_timeout]].
     - [[one_way]] - the handler function is annotated by
       future<rpc::no_wait_type> return type to designate that a client
       doesn't need to wait for an answer.
@@ -697,8 +695,6 @@ def rpc_verb_parse_action(tokens):
     one_way = not raw_attrs.empty() and 'one_way' in raw_attrs.attr_items
     if one_way and 'return_values' in tokens:
         raise Exception(f"Invalid return type specification for one-way RPC verb '{name}'")
-    if with_timeout and cancellable:
-        raise Exception(f"Error in verb {name}: [[with_timeout]] cannot be used together with [[cancellable]] in the same verb")
     return RpcVerb(name=name, parameters=params, return_values=tokens.get('return_values'), with_client_info=with_client_info, with_timeout=with_timeout, cancellable=cancellable, one_way=one_way, ip=ip)
 
 

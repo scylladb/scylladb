@@ -109,6 +109,7 @@ private:
     future<> handle_shutdown_msg(locator::host_id from, std::optional<int64_t> generation_number_opt);
     future<> do_send_ack_msg(locator::host_id from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(locator::host_id from, utils::chunked_vector<gossip_digest> ack_msg_digest);
+    future<> send_echo(locator::host_id host_id, std::chrono::milliseconds timeout_ms, int64_t generation_number, bool notify_up);
     future<gossip_get_endpoint_states_response> handle_get_endpoint_states_msg(gossip_get_endpoint_states_request request);
     static constexpr uint32_t _default_cpuid = 0;
     void do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) const;

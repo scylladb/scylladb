@@ -13,6 +13,7 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/coroutine.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/util/closeable.hh>
 #include "db/config.hh"
@@ -157,15 +158,12 @@ public:
     future<> test_echo() {
         test_logger.info("=== {} ===", __func__);
         int64_t gen = 0x1;
-        return ser::gossip_rpc_verbs::send_gossip_echo(&ms, _server_id, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), gen, false).then_wrapped([] (auto&& f) {
-            try {
-                f.get();
-                return make_ready_future<>();
-            } catch (std::runtime_error& e) {
-                test_logger.error("test_echo: {}", e.what());
-            }
-            return make_ready_future<>();
-        });
+        abort_source as;
+        try {
+            co_await ser::gossip_rpc_verbs::send_gossip_echo(&ms, _server_id, netw::messaging_service::clock_type::now() + std::chrono::seconds(10), as, gen, false);
+        } catch (...) {
+            test_logger.error("test_echo: {}", std::current_exception());
+        }
     }
 };
 
