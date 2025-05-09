@@ -928,22 +928,6 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_mutation_reader_from_mutation) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_as_mutation_source) {
-    auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
-        return mutation_source([=] (
-                schema_ptr schema,
-                reader_permit permit,
-                const dht::partition_range& range,
-                const query::partition_slice& slice,
-                tracing::trace_state_ptr,
-                streamed_mutation::forwarding fwd_sm,
-                mutation_reader::forwarding) mutable {
-            return make_mutation_reader_from_mutations(schema, std::move(permit), squash_mutations(muts), range, slice, fwd_sm);
-        });
-    };
-    run_mutation_source_tests(populate);
-}
-
-SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_v2_as_mutation_source) {
     auto populate = [] (schema_ptr, const std::vector<mutation>& muts) {
         return mutation_source([=] (
                 schema_ptr schema,
@@ -959,7 +943,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_mutations_v2_as_mutation_sour
     run_mutation_source_tests(populate);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_v2_as_mutation_source) {
+SEASTAR_THREAD_TEST_CASE(test_mutation_reader_from_fragments_as_mutation_source) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     auto populate = [] (schema_ptr, const std::vector<mutation> &muts) {
         return mutation_source([=] (
@@ -1113,7 +1097,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_reads_in_native_reverse_order) {
     reversed_forward_reader.produces_end_of_stream();
 }
 
-SEASTAR_THREAD_TEST_CASE(test_reverse_reader_v2_is_mutation_source) {
+SEASTAR_THREAD_TEST_CASE(test_reverse_reader_is_mutation_source) {
     auto populate = [] (schema_ptr s, const std::vector<mutation> &muts) {
         auto reverse_schema = s->make_reversed();
         auto reverse_muts = std::vector<mutation>();
@@ -1157,7 +1141,7 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_reader_v2_is_mutation_source) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
-    struct test_reader_v2_impl : public mutation_reader::impl {
+    struct test_reader_impl : public mutation_reader::impl {
         using mutation_reader::impl::impl;
         virtual future<> fill_buffer() override { return make_ready_future<>(); }
         virtual future<> next_partition() override { return make_ready_future<>(); }
@@ -1169,5 +1153,5 @@ SEASTAR_THREAD_TEST_CASE(test_allow_reader_early_destruction) {
     simple_schema s;
     tests::reader_concurrency_semaphore_wrapper semaphore;
     // This reader is not closed, but didn't start any operations, so it's safe for it to be destroyed.
-    auto reader_v2 = make_mutation_reader<test_reader_v2_impl>(s.schema(), semaphore.make_permit());
+    auto reader = make_mutation_reader<test_reader_impl>(s.schema(), semaphore.make_permit());
 }
