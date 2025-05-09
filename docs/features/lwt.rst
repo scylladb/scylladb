@@ -297,7 +297,7 @@ You can use lightweight transactions for any of the following activities:
       VALUES ('Sonic the Hedgehog', 'Penn Station', 'AMC 34th Street 14', 'Sunday', '21:00:00')
       IF NOT EXISTS;
 
-   .. code-block::cql
+   .. code-block:: cql
 
       INSERT INTO movies.nowshowing (movie, location, theater, run_day, run_time)
       VALUES ('Invisible Man', 'Times Square', 'AMC Empire 25', 'Friday', '21:00:00')
@@ -315,7 +315,7 @@ You can use lightweight transactions for any of the following activities:
       VALUES ('Invisible Man', 'Times Square', 'AMC Empire 25', 'Saturday', '22:00:00')
       IF NOT EXISTS;
 
-   .. code-block::cql
+   .. code-block:: cql
 
       INSERT INTO movies.nowshowing (movie, location, theater, run_day, run_time)
       VALUES ('Invisible Man', 'Penn Station', 'AMC 34th Street 14', 'Sunday', '18:00:00')
