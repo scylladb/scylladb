@@ -1487,7 +1487,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
                     break;
                 case locator::tablet_transition_stage::repair: {
-                    if (action_failed(tablet_state.repair)) {
+                    bool fail_repair = utils::get_local_injector().enter("handle_tablet_migration_repair_fail");
+                    if (fail_repair || action_failed(tablet_state.repair)) {
                         if (do_barrier()) {
                             updates.emplace_back(get_mutation_builder()
                                     .set_stage(last_token, locator::tablet_transition_stage::end_repair)
