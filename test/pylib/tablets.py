@@ -13,6 +13,12 @@ class TabletReplicas(NamedTuple):
     last_token: int
     replicas: list[tuple[HostID, int]]
 
+async def get_base_table(manager: ManagerClient, table_id):
+    rows = await manager.get_cql().run_async(f"SELECT base_table FROM system.tablets where table_id = {table_id}")
+    if len(rows) > 0 and rows[0].base_table:
+        return rows[0].base_table
+    return table_id
+
 async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, is_view: bool = False) -> list[TabletReplicas]:
     """
     Retrieves the tablet distribution for a given table.
@@ -27,10 +33,8 @@ async def get_all_tablet_replicas(manager: ManagerClient, server: ServerInfo, ke
     # reflects the finalized tablet movement.
     await read_barrier(manager.api, server.ip_addr)
 
-    if is_view:
-        table_id = await manager.get_view_id(keyspace_name, table_name)
-    else:
-        table_id = await manager.get_table_id(keyspace_name, table_name)
+    table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
+    table_id = await get_base_table(manager, table_id)
     rows = await manager.get_cql().run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
     return [TabletReplicas(
@@ -62,3 +66,23 @@ async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspac
     replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token)
     return replicas[0]
 
+async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
+    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.api, server.ip_addr)
+
+    table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
+    table_id = await get_base_table(manager, table_id)
+    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
+                                       f"table_id = {table_id}", host=host)
+    return rows[0].tablet_count
+
+async def get_tablet_info(manager, table_id, token):
+    table_id = await get_base_table(manager, table_id)
+    rows = await manager.cql.run_async(f"SELECT * FROM system.tablets where table_id = {table_id}")
+    for row in rows:
+        if row.last_token >= token:
+            return row
+    raise "Tablet not found"

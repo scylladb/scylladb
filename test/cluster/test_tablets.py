@@ -1060,7 +1060,7 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
     split_finalization_mark = await log.wait_for("Finished tablet split finalization", mark)
     for table_id in [test_table_id, blocker_table_id]:
-        migration_mark = await log.wait_for(f"Will set tablet {table_id}:\\d+ stage to write_both_read_old", mark)
+        migration_mark = await log.wait_for(f"Will set tablet \[{table_id}:\\d+\] stage to write_both_read_old", mark)
         assert split_finalization_mark < migration_mark, f"Tablet migration of {table_id} was scheduled before resize finalization"
 
     # ensure all migrations complete
