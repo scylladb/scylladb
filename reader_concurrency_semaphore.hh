@@ -264,7 +264,6 @@ private:
     future<> execution_loop() noexcept;
 
     uint64_t get_serialize_limit() const;
-    uint64_t get_kill_limit() const;
 
     // Throws std::bad_alloc if memory consumed is oom_kill_limit_multiply_threshold more than the memory limit.
     void consume(reader_permit::impl& permit, resources r);
@@ -486,6 +485,8 @@ public:
         return _initial_resources == reader_resources{std::numeric_limits<int>::max(), std::numeric_limits<ssize_t>::max()};
     }
 
+    uint64_t get_kill_limit() const;
+
     const resources available_resources() const {
         return _resources;
     }
@@ -504,6 +505,10 @@ public:
 
     void set_max_queue_length(size_t size) {
         _max_queue_length = size;
+    }
+
+    size_t get_max_queue_length() const {
+        return _max_queue_length;
     }
 
     uint64_t active_reads() const noexcept {

@@ -1758,7 +1758,7 @@ public:
             ++stats().throttled_base_writes;
             ++stats().total_throttled_base_writes;
             tracing::trace(trace, "Delaying user write due to view update backlog {}/{} by {}us",
-                          _view_backlog.get_current_bytes(), _view_backlog.get_max_bytes(), delay.count());
+                          _view_backlog.get_current_size(), _view_backlog.get_max_size(), delay.count());
             // Waited on indirectly.
             (void)sleep_abortable<seastar::steady_clock_type>(delay).finally([self = shared_from_this(), on_resume = std::forward<Func>(on_resume)] {
                 --self->stats().throttled_base_writes;
@@ -3120,7 +3120,7 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
                        sm::description("number of currently throttled write requests"))(basic_level),
     });
     _metrics.add_group(storage_proxy_stats::REPLICA_STATS_CATEGORY, {
-        sm::make_current_bytes("view_update_backlog", [this] { return _max_view_update_backlog.fetch_shard(this_shard_id()).get_current_bytes(); },
+        sm::make_gauge("view_update_backlog", [this] { return _max_view_update_backlog.fetch_shard(this_shard_id()).relative_size(); },
                        sm::description("Tracks the size of scylla_database_view_update_backlog and is used instead of that one to calculate the "
                                         "max backlog across all shards, which is then used by other nodes to calculate appropriate throttling delays "
                                         "if it grows too large. If it's notably different from scylla_database_view_update_backlog, it means "

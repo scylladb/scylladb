@@ -46,7 +46,7 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 
 # This test reproduces issue #12379
 # To quickly exceed the view update backlog limit, the test uses a minimal, 2 node
-# cluster and lowers the limit using the "view_update_limit" error injection.
+# cluster and lowers the limit using the "pending_view_updates_memory_admission_limit" error injection.
 # Also, the "delay_before_remote_view_update" error injection is used to ensure that
 # we're hitting a scenario where the remote view update finishes after the base write
 # returns.
@@ -54,14 +54,17 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 # 1. Create a table and with one partition and 200 rows
 # 2. Create a materialized view and wait until it's built
 # 3. Delete the entire partition in the base table, causing a large number of view updates
-# The "view_update_limit" error injections will cause the test to fail due to a failed
+# The "pending_view_updates_memory_admission_limit" error injections will cause the test to fail due to a failed
 # replica write if the view update limit is exceeded. If, thanks to throttling, we never
 # exceed the limit, the test will pass
 @pytest.mark.asyncio
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) -> None:
     node_count = 2
-    await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
+    await manager.servers_add(node_count, config={'error_injections_at_startup': [{
+                'name': 'pending_view_updates_memory_admission_limit',
+                'value': 200000,
+            }, 'delay_before_remote_view_update']})
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")

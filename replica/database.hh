@@ -1497,18 +1497,23 @@ private:
     size_t max_memory_concurrent_view_update_reads() { return _dbcfg.available_memory * 0.01; }
     // Assume a queued read takes up 1kB of memory, and allow 2% of memory to be filled up with such reads.
     size_t max_inactive_queue_length() { return _dbcfg.available_memory * 0.02 / 1000; }
-    size_t max_inactive_view_update_queue_length() { return _dbcfg.available_memory * 0.01 / 1000; }
+    size_t max_inactive_view_update_queue_length() {
+        if (const auto max = utils::get_local_injector().inject_parameter<size_t>("max_view_update_read_queue"); max) {
+            return *max;
+        }
+        return _dbcfg.available_memory * 0.01 / 1000;
+    }
     // They're rather heavyweight, so limit more
     static constexpr size_t max_count_streaming_concurrent_reads{10};
     size_t max_memory_streaming_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
     static constexpr size_t max_count_system_concurrent_reads{10};
     size_t max_memory_system_concurrent_reads() { return _dbcfg.available_memory * 0.02; };
     size_t max_memory_pending_view_updates() const {
-        auto ret = _dbcfg.available_memory * 0.1;
-        utils::get_local_injector().inject("view_update_limit", [&ret] {
-            ret = 250000;
-        });
-        return ret;
+        if (const auto limit = utils::get_local_injector().inject_parameter<size_t>("pending_view_updates_memory_admission_limit"); limit) {
+            // The limit for admission is 80% of the kill limit.
+            return *limit / 0.8;
+        }
+        return _dbcfg.available_memory * 0.1;
     }
 
     struct db_stats {
@@ -1946,9 +1951,7 @@ public:
         return _querier_cache;
     }
 
-    db::view::update_backlog get_view_update_backlog() const {
-        return {max_memory_pending_view_updates() - _view_update_concurrency_sem.current(), max_memory_pending_view_updates()};
-    }
+    db::view::update_backlog get_view_update_backlog() const;
 
     db::data_listeners& data_listeners() const {
         return *_data_listeners;
