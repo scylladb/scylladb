@@ -27,6 +27,7 @@
 #include "version.hh"
 #include "encoding_stats.hh"
 #include "types_fwd.hh"
+#include "schema/schema_fwd.hh"
 
 // While the sstable code works with char, bytes_view works with int8_t
 // (signed char). Rather than change all the code, let's do a cast.
@@ -542,6 +543,7 @@ enum class scylla_metadata_type : uint32_t {
     ScyllaVersion = 8,
     ExtTimestampStats = 9,
     SSTableIdentifier = 10,
+    Schema = 11,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -598,6 +600,38 @@ enum class ext_timestamp_stats_type : uint32_t {
     min_live_row_marker_timestamp = 2,
 };
 
+// Mirrors column_kind from schema.hh
+// Not reusing said enum because this enum is ABI, it must have a defined
+// integer storage type and defined values for each member. This kind of
+// restrictions are hard to enforce on an enum in a seemingly unrelated part
+// of the code.
+enum class sstable_column_kind : uint8_t {
+    partition_key = 1,
+    clustering_key = 2,
+    static_column = 3,
+    regular_column = 4,
+};
+
+struct sstable_column_description {
+    sstable_column_kind kind;
+    disk_string<uint32_t> name;
+    disk_string<uint32_t> type;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(kind, name, type); }
+};
+
+struct sstable_schema_type {
+    table_id id;
+    table_schema_version version;
+    disk_string<uint32_t> keyspace_name;
+    disk_string<uint32_t> table_name;
+    disk_array<uint32_t, sstable_column_description> columns;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(id, version, keyspace_name, table_name, columns); }
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
     using large_data_stats = disk_hash<uint32_t, large_data_type, large_data_stats_entry>;
@@ -606,6 +640,7 @@ struct scylla_metadata {
     using scylla_version = disk_string<uint32_t>;
     using ext_timestamp_stats = disk_hash<uint32_t, ext_timestamp_stats_type, int64_t>;
     using sstable_identifier = sstable_identifier_type;
+    using sstable_schema = sstable_schema_type;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -617,7 +652,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaBuildId, scylla_build_id>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScyllaVersion, scylla_version>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ExtTimestampStats, ext_timestamp_stats>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::SSTableIdentifier, sstable_identifier>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>
             > data;
 
     sstable_enabled_features get_features() const {
