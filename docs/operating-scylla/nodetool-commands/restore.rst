@@ -4,9 +4,15 @@ Nodetool restore
 
 **restore** - Load SSTables from a designated bucket in object store into a specified keyspace or table
 
-Note that status of restore can be checked for ``user_task_ttl`` seconds after the operation is done.
-You can set the ttl using :doc:`nodetool tasks user-ttl </operating-scylla/nodetool-commands/tasks/user-ttl>`.
-If ``--nowait`` flag is not set, the command relies on ``user_task_ttl`` internally.
+The status of a restore operation is retained for a period defined by ``user_task_ttl``,
+allowing you to query the status even after the operation completes.
+You can configure the TTL duration using the :doc:`nodetool tasks user-ttl </operating-scylla/nodetool-commands/tasks/user-ttl>` command.
+
+When you run a restore operation, it always executes as a background task. You have two ways to interact with this task:
+
+* **Without the ``--nowait`` flag (default)**: The command waits for the restore operation to complete and returns the final status. This approach relies on the ``user_task_ttl`` setting. If ``user_task_ttl`` is set too low (especially if set to 0), the task record might be removed before the status can be checked, potentially causing the command to fail in reporting the result.
+
+* **With the ``--nowait`` flag**: The command immediately returns a task ID without waiting for the operation to complete. You can use this task ID with the :doc:`nodetool tasks </operating-scylla/nodetool-commands/tasks/index>` command to monitor the progress of the restore operation or to cancel it if needed. The task information remains available for the duration specified by ``user_task_ttl`` after completion.
 
 Syntax
 ------
