@@ -299,6 +299,15 @@ require_on_single_column(const predicate& p) {
     on_internal_error(rlogger, "require_on_single_column: predicate is not on a single column");
 }
 
+static
+bool
+is_null_constant(const expression& e) {
+    if (auto* c = as_if<constant>(&e)) {
+        return c->value.is_null();
+    }
+    return false;
+}
+
 /// Given an expression, decompose it into a set of predicates, on individual columns,
 /// the table's tokens, or multiple columns. A predicate may know how to solve for
 /// the set of all column values that would satisfy the expression, treated a a boolean
@@ -389,6 +398,7 @@ to_predicates(
                                   .filter = oper,
                                   .on = on_column{col.col},
                                   .is_singleton = (oper.op == oper_t::EQ),
+                                  .is_not_null_single_column = (oper.op == oper_t::IS_NOT) && is_null_constant(oper.rhs),
                               });
                             } else if (oper.op == oper_t::IN) {
                               auto solve = [oper, type, cdef] (const query_options& options) {
@@ -496,6 +506,7 @@ to_predicates(
                                 .solve_for = nullptr,
                                 .filter = oper,
                                 .on = on_clustering_key_prefix{columns},
+                                .is_multi_column = true,
                           });
                           std::vector<predicate_alternatives> ret;
                           // The tuple relation can be interpreted as either a conjunction of
