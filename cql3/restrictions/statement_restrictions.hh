@@ -78,6 +78,8 @@ struct predicate {
     bool is_singleton = false;
     // Whether the returned value_set follows CQL comparison semantics
     bool comparable = true;
+    bool is_multi_column = false;
+    bool is_not_null_single_column = false;
 };
 
 ///In some cases checking if columns have indexes is undesired of even
