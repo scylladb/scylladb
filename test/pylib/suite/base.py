@@ -517,7 +517,7 @@ def prepare_dir(dirname: pathlib.Path, pattern: str) -> None:
     dirname.mkdir(parents=True, exist_ok=True)
 
     # Remove old artifacts.
-    for p in dirname.rglob(pattern):
+    for p in dirname.glob(pattern):
         p.unlink()
 
 
