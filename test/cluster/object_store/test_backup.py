@@ -401,20 +401,21 @@ class topo:
         self.dcs = dcs
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("topology", [
-        topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
-        topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
-        topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
-        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
-        topo(rf = 3, nodes = 6, racks = 3, dcs = 1),
-        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
+@pytest.mark.parametrize("topology_rf_validity", [
+        (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
+        (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
+        (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), True),
+        (topo(rf = 3, nodes = 6, racks = 2, dcs = 1), False),
+        (topo(rf = 3, nodes = 6, racks = 3, dcs = 1), True),
+        (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
     ])
-async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, topology):
+async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, topology_rf_validity):
     '''Check that restoring of a cluster with stream scopes works'''
 
-    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks')
+    topology, rf_rack_valid_keyspaces = topology_rf_validity
+    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
     objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
-    cfg = { 'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300 }
+    cfg = { 'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces }
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
     servers = []
     host_ids = {}

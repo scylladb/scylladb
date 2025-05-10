@@ -39,7 +39,7 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
     """
     cmdline = ["--hinted-handoff-enabled", "0", "--cache-hit-rate-read-balancing", "0", "--logger-log-level", "debug_error_injection=trace"]
 
-    nodes = await manager.servers_add(3, cmdline=cmdline)
+    nodes = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
 
     node1, node2, node3 = nodes
 

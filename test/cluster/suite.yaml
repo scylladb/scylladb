@@ -6,6 +6,7 @@ extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
     enable_user_defined_functions: False
+    rf_rack_valid_keyspaces: True
     tablets_mode_for_new_keyspaces: enabled
 run_first:
   - test_raft_recovery_stuck

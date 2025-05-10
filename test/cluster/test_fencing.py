@@ -64,12 +64,15 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
     cfg = {'tablets_mode_for_new_keyspaces' : 'enabled' if tablets_enabled else 'disabled'}
 
     logger.info("Bootstrapping first two nodes")
-    servers = await manager.servers_add(2, config=cfg)
+    servers = await manager.servers_add(2, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"}
+    ])
 
     # The third node is started as the last one, so we can be sure that is has
     # the latest topology version
     logger.info("Bootstrapping the last node")
-    servers += [await manager.server_add(config=cfg)]
+    servers += [await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"})]
 
     # Disable load balancer as it might bump topology version, undoing the decrement below.
     # This should be done before adding the last two servers,
@@ -123,9 +126,10 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_fence_hints(request, manager: ManagerClient):
     logger.info("Bootstrapping cluster with three nodes")
-    s0 = await manager.server_add(config={
-        'error_injections_at_startup': ['decrease_hints_flush_period']
-    }, cmdline=['--logger-log-level', 'hints_manager=trace'])
+    s0 = await manager.server_add(
+        config={'error_injections_at_startup': ['decrease_hints_flush_period']},
+        cmdline=['--logger-log-level', 'hints_manager=trace'],
+        property_file={"dc": "dc1", "rack": "r1"})
 
     # Disable load balancer as it might bump topology version, potentially creating a race condition
     # with read modify write below.
@@ -134,7 +138,10 @@ async def test_fence_hints(request, manager: ManagerClient):
     # which the test relies on.
     await manager.api.disable_tablet_balancing(s0.ip_addr)
 
-    [s1, s2] = await manager.servers_add(2)
+    [s1, s2] = await manager.servers_add(2, property_file=[
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"}
+    ])
 
     logger.info(f'Creating test table')
     random_tables = RandomTables(request.node.name, manager, unique_name(), 3)

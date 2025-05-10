@@ -25,9 +25,11 @@ async def test_topology_ops_encrypted(request, manager: ManagerClient, tablets_e
     d.mkdir()
     k = d / "system_key"
     k.write_text('AES/CBC/PKCS5Padding:128:ApvJEoFpQmogvam18bb54g==')
+    rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled',
            'user_info_encryption': {'enabled': True, 'key_provider': 'LocalFileSystemKeyProviderFactory'},
            'system_key_directory': d.as_posix()}
+    cfg = cfg | rf_rack_cfg
     rf = 3
     num_nodes = rf
     if tablets_enabled:
@@ -62,7 +64,7 @@ async def test_topology_ops_encrypted(request, manager: ManagerClient, tablets_e
 
     logger.info(f"Replacing node {servers[0]}")
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = False)
-    servers = servers[1:] + [await manager.server_add(replace_cfg)]
+    servers = servers[1:] + [await manager.server_add(replace_cfg, config=rf_rack_cfg)]
     await check_token_ring_and_group0_consistency(manager)
 
     logger.info(f"Stopping node {servers[0]}")

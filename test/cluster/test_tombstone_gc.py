@@ -32,7 +32,7 @@ def get_expected_tombstone_gc_mode(rf, tablets):
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bool):
-    _ = [await manager.server_add() for _ in range(2)]
+    _ = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
     tablets_enabled = "true" if tablets else "false"
     async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
@@ -44,7 +44,7 @@ async def test_default_tombstone_gc(manager: ManagerClient, rf: int, tablets: bo
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc_does_not_override(manager: ManagerClient, rf: int, tablets: bool):
-    _ = [await manager.server_add() for _ in range(2)]
+    _ = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
     tablets_enabled = "true" if tablets else "false"
     async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
@@ -92,7 +92,10 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
     cfg = {
         'group0_tombstone_gc_refresh_interval_in_ms': 1000,  # this is 1 hour by default
     }
-    servers = [await manager.server_add(cmdline=cmdline, config=cfg) for _ in range(3)]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r2"}])
 
     cql = manager.get_cql()
     hosts = [(await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60))[0]
