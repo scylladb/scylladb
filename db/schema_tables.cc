@@ -2787,7 +2787,7 @@ future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, ::table_i
     for (const auto& row : *results) {
         auto kind = deserialize_kind(row.get_as<sstring>("kind"));
         auto type = cql_type_parser::parse("" /*unused*/, row.get_as<sstring>("type"), data_dictionary::dummy_user_types_storage());
-        auto name_bytes = row.get_blob("column_name_bytes");
+        auto name_bytes = row.get_blob_unfragmented("column_name_bytes");
         column_id position = row.get_as<int32_t>("position");
 
         auto order = row.get_as<sstring>("clustering_order");
