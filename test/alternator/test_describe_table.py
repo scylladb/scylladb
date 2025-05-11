@@ -17,8 +17,8 @@
 import pytest
 from botocore.exceptions import ClientError
 import re
-import time
-from test.alternator.util import multiset
+import time, datetime
+from test.alternator.util import multiset, create_test_table, new_test_table
 
 # Test that DescribeTable correctly returns the table's name and state
 def test_describe_table_basic(test_table):
@@ -57,20 +57,48 @@ def test_describe_table_billing(test_table):
     assert 'LastUpdateToPayPerRequestDateTime' in got['BillingModeSummary']
     assert got['BillingModeSummary']['LastUpdateToPayPerRequestDateTime'] == got['CreationDateTime']
 
-# Test that DescribeTable correctly returns the table's creation time.
-# We don't know what this creation time is supposed to be, so this test
-# cannot be very thorough... We currently just tests against something we
-# know to be wrong - returning the *current* time, which changes on every
-# call.
-@pytest.mark.xfail(reason="DescribeTable does not return table creation time")
-def test_describe_table_creation_time(test_table):
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    assert 'CreationDateTime' in got
-    time1 = got['CreationDateTime']
-    time.sleep(1) 
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    time2 = got['CreationDateTime']
-    assert time1 == time2
+# Test that DescribeTable correctly returns the table's creation time - 
+# timestamp in seconds as double with as much precision as the operating system will provide
+# Reproduces issue #5013
+def test_describe_table_creation_time(dynamodb):
+    before_time = time.time()
+
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+    }
+
+    with new_test_table(dynamodb, **schema) as table1:
+        # let's sleep few ms, so table2 creation time was always bigger, as we now return CreationDateTime in ms precision
+        time.sleep(0.002)    
+        with new_test_table(dynamodb, **schema) as table2:
+            got1 = table1.meta.client.describe_table(TableName=table1.name)['Table']
+            got2 = table2.meta.client.describe_table(TableName=table2.name)['Table']
+            assert 'CreationDateTime' in got1
+            assert 'CreationDateTime' in got2
+            
+            time1 = got1['CreationDateTime']
+            time2 = got2['CreationDateTime']
+            
+            after_time = time.time()
+            # we add some wiggle room, as the test might be run with on aws and time synchronization might be bit off
+            assert before_time - 1  < time1.timestamp() < time2.timestamp() < after_time + 1
+
+            got4 = table2.meta.client.describe_table(TableName=table2.name)['Table']
+            got3 = table1.meta.client.describe_table(TableName=table1.name)['Table']
+            assert 'CreationDateTime' in got3
+            assert 'CreationDateTime' in got4
+
+            time3 = got3['CreationDateTime']
+            time4 = got4['CreationDateTime']
+
+            assert time1 == time3, (time1, time1.timestamp(), time3, time3.timestamp())
+            assert time2 == time4, (time2, time2.timestamp(), time4, time4.timestamp())
 
 # Test that DescribeTable returns the table's estimated item count
 # in the ItemCount attribute. Unfortunately, there's not much we can

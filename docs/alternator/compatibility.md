@@ -336,10 +336,8 @@ they should be easy to detect. Here is a list of these unimplemented features:
   another cache in front of the it. We wrote more about this here:
   <https://www.scylladb.com/2017/07/31/database-caches-not-good/>
 
-* The DescribeTable is missing information about creation date and size
-  estimates, and also part of the information about indexes enabled on 
-  the table.
-  <https://github.com/scylladb/scylla/issues/5013>
+* The DescribeTable is missing information about size estimates, and 
+  also part of the information about indexes enabled on the table.
   <https://github.com/scylladb/scylla/issues/5320>
   <https://github.com/scylladb/scylla/issues/7550>
   <https://github.com/scylladb/scylla/issues/7551>
