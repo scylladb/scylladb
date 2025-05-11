@@ -338,17 +338,13 @@ credentials and endpoint.
 Views with tablets
 ------------------
 
-By default, Materialized Views (MV) and Secondary Indexes (SI)
-are disabled in keyspaces that use tablets.
-
-Support for MV and SI with tablets is experimental and must be explicitly
-enabled in the ``scylla.yaml`` configuration file by specifying
-the ``views-with-tablets`` option:
+Materialized Views (MV) and Secondary Indexes (SI) are enabled in keyspaces that use tablets
+only when :term:`RF-rack-valid keyspaces <RF-rack-valid keyspace>` are enforced. That can be
+done in the ``scylla.yaml`` configuration file by specifying
 
 .. code-block:: yaml
 
-   experimental_features:
-     - views-with-tablets
+   rf_rack_valid_keyspaces: true
 
 
 Monitoring
