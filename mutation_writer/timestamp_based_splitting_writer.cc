@@ -95,12 +95,12 @@ small_flat_map<Key, Value, Size>::find(const key_type& k) {
 class timestamp_based_splitting_mutation_writer {
     using bucket_id = int64_t;
 
-    class timestamp_bucket_writer : public bucket_writer_v2 {
+    class timestamp_bucket_writer : public bucket_writer {
         bool _has_current_partition = false;
 
     public:
-        timestamp_bucket_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2& consumer)
-            : bucket_writer_v2(schema, std::move(permit), consumer) {
+        timestamp_bucket_writer(schema_ptr schema, reader_permit permit, mutation_reader_consumer& consumer)
+            : bucket_writer(schema, std::move(permit), consumer) {
         }
         void set_has_current_partition() {
             _has_current_partition = true;
@@ -117,7 +117,7 @@ private:
     schema_ptr _schema;
     reader_permit _permit;
     classify_by_timestamp _classifier;
-    reader_consumer_v2 _consumer;
+    mutation_reader_consumer _consumer;
     partition_start _current_partition_start;
     std::unordered_map<bucket_id, timestamp_bucket_writer> _buckets;
     std::vector<bucket_id> _buckets_used_for_current_partition;
@@ -137,7 +137,7 @@ private:
     future<> write_marker_and_tombstone(const clustering_row& cr);
 
 public:
-    timestamp_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, classify_by_timestamp classifier, reader_consumer_v2 consumer)
+    timestamp_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, classify_by_timestamp classifier, mutation_reader_consumer consumer)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _classifier(std::move(classifier))
@@ -441,7 +441,7 @@ future<> timestamp_based_splitting_mutation_writer::consume(partition_end&& pe) 
     });
 }
 
-future<> segregate_by_timestamp(mutation_reader producer, classify_by_timestamp classifier, reader_consumer_v2 consumer) {
+future<> segregate_by_timestamp(mutation_reader producer, classify_by_timestamp classifier, mutation_reader_consumer consumer) {
     //FIXME: make this into a consume() variant?
     auto schema = producer.schema();
     auto permit = producer.permit();

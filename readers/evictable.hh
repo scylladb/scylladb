@@ -36,7 +36,7 @@ class partition_slice;
 /// transparent to its user.
 /// Parameters passed by reference have to be kept alive while the reader is
 /// alive.
-mutation_reader make_auto_paused_evictable_reader_v2(
+mutation_reader make_auto_paused_evictable_reader(
         mutation_source ms,
         schema_ptr schema,
         reader_permit permit,
@@ -45,17 +45,17 @@ mutation_reader make_auto_paused_evictable_reader_v2(
         tracing::trace_state_ptr trace_state,
         mutation_reader::forwarding fwd_mr);
 
-class evictable_reader_v2;
+class evictable_reader;
 
-class evictable_reader_handle_v2 {
-    friend std::pair<mutation_reader, evictable_reader_handle_v2> make_manually_paused_evictable_reader_v2(mutation_source, schema_ptr, reader_permit,
+class evictable_reader_handle {
+    friend std::pair<mutation_reader, evictable_reader_handle> make_manually_paused_evictable_reader(mutation_source, schema_ptr, reader_permit,
             const dht::partition_range&, const query::partition_slice&, tracing::trace_state_ptr, mutation_reader::forwarding);
 
 private:
-    evictable_reader_v2* _r;
+    evictable_reader* _r;
 
 private:
-    explicit evictable_reader_handle_v2(evictable_reader_v2& r);
+    explicit evictable_reader_handle(evictable_reader& r);
 
 public:
     void pause();
@@ -72,7 +72,7 @@ public:
 /// transparent to its user.
 /// Parameters passed by reference have to be kept alive while the reader is
 /// alive.
-std::pair<mutation_reader, evictable_reader_handle_v2> make_manually_paused_evictable_reader_v2(
+std::pair<mutation_reader, evictable_reader_handle> make_manually_paused_evictable_reader(
         mutation_source ms,
         schema_ptr schema,
         reader_permit permit,

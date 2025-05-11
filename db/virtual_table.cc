@@ -63,7 +63,7 @@ mutation_source memtable_filling_virtual_table::as_mutation_source() {
             };
 
             return execute(mutation_sink, permit).then([this, mt, s, units, &range, &slice, &trace_state, &fwd, &fwd_mr] () {
-                auto rd = mt->as_data_source().make_reader_v2(s, units->units.permit(), range, slice, trace_state, fwd, fwd_mr);
+                auto rd = mt->as_data_source().make_mutation_reader(s, units->units.permit(), range, slice, trace_state, fwd, fwd_mr);
 
                 if (!_shard_aware) {
                     rd = make_filtering_reader(std::move(rd), [this] (const dht::decorated_key& dk) -> bool {
@@ -103,14 +103,14 @@ mutation_source streaming_virtual_table::as_mutation_source() {
         // We achieve safety by mediating access through query_restrictions. When the reader
         // dies, pr is cleared and execute() will get an exception.
         struct my_result_collector : public result_collector, public query_restrictions {
-            queue_reader_handle_v2 handle;
+            queue_reader_handle handle;
 
             // Valid until handle.is_terminated(), which is set to true when the
             // queue_reader dies.
             const dht::partition_range* pr;
             mutation_reader::forwarding fwd_mr;
 
-            my_result_collector(schema_ptr s, reader_permit p, const dht::partition_range* pr, queue_reader_handle_v2&& handle)
+            my_result_collector(schema_ptr s, reader_permit p, const dht::partition_range* pr, queue_reader_handle&& handle)
                 : result_collector(s, p)
                 , handle(std::move(handle))
                 , pr(pr)
@@ -130,7 +130,7 @@ mutation_source streaming_virtual_table::as_mutation_source() {
             }
         };
 
-        auto reader_and_handle = make_queue_reader_v2(table_schema, permit);
+        auto reader_and_handle = make_queue_reader(table_schema, permit);
         auto consumer = std::make_unique<my_result_collector>(table_schema, permit, &pr, std::move(reader_and_handle.second));
         auto f = execute(permit, *consumer, *consumer);
 

@@ -93,7 +93,7 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
             };
 
             auto lifecycle_policy = seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), std::make_unique<evicting_semaphore_factory>(evict_paused_readers));
-            auto mr = make_multishard_combining_reader_v2_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
+            auto mr = make_multishard_combining_reader_for_tests(keep_alive_sharder.back(), std::move(lifecycle_policy), s,
                     std::move(permit), range, slice, trace_state, fwd_mr);
             if (fwd_sm == streamed_mutation::forwarding::yes) {
                 return make_forwardable(std::move(mr));

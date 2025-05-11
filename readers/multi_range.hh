@@ -36,7 +36,7 @@ namespace query {
 ///     ranges. Otherwise the reader is created with
 ///     mutation_reader::forwarding::yes.
 mutation_reader
-make_flat_multi_range_reader(
+make_multi_range_reader(
         schema_ptr s, reader_permit permit, mutation_source source, const dht::partition_range_vector& ranges,
         const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state = nullptr,
@@ -47,7 +47,7 @@ make_flat_multi_range_reader(
 /// Generator overload. The ranges returned by the generator have to satisfy the
 /// same requirements as the `ranges` param of the vector overload.
 mutation_reader
-make_flat_multi_range_reader(
+make_multi_range_reader(
         schema_ptr s,
         reader_permit permit,
         mutation_source source,

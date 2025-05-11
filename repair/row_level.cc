@@ -286,7 +286,7 @@ mutation_reader repair_reader::make_reader(
                 return cf.make_streaming_reader(std::move(s), std::move(permit), pr, ps, fwd_mr, compaction_time);
             });
             mutation_reader rd(nullptr);
-            std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader_v2(
+            std::tie(rd, _reader_handle) = make_manually_paused_evictable_reader(
                 std::move(ms),
                 _schema,
                 _permit,
@@ -464,9 +464,9 @@ future<> repair_writer::write_start_and_mf(lw_shared_ptr<const decorated_key_wit
 };
 
 class queue_reader_handle_adapter : public mutation_fragment_queue::impl {
-    queue_reader_handle_v2 _handle;
+    queue_reader_handle _handle;
 public:
-    queue_reader_handle_adapter(queue_reader_handle_v2 handle)
+    queue_reader_handle_adapter(queue_reader_handle handle)
         : _handle(std::move(handle))
     {}
 
@@ -483,7 +483,7 @@ public:
     }
 };
 
-mutation_fragment_queue make_mutation_fragment_queue(schema_ptr s, reader_permit permit, queue_reader_handle_v2 handle) {
+mutation_fragment_queue make_mutation_fragment_queue(schema_ptr s, reader_permit permit, queue_reader_handle handle) {
     return mutation_fragment_queue(std::move(s), std::move(permit), seastar::make_shared<queue_reader_handle_adapter>(std::move(handle)));
 }
 
@@ -548,7 +548,7 @@ lw_shared_ptr<repair_writer> make_repair_writer(
             sharded<replica::database>& db,
             db::view::view_builder& view_builder,
             service::frozen_topology_guard topo_guard) {
-    auto [queue_reader, queue_handle] = make_queue_reader_v2(schema, permit);
+    auto [queue_reader, queue_handle] = make_queue_reader(schema, permit);
     auto queue = make_mutation_fragment_queue(schema, permit, std::move(queue_handle));
     auto i = std::make_unique<repair_writer_impl>(schema, permit, db, view_builder, reason, std::move(queue), std::move(queue_reader), topo_guard);
     return make_lw_shared<repair_writer>(schema, permit, std::move(i));

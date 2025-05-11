@@ -19,9 +19,9 @@ namespace mutation_writer {
 class partition_sorting_mutation_writer {
     schema_ptr _schema;
     reader_permit _permit;
-    reader_consumer_v2 _consumer;
+    mutation_reader_consumer _consumer;
     size_t _max_memory;
-    bucket_writer_v2 _bucket_writer;
+    bucket_writer _bucket_writer;
     std::optional<dht::decorated_key> _last_bucket_key;
     lw_shared_ptr<replica::memtable> _memtable;
     future<> _background_memtable_flush = make_ready_future<>();
@@ -72,7 +72,7 @@ private:
     }
 
 public:
-    partition_sorting_mutation_writer(schema_ptr schema, reader_permit permit, reader_consumer_v2 consumer, const segregate_config& cfg)
+    partition_sorting_mutation_writer(schema_ptr schema, reader_permit permit, mutation_reader_consumer consumer, const segregate_config& cfg)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _consumer(std::move(consumer))
@@ -130,7 +130,7 @@ public:
     }
 };
 
-future<> segregate_by_partition(mutation_reader producer, segregate_config cfg, reader_consumer_v2 consumer) {
+future<> segregate_by_partition(mutation_reader producer, segregate_config cfg, mutation_reader_consumer consumer) {
     auto schema = producer.schema();
     auto permit = producer.permit();
   try {

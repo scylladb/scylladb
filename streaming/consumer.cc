@@ -18,7 +18,7 @@
 
 namespace streaming {
 
-reader_consumer_v2 make_streaming_consumer(sstring origin,
+mutation_reader_consumer make_streaming_consumer(sstring origin,
         sharded<replica::database>& db,
         db::view::view_builder& vb,
         uint64_t estimated_partitions,
@@ -42,7 +42,7 @@ reader_consumer_v2 make_streaming_consumer(sstring origin,
             // Data segregation is postponed to happen during off-strategy if latter is enabled, which
             // means partition estimation shouldn't be adjusted.
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
-            reader_consumer_v2 consumer =
+            mutation_reader_consumer consumer =
                     [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, origin = std::move(origin), offstrategy] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {

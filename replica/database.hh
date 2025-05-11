@@ -789,14 +789,14 @@ public:
     // Note: for data queries use query() instead.
     // The 'range' parameter must be live as long as the reader is used.
     // Mutations returned by the reader will all have given schema.
-    mutation_reader make_reader_v2(schema_ptr schema,
+    mutation_reader make_mutation_reader(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
             tracing::trace_state_ptr trace_state = nullptr,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
-    mutation_reader make_reader_v2_excluding_staging(schema_ptr schema,
+    mutation_reader make_mutation_reader_excluding_staging(schema_ptr schema,
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
@@ -804,9 +804,9 @@ public:
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes) const;
 
-    mutation_reader make_reader_v2(schema_ptr schema, reader_permit permit, const dht::partition_range& range = query::full_partition_range) const {
+    mutation_reader make_mutation_reader(schema_ptr schema, reader_permit permit, const dht::partition_range& range = query::full_partition_range) const {
         auto& full_slice = schema->full_slice();
-        return make_reader_v2(std::move(schema), std::move(permit), range, full_slice);
+        return make_mutation_reader(std::move(schema), std::move(permit), range, full_slice);
     }
 
     // The streaming mutation reader differs from the regular mutation reader in that:
@@ -2025,7 +2025,7 @@ future<> start_large_data_handler(sharded<replica::database>& db);
 // Opt-in for compacting the output by passing `compaction_time`, see
 // make_streaming_reader() for more details.
 // Setting multishard_reader_buffer_size enables the multishard reader's buffer
-// size optimization (see make_multishard_combining_reader_v2()), using the
+// size optimization (see make_multishard_combining_reader()), using the
 // given size.
 mutation_reader make_multishard_streaming_reader(
         distributed<replica::database>& db,
@@ -2048,7 +2048,7 @@ mutation_reader make_multishard_streaming_reader(
 bool is_internal_keyspace(std::string_view name);
 
 class streaming_reader_lifecycle_policy
-    : public reader_lifecycle_policy_v2
+    : public reader_lifecycle_policy
         , public enable_shared_from_this<streaming_reader_lifecycle_policy> {
 
     template <typename T>

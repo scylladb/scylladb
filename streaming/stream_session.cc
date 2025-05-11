@@ -84,7 +84,7 @@ public:
     }
 };
 
-reader_consumer_v2
+mutation_reader_consumer
 stream_manager::make_streaming_consumer(uint64_t estimated_partitions, stream_reason reason, service::frozen_topology_guard topo_guard) {
     return streaming::make_streaming_consumer("streaming", _db, _view_builder, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard);
 }

@@ -55,7 +55,7 @@ using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
 /// 3) Both, `read_context::lookup_readers()` and `read_context::save_readers()`
 ///    knows to do nothing when the query is not stateful and just short
 ///    circuit.
-class read_context : public reader_lifecycle_policy_v2 {
+class read_context : public reader_lifecycle_policy {
 
     //              ( )    (O)
     //               |      ^
@@ -363,7 +363,7 @@ mutation_reader read_context::create_reader(
 
     rm.state = reader_state::used;
 
-    return table.as_mutation_source().make_reader_v2(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice,
+    return table.as_mutation_source().make_mutation_reader(std::move(schema), rm.rparts->permit, *rm.rparts->range, *rm.rparts->slice,
             std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr);
 }
 
@@ -634,10 +634,10 @@ requires std::is_nothrow_move_constructible_v<typename ResultBuilder::result_typ
 struct page_consume_result {
     typename ResultBuilder::result_type result;
     mutation_reader::tracked_buffer unconsumed_fragments;
-    lw_shared_ptr<compact_for_query_state_v2> compaction_state;
+    lw_shared_ptr<compact_for_query_state> compaction_state;
 
     page_consume_result(typename ResultBuilder::result_type&& result, mutation_reader::tracked_buffer&& unconsumed_fragments,
-            lw_shared_ptr<compact_for_query_state_v2>&& compaction_state) noexcept
+            lw_shared_ptr<compact_for_query_state>&& compaction_state) noexcept
         : result(std::move(result))
         , unconsumed_fragments(std::move(unconsumed_fragments))
         , compaction_state(std::move(compaction_state)) {
@@ -647,7 +647,7 @@ struct page_consume_result {
 // A special-purpose multi-range reader for multishard reads
 //
 // It is different from the "stock" multi-range reader
-// (make_flat_multi_range_reader()) in the following ways:
+// (make_multi_range_reader()) in the following ways:
 // * It guarantees that a buffer never crosses two ranges.
 // * It guarantees that after calling `fill_buffer()` the underlying reader's
 //   buffer's *entire* content is moved into its own buffer. In other words,
@@ -715,10 +715,10 @@ future<page_consume_result<ResultBuilder>> read_page(
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         noncopyable_function<ResultBuilder()> result_builder_factory) {
-    auto compaction_state = make_lw_shared<compact_for_query_state_v2>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
+    auto compaction_state = make_lw_shared<compact_for_query_state>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
             cmd.partition_limit);
 
-    auto reader = make_multishard_combining_reader_v2(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,
+    auto reader = make_multishard_combining_reader(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,
             trace_state, mutation_reader::forwarding(ranges.size() > 1));
     if (ranges.size() > 1) {
         reader = make_mutation_reader<multi_range_reader>(s, ctx->permit(), std::move(reader), ranges);

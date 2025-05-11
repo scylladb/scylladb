@@ -166,23 +166,23 @@ SEASTAR_TEST_CASE(test_cache_works_after_clearing) {
     });
 }
 
-class partition_counting_reader final : public delegating_reader_v2 {
+class partition_counting_reader final : public delegating_reader {
     int& _counter;
     bool _count_fill_buffer = true;
 public:
     partition_counting_reader(mutation_reader mr, int& counter)
-        : delegating_reader_v2(std::move(mr)), _counter(counter) { }
+        : delegating_reader(std::move(mr)), _counter(counter) { }
     virtual future<> fill_buffer() override {
         if (_count_fill_buffer) {
             ++_counter;
             _count_fill_buffer = false;
         }
-        return delegating_reader_v2::fill_buffer();
+        return delegating_reader::fill_buffer();
     }
     virtual future<> next_partition() override {
         _count_fill_buffer = false;
         ++_counter;
-        return delegating_reader_v2::next_partition();
+        return delegating_reader::next_partition();
     }
 };
 
@@ -402,7 +402,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
 
         auto do_test = [&s, &semaphore, &partitions] (const mutation_source& ds, const dht::partition_range& range,
                                           int& secondary_calls_count, int expected_calls) {
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(expected_calls, secondary_calls_count);
@@ -489,25 +489,25 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
             auto range = dht::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[1].decorated_key(), true});
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(3, secondary_calls_count);
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range))
                 .produces(slice(partitions, range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(3, secondary_calls_count);
             auto range2 = dht::partition_range::make(
                 {partitions[0].decorated_key(), true},
                 {partitions[1].decorated_key(), false});
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range2))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range2))
                 .produces(slice(partitions, range2))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(3, secondary_calls_count);
             auto range3 = dht::partition_range::make(
                 {dht::ring_position::starting_at(key_before_all.token())},
                 {partitions[2].decorated_key(), false});
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), range3))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range3))
                 .produces(slice(partitions, range3))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(5, secondary_calls_count);
@@ -529,7 +529,7 @@ SEASTAR_TEST_CASE(test_cache_delegates_to_underlying_only_once_multiple_mutation
 
             cache->invalidate(row_cache::external_updater([] {}), key_after_all).get();
 
-            assert_that(ds.make_reader_v2(s, semaphore.make_permit(), query::full_partition_range))
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), query::full_partition_range))
                 .produces(slice(partitions, query::full_partition_range))
                 .produces_end_of_stream();
             BOOST_CHECK_EQUAL(partitions.size() + 2, secondary_calls_count);
@@ -768,7 +768,7 @@ SEASTAR_TEST_CASE(test_presence_checker_runs_under_right_allocator) {
                 tracing::trace_state_ptr tr,
                 streamed_mutation::forwarding fwd,
                 mutation_reader::forwarding mr_fwd) {
-                return ms.make_reader_v2(s, std::move(permit), pr, slice, std::move(tr), fwd, mr_fwd);
+                return ms.make_mutation_reader(s, std::move(permit), pr, slice, std::move(tr), fwd, mr_fwd);
             }, [] {
                 return [saved = managed_bytes()] (const dht::decorated_key& key) mutable {
                     // size large enough to defeat the small blob optimization
@@ -1220,15 +1220,15 @@ private:
         mutation_source _underlying;
         utils::throttle& _throttle;
     private:
-        class reader : public delegating_reader_v2 {
+        class reader : public delegating_reader {
             utils::throttle& _throttle;
         public:
             reader(utils::throttle& t, mutation_reader r)
-                    : delegating_reader_v2(std::move(r))
+                    : delegating_reader(std::move(r))
                     , _throttle(t)
             {}
             virtual future<> fill_buffer() override {
-                return delegating_reader_v2::fill_buffer().finally([this] () {
+                return delegating_reader::fill_buffer().finally([this] () {
                     return _throttle.enter();
                 });
             }
@@ -1241,7 +1241,7 @@ private:
 
         mutation_reader make_reader(schema_ptr s, reader_permit permit, const dht::partition_range& pr,
                 const query::partition_slice& slice, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
-            return make_mutation_reader<reader>(_throttle, _underlying.make_reader_v2(s, std::move(permit), pr, slice, std::move(trace), std::move(fwd)));
+            return make_mutation_reader<reader>(_throttle, _underlying.make_mutation_reader(s, std::move(permit), pr, slice, std::move(trace), std::move(fwd)));
         }
     };
     lw_shared_ptr<impl> _impl;
@@ -5045,12 +5045,12 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario(c
 
     db.apply({ freeze(mut_v2) }, db::no_timeout).get();
 
-    auto reader1 = tbl.make_reader_v2(schema, db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(), pr, schema->full_slice());
+    auto reader1 = tbl.make_mutation_reader(schema, db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(), pr, schema->full_slice());
     const auto close_reader1 = deferred_close(reader1);
 
     reader1.fill_buffer().get();
 
-    auto reader2 = tbl.make_reader_v2(schema, db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(), pr, schema->full_slice());
+    auto reader2 = tbl.make_mutation_reader(schema, db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(), pr, schema->full_slice());
     const auto close_reader2 = deferred_close(reader2);
 
     reader2.fill_buffer().get();
@@ -5118,7 +5118,7 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(c
     assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", table_name, pk2, ck1, 0)).get()).is_rows();
 
     testlog.info("read 1");
-    auto reader1 = tbl.make_reader_v2(
+    auto reader1 = tbl.make_mutation_reader(
             schema,
             db.obtain_reader_permit(tbl, "read1", db::no_timeout, {}).get(),
             query::full_partition_range,
@@ -5128,7 +5128,7 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(c
     reader1.fill_buffer().get();
 
     testlog.info("read 2");
-    auto reader2 = tbl.make_reader_v2(
+    auto reader2 = tbl.make_mutation_reader(
             schema,
             db.obtain_reader_permit(tbl, "read2", db::no_timeout, {}).get(),
             query::full_partition_range,

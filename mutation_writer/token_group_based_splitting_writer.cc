@@ -21,9 +21,9 @@ class token_group_based_splitting_mutation_writer {
     schema_ptr _schema;
     reader_permit _permit;
     classify_by_token_group _classify;
-    reader_consumer_v2 _consumer;
+    mutation_reader_consumer _consumer;
     token_group_id _current_group_id = 0;
-    std::optional<bucket_writer_v2> _current_writer;
+    std::optional<bucket_writer> _current_writer;
 private:
     future<> write(mutation_fragment_v2&& mf) {
         return _current_writer->consume(std::move(mf));
@@ -31,7 +31,7 @@ private:
 
     inline void allocate_new_writer_if_needed() {
         if (!_current_writer) [[unlikely]] {
-            _current_writer = bucket_writer_v2(_schema, _permit, _consumer);
+            _current_writer = bucket_writer(_schema, _permit, _consumer);
         }
     }
 
@@ -63,7 +63,7 @@ private:
         return make_ready_future<>();
     }
 public:
-    token_group_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, classify_by_token_group classify, reader_consumer_v2 consumer)
+    token_group_based_splitting_mutation_writer(schema_ptr schema, reader_permit permit, classify_by_token_group classify, mutation_reader_consumer consumer)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _classify(std::move(classify))
@@ -107,7 +107,7 @@ public:
     }
 };
 
-future<> segregate_by_token_group(mutation_reader producer, classify_by_token_group classify, reader_consumer_v2 consumer) {
+future<> segregate_by_token_group(mutation_reader producer, classify_by_token_group classify, mutation_reader_consumer consumer) {
     auto schema = producer.schema();
     auto permit = producer.permit();
     return feed_writer(

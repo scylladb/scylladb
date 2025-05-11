@@ -381,17 +381,17 @@ SEASTAR_TEST_CASE(test_partition_version_consistency_after_lsa_compaction_happen
         m3.set_clustered_cell(ck3, to_bytes("col"), data_value(bytes(bytes::initialized_later(), 8)), next_timestamp());
 
         mt->apply(m1);
-        std::optional<flat_reader_assertions_v2> rd1 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
+        std::optional<mutation_reader_assertions> rd1 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
         rd1->set_max_buffer_size(1);
         rd1->fill_buffer().get();
 
         mt->apply(m2);
-        std::optional<flat_reader_assertions_v2> rd2 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
+        std::optional<mutation_reader_assertions> rd2 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
         rd2->set_max_buffer_size(1);
         rd2->fill_buffer().get();
 
         mt->apply(m3);
-        std::optional<flat_reader_assertions_v2> rd3 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
+        std::optional<mutation_reader_assertions> rd3 = assert_that(mt->make_mutation_reader(s, semaphore.make_permit()));
         rd3->set_max_buffer_size(1);
         rd3->fill_buffer().get();
 
@@ -998,7 +998,7 @@ SEASTAR_TEST_CASE(memtable_flush_compresses_mutations) {
 
         // Treat the table as mutation_source and SCYLLA_ASSERT we get the expected mutation and end of stream
         mutation_source ms = t.as_mutation_source();
-        assert_that(ms.make_reader_v2(s, semaphore.make_permit()))
+        assert_that(ms.make_mutation_reader(s, semaphore.make_permit()))
             .produces(m2)
             .produces_end_of_stream();
     }, db_config);
@@ -1043,7 +1043,7 @@ SEASTAR_TEST_CASE(memtable_flush_period) {
 
         // Check mutation presents in the table
         mutation_source ms = t.as_mutation_source();
-        assert_that(ms.make_reader_v2(s2, semaphore.make_permit()))
+        assert_that(ms.make_mutation_reader(s2, semaphore.make_permit()))
             .produces(m)
             .produces_end_of_stream();
     }, db_config);
@@ -1543,7 +1543,7 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
 
             testlog.info("create reader -- first buffer fill");
 
-            auto reader = tbl.make_reader_v2(schema, co_await db.obtain_reader_permit(tbl, "read", db::no_timeout, {}), query::full_partition_range, schema->full_slice());
+            auto reader = tbl.make_mutation_reader(schema, co_await db.obtain_reader_permit(tbl, "read", db::no_timeout, {}), query::full_partition_range, schema->full_slice());
 
             std::exception_ptr ex;
             try {
