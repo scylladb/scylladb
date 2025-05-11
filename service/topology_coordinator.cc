@@ -1909,17 +1909,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto node_builder = builder.with_node(id).del("topology_request");
             auto done_msg = fmt::format("Canceled. Dead nodes: {}", dead_nodes);
             rtbuilder.done(done_msg);
-            if (_topo_sm._topology.global_request_id) {
-                try {
-                    utils::UUID uuid = utils::UUID{*_topo_sm._topology.global_request_id};
-                    topology_request_tracking_mutation_builder rt_global_req_builder{uuid};
-                    rt_global_req_builder.done(done_msg)
-                                         .set("end_time", db_clock::now());
-                    muts.emplace_back(rt_global_req_builder.build());
-                } catch (...) {
-                    rtlogger.warn("failed to cancel topology global request: {}", std::current_exception());
-                }
-            }
             switch (req) {
                 case topology_request::replace:
                 [[fallthrough]];
