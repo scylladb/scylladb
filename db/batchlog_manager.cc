@@ -185,7 +185,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
 
-        auto data = row.get_blob("data");
+        auto data = row.get_blob_unfragmented("data");
 
         blogger.debug("Replaying batch {}", id);
 

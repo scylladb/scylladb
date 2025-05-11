@@ -2885,7 +2885,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
         std::vector<data_value_or_unset> values;
         for (const auto& col: schema->all_columns()) {
             if (row.has(col.name_as_text())) {
-                values.push_back(col.type->deserialize(row.get_blob(col.name_as_text())));
+                values.push_back(col.type->deserialize(row.get_blob_unfragmented(col.name_as_text())));
             } else {
                 values.push_back(unset_value{});
             }
