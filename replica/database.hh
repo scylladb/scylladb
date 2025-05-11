@@ -1461,7 +1461,6 @@ private:
     size_t max_memory_concurrent_view_update_reads() { return _dbcfg.available_memory * 0.01; }
     // Assume a queued read takes up 1kB of memory, and allow 2% of memory to be filled up with such reads.
     size_t max_inactive_queue_length() { return _dbcfg.available_memory * 0.02 / 1000; }
-    size_t max_inactive_view_update_queue_length() { return _dbcfg.available_memory * 0.01 / 1000; }
     // They're rather heavyweight, so limit more
     static constexpr size_t max_count_streaming_concurrent_reads{10};
     size_t max_memory_streaming_concurrent_reads() { return _dbcfg.available_memory * 0.02; }
