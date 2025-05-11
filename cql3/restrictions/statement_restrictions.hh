@@ -78,6 +78,11 @@ struct predicate {
     bool is_singleton = false;
     // Whether the returned value_set follows CQL comparison semantics
     bool comparable = true;
+    bool is_slice = false;
+    bool is_slice_with_cql_order = false;
+    bool is_slice_with_clustering_key_order = false; 
+    bool is_slice_with_left_bound = false;
+    bool is_slice_with_right_bound = false;
     bool is_multi_column = false;
     bool is_not_null_single_column = false;
 };
@@ -156,7 +161,7 @@ private:
     /**
      * Restrictions on clustering columns
      */
-    expr::expression _clustering_columns_restrictions = expr::conjunction({});
+    std::vector<predicate> _clustering_columns_restrictions;
 
     expr::single_column_restrictions_map _single_column_clustering_key_restrictions;
     expr::expression _clustering_row_level_filter = expr::conjunction({});
