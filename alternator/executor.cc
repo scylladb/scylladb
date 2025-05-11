@@ -70,6 +70,7 @@ namespace alternator {
 // tags RCU_TAG_KEY and WCU_TAG_KEY.
 static const sstring RCU_TAG_KEY("system:provisioned_rcu");
 static const sstring WCU_TAG_KEY("system:provisioned_wcu");
+static const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
 
 enum class table_status {
     active = 0,
@@ -210,9 +211,29 @@ executor::executor(gms::gossiper& gossiper,
     register_metrics(_metrics, _stats);
 }
 
+static void set_table_creation_time(std::map<sstring, sstring>& tags_map, db_clock::time_point creation_time) {
+    auto tm = std::chrono::duration_cast<std::chrono::milliseconds>(creation_time.time_since_epoch()).count();
+    tags_map[TABLE_CREATION_TIME_TAG_KEY] = std::to_string(tm);
+}
+
+static double get_table_creation_time(const schema &schema) {
+    auto time = db::find_tag(schema, TABLE_CREATION_TIME_TAG_KEY);
+    if (time) {
+        try {
+            auto val = std::stoll(*time);
+            if (val > 0) {
+                return val / 1000.0;
+            }
+        }
+        catch(...) {}
+    }
+    return 0.0;
+}
 
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
-    rjson::add(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
+    auto creation_time = get_table_creation_time(schema);
+
+    rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
@@ -607,8 +628,9 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
     auto tags_ptr = db::get_tags_of_table(schema);
 
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
-    // FIXME: take the tables creation time, not the current time!
-    size_t creation_date_seconds = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
+
+    auto creation_timestamp = get_table_creation_time(*schema);
+    
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
@@ -619,7 +641,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
     rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
     rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
     rjson::add(table_description, "BillingModeSummary", rjson::empty_object());
-    rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_date_seconds));
+    rjson::add(table_description["BillingModeSummary"], "LastUpdateToPayPerRequestDateTime", rjson::value(creation_timestamp));
     // In PAY_PER_REQUEST billing mode, provisioned capacity should return 0
     int rcu = 0;
     int wcu = 0;
@@ -654,7 +676,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
     data_dictionary::table t = proxy.data_dictionary().find_column_family(schema);
 
     if (tbl_status != table_status::deleting) {
-        rjson::add(table_description, "CreationDateTime", rjson::value(creation_date_seconds));
+        rjson::add(table_description, "CreationDateTime", rjson::value(creation_timestamp));
         std::unordered_map<std::string,std::string> key_attribute_types;
         // Add base table's KeySchema and collect types for AttributeDefinitions:
         executor::describe_key_schema(table_description, *schema, key_attribute_types);
@@ -1552,6 +1574,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         tags_map[RCU_TAG_KEY] = std::to_string(bm.rcu);
         tags_map[WCU_TAG_KEY] = std::to_string(bm.wcu);
     }
+    set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
 
     co_await verify_create_permission(enforce_authorization, client_state);
