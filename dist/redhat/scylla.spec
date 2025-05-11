@@ -21,6 +21,11 @@ Obsoletes:      scylla-enterprise < 2025.1.0
 %global __brp_python_bytecompile %{nil}
 %global __brp_mangle_shebangs %{nil}
 
+# On Fedora 42, _sbindir was redefined to /usr/bin; redefine it back
+# Eventually we should migrate to /usr/bin too, but let's not touch
+# it until it becomes widely used in RHEL.
+%global _sbindir /usr/sbin
+
 %undefine _find_debuginfo_dwz_opts
 
 # Prevent find-debuginfo.sh from tempering with scylla's build-id (#5881)
