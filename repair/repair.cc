@@ -2438,7 +2438,9 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         };
         co_await create_tablet_repair_task_metas(metas);
     }
-    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, tasks::task_id::create_null_id(), table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, service::default_session_id);
+    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, rid, keyspace_name, tasks::task_id::create_null_id(), table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, service::default_session_id);
+    auto task = co_await _repair_module->make_task(task_impl_ptr, {});
+    task->start();
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
