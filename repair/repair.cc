@@ -2488,6 +2488,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
 future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas) {
+    std::exception_ptr ex = nullptr;
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
     auto& db = get_db().local();
@@ -2542,11 +2543,17 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
         co_return flush_time;
     }
 
-    std::vector<tablet_repair_task_meta> task_metas;
     auto ranges_parallelism = std::nullopt;
     auto start = std::chrono::steady_clock::now();
-    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, std::set<locator::effective_replication_map_ptr>{}, rebuild_replicas.has_value());
+    std::vector<tablet_repair_task_meta> tmp_task_metas;
+    shared_ptr<sharded<std::vector<tablet_repair_task_meta>>> task_metas = make_shared<sharded<std::vector<tablet_repair_task_meta>>>();
+    co_await task_metas->start();
+    try {
+    co_await task_metas->invoke_on(*master_shard_id, [&] (auto& local_metas) {
+        local_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    });
+    tmp_task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(tmp_task_metas), ranges_parallelism, topo_guard, std::set<locator::effective_replication_map_ptr>{}, rebuild_replicas.has_value());
     task_impl_ptr->sched_by_scheduler = true;
     auto task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
     task->start();
@@ -2561,6 +2568,14 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
             id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
     co_return flush_time;
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await task_metas->stop();
+    if (ex) {
+        co_await coroutine::return_exception_ptr(ex);
+    }
+    co_return gc_clock::now();
 }
 
 tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexcept {
