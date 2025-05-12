@@ -452,7 +452,7 @@ std::string_view compression_parameters::algorithm_to_name(algorithm alg) {
         case algorithm::snappy: return "SnappyCompressor";
         case algorithm::zstd: return "ZstdCompressor";
         case algorithm::zstd_with_dicts: return "ZstdWithDictsCompressor";
-        case algorithm::none: on_internal_error(compressor_factory_logger, "algorithm_to_name(): called with algorithm::none");
+        case algorithm::none: return "none"; // Name used only for logging purposes, can't be chosen by the user.
     }
     abort();
 }
