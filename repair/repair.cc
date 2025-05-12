@@ -2368,6 +2368,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             throw std::runtime_error("The current host must be part of the repair");
         }
 
+        auto create_tablet_repair_task_metas = [&] (const std::vector<repair_tablet_meta>& metas) -> future<> {
         size_t nr = 0;
         for (auto& m : metas) {
             nr++;
@@ -2434,6 +2435,8 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                 co_await coroutine::maybe_yield();
             }
         }
+        };
+        co_await create_tablet_repair_task_metas(metas);
     }
     auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, tasks::task_id::create_null_id(), table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, service::default_session_id);
 }
