@@ -5,6 +5,7 @@
 #
 from typing import Any
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import HostID, ServerInfo, ServerNum
 from test.pylib.manager_client import ManagerClient
@@ -1957,3 +1958,54 @@ async def test_concurrent_schema_change_with_compaction_completion(manager: Mana
         await force_minor_compaction()
         await cql.run_async(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'IncrementalCompactionStrategy' }};")
         await force_minor_compaction()
+
+
+@pytest.mark.asyncio
+async def test_lwt(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    config = {
+        'rf_rack_valid_keyspaces': False
+    }
+    servers = await manager.servers_add(3, cmdline=cmdline, config=config)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    quorum = len(hosts) // 2 + 1
+
+    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        async def check_paxos_state_table(exists: bool, replicas: int):
+            async def query_host(h: Host):
+                q = f"""
+                    SELECT table_name FROM system_schema.tables
+                    WHERE keyspace_name='{ks}' AND table_name='test$paxos'
+                """
+                rows = await cql.run_async(q, host=h)
+                return len(rows) > 0
+            results = await asyncio.gather(*(query_host(h) for h in hosts))
+            return results.count(exists) >= replicas
+
+        for i in range(5):
+            await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i}) IF NOT EXISTS")
+            # For a Paxos round to succeed, a quorum of replicas must respond.
+            # Therefore, the Paxos state table must exist on at least a quorum of replicas,
+            # though it doesn't need to exist on all of them.
+            assert await check_paxos_state_table(True, quorum)
+
+            await cql.run_async(f"UPDATE {ks}.test SET c = {i * 10} WHERE pk = {i} IF c = {i}")
+
+            rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test;")
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.pk == i
+            assert row.c == i * 10
+
+            await cql.run_async(f"DROP TABLE {ks}.test")
+            # The driver implicitly calls wait_for_schema_agreement,
+            # so the table must be dropped from all replicas, not just a quorum.
+            assert await check_paxos_state_table(False, len(hosts))
