@@ -1957,3 +1957,45 @@ async def test_concurrent_schema_change_with_compaction_completion(manager: Mana
         await force_minor_compaction()
         await cql.run_async(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'IncrementalCompactionStrategy' }};")
         await force_minor_compaction()
+
+
+@pytest.mark.asyncio
+async def test_lwt(manager: ManagerClient):
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    config = {
+        'rf_rack_valid_keyspaces': False,
+        'experimental_features': ['lwt-with-tablets']
+    }
+    servers = await manager.servers_add(3, cmdline=cmdline, config=config)
+
+    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        async def paxos_state_table_exists():
+            query = f"""
+                SELECT table_name FROM system_schema.tables
+                WHERE keyspace_name='{ks}' AND table_name='test_scylla_paxos_state'
+            """
+            rows = await cql.run_async(query)
+            return len(rows) > 0
+
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+    
+        assert not await paxos_state_table_exists()
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+        assert await paxos_state_table_exists()
+
+        await cql.run_async(f"UPDATE {ks}.test SET c = 2 WHERE pk = 1 IF c = 1")
+
+        rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test;")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 2
+
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        assert not await paxos_state_table_exists()
