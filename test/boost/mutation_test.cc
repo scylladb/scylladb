@@ -566,7 +566,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_one_partition) {
 }
 
 SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
-  return sstables::test_env::do_with([] (sstables::test_env& env) {
+  return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     auto s = schema_builder("ks", "cf")
         .with_column("pk", bytes_type, column_kind::partition_key)
         .with_column("v", bytes_type)
@@ -581,7 +581,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    return with_column_family(s, cfg, env.manager(), [&env, s](replica::column_family& cf) {
+    with_column_family(s, cfg, env.manager(), [&env, s](replica::column_family& cf) {
         return seastar::async([&env, s, &cf] {
             // populate
             auto new_key = [&] {
@@ -645,7 +645,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
 
             flushed.get();
         });
-    }).then([cf_stats] {});
+    }).get();
   });
 }
 

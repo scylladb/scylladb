@@ -1666,7 +1666,7 @@ SEASTAR_TEST_CASE(time_window_strategy_time_window_tests) {
 }
 
 SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     auto ts = 1451001601000L; // 2015-12-25 @ 00:00:01, in milliseconds
     auto ts_in_ms = std::chrono::milliseconds(ts);
     auto ts_in_us = std::chrono::duration_cast<std::chrono::microseconds>(ts_in_ms);
@@ -1702,7 +1702,6 @@ SEASTAR_TEST_CASE(time_window_strategy_ts_resolution_check) {
 
         BOOST_REQUIRE(ret.second == expected);
     }
-    return make_ready_future<>();
   });
 }
 
@@ -2319,6 +2318,7 @@ public:
     using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
 
 private:
+    std::unique_ptr<sstable_compressor_factory> scf = make_sstable_compressor_factory_for_tests_in_thread();
     sharded<test_env> _env;
     uint32_t _seed;
     std::unique_ptr<tests::random_schema_specification> _random_schema_spec;
@@ -2336,7 +2336,7 @@ public:
                 compress))
         , _random_schema(_seed, *_random_schema_spec)
     {
-        _env.start().get();
+        _env.start(test_env_config(), std::ref(*scf)).get();
         testlog.info("random_schema: {}", _random_schema.cql());
     }
 
@@ -2402,12 +2402,14 @@ public:
     using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
 
 private:
+
+    std::unique_ptr<sstable_compressor_factory> scf = make_sstable_compressor_factory_for_tests_in_thread();
     sharded<test_env> _env;
 
 public:
     scrub_test_framework()
     {
-        _env.start().get();
+        _env.start(test_env_config(), std::ref(*scf)).get();
     }
 
     ~scrub_test_framework() {
