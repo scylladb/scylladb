@@ -54,6 +54,8 @@ On one extreme, one node is given all SStables with the scope ``all``; on the ot
 nodes are loading only their own SStables with the scope ``node``. In between, you can choose
 a subset of nodes to load only SStables that belong to the rack or DC.
 
+This option is only valid when using the ``--load-and-stream`` option.
+
 
 Skip cleanup
 ---------------
