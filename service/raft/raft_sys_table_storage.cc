@@ -89,7 +89,6 @@ future<raft::index_t> raft_sys_table_storage::load_commit_idx() {
     co_return raft::index_t(static_row.get_or<int64_t>("commit_idx", raft::index_t{}.value()));
 }
 
-
 future<raft::log_entries> raft_sys_table_storage::load_log() {
     static const auto load_cql = format("SELECT term, \"index\", data FROM system.{} WHERE group_id = ?", db::system_keyspace::RAFT);
     ::shared_ptr<cql3::untyped_result_set> rs = co_await _qp.execute_internal(load_cql, {_group_id.id}, cql3::query_processor::cache_internal::yes);
@@ -103,7 +102,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
         }
         raft::term_t term = raft::term_t(row.get_as<int64_t>("term"));
         raft::index_t idx = raft::index_t(row.get_as<int64_t>("index"));
-        auto raw_data = row.get_blob("data");
+        auto raw_data = row.get_view("data");
         auto in = ser::as_input_stream(raw_data);
         using data_variant_type = decltype(raft::log_entry::data);
         data_variant_type data = ser::deserialize(in, std::type_identity<data_variant_type>());
