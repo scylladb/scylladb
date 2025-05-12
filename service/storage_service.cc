@@ -462,7 +462,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
     switch (rs.state) {
         case node_state::normal: {
-            if (is_me(ip)) {
+            if (is_me(id)) {
                 co_return;
             }
             // In replace-with-same-ip scenario the replaced node IP will be the same
@@ -1713,6 +1713,8 @@ future<> storage_service::join_topology(sharded<db::system_distributed_keyspace>
     _listeners.emplace_back(make_lw_shared(std::move(schema_change_announce)));
 
     slogger.info("Starting up server gossip");
+
+    co_await utils::get_local_injector().inject("sleep_before_start_gossiping", std::chrono::milliseconds{500});
 
     co_await _gossiper.start_gossiping(new_generation, app_states);
 
