@@ -302,6 +302,52 @@ SEASTAR_THREAD_TEST_CASE(test_inject_internal_columns) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_internal_columns_dont_extend_row_lifetime) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create keyspace tests_ks with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").get();
+        e.execute_cql("create table tests_ks.table1 (pk int, c1 int static, c2 int static, c3 int, primary key(pk, c3));").get();
+
+        e.execute_cql("update tests_ks.table1 set c1 = 1 where pk = 1").get();
+        {
+            const auto result_msg = e.execute_cql("select c2 from tests_ks.table1").get();
+            assert_that(result_msg).is_rows().with_size(1).with_row({
+                {std::nullopt}
+            });
+        }
+
+        {
+            const auto original_schema = e.db().local().find_schema("tests_ks", "table1");
+            const auto test_column_set = internal_column_set("$test_set",
+                {},
+                {{"$test_set_c1", int32_type}});
+            auto& mm = e.migration_manager().local();
+            mm.inject_internal_columns(original_schema, test_column_set).get();
+            const char* cql = R"(
+                update tests_ks.table1
+                set "$test_set_c1" = 10
+                where pk = 1;
+            )";
+            e.execute_cql(cql).get();
+        }
+
+        e.execute_cql("delete c1 from tests_ks.table1 where pk = 1").get();
+        {
+            const auto result_msg = e.execute_cql("select c2 from tests_ks.table1").get();
+            assert_that(result_msg).is_rows().is_empty();
+        }
+        {
+            const auto result_msg = e.execute_cql("select * from tests_ks.table1").get();
+            assert_that(result_msg).is_rows().is_empty();
+        }
+        {
+            const auto result_msg = e.execute_cql("select \"$test_set_c1\" from tests_ks.table1").get();
+            assert_that(result_msg).is_rows().with_size(1).with_row({
+                {int32_type->decompose(10)}
+            });
+        }
+    }).get();
+}
+
 SEASTAR_TEST_CASE(test_schema_is_updated_in_keyspace) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
