@@ -54,14 +54,14 @@ async def test_autoretrain_dict(manager: ManagerClient):
     uncompressed_size = blob_size * n_blobs * rf
 
     logger.info("Bootstrapping cluster")
-    servers = (await manager.servers_add(2, cmdline=[
+    servers = await manager.servers_add(2, cmdline=[
         '--logger-log-level=storage_service=debug',
         '--logger-log-level=database=debug',
         '--logger-log-level=sstable_dict_autotrainer=debug',
         '--sstable-compression-dictionaries-retrain-period-in-seconds=1',
         '--sstable-compression-dictionaries-autotrainer-tick-period-in-seconds=1',
         f'--sstable-compression-dictionaries-min-training-dataset-bytes={int(uncompressed_size/2)}',
-    ]))
+    ], auto_rack_dc="dc1")
 
     logger.info("Creating table")
     cql = manager.get_cql()

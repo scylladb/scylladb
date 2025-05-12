@@ -27,7 +27,7 @@ async def test_reversed_queries_during_upgrade(manager: ManagerClient) -> None:
     in order to test both native and legacy reversed formats.
     """
     cmdline = ["--hinted-handoff-enabled", "0"]
-    node1, _ = await manager.servers_add(2, cmdline)
+    node1, _ = await manager.servers_add(2, cmdline, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
 

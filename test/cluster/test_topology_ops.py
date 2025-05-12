@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 @pytest.mark.parametrize("tablets_enabled", [True, False])
 async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bool):
     """Test basic topology operations using the topology coordinator."""
-    cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled'}
+    rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
+    cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if tablets_enabled else 'disabled'} | rf_rack_cfg
     rf = 3
     num_nodes = rf
     if tablets_enabled:
@@ -57,7 +58,7 @@ async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bo
 
     logger.info(f"Replacing node {servers[0]}")
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = False)
-    servers = servers[1:] + [await manager.server_add(replace_cfg)]
+    servers = servers[1:] + [await manager.server_add(replace_cfg, config=rf_rack_cfg)]
     await check_token_ring_and_group0_consistency(manager)
 
     logger.info(f"Stopping node {servers[0]}")

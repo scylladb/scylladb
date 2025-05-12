@@ -13,7 +13,7 @@ import logging
 import pytest
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio

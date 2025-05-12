@@ -43,6 +43,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     previous state. For replace, add a single node (a sanity check verifying that the cluster is functioning properly).
     7. Stop sending writes.
     """
+    # Currently, the constraints imposed by `rf_rack_valid_keyspaces` are quite strict
+    # and adjusting this test to working with it may require significant changes in the test.
+    # Let's disable the option explicitly until we do that.
+    rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     # Decrease failure_detector_timeout_in_ms from the default 20 s to speed up some graceful shutdowns in the test.
     # Shutting down the CQL server can hang for failure_detector_timeout_in_ms in the presence of dead nodes and
     # CQL requests.
@@ -50,7 +54,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         'endpoint_snitch': 'GossipingPropertyFileSnitch',
         'tablets_mode_for_new_keyspaces': 'enabled',
         'failure_detector_timeout_in_ms': 2000,
-    }
+    } | rf_rack_cfg
+
     property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
     property_file_dc2 = {'dc': 'dc2', 'rack': 'rack2'}
 
@@ -150,7 +155,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         for i, being_replaced in enumerate(dead_servers):
             replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True,
                                         ignore_dead_nodes=[dead_srv.ip_addr for dead_srv in dead_servers[i + 1:]])
-            new_servers.append(await manager.server_add(replace_cfg=replace_cfg, property_file=property_file_dc2))
+            new_servers.append(await manager.server_add(replace_cfg=replace_cfg, config=rf_rack_cfg, property_file=property_file_dc2))
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
     for srv in live_servers:
