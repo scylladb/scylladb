@@ -1,3 +1,5 @@
+.. _nodetool-cleanup-cmd:
+
 Nodetool cleanup
 ================
 **cleanup** ``[<keyspace> <tablename ...>]``- triggers the immediate removal of data from node(s) that "lose" part of their token range due to a range movement operation (node addition or node replacement).

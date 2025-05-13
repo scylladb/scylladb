@@ -1489,6 +1489,12 @@ void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         }
         params["primary_replica_only"] = "true";
     }
+    if (vm.contains("skip-cleanup")) {
+        if (vm.contains("load-and-stream")) {
+            throw std::invalid_argument("--skip-cleanup takes no effect with --load-and-stream|-las");
+        }
+        params["skip_cleanup"] = "true";
+    }
     if (vm.contains("scope")) {
         if (vm.contains("primary-replica-only")) {
             throw std::invalid_argument("Scoped streaming of primary replica only is not supported yet");
@@ -4063,6 +4069,7 @@ For more information, see: {}"
                 {
                     typed_option<>("load-and-stream", "Allows loading sstables that do not belong to this node, in which case they are automatically streamed to the owning nodes"),
                     typed_option<>("primary-replica-only", "Load the sstables and stream to primary replica node that owns the data. Repair is needed after the load and stream process"),
+                    typed_option<>("skip-cleanup", "Do not perform keys cleanup when loading sstables."),
                     typed_option<sstring>("scope", "Load-and-stream scope (node, rack or dc)"),
                 },
                 {
