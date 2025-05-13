@@ -2945,9 +2945,10 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
 
         co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
             file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
-                return table_shards->snapshot_sstables(jsondir);
+                return table_shards->snapshot_sstables(name);
             }));
         });
+        co_await io_check(sync_directory, jsondir);
 
         co_await t.finalize_snapshot(sharded_db.local(), std::move(jsondir), std::move(file_sets));
     });
@@ -2967,7 +2968,6 @@ future<table::snapshot_file_set> table::snapshot_sstables(sstring name) {
             return sstable->snapshot(name);
         });
     });
-    co_await io_check(sync_directory, name);
     co_return make_foreign(std::move(table_names));
 }
 

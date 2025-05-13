@@ -2270,7 +2270,7 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
-    return _storage->snapshot(*this, dir, storage::absolute_path::yes);
+    return _storage->snapshot(*this, fmt::format("{}/{}", snapshots_dir, dir), storage::absolute_path::no);
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {
