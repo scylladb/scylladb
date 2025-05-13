@@ -108,4 +108,10 @@ private:
     seastar::metrics::metric_groups _metrics;
 };
 
+struct table_stats {
+    table_stats(const sstring& ks, const sstring& table);
+    seastar::metrics::metric_groups _metrics;
+    lw_shared_ptr<stats> _stats;
+};
+
 }
