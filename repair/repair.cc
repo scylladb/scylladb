@@ -2314,7 +2314,6 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             locator::tablet_id id;
             dht::token_range range;
             locator::host_id master_host_id;
-            shard_id master_shard_id;
             locator::tablet_replica_set replicas;
         };
         sharded<std::vector<repair_tablet_meta>> metas;
@@ -2352,7 +2351,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                 const auto pr = select_primary_ranges_within_dc ? tmap.get_primary_replica_within_dc(id, erm->get_topology(), mydc) : tmap.get_primary_replica(id);
                 if (pr.host == myhostid_) {
                     co_await metas.invoke_on(pr.shard, [&] (auto& local_metas) {
-                        local_metas.push_back(repair_tablet_meta{id, range, myhostid_, pr.shard, replicas});
+                        local_metas.push_back(repair_tablet_meta{id, range, myhostid_, replicas});
                     });
                 }
                 co_return;
@@ -2370,7 +2369,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             }
             if (found) {
                 co_await metas.invoke_on(master_shard_id, [&] (auto& local_metas) {
-                    local_metas.push_back(repair_tablet_meta{id, range, myhostid_, master_shard_id, replicas});
+                    local_metas.push_back(repair_tablet_meta{id, range, myhostid_, replicas});
                 });
             }
             co_return;
@@ -2389,7 +2388,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             rlogger.debug("repair[{}] Collect {} out of {} tablets: table={}.{} tablet_id={} range={} replicas={} primary_replica_only={}",
                 rid.uuid(), nr, metas.size(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only);
             std::vector<locator::host_id> nodes;
-            auto master_shard_id = m.master_shard_id;
+            auto master_shard_id = this_shard_id();
             auto range = m.range;
             dht::token_range_vector intersection_ranges;
             if (!ranges_specified.empty()) {
@@ -2448,7 +2447,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             for (auto& r : intersection_ranges) {
                 rlogger.debug("repair[{}] Repair tablet task table={}.{} master_shard_id={} range={} neighbors={} replicas={}",
                         rid.uuid(), keyspace_name, table_name, master_shard_id, r, repair_neighbors(nodes, shards).shard_map, m.replicas);
-                task_metas->local().push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas});
+                task_metas->local().push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, r, repair_neighbors(nodes, shards), m.replicas});
                 co_await coroutine::maybe_yield();
             }
         }
@@ -2550,7 +2549,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     co_await task_metas->start();
     try {
     co_await task_metas->invoke_on(*master_shard_id, [&] (auto& local_metas) {
-        local_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+        local_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, range, repair_neighbors(nodes, shards), replicas});
     });
     size_t metas_size = 1;
     auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, task_metas, metas_size, ranges_parallelism, topo_guard, std::set<locator::effective_replication_map_ptr>{}, rebuild_replicas.has_value());
