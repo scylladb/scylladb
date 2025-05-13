@@ -422,6 +422,21 @@ async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_
 
     return servers,host_ids
 
+async def take_snapshot(ks, servers, manager, logger):
+    logger.info(f'Take snapshot and collect sstables lists')
+    snap_name = unique_name('backup_')
+    sstables = []
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
+        workdir = await manager.server_get_workdir(s.server_id)
+        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
+        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
+        sstables += tocs
+
+    return snap_name,sstables
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
@@ -454,18 +469,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     for k in keys:
         cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
 
-    snap_name = unique_name('backup_')
-
-    logger.info(f'Take snapshot and collect sstables lists')
-    sstables = []
-    for s in servers:
-        await manager.api.flush_keyspace(s.ip_addr, ks)
-        await manager.api.take_snapshot(s.ip_addr, ks, snap_name)
-        workdir = await manager.server_get_workdir(s.server_id)
-        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
-        tocs = [ f.name for f in os.scandir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}') if f.is_file() and f.name.endswith('TOC.txt') ]
-        logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
-        sstables += tocs
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
 
     logger.info(f'Backup to {snap_name}')
     prefix = f'{cf}/{snap_name}'
