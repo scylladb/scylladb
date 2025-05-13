@@ -2146,6 +2146,14 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"skip_cleanup",
+                     "description":"Don't cleanup keys from loaded sstables. Invalid if load_and_stream is true",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"scope",
                      "description":"Defines the set of nodes to which mutations can be streamed",
                      "required":false,

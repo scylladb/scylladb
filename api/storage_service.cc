@@ -453,11 +453,12 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto cf = req->get_query_param("cf");
         auto stream = req->get_query_param("load_and_stream");
         auto primary_replica = req->get_query_param("primary_replica_only");
+        auto skip_cleanup_p = req->get_query_param("skip_cleanup");
         boost::algorithm::to_lower(stream);
         boost::algorithm::to_lower(primary_replica);
         bool load_and_stream = stream == "true" || stream == "1";
         bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
-        bool skip_cleanup = false;
+        bool skip_cleanup = skip_cleanup_p == "true" || skip_cleanup_p == "1";
         auto scope = parse_stream_scope(req->get_query_param("scope"));
 
         if (scope != sstables_loader::stream_scope::all && !load_and_stream) {
