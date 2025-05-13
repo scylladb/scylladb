@@ -451,6 +451,19 @@ async def take_snapshot(ks, servers, manager, logger):
 
     return snap_name,sstables
 
+def compute_scope(topology, servers):
+    if topology.dcs > 1:
+        scope = 'dc'
+        r_servers = servers[:topology.dcs]
+    elif topology.racks > 1:
+        scope = 'rack'
+        r_servers = servers[:topology.racks]
+    else:
+        scope = 'node'
+        r_servers = servers
+
+    return scope,r_servers
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
@@ -499,15 +512,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
         status = await manager.api.wait_task(s.ip_addr, tid)
         assert (status is not None) and (status['state'] == 'done')
 
-    if topology.dcs > 1:
-        scope = 'dc'
-        r_servers = servers[:topology.dcs]
-    elif topology.racks > 1:
-        scope = 'rack'
-        r_servers = servers[:topology.racks]
-    else:
-        scope = 'node'
-        r_servers = servers
+    scope,r_servers = compute_scope(topology, servers)
 
     await asyncio.gather(*(do_restore(s, sstables, scope) for s in r_servers))
 
