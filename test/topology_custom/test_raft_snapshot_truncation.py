@@ -11,7 +11,7 @@ import logging
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.topology.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id
+from test.topology.util import reconnect_driver, trigger_snapshot, get_topology_coordinator, get_raft_log_size, get_raft_snap_id, create_new_test_keyspace
 from test.pylib.rest_client import inject_error_one_shot
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     logger.info(f"Log size on {s1}: {log_size}")
     assert (log_size > 0)
 
-    await cql.run_async("create keyspace ks with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+    ks = await create_new_test_keyspace(cql, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
 
     log_size = await get_raft_log_size(cql, h1)
     logger.info(f"After add keyspace Log size on {s1}: {log_size}")
@@ -62,7 +62,7 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     await asyncio.gather(*errs)
 
     # Change schema - trigger log truncation.
-    await cql.run_async("drop keyspace ks")
+    await cql.run_async(f"drop keyspace {ks}")
 
     log_size = await get_raft_log_size(cql, h1)
     logger.info(f"After drop keyspace Log size on {s1}: {log_size}")
@@ -82,12 +82,13 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     original_snap_id = await get_raft_snap_id(cql, h1)
     
     # Create 3 keyspaces.
+    keyspaces = []
     for i in range(3):
-        await cql.run_async(f"create keyspace ks{i} with replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+        keyspaces.append(await create_new_test_keyspace(cql, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"))
 
     # Drop 2 keyspaces.
     for i in range(2):
-        await cql.run_async(f"drop keyspace ks{i}")
+        await cql.run_async(f"drop keyspace {keyspaces[i]}")
 
     log_size = await get_raft_log_size(cql, h1)
     logger.info(f"After add/drop keyspace Log size on {s1}: {log_size}.")
@@ -99,7 +100,7 @@ async def test_raft_snapshot_truncation(manager: ManagerClient):
     await asyncio.gather(*errs)
 
     # Change schema by dropping the last keyspace, that will trigger log truncation.
-    await cql.run_async("drop keyspace ks2")
+    await cql.run_async(f"drop keyspace {keyspaces[2]}")
 
     new_snap_id = await get_raft_snap_id(cql, h1)
     

@@ -13,6 +13,7 @@ from cassandra.query import SimpleStatement
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import unique_name
 from test.topology.conftest import cluster_con
+from test.topology.util import create_new_test_keyspace
 
 
 @pytest.mark.asyncio
@@ -40,11 +41,10 @@ async def test_zero_token_nodes_no_replication(manager: ManagerClient):
             if tablets_enabled and replication_strategy != 'NetworkTopologyStrategy':
                 continue
 
-            ks_name = unique_name()
-            ks_names.append(ks_name)
-            await cql_b.run_async(f"""CREATE KEYSPACE {ks_name} WITH replication =
+            ks_name = await create_new_test_keyspace(cql_b, f"""WITH replication =
                                     {{'class': '{replication_strategy}', 'replication_factor': 2}}
                                     AND tablets = {{ 'enabled': {str(tablets_enabled).lower()} }}""")
+            ks_names.append(ks_name)
             await cql_b.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
             for i in range(100):
                 insert_query = f'INSERT INTO {ks_name}.tbl (pk, v) VALUES ({i}, {i})'

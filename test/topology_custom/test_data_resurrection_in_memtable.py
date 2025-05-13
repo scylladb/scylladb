@@ -60,7 +60,7 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
             page_traces.append("\n".join(trace_events))
         logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
 
-    async with new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = { 'enabled': true }") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = { 'enabled': true }") as ks:
         cql.execute(f"CREATE TABLE {ks}.tbl (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
                     "     WITH speculative_retry = 'NONE'"
                     "     AND tombstone_gc = {'mode': 'immediate', 'propagation_delay_in_seconds': 0}"

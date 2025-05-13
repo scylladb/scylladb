@@ -13,6 +13,7 @@ from test.pylib.manager_client import ManagerClient
 
 from test.pylib.util import unique_name
 from test.topology.conftest import cluster_con
+from test.topology.util import create_new_test_keyspace
 
 
 @pytest.mark.asyncio
@@ -47,11 +48,11 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
     ks_names = list[str]()
     logging.info('Trying to create tables for different replication factors')
     for rf in range(3):
-        ks_names.append(unique_name())
         failed = False
-        await dc2_cql.run_async(f"""CREATE KEYSPACE {ks_names[rf]} WITH replication =
+        ks_name = await create_new_test_keyspace(dc2_cql, f"""WITH replication =
                                      {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2, 'dc2': {rf}}}
                                      AND tablets = {{ 'enabled': true }}""")
+        ks_names.append(ks_name)
         try:
             await dc2_cql.run_async(f'CREATE TABLE {ks_names[rf]}.tbl (pk int PRIMARY KEY, v int)')
         except Exception:

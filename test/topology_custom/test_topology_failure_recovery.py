@@ -6,6 +6,7 @@
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.topology.conftest import skip_mode
+from test.topology.util import new_test_keyspace
 import pytest
 import logging
 import asyncio
@@ -26,21 +27,18 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
     marks = [await log.mark() for log in logs]
 
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 32};")
-    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int);")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 32}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
-    logger.info("Populating table")
+        logger.info("Populating table")
 
-    keys = range(256)
-    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        keys = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
-    await inject_error_on(manager, "stream_tablet_fail_on_drain", servers)
+        await inject_error_on(manager, "stream_tablet_fail_on_drain", servers)
 
-    await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
+        await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
 
-    matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
-               from_mark=mark) for log, mark in zip(logs, marks)]
-    assert sum(len(x) for x in matches) == 1
-
-    await cql.run_async("DROP KEYSPACE test;")
-
+        matches = [await log.grep("raft_topology - rollback.*after decommissioning failure, moving transition state to rollback to normal",
+                from_mark=mark) for log, mark in zip(logs, marks)]
+        assert sum(len(x) for x in matches) == 1
