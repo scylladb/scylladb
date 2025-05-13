@@ -132,6 +132,9 @@ struct compaction_stats {
     uint64_t live_cells() const {
         return static_rows.cell_stats.live_cells + clustering_rows.cell_stats.live_cells;
     }
+    uint64_t live_internal_cells() const {
+        return static_rows.cell_stats.live_internal_cells + clustering_rows.cell_stats.live_internal_cells;
+    }
     uint64_t dead_cells() const {
         return static_rows.cell_stats.dead_cells + clustering_rows.cell_stats.dead_cells +
             static_rows.cell_stats.collection_tombstones + clustering_rows.cell_stats.collection_tombstones;
@@ -186,6 +189,8 @@ class compact_mutation_state {
 
     // Remember if we requested to stop mid-partition.
     stop_iteration _stop = stop_iteration::no;
+
+    bool _with_internal_columns = false;
 private:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
@@ -296,6 +301,15 @@ private:
         return ret;
     };
 
+    static bool contains_internal_columns(const schema& s, const query::column_id_vector& columns, column_kind kind) {
+        for (const auto col_id: columns) {
+            if (s.column_at(kind, col_id).is_internal()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
@@ -311,6 +325,7 @@ public:
         , _tombstone_gc_state(nullptr)
         , _last_pos(position_in_partition::for_partition_end())
         , _validator("mutation_compactor for read", _schema, validation_level)
+        , _with_internal_columns(contains_internal_columns(_schema, _slice.static_columns, column_kind::static_column) || contains_internal_columns(_schema, _slice.regular_columns, column_kind::regular_column))
     {
         static_assert(!sstable_compaction(), "This constructor cannot be used for sstable compaction.");
     }
@@ -387,7 +402,7 @@ public:
         auto res = sr.cells().compact_and_expire(_schema, column_kind::static_column, row_tombstone(current_tombstone),
                 _query_time, _can_gc, gc_before, _collector.get());
         _stats.static_rows.add_row(res);
-        const auto is_live = res.is_live();
+        auto is_live = res.is_live();
         if constexpr (sstable_compaction()) {
             _collector->consume_static_row([this, &gc_consumer, current_tombstone] (static_row&& sr_garbage) {
                 partition_is_not_empty_for_gc_consumer(gc_consumer);
@@ -395,6 +410,9 @@ public:
                 gc_consumer.consume(std::move(sr_garbage), current_tombstone, false);
             });
         } else {
+            if (!_with_internal_columns) {
+                is_live = res.live_cells > 0;
+            }
             if (can_purge_tombstone(current_tombstone)) {
                 current_tombstone = {};
             }
@@ -438,7 +456,7 @@ public:
         const auto res = cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, gc_before, cr.marker(),
                 _collector.get());
         _stats.clustering_rows.add_row(res, marker_is_live);
-        const auto is_live = res.is_live() || marker_is_live;
+        auto is_live = res.is_live() || marker_is_live;
 
         if constexpr (sstable_compaction()) {
             _collector->consume_clustering_row([this, &gc_consumer, t] (clustering_row&& cr_garbage) {
@@ -447,6 +465,9 @@ public:
                 gc_consumer.consume(std::move(cr_garbage), t, false);
             });
         } else {
+            if (!_with_internal_columns) {
+                is_live = (res.live_cells > 0) || marker_is_live;
+            }
             if (can_purge_tombstone(t)) {
                 t = {};
             }
