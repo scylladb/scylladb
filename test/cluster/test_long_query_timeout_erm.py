@@ -17,14 +17,14 @@ import time
 logger = logging.getLogger(__name__)
 @skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.asyncio
-@pytest.mark.parametrize("query,should_wait_for_timeout,shutdown_nodes", [
-    ("SELECT * FROM {}", True, False),
-    ("SELECT * FROM {}", True, True),
-    ("SELECT COUNT(*) FROM {}", False, False),
-    ("SELECT * FROM {} WHERE key = 0", True, False),
-    ("SELECT COUNT(*) FROM {} WHERE key = 0", True, False),
+@pytest.mark.parametrize("query_type,should_wait_for_timeout,shutdown_nodes", [
+    ("SELECT", True, False),
+    ("SELECT", True, True),
+    ("SELECT_COUNT", False, False),
+    ("SELECT_WHERE", True, False),
+    ("SELECT_COUNT_WHERE", True, False),
 ])
-async def test_long_query_timeout_erm(request, manager: ManagerClient, query, should_wait_for_timeout, shutdown_nodes):
+async def test_long_query_timeout_erm(request, manager: ManagerClient, query_type, should_wait_for_timeout, shutdown_nodes):
     """
     Test verifies that a query with long timeout doesn't block ERM on failure.
 
@@ -45,6 +45,18 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query, sh
     One of the test scenarios sets shutdown_nodes=True, to verify that we are able to
     quickly shutdown nodes, even if query timeout is extremely long.
     """
+
+    if query_type == "SELECT":
+        query = "SELECT * FROM {}"
+    elif query_type == "SELECT_COUNT":
+        query = "SELECT COUNT(*) FROM {}"
+    elif query_type == "SELECT_WHERE":
+        query = "SELECT * FROM {} WHERE key = 0"
+    elif query_type == "SELECT_COUNT_WHERE":
+        query = "SELECT COUNT(*) FROM {} WHERE key = 0"
+    else:
+        assert False # Invalid query type
+
     logger.info("Start four nodes cluster")
     # FIXME: Adjust this test to run with `rf_rack_valid_keyspaces` set to `True`.
     servers = await manager.servers_add(4, config={"rf_rack_valid_keyspaces": False})
