@@ -2941,6 +2941,8 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
         std::vector<table::snapshot_file_set> file_sets;
         file_sets.reserve(smp::count);
 
+        co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
+
         co_await coroutine::parallel_for_each(smp::all_cpus(), [&] (unsigned shard) -> future<> {
             file_sets.emplace_back(co_await smp::submit_to(shard, [&] {
                 return table_shards->take_snapshot(jsondir);
@@ -2959,7 +2961,6 @@ future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
     auto tables = *_sstables->all() | std::ranges::to<std::vector<sstables::shared_sstable>>();
     auto table_names = std::make_unique<std::unordered_set<sstring>>();
 
-    co_await io_check([&jsondir] { return recursive_touch_directory(jsondir); });
     co_await _sstables_manager.dir_semaphore().parallel_for_each(tables, [&jsondir, &table_names] (sstables::shared_sstable sstable) {
         table_names->insert(sstable->component_basename(sstables::component_type::Data));
         return io_check([sstable, &dir = jsondir] {
