@@ -321,6 +321,11 @@ public:
     bool operator==(const chunked_vector& x) const {
         return std::ranges::equal(*this, x);
     }
+public:
+    iterator insert(const_iterator pos, const T& x);
+    iterator insert(const_iterator pos, T&& x);
+    template <typename... Args>
+    iterator emplace(const_iterator pos, Args&&... args);
 };
 
 template<typename T, size_t max_contiguous_allocation>
@@ -593,6 +598,34 @@ chunked_vector<T, max_contiguous_allocation>::clear() {
         pop_back();
     }
     shrink_to_fit();
+}
+
+template <typename T, size_t max_contiguous_allocation>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::insert(const_iterator pos, const T& x) {
+    auto insert_idx = pos - begin();
+    push_back(x);
+    std::rotate(begin() + insert_idx, end() - 1, end());
+    return begin() + insert_idx;
+}
+
+template <typename T, size_t max_contiguous_allocation>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::insert(const_iterator pos, T&& x) {
+    auto insert_idx = pos - begin();
+    push_back(std::move(x));
+    std::rotate(begin() + insert_idx, end() - 1, end());
+    return begin() + insert_idx;
+}
+
+template <typename T, size_t max_contiguous_allocation>
+template <typename... Args>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::emplace(const_iterator pos, Args&&... args) {
+    auto insert_idx = pos - begin();
+    emplace_back(std::forward<Args>(args)...);
+    std::rotate(begin() + insert_idx, end() - 1, end());
+    return begin() + insert_idx;
 }
 
 template <typename T, size_t max_contiguous_allocation>
