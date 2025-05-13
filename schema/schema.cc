@@ -8,6 +8,7 @@
 
 #include <seastar/core/on_internal_error.hh>
 #include <map>
+#include "bytes_ostream.hh"
 #include "cql3/description.hh"
 #include "db/tablet_options.hh"
 #include "db/view/view.hh"
@@ -37,6 +38,7 @@
 #include "utils/hashing.hh"
 #include "utils/hashers.hh"
 #include "alternator/extract_from_attrs.hh"
+#include "utils/managed_string.hh"
 
 #include <boost/lexical_cast.hpp>
 
@@ -911,7 +913,8 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     return fmt::format_to(out, "]");
 }
 
-static std::ostream& map_as_cql_param(std::ostream& os, const std::map<sstring, sstring>& map, bool first = true) {
+template <typename Stream>
+static Stream& map_as_cql_param(Stream& os, const std::map<sstring, sstring>& map, bool first = true) {
     for (auto i: map) {
         if (first) {
             first = false;
@@ -939,7 +942,7 @@ std::string schema_extension::options_to_string() const {
     return ss.str();
 }
 
-static std::ostream& column_definition_as_cql_key(std::ostream& os, const column_definition & cd) {
+static fragmented_ostringstream& column_definition_as_cql_key(fragmented_ostringstream& os, const column_definition & cd) {
     os << cd.name_as_cql_string();
     os << " " << cd.type->cql3_type_name();
 
@@ -949,7 +952,7 @@ static std::ostream& column_definition_as_cql_key(std::ostream& os, const column
     return os;
 }
 
-static void describe_index_columns(std::ostream& os, bool is_local, const schema& index_schema, schema_ptr base_schema) {
+static void describe_index_columns(fragmented_ostringstream& os, bool is_local, const schema& index_schema, schema_ptr base_schema) {
     auto index_name = secondary_index::index_name_from_table_name(index_schema.cf_name());
     if (!base_schema->all_indices().contains(index_name)) {
         on_internal_error(dblog, format("Couldn't find index {} on table {}", index_name, base_schema->cf_name()));
@@ -999,8 +1002,8 @@ static void describe_index_columns(std::ostream& os, bool is_local, const schema
     os << ")";
 }
 
-sstring schema::get_create_statement(const schema_describe_helper& helper, bool with_internals) const {
-    std::ostringstream os;
+managed_string schema::get_create_statement(const schema_describe_helper& helper, bool with_internals) const {
+    fragmented_ostringstream os;
 
     os << "CREATE ";
     int n = 0;
@@ -1015,7 +1018,7 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
             describe_index_columns(os, is_local, *this, helper.find_schema(view_info()->base_id()));
             os << ";\n";
 
-            return std::move(os).str();
+            return std::move(os).to_managed_string();
         } else {
             os << "MATERIALIZED VIEW " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " AS\n";
             if (view_info()->include_all_columns()) {
@@ -1085,7 +1088,7 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
     }
     os << "WITH ";
     if (with_internals) {
-        os << "ID = " << id() << "\nAND ";
+        os << "ID = " << id().to_sstring() << "\nAND ";
     }
     if (!clustering_key_columns().empty()) {
         // Adding clustering key order can be optional, but there's no harm in doing so.
@@ -1113,7 +1116,7 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
     if (with_internals) {
         for (auto& cdef : dropped_columns()) {
             os << "\nALTER TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name())
-               << " DROP " << cql3::util::maybe_quote(cdef.first) << " USING TIMESTAMP " << cdef.second.timestamp << ";";
+               << " DROP " << cql3::util::maybe_quote(cdef.first) << " USING TIMESTAMP " << fmt::to_string(cdef.second.timestamp) << ";";
 
             auto column = get_column_definition(to_bytes(cdef.first));
             if (column) {
@@ -1125,7 +1128,7 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
         }
     }
 
-    return std::move(os).str();
+    return std::move(os).to_managed_string();
 }
 
 cql3::description schema::describe(const schema_describe_helper& helper, cql3::describe_option desc_opt) const {
@@ -1148,8 +1151,8 @@ cql3::description schema::describe(const schema_describe_helper& helper, cql3::d
     };
 }
 
-std::ostream& schema::schema_properties(const schema_describe_helper& helper, std::ostream& os) const {
-    os << "bloom_filter_fp_chance = " << bloom_filter_fp_chance();
+fragmented_ostringstream& schema::schema_properties(const schema_describe_helper& helper, fragmented_ostringstream& os) const {
+    os << "bloom_filter_fp_chance = " << fmt::to_string(bloom_filter_fp_chance());
     os << "\n    AND caching = {";
     map_as_cql_param(os, caching_options().to_map());
     os << "}";
@@ -1160,12 +1163,12 @@ std::ostream& schema::schema_properties(const schema_describe_helper& helper, st
     map_as_cql_param(os,  get_compressor_params().get_options());
     os << "}";
 
-    os << "\n    AND crc_check_chance = " << crc_check_chance();
-    os << "\n    AND default_time_to_live = " << default_time_to_live().count();
-    os << "\n    AND gc_grace_seconds = " << gc_grace_seconds().count();
-    os << "\n    AND max_index_interval = " << max_index_interval();
-    os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
-    os << "\n    AND min_index_interval = " << min_index_interval();
+    os << "\n    AND crc_check_chance = " << fmt::to_string(crc_check_chance());
+    os << "\n    AND default_time_to_live = " << fmt::to_string(default_time_to_live().count());
+    os << "\n    AND gc_grace_seconds = " << fmt::to_string(gc_grace_seconds().count());
+    os << "\n    AND max_index_interval = " << fmt::to_string(max_index_interval());
+    os << "\n    AND memtable_flush_period_in_ms = " << fmt::to_string(memtable_flush_period());
+    os << "\n    AND min_index_interval = " << fmt::to_string(min_index_interval());
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
 
     if (has_tablet_options()) {
@@ -1186,7 +1189,7 @@ std::ostream& schema::schema_properties(const schema_describe_helper& helper, st
     return os;
 }
 
-std::ostream& schema::describe_alter_with_properties(const schema_describe_helper& helper, std::ostream& os) const {
+fragmented_ostringstream& schema::describe_alter_with_properties(const schema_describe_helper& helper, fragmented_ostringstream& os) const {
     os << "ALTER "; 
     if (is_view()) {
         if (helper.is_index(view_info()->base_id(), *this)) {
