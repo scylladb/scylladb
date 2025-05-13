@@ -110,7 +110,7 @@ class tablet_repair_task_impl : public repair_task_impl {
 private:
     sstring _keyspace;
     std::vector<sstring> _tables;
-    std::vector<tablet_repair_task_meta> _metas;
+    shared_ptr<sharded<std::vector<tablet_repair_task_meta>>> _metas;
     optimized_optional<abort_source::subscription> _abort_subscription;
     std::optional<int> _ranges_parallelism;
     size_t _metas_size = 0;
@@ -122,8 +122,8 @@ public:
     bool sched_by_scheduler = false;
 public:
     tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason,
-            std::vector<tablet_repair_task_meta> metas, size_t metas_size, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, std::set<locator::effective_replication_map_ptr> erms,
-            bool skip_flush = false)
+            shared_ptr<sharded<std::vector<tablet_repair_task_meta>>> metas, size_t metas_size, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard,
+            std::set<locator::effective_replication_map_ptr> erms, bool skip_flush = false)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", parent_id, reason)
         , _keyspace(std::move(keyspace))
         , _tables(std::move(tables))
