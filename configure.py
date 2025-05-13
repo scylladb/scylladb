@@ -1952,7 +1952,7 @@ def configure_seastar(build_dir, mode, mode_config):
         '-DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON',
         '-DCMAKE_CXX_STANDARD=23',
         '-DCMAKE_CXX_EXTENSIONS=ON',
-        '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags'] + extra_file_prefix_map),
+        '-DSeastar_CXX_FLAGS=SHELL:{}'.format(mode_config['lib_cflags'] + extra_file_prefix_map + mode_config['cxxflags']),
         '-DSeastar_LD_FLAGS={}'.format(semicolon_separated(mode_config['lib_ldflags'], seastar_cxx_ld_flags)),
         '-DSeastar_API_LEVEL=7',
         '-DSeastar_DEPRECATED_OSTREAM_FORMATTERS=OFF',
