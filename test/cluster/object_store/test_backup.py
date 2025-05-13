@@ -464,6 +464,50 @@ def compute_scope(topology, servers):
 
     return scope,r_servers
 
+async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope):
+    logger.info(f'Check the data is back')
+    async def collect_mutations(server):
+        host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
+        await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
+        ret = {}
+        for frag in await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf})", host=host[0]):
+            if not frag.pk in ret:
+                ret[frag.pk] = []
+            ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
+        return ret
+
+    by_node = await asyncio.gather(*(collect_mutations(s) for s in servers))
+    mutations = {}
+    for node_frags in by_node:
+        for pk in node_frags:
+            if not pk in mutations:
+                mutations[pk] = []
+            mutations[pk].append(node_frags[pk])
+
+    for k in random.sample(keys, 17):
+        if not k in mutations:
+            logger.info(f'{k} not found in mutations')
+            logger.info(f'Mutations: {mutations}')
+            assert False, "Key not found in mutations"
+        if len(mutations[k]) != topology.rf * topology.dcs:
+            logger.info(f'{k} is replicated {len(mutations[k])} times only, expect {topology.rf * topology.dcs}')
+            logger.info(f'Mutations: {mutations}')
+            assert False, "Key not replicated enough"
+
+    logger.info(f'Validate streaming directions')
+    for i, s in enumerate(r_servers):
+        log = await manager.server_open_log(s.server_id)
+        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
+        streamed_to = set([ str(host_ids[s.server_id]) ] + [ r[1].group(1) for r in res ])
+        scope_nodes = set([ str(host_ids[s.server_id]) ])
+        # See comment near merge_tocs() above for explanation of servers list filtering below
+        if scope == 'rack':
+            scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
+        elif scope == 'dc':
+            scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
+        logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')
+        assert streamed_to == scope_nodes
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
@@ -516,49 +560,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
 
     await asyncio.gather(*(do_restore(s, sstables, scope) for s in r_servers))
 
-    logger.info(f'Check the data is back')
-    async def collect_mutations(server, key):
-        host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
-        await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
-        ret = {}
-        for frag in await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf})", host=host[0]):
-            if not frag.pk in ret:
-                ret[frag.pk] = []
-            ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
-        return ret
-
-    by_node = await asyncio.gather(*(collect_mutations(s, k) for s in servers))
-    mutations = {}
-    for node_frags in by_node:
-        for pk in node_frags:
-            if not pk in mutations:
-                mutations[pk] = []
-            mutations[pk].append(node_frags[pk])
-
-    for k in random.sample(keys, 17):
-        real_rf = 0
-        if not k in mutations:
-            logger.info(f'{k} not found in mutations')
-            logger.info(f'Mutations: {mutations}')
-            assert False, "Key not found in mutations"
-        if len(mutations[k]) != topology.rf * topology.dcs:
-            logger.info(f'{k} is replicated {len(mutations[k])} times only, expect {topology.rf * topology.dcs}')
-            logger.info(f'Mutations: {mutations}')
-            assert False, "Key not replicated enough"
-
-    logger.info(f'Validate streaming directions')
-    for i, s in enumerate(r_servers):
-        log = await manager.server_open_log(s.server_id)
-        res = await log.grep(r'INFO.*sstables_loader - load_and_stream:.*target_node=([0-9a-z-]+),.*num_bytes_sent=([0-9]+)')
-        streamed_to = set([ str(host_ids[s.server_id]) ] + [ r[1].group(1) for r in res ])
-        scope_nodes = set([ str(host_ids[s.server_id]) ])
-        # See comment near merge_tocs() above for explanation of servers list filtering below
-        if scope == 'rack':
-            scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.racks] ])
-        elif scope == 'dc':
-            scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
-        logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')
-        assert streamed_to == scope_nodes
+    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_server):
