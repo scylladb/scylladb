@@ -326,6 +326,10 @@ public:
     iterator insert(const_iterator pos, T&& x);
     template <typename... Args>
     iterator emplace(const_iterator pos, Args&&... args);
+    iterator erase(iterator pos);
+    iterator erase(const_iterator pos);
+    iterator erase(iterator first, iterator last);
+    iterator erase(const_iterator first, const_iterator last);
 };
 
 template<typename T, size_t max_contiguous_allocation>
@@ -626,6 +630,34 @@ chunked_vector<T, max_contiguous_allocation>::emplace(const_iterator pos, Args&&
     emplace_back(std::forward<Args>(args)...);
     std::rotate(begin() + insert_idx, end() - 1, end());
     return begin() + insert_idx;
+}
+
+template <typename T, size_t max_contiguous_allocation>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::erase(const_iterator first, const_iterator last) {
+    auto erase_idx = first - begin();
+    auto n_erase = last - first;
+    std::rotate(begin() + erase_idx, begin() + erase_idx + n_erase, end());
+    resize(size() - n_erase);
+    return begin() + erase_idx;
+}
+
+template <typename T, size_t max_contiguous_allocation>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::erase(const_iterator pos) {
+    return erase(pos, pos + 1);
+}
+
+template <typename T, size_t max_contiguous_allocation>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::erase(iterator first, iterator last) {
+    return erase(const_iterator(first), const_iterator(last));
+}
+
+template <typename T, size_t max_contiguous_allocation>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::erase(iterator pos) {
+    return erase(const_iterator(pos));
 }
 
 template <typename T, size_t max_contiguous_allocation>
