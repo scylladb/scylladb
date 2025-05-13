@@ -124,10 +124,27 @@ def check_increases_operation(metrics, operation_names, metric_name = 'scylla_al
         else:
             assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op}, the_metrics)
 
+@contextmanager
+def check_table_increases_operation(metrics, operation_names, table, metric_name = 'scylla_alternator_table_operation', expected_value=None):
+    the_metrics = get_metrics(metrics)
+    saved_metrics = { x: get_metric(metrics, metric_name, {'op': x, 'cf': table}, the_metrics) for x in operation_names }
+    yield
+    the_metrics = get_metrics(metrics)
+    for op in operation_names:
+        if expected_value:
+            assert expected_value == get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics) - saved_metrics[op]
+        else:
+            assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics)
+
 ###### Test for metrics that count DynamoDB API operations:
 
 def test_batch_write_item(test_table_s, metrics):
     with check_increases_operation(metrics, ['BatchWriteItem']):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
+
+def test_table_batch_write_item(test_table_s, metrics):
+    with check_table_increases_operation(metrics, ['BatchWriteItem'], test_table_s.name, expected_value=1):
         test_table_s.meta.client.batch_write_item(RequestItems = {
             test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}]})
 
@@ -138,6 +155,18 @@ def test_batch_write_item_histogram(test_table_s, metrics):
     items = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
     items2 = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
     with check_increases_metric_exact(metrics, "scylla_alternator_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '86.000000'}], [2, {'op': 'BatchWriteItem', 'le': '103.000000'}]]):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: items})
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: items2})
+
+def test_table_batch_write_item_histogram(test_table_s, metrics):
+    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '2.000000', 'cf': test_table_s.name}], [1, {'op': 'BatchWriteItem', 'le': '3.000000', 'cf': test_table_s.name}]]):
+        test_table_s.meta.client.batch_write_item(RequestItems = {
+            test_table_s.name: [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}, {'PutRequest': {'Item': {'p': random_string(), 'a': 'hi1'}}}]})
+    items = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
+    items2 = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'hi'}}} for i in range(100)]
+    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '86.000000', 'cf': test_table_s.name}], [2, {'op': 'BatchWriteItem', 'le': '103.000000', 'cf': test_table_s.name}]]):
         test_table_s.meta.client.batch_write_item(RequestItems = {
             test_table_s.name: items})
         test_table_s.meta.client.batch_write_item(RequestItems = {
@@ -155,6 +184,17 @@ def test_batch_get_item_histogram(test_table_s, metrics):
         test_table_s.meta.client.batch_get_item(RequestItems = {
             test_table_s.name: {'Keys': keys2, 'ConsistentRead': True}})
 
+def test_table_batch_get_item_histogram(test_table_s, metrics):
+    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchWriteItem', 'le': '2.000000', 'cf': test_table_s.name}], [1, {'op': 'BatchGetItem', 'le': '3.000000', 'cf': test_table_s.name}]]):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': [{'p': random_string()}, {'p': random_string()}, {'p': random_string()}], 'ConsistentRead': True}})
+    keys = [{'p': random_string()} for i in range(100) ]
+    keys2 = [{'p': random_string()} for i in range(100) ]
+    with check_increases_metric_exact(metrics, "scylla_alternator_table_batch_item_count_histogram_bucket", [[0, {'op': 'BatchGetItem', 'le': '86.000000', 'cf': test_table_s.name}], [2, {'op': 'BatchGetItem', 'le': '103.000000', 'cf': test_table_s.name}]]):
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': keys, 'ConsistentRead': True}})
+        test_table_s.meta.client.batch_get_item(RequestItems = {
+            test_table_s.name: {'Keys': keys2, 'ConsistentRead': True}})
 
 # Reproduces issue #9406:
 def test_batch_get_item(test_table_s, metrics):
@@ -191,6 +231,24 @@ def test_wcu(test_table_s, metrics):
         val2 = 'a' * (2 * KB - total_length + 1) # message length 2K + 1
         test_table_s.put_item(Item={'p': p, 'att': val, 'another': val2})
 
+def test_rcu_per_table(test_table_s, metrics):
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_rcu_total', [[2, {'cf': test_table_s.name}]]):
+        p = random_string()
+        val = random_string()
+        total_length = len(p) + len(val) + len("pattanother")
+        val2 = 'a' * (4 * KB - total_length + 1) # message length 4KB +1
+
+        test_table_s.put_item(Item={'p': p, 'att': val, 'another': val2})
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+def test_wcu_per_table(test_table_s, metrics):
+    with check_table_increases_operation(metrics, ['PutItem'], test_table_s.name, 'scylla_alternator_table_wcu_total', 3):
+        p = random_string()
+        val = random_string()
+        total_length = len(p) + len(val) + len("pattanother")
+        val2 = 'a' * (2 * KB - total_length + 1) # message length 2K + 1
+        test_table_s.put_item(Item={'p': p, 'att': val, 'another': val2})
+
 def test_wcu_batch_write_item(test_table_s, metrics):
     with check_increases_operation(metrics, ['PutItem'], 'scylla_alternator_wcu_total', 3):
         p1 = random_string()
@@ -215,6 +273,15 @@ def test_table_operations(dynamodb, metrics):
 # Test counters for DeleteItem, GetItem, PutItem and UpdateItem:
 def test_item_operations(test_table_s, metrics):
     with check_increases_operation(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem']):
+        p = random_string()
+        test_table_s.put_item(Item={'p': p})
+        test_table_s.get_item(Key={'p': p})
+        test_table_s.delete_item(Key={'p': p})
+        test_table_s.update_item(Key={'p': p})
+
+# Test counters for DeleteItem, GetItem, PutItem and UpdateItem:
+def test_table_item_operations(test_table_s, metrics):
+    with check_table_increases_operation(metrics, ['DeleteItem', 'GetItem', 'PutItem', 'UpdateItem'], test_table_s.name):
         p = random_string()
         test_table_s.put_item(Item={'p': p})
         test_table_s.get_item(Key={'p': p})
