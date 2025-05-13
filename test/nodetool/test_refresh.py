@@ -53,3 +53,16 @@ def test_refresh_primary_replica_only(nodetool, scylla_only):
             ("refresh", "ks", "tbl", "--primary-replica-only"),
             {"expected_requests": []},
             ["error processing arguments: --primary-replica-only|-pro takes no effect without --load-and-stream|-las"])
+
+
+def test_refresh_skip_cleanup(nodetool, scylla_only):
+    nodetool("refresh", "ks", "tbl", "--skip-cleanup", expected_requests=[
+        expected_request("POST", "/storage_service/sstables/ks", params={"cf": "tbl", "skip_cleanup": "true"})])
+
+
+def test_refresh_skip_cleanup_load_and_stream(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("refresh", "ks", "tbl", "--load-and-stream", "--skip-cleanup"),
+            {"expected_requests": []},
+            ["error processing arguments: --skip-cleanup takes no effect with --load-and-stream|-las"])
