@@ -11,7 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
-#include "bytes_fwd.hh"
+#include "utils/managed_bytes.hh"
 
 #include <optional>
 #include <vector>
@@ -80,7 +80,7 @@ struct description {
     ///
     /// Precondition: if `serialize_create_statement` is true, then `create_statement.has_value()`
     ///               is also true.
-    std::vector<bytes_opt> serialize(bool serialize_create_statement = true) const;
+    std::vector<managed_bytes_opt> serialize(bool serialize_create_statement = true) const;
 };
 
 } // namespace cql3
