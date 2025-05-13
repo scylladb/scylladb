@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <optional>
 #include <type_traits>
+#include "utils/managed_string.hh"
 
 using namespace cql3;
 using namespace functions;
@@ -357,7 +358,7 @@ user_aggregate::user_aggregate(function_name fname, bytes_opt initcond, ::shared
 bool user_aggregate::has_finalfunc() const { return _agg.state_to_result_function != nullptr; }
 
 description user_aggregate::describe(with_create_statement with_stmt) const {
-    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<managed_string> {
         if (!with_stmt) {
             return std::nullopt;
         }
@@ -365,7 +366,7 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
         auto ks = cql3::util::maybe_quote(name().keyspace);
         auto na = cql3::util::maybe_quote(name().name);
 
-        std::ostringstream os;
+        fragmented_ostringstream os;
 
         os << "CREATE AGGREGATE " << ks << "." << na << "(";
         auto a = arg_types();
@@ -390,7 +391,7 @@ description user_aggregate::describe(with_create_statement with_stmt) const {
         }
         os << ";";
 
-        return std::move(os).str();
+        return std::move(os).to_managed_string();
     });
 
     return description {

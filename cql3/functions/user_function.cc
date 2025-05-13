@@ -11,6 +11,7 @@
 #include "cql3/util.hh"
 #include "utils/log.hh"
 #include "lang/wasm.hh"
+#include "utils/managed_string.hh"
 
 #include <seastar/core/thread.hh>
 
@@ -70,10 +71,12 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
 }
 
 description user_function::describe(with_create_statement with_stmt) const {
-    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<managed_string> {
         if (!with_stmt) {
             return std::nullopt;
         }
+
+        fragmented_ostringstream stream;
 
         auto arg_type_range = _arg_types | std::views::transform(std::mem_fn(&abstract_type::cql3_type_name_without_frozen));
         auto arg_range = std::views::zip(_arg_names, arg_type_range)
@@ -82,7 +85,7 @@ description user_function::describe(with_create_statement with_stmt) const {
                     return seastar::format("{} {}", name, type);
                 });
 
-        return seastar::format("CREATE FUNCTION {}.{}({})\n"
+        fmt::format_to(stream.to_iter(), "CREATE FUNCTION {}.{}({})\n"
                 "{} ON NULL INPUT\n"
                 "RETURNS {}\n"
                 "LANGUAGE {}\n"
@@ -92,6 +95,8 @@ description user_function::describe(with_create_statement with_stmt) const {
                 _return_type->cql3_type_name_without_frozen(),
                 _language,
                 _body);
+
+        return std::move(stream).to_managed_string();
     });
 
     return description {
