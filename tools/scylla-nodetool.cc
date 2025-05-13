@@ -67,13 +67,13 @@ static std::ostream& operator<<(std::ostream& os, const std::vector<sstring>& v)
 
 // mimic the behavior of FileUtils::stringifyFileSize
 struct file_size_printer {
-    uint64_t value;
+    int64_t value;
     bool human_readable;
     bool use_correct_units;
     // Cassandra nodetool uses base_2 and base_10 units interchangeably, some
     // commands use this, some that. Let's accomodate this for now, and maybe
     // fix this mess at one point in the future, after the rewrite is done.
-    file_size_printer(uint64_t value, bool human_readable = true, bool use_correct_units = false)
+    file_size_printer(int64_t value, bool human_readable = true, bool use_correct_units = false)
         : value{value}
         , human_readable{human_readable}
         , use_correct_units{use_correct_units}
@@ -87,15 +87,15 @@ struct fmt::formatter<file_size_printer> : fmt::formatter<string_view> {
             return fmt::format_to(ctx.out(), "{}", size.value);
         }
 
-        using unit_t = std::tuple<uint64_t, std::string_view, std::string_view>;
+        using unit_t = std::tuple<int64_t, std::string_view, std::string_view>;
         const unit_t units[] = {
-            {1UL << 40, "TiB", "TB"},
-            {1UL << 30, "GiB", "GB"},
-            {1UL << 20, "MiB", "MB"},
-            {1UL << 10, "KiB", "KB"},
+            {1LL << 40, "TiB", "TB"},
+            {1LL << 30, "GiB", "GB"},
+            {1LL << 20, "MiB", "MB"},
+            {1LL << 10, "KiB", "KB"},
         };
         for (auto [n, base_2, base_10] : units) {
-            if (size.value > n) {
+            if ((size.value > n) || (size.value < -n)) {
                 auto d = static_cast<float>(size.value) / n;
                 auto postfix = size.use_correct_units ? base_2 : base_10;
                 return fmt::format_to(ctx.out(), "{:.2f} {}", d, postfix);
@@ -2205,7 +2205,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     const auto joining = get_nodes_of_state(client, "joining");
     const auto leaving = get_nodes_of_state(client, "leaving");
     const auto moving = get_nodes_of_state(client, "moving");
-    const auto endpoint_load = rjson_to_map<size_t>(client.get("/storage_service/load_map"));
+    const auto endpoint_load = rjson_to_map<ssize_t>(client.get("/storage_service/load_map"));
 
     const auto tablets_keyspace = keyspace && keyspace_uses_tablets(client, *keyspace);
 
