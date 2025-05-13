@@ -173,7 +173,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         on_internal_error(dblog, "process_upload_dir is not supported with tablets");
     }
 
-    return seastar::async([&db, &vb, ks = std::move(ks), cf = std::move(cf)] {
+    return seastar::async([&db, &vb, ks = std::move(ks), cf = std::move(cf), skip_cleanup] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get();
 
         sharded<sstables::sstable_directory> directory;
@@ -217,7 +217,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         // - split the keyspace local ranges per compaction_group as done in table::perform_cleanup_compaction
         //   so that cleanup can be considered per compaction group
         const auto& erm = db.local().find_keyspace(ks).get_vnode_effective_replication_map();
-        auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(erm).get());
+        auto owned_ranges_ptr = skip_cleanup ? lw_shared_ptr<dht::token_range_vector>(nullptr) : compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(erm).get());
         reshard(directory, db, ks, cf, make_sstable, owned_ranges_ptr).get();
         reshape(directory, db, sstables::reshape_mode::strict, ks, cf, make_sstable,
                 [] (const sstables::shared_sstable&) { return true; }).get();
