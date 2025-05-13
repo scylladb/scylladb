@@ -400,6 +400,28 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
+async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_server=None):
+    logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks')
+
+    cfg = {'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
+    if s3_server:
+        objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
+        cfg['object_storage_endpoints'] = objconf
+
+    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
+    servers = []
+    host_ids = {}
+
+    for s in range(topology.nodes):
+        dc = f'dc{s % topology.dcs}'
+        rack = f'rack{s % topology.racks}'
+        s = await manager.server_add(config=cfg, cmdline=cmd, property_file={'dc': dc, 'rack': rack})
+        logger.info(f'Created node {s.ip_addr} in {dc}.{rack}')
+        servers.append(s)
+        host_ids[s.server_id] = await manager.get_host_id(s.server_id)
+
+    return servers,host_ids
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
@@ -414,18 +436,8 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
 
     topology, rf_rack_valid_keyspaces = topology_rf_validity
     logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
-    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
-    cfg = { 'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces }
-    cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
-    servers = []
-    host_ids = {}
-    for s in range(topology.nodes):
-        dc = f'dc{s % topology.dcs}'
-        rack = f'rack{s % topology.racks}'
-        s = await manager.server_add(config=cfg, cmdline=cmd, property_file={'dc': dc, 'rack': rack})
-        logger.info(f'Created node {s.ip_addr} in {dc}.{rack}')
-        servers.append(s)
-        host_ids[s.server_id] = await manager.get_host_id(s.server_id)
+
+    servers, host_ids = await create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_server)
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
     cql = manager.get_cql()
@@ -531,7 +543,6 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
             scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
         logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')
         assert streamed_to == scope_nodes
-
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_server):
