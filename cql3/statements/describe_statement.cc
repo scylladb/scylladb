@@ -38,6 +38,7 @@
 #include "types/list.hh"
 #include "cql3/functions/functions.hh"
 #include "types/user.hh"
+#include "utils/managed_string.hh"
 #include "view_info.hh"
 #include "validation.hh"
 #include "index/secondary_index_manager.hh"
@@ -251,13 +252,13 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
         return std::nullopt;
     }
 
-    std::ostringstream os;
+    fragmented_ostringstream os;
     auto schema = table->schema();
     replica::schema_describe_helper describe_helper{db};
     schema->describe_alter_with_properties(describe_helper, os);
 
     auto schema_desc = schema->describe(describe_helper, describe_option::NO_STMTS);
-    schema_desc.create_statement = std::move(os).str();
+    schema_desc.create_statement = std::move(os).to_managed_string();
     return schema_desc;
 }
 
@@ -283,12 +284,16 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
         // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
         // This way, the user learns about the internals of the table, but they're also told not to execute it.
-        table_desc.create_statement = seastar::format(
+        fragmented_ostringstream os{};
+
+        fmt::format_to(os.to_iter(),
                 "/* Do NOT execute this statement! It's only for informational purposes.\n"
                 "   A CDC log table is created automatically when the base is created.\n"
                 "\n{}\n"
                 "*/",
                 *table_desc.create_statement);
+
+        table_desc.create_statement = std::move(os).to_managed_string();
     }
     result.push_back(std::move(table_desc));
 
