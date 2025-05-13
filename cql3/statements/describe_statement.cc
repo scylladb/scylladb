@@ -443,7 +443,7 @@ std::vector<lw_shared_ptr<column_specification>> get_element_column_specificatio
     return col_specs;
 }
 
-std::vector<std::vector<bytes_opt>> serialize_descriptions(std::vector<description>&& descs, bool serialize_create_statement = true) {
+std::vector<std::vector<managed_bytes_opt>> serialize_descriptions(std::vector<description>&& descs, bool serialize_create_statement = true) {
     return descs | std::views::transform([serialize_create_statement] (const description& desc) {
         return desc.serialize(serialize_create_statement);
     }) | std::ranges::to<std::vector>();
@@ -525,7 +525,7 @@ bool cluster_describe_statement::should_add_range_ownership(replica::database& d
     return !ks.empty() && !is_system_keyspace(ks) && !is_internal_keyspace(ks) && !uses_tablets;
 }
 
-future<bytes_opt> cluster_describe_statement::range_ownership(const service::storage_proxy& proxy, const sstring& ks) const {
+future<managed_bytes_opt> cluster_describe_statement::range_ownership(const service::storage_proxy& proxy, const sstring& ks) const {
     auto [list_type, map_type] = range_ownership_type();
 
     auto ranges = co_await proxy.describe_ring(ks);
@@ -549,15 +549,15 @@ future<bytes_opt> cluster_describe_statement::range_ownership(const service::sto
     )).serialize();
 }
 
-future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {   
+future<std::vector<std::vector<managed_bytes_opt>>> cluster_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {   
     auto db = qp.db();
     auto& proxy = qp.proxy();
 
-    auto cluster = to_bytes(db.get_config().cluster_name());
-    auto partitioner = to_bytes(db.get_config().partitioner());
-    auto snitch = to_bytes(db.get_config().endpoint_snitch());
+    auto cluster = to_managed_bytes(db.get_config().cluster_name());
+    auto partitioner = to_managed_bytes(db.get_config().partitioner());
+    auto snitch = to_managed_bytes(db.get_config().endpoint_snitch());
 
-    std::vector<bytes_opt> row {
+    std::vector<managed_bytes_opt> row {
         {cluster},
         {partitioner},
         {snitch}
@@ -568,7 +568,7 @@ future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe
         row.push_back(std::move(ro_map));
     }
     
-    std::vector<std::vector<bytes_opt>> result {std::move(row)};
+    std::vector<std::vector<managed_bytes_opt>> result {std::move(row)};
     co_return result;
 }
 
@@ -587,7 +587,7 @@ std::vector<lw_shared_ptr<column_specification>> schema_describe_statement::get_
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
 
     auto result = co_await std::visit(overloaded_functor{
@@ -658,7 +658,7 @@ std::vector<lw_shared_ptr<column_specification>> listing_describe_statement::get
 
 }
 
-future<std::vector<std::vector<bytes_opt>>> listing_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
     auto raw_ks = client_state.get_raw_keyspace();
 
@@ -692,7 +692,7 @@ std::vector<lw_shared_ptr<column_specification>> element_describe_statement::get
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> element_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> element_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto ks = client_state.get_raw_keyspace();
     if (_keyspace) {
         ks = *_keyspace;
@@ -715,7 +715,7 @@ std::vector<lw_shared_ptr<column_specification>> generic_describe_statement::get
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
     auto& replica_db = db.real_database();
     auto raw_ks = client_state.get_raw_keyspace();
