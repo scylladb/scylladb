@@ -167,7 +167,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
 }
 
 future<>
-distributed_loader::process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sstring ks, sstring cf) {
+distributed_loader::process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sstring ks, sstring cf, bool skip_cleanup) {
     const auto& rs = db.local().find_keyspace(ks).get_replication_strategy();
     if (rs.is_per_table()) {
         on_internal_error(dblog, "process_upload_dir is not supported with tablets");
