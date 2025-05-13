@@ -422,6 +422,20 @@ async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_
 
     return servers,host_ids
 
+def create_dataset(manager, ks, cf, topology, logger):
+    cql = manager.get_cql()
+    logger.info(f'Create keyspace, rf={topology.rf}')
+    keys = range(256)
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': f'{topology.rf}'})
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+
+    schema = f"CREATE TABLE {ks}.{cf} ( pk int primary key, value text );"
+    cql.execute(schema)
+    for k in keys:
+        cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
+
+    return schema, keys, replication_opts
+
 async def take_snapshot(ks, servers, manager, logger):
     logger.info(f'Take snapshot and collect sstables lists')
     snap_name = unique_name('backup_')
@@ -457,17 +471,10 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
     cql = manager.get_cql()
 
-    logger.info(f'Create keyspace, rf={topology.rf}')
-    keys = range(256)
     ks = 'ks'
     cf = 'cf'
-    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': f'{topology.rf}'})
-    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
 
-    schema = f"CREATE TABLE {ks}.{cf} ( pk int primary key, value text );"
-    cql.execute(schema)
-    for k in keys:
-        cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
 
