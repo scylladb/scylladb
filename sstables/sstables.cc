@@ -872,7 +872,7 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
 }
 
 future<entry_descriptor> sstable::clone(generation_type new_generation) const {
-    co_await _storage->snapshot(*this, "", storage::absolute_path::no, new_generation);
+    co_await _storage->snapshot(*this, "", new_generation);
     co_return entry_descriptor(new_generation, _version, _format, component_type::TOC, _state);
 }
 
@@ -1909,7 +1909,7 @@ future<> sstable::seal_sstable(bool backup)
         _marked_for_deletion = mark_for_deletion::none;
     }
     if (backup) {
-        co_await _storage->snapshot(*this, "backups", storage::absolute_path::no);
+        co_await _storage->snapshot(*this, "backups");
     }
 }
 
@@ -2270,7 +2270,7 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
 }
 
 future<> sstable::snapshot(const sstring& dir) const {
-    return _storage->snapshot(*this, fmt::format("{}/{}", snapshots_dir, dir), storage::absolute_path::no);
+    return _storage->snapshot(*this, fmt::format("{}/{}", snapshots_dir, dir));
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {

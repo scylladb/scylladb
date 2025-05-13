@@ -82,7 +82,7 @@ public:
     {}
 
     virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const override;
+    virtual future<> snapshot(const sstable& sst, sstring dir, std::optional<generation_type> gen) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -381,13 +381,8 @@ future<> filesystem_storage::create_links(const sstable& sst, const std::filesys
     return create_links_common(sst, dir.native(), sst._generation, mark_for_removal::no);
 }
 
-future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
-    std::filesystem::path snapshot_dir;
-    if (abs) {
-        snapshot_dir = dir;
-    } else {
-        snapshot_dir = _dir.path() / dir;
-    }
+future<> filesystem_storage::snapshot(const sstable& sst, sstring dir, std::optional<generation_type> gen) const {
+    std::filesystem::path snapshot_dir = _dir.path() / dir;
     co_await sst.sstable_touch_directory_io_check(snapshot_dir);
     co_await create_links_common(sst, snapshot_dir, std::move(gen));
 }
@@ -563,7 +558,7 @@ public:
     }
 
     virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>) const override;
+    virtual future<> snapshot(const sstable& sst, sstring dir, std::optional<generation_type>) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -707,7 +702,7 @@ future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
     co_await _client->delete_object(prefix + "/" + sstable_version_constants::TOC_SUFFIX);
 }
 
-future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
+future<> s3_storage::snapshot(const sstable& sst, sstring dir, std::optional<generation_type> gen) const {
     on_internal_error(sstlog, "Snapshotting S3 objects not implemented");
     co_return;
 }
