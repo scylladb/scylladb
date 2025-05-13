@@ -1722,7 +1722,6 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
     mutation m(scylla_tables(), pkey);
     m.set_clustered_cell(ckey, "version", table->version().uuid(), timestamp);
     if (!table->is_view()) {
-        diff_logger.error("QWERTY storing creation timestamp to table {}.{}", table->ks_name(), table->cf_name());
         m.set_clustered_cell(ckey, "creation_timestamp_seconds", table->creation_time(), timestamp);
     }
 
