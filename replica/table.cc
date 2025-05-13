@@ -29,7 +29,14 @@
 #include "cell_locking.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
+<<<<<<< HEAD
 #include "checked-file-impl.hh"
+||||||| parent of ac9062644f (cql3: Represent create_statement using managed_string)
+#include "utils/checked-file-impl.hh"
+=======
+#include "utils/checked-file-impl.hh"
+#include "utils/managed_bytes.hh"
+>>>>>>> ac9062644f (cql3: Represent create_statement using managed_string)
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
@@ -2885,8 +2892,13 @@ future<> table::write_schema_as_cql(database& db, sstring dir) const {
     auto out = co_await make_file_output_stream(std::move(f));
     std::exception_ptr ex;
 
+    auto view = managed_bytes_view(schema_description.as_managed_bytes());
+
     try {
-        co_await out.write(schema_description.c_str(), schema_description.size());
+        for (auto&& fragment : fragment_range(view)) {
+            auto sv = to_string_view(fragment);
+            co_await out.write(sv.data(), sv.size());
+        }
         co_await out.flush();
     } catch (...) {
         ex = std::current_exception();

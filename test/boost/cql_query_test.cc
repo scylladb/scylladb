@@ -4234,7 +4234,7 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
             auto schema = e.local_db().find_schema("ks", ct.first);
             auto schema_desc = schema->describe(describe_helper, cql3::describe_option::STMTS);
 
-            BOOST_CHECK_EQUAL(normalize_white_space(*schema_desc.create_statement), normalize_white_space(ct.second));
+            BOOST_CHECK_EQUAL(normalize_white_space(schema_desc.create_statement.value().linearize()), normalize_white_space(ct.second));
         }
     }, describe_test_config());
 }
@@ -4303,12 +4303,12 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
             auto schema = e.local_db().find_schema("KS", ct.first);
             auto schema_desc = schema->describe(describe_helper, cql3::describe_option::STMTS);
 
-            BOOST_CHECK_EQUAL(normalize_white_space(*schema_desc.create_statement), normalize_white_space(ct.second));
+            BOOST_CHECK_EQUAL(normalize_white_space(schema_desc.create_statement.value().linearize()), normalize_white_space(ct.second));
 
             auto base_schema = e.local_db().find_schema("KS", "cF");
             auto base_schema_desc = base_schema->describe(describe_helper, cql3::describe_option::STMTS);
 
-            BOOST_CHECK_EQUAL(normalize_white_space(*base_schema_desc.create_statement), normalize_white_space(base_table));
+            BOOST_CHECK_EQUAL(normalize_white_space(base_schema_desc.create_statement.value().linearize()), normalize_white_space(base_table));
         }
     }, describe_test_config());
 }

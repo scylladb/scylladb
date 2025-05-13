@@ -2766,6 +2766,529 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
     }
 }
 
+<<<<<<< HEAD
+||||||| parent of ac9062644f (cql3: Represent create_statement using managed_string)
+void print_query_results_text(const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    struct column_values {
+        size_t max_size{0};
+        sstring header_format;
+        sstring row_format;
+        std::vector<sstring> values;
+
+        void add(sstring value) {
+            max_size = std::max(max_size, value.size());
+            values.push_back(std::move(value));
+        }
+    };
+
+    std::vector<column_values> columns;
+    columns.resize(column_metadata.size());
+
+    for (size_t i = 0; i < column_metadata.size(); ++i) {
+        columns[i].add(column_metadata[i]->name->text());
+    }
+
+    for (const auto& row : result.result_set().rows()) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (row[i]) {
+                columns[i].add(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))));
+            } else {
+                columns[i].add("");
+            }
+        }
+    }
+
+    std::vector<sstring> separators(columns.size(), sstring());
+    for (size_t i = 0; i < columns.size(); ++i) {
+        auto& col_values = columns[i];
+        col_values.header_format = seastar::format(" {{:<{}}} ", col_values.max_size);
+        col_values.row_format = seastar::format(" {{:>{}}} ", col_values.max_size);
+        for (size_t c = 0; c < col_values.max_size; ++c) {
+            separators[i] += "-";
+        }
+    }
+
+    for (size_t r = 0; r < result.result_set().rows().size() + 1; ++r) {
+        std::vector<sstring> row;
+        row.reserve(columns.size());
+        for (size_t i = 0; i < columns.size(); ++i) {
+            const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
+            row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
+        }
+        fmt::print("{}\n", fmt::join(row, "|"));
+        if (!r) {
+            fmt::print("-{}-\n", fmt::join(separators, "-+-"));
+        }
+    }
+}
+
+void print_query_results_json(const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    rjson::streaming_writer writer(std::cout);
+
+    writer.StartArray();
+    for (const auto& row : result.result_set().rows()) {
+        writer.StartObject();
+        for (size_t i = 0; i < row.size(); ++i) {
+            writer.Key(column_metadata[i]->name->text());
+            if (!row[i]) {
+                writer.Null();
+            }
+            const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
+            const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
+            writer.RawValue(value, type);
+        }
+        writer.EndObject();
+    }
+    writer.EndArray();
+}
+
+class query_operation_result_visitor : public cql_transport::messages::result_message::visitor {
+    output_format _output_format;
+private:
+    [[noreturn]] void throw_on_unexpected_message(const char* message_kind) {
+        throw std::runtime_error(std::format("unexpected result message, expected rows, got {}", message_kind));
+    }
+public:
+    query_operation_result_visitor(output_format of) : _output_format(of) { }
+    virtual void visit(const cql_transport::messages::result_message::void_message&) override { throw_on_unexpected_message("void_message"); }
+    virtual void visit(const cql_transport::messages::result_message::set_keyspace&) override { throw_on_unexpected_message("set_keyspace"); }
+    virtual void visit(const cql_transport::messages::result_message::prepared::cql&) override { throw_on_unexpected_message("prepared::cql"); }
+    virtual void visit(const cql_transport::messages::result_message::schema_change&) override { throw_on_unexpected_message("schema_change"); }
+    virtual void visit(const cql_transport::messages::result_message::bounce_to_shard&) override { throw_on_unexpected_message("bounce_to_shard"); }
+    virtual void visit(const cql_transport::messages::result_message::exception&) override { throw_on_unexpected_message("exception"); }
+
+    virtual void visit(const cql_transport::messages::result_message::rows& rows) override {
+        const auto& result = rows.rs();
+        switch (_output_format) {
+            case output_format::text:
+                print_query_results_text(result);
+                break;
+            case output_format::json:
+                print_query_results_json(result);
+                break;
+        }
+    }
+};
+
+void query_operation_validate_query(const sstring& query, std::string_view table_name, data_dictionary::database db) {
+    std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
+    try {
+        raw_statements = cql3::query_processor::parse_statements(query, cql3::dialect{});
+    } catch (...) {
+        throw std::invalid_argument(seastar::format("failed to parse query: {}", std::current_exception()));
+    }
+    if (raw_statements.size() != 1) {
+        throw std::invalid_argument(seastar::format("expected exactly 1 query, got {}", raw_statements.size()));
+    }
+
+    const auto raw_statement = raw_statements.front().get();
+
+    if (auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement)) {
+        if (!cf_statement->has_keyspace()) {
+            throw std::invalid_argument("query must have keyspace and the keyspace has to be scylla_sstable");
+        }
+        if (cf_statement->keyspace() != "scylla_sstable") {
+            throw std::invalid_argument(seastar::format("query must select from scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
+        }
+        if (cf_statement->column_family() != table_name) {
+            throw std::invalid_argument(seastar::format("query must select from {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
+        }
+    } else {
+        throw std::invalid_argument("query must be a select query");
+    }
+
+    seastar::shared_ptr<cql3::cql_statement> statement;
+    cql3::cql_stats cql_stats;
+
+    try {
+        auto prepared_statement = raw_statement->prepare(db, cql_stats);
+        statement = prepared_statement->statement;
+    } catch (...) {
+        throw std::invalid_argument(seastar::format("failed to prepare query: {}", std::current_exception()));
+    }
+
+    if (dynamic_cast<cql3::statements::select_statement*>(statement.get()) == nullptr) {
+        throw std::invalid_argument("query must be a select query");
+    }
+}
+
+void query_operation(schema_ptr sstable_schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sstable_manager, const bpo::variables_map& vm) {
+    if (vm.contains("query") && vm.contains("query-file")) {
+        throw std::invalid_argument("cannot provide both -q|--query and --query-file");
+    }
+
+    if (smp::count > 1) {
+        // Assuming smp==1 allows simplifying the code below.
+        throw std::runtime_error("query operation cannot run with --smp > 1");
+    }
+
+    const auto format = get_output_format_from_options(vm, output_format::text);
+
+    do_with_cql_env_noreentrant_in_thread([&] (cql_test_env& env) mutable -> future<> {
+        auto& db = env.local_db();
+
+        const auto keyspace_name = "scylla_sstable";
+        co_await env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name));
+        auto& keyspace = db.find_keyspace(keyspace_name);
+
+        // Clone and modify the schema:
+        // * Change keyspace name to scylla_sstable
+        // * Generate a new ID
+        // * Drop all properties
+        //
+        // This will help avoid conflicts when querying sstables of system-tables
+        // and allows cql_test_env to work with a simple config (no EAR setup).
+        auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
+        for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
+            for (const auto& col : sstable_schema->columns(col_kind)) {
+                builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
+
+                // Register any user types, so they are known by the time we create the table.
+                if (col.type->is_user_type()) {
+                    keyspace.add_user_type(dynamic_pointer_cast<const user_type_impl>(col.type));
+                }
+            }
+        }
+        auto schema = builder.build();
+
+        const auto table_name = schema->cf_name();
+
+        replica::schema_describe_helper describe_helper{db.as_data_dictionary()};
+
+        const auto original_schema_description = sstable_schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+        const auto schema_description = schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+
+        sst_log.debug("\noriginal schema:\n{}\nreplacement schema:\n{}\n\nNote: original keyspace name of {} was replaced with {}, original id of {} was replaced with {} and all properties were dropped!\n",
+                original_schema_description.create_statement.value(),
+                schema_description.create_statement.value(),
+                sstable_schema->ks_name(),
+                keyspace_name,
+                sstable_schema->id(),
+                schema->id());
+
+        co_await env.execute_cql(schema_description.create_statement.value());
+
+        auto& table = db.find_column_family(keyspace_name, table_name);
+
+        // We don't want to register the sstables with the table object,
+        // to avoid any attempt to compact/split/merge/rewrite them.
+        // Also, they were created with a foreign stable-manager (not part of
+        // cql_test_env).
+        // Use the virtual reader facility to isolate the sstables from
+        // cql-test-env.
+        table.set_virtual_reader(mutation_source([&] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                tracing::trace_state_ptr tr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) -> mutation_reader {
+            return make_combined_reader(
+                    schema,
+                    permit,
+                    sstables |
+                            std::views::transform([&] (const sstables::shared_sstable& sst) {
+                                    return sst->make_reader(schema, permit, range, slice, tr, fwd_sm, fwd_mr);
+                            }) |
+                            std::ranges::to<std::vector<mutation_reader>>(),
+                    fwd_sm,
+                    fwd_mr);
+        }));
+
+        sstring query;
+        if (vm.contains("query")) {
+            query = sstring(vm["query"].as<std::string>());
+        } else if (vm.contains("query-file")) {
+            auto file = co_await open_file_dma(vm["query-file"].as<std::string>(), open_flags::ro);
+            auto fstream = make_file_input_stream(file);
+            query = co_await util::read_entire_stream_contiguous(fstream);
+        } else {
+            query = seastar::format("SELECT * FROM {}.{} ", keyspace_name, table_name);
+        }
+
+        query_operation_validate_query(query, table_name, db.as_data_dictionary());
+
+        sst_log.debug("query_operation(): running query {}", query);
+
+        const auto result = co_await env.execute_cql(query);
+        result->throw_if_exception();
+
+        query_operation_result_visitor visitor{format};
+        result->accept(visitor);
+    }, {});
+}
+
+=======
+void print_query_results_text(const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    struct column_values {
+        size_t max_size{0};
+        sstring header_format;
+        sstring row_format;
+        std::vector<sstring> values;
+
+        void add(sstring value) {
+            max_size = std::max(max_size, value.size());
+            values.push_back(std::move(value));
+        }
+    };
+
+    std::vector<column_values> columns;
+    columns.resize(column_metadata.size());
+
+    for (size_t i = 0; i < column_metadata.size(); ++i) {
+        columns[i].add(column_metadata[i]->name->text());
+    }
+
+    for (const auto& row : result.result_set().rows()) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (row[i]) {
+                columns[i].add(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))));
+            } else {
+                columns[i].add("");
+            }
+        }
+    }
+
+    std::vector<sstring> separators(columns.size(), sstring());
+    for (size_t i = 0; i < columns.size(); ++i) {
+        auto& col_values = columns[i];
+        col_values.header_format = seastar::format(" {{:<{}}} ", col_values.max_size);
+        col_values.row_format = seastar::format(" {{:>{}}} ", col_values.max_size);
+        for (size_t c = 0; c < col_values.max_size; ++c) {
+            separators[i] += "-";
+        }
+    }
+
+    for (size_t r = 0; r < result.result_set().rows().size() + 1; ++r) {
+        std::vector<sstring> row;
+        row.reserve(columns.size());
+        for (size_t i = 0; i < columns.size(); ++i) {
+            const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
+            row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
+        }
+        fmt::print("{}\n", fmt::join(row, "|"));
+        if (!r) {
+            fmt::print("-{}-\n", fmt::join(separators, "-+-"));
+        }
+    }
+}
+
+void print_query_results_json(const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    rjson::streaming_writer writer(std::cout);
+
+    writer.StartArray();
+    for (const auto& row : result.result_set().rows()) {
+        writer.StartObject();
+        for (size_t i = 0; i < row.size(); ++i) {
+            writer.Key(column_metadata[i]->name->text());
+            if (!row[i]) {
+                writer.Null();
+            }
+            const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
+            const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
+            writer.RawValue(value, type);
+        }
+        writer.EndObject();
+    }
+    writer.EndArray();
+}
+
+class query_operation_result_visitor : public cql_transport::messages::result_message::visitor {
+    output_format _output_format;
+private:
+    [[noreturn]] void throw_on_unexpected_message(const char* message_kind) {
+        throw std::runtime_error(std::format("unexpected result message, expected rows, got {}", message_kind));
+    }
+public:
+    query_operation_result_visitor(output_format of) : _output_format(of) { }
+    virtual void visit(const cql_transport::messages::result_message::void_message&) override { throw_on_unexpected_message("void_message"); }
+    virtual void visit(const cql_transport::messages::result_message::set_keyspace&) override { throw_on_unexpected_message("set_keyspace"); }
+    virtual void visit(const cql_transport::messages::result_message::prepared::cql&) override { throw_on_unexpected_message("prepared::cql"); }
+    virtual void visit(const cql_transport::messages::result_message::schema_change&) override { throw_on_unexpected_message("schema_change"); }
+    virtual void visit(const cql_transport::messages::result_message::bounce_to_shard&) override { throw_on_unexpected_message("bounce_to_shard"); }
+    virtual void visit(const cql_transport::messages::result_message::exception&) override { throw_on_unexpected_message("exception"); }
+
+    virtual void visit(const cql_transport::messages::result_message::rows& rows) override {
+        const auto& result = rows.rs();
+        switch (_output_format) {
+            case output_format::text:
+                print_query_results_text(result);
+                break;
+            case output_format::json:
+                print_query_results_json(result);
+                break;
+        }
+    }
+};
+
+void query_operation_validate_query(const sstring& query, std::string_view table_name, data_dictionary::database db) {
+    std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
+    try {
+        raw_statements = cql3::query_processor::parse_statements(query, cql3::dialect{});
+    } catch (...) {
+        throw std::invalid_argument(seastar::format("failed to parse query: {}", std::current_exception()));
+    }
+    if (raw_statements.size() != 1) {
+        throw std::invalid_argument(seastar::format("expected exactly 1 query, got {}", raw_statements.size()));
+    }
+
+    const auto raw_statement = raw_statements.front().get();
+
+    if (auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement)) {
+        if (!cf_statement->has_keyspace()) {
+            throw std::invalid_argument("query must have keyspace and the keyspace has to be scylla_sstable");
+        }
+        if (cf_statement->keyspace() != "scylla_sstable") {
+            throw std::invalid_argument(seastar::format("query must select from scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
+        }
+        if (cf_statement->column_family() != table_name) {
+            throw std::invalid_argument(seastar::format("query must select from {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
+        }
+    } else {
+        throw std::invalid_argument("query must be a select query");
+    }
+
+    seastar::shared_ptr<cql3::cql_statement> statement;
+    cql3::cql_stats cql_stats;
+
+    try {
+        auto prepared_statement = raw_statement->prepare(db, cql_stats);
+        statement = prepared_statement->statement;
+    } catch (...) {
+        throw std::invalid_argument(seastar::format("failed to prepare query: {}", std::current_exception()));
+    }
+
+    if (dynamic_cast<cql3::statements::select_statement*>(statement.get()) == nullptr) {
+        throw std::invalid_argument("query must be a select query");
+    }
+}
+
+void query_operation(schema_ptr sstable_schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sstable_manager, const bpo::variables_map& vm) {
+    if (vm.contains("query") && vm.contains("query-file")) {
+        throw std::invalid_argument("cannot provide both -q|--query and --query-file");
+    }
+
+    if (smp::count > 1) {
+        // Assuming smp==1 allows simplifying the code below.
+        throw std::runtime_error("query operation cannot run with --smp > 1");
+    }
+
+    const auto format = get_output_format_from_options(vm, output_format::text);
+
+    do_with_cql_env_noreentrant_in_thread([&] (cql_test_env& env) mutable -> future<> {
+        auto& db = env.local_db();
+
+        const auto keyspace_name = "scylla_sstable";
+        co_await env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name));
+        auto& keyspace = db.find_keyspace(keyspace_name);
+
+        // Clone and modify the schema:
+        // * Change keyspace name to scylla_sstable
+        // * Generate a new ID
+        // * Drop all properties
+        //
+        // This will help avoid conflicts when querying sstables of system-tables
+        // and allows cql_test_env to work with a simple config (no EAR setup).
+        auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
+        for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
+            for (const auto& col : sstable_schema->columns(col_kind)) {
+                builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
+
+                // Register any user types, so they are known by the time we create the table.
+                if (col.type->is_user_type()) {
+                    keyspace.add_user_type(dynamic_pointer_cast<const user_type_impl>(col.type));
+                }
+            }
+        }
+        auto schema = builder.build();
+
+        const auto table_name = schema->cf_name();
+
+        replica::schema_describe_helper describe_helper{db.as_data_dictionary()};
+
+        const auto original_schema_description = sstable_schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+        const auto schema_description = schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+
+        const sstring original_create_statement = original_schema_description.create_statement.value().linearize();
+        const sstring schema_create_statement = schema_description.create_statement.value().linearize();
+
+        sst_log.debug("\noriginal schema:\n{}\nreplacement schema:\n{}\n\nNote: original keyspace name of {} was replaced with {}, original id of {} was replaced with {} and all properties were dropped!\n",
+                original_create_statement,
+                schema_create_statement,
+                sstable_schema->ks_name(),
+                keyspace_name,
+                sstable_schema->id(),
+                schema->id());
+
+        co_await env.execute_cql(schema_create_statement);
+
+        auto& table = db.find_column_family(keyspace_name, table_name);
+
+        // We don't want to register the sstables with the table object,
+        // to avoid any attempt to compact/split/merge/rewrite them.
+        // Also, they were created with a foreign stable-manager (not part of
+        // cql_test_env).
+        // Use the virtual reader facility to isolate the sstables from
+        // cql-test-env.
+        table.set_virtual_reader(mutation_source([&] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                tracing::trace_state_ptr tr,
+                streamed_mutation::forwarding fwd_sm,
+                mutation_reader::forwarding fwd_mr) -> mutation_reader {
+            return make_combined_reader(
+                    schema,
+                    permit,
+                    sstables |
+                            std::views::transform([&] (const sstables::shared_sstable& sst) {
+                                    return sst->make_reader(schema, permit, range, slice, tr, fwd_sm, fwd_mr);
+                            }) |
+                            std::ranges::to<std::vector<mutation_reader>>(),
+                    fwd_sm,
+                    fwd_mr);
+        }));
+
+        sstring query;
+        if (vm.contains("query")) {
+            query = sstring(vm["query"].as<std::string>());
+        } else if (vm.contains("query-file")) {
+            auto file = co_await open_file_dma(vm["query-file"].as<std::string>(), open_flags::ro);
+            auto fstream = make_file_input_stream(file);
+            query = co_await util::read_entire_stream_contiguous(fstream);
+        } else {
+            query = seastar::format("SELECT * FROM {}.{} ", keyspace_name, table_name);
+        }
+
+        query_operation_validate_query(query, table_name, db.as_data_dictionary());
+
+        sst_log.debug("query_operation(): running query {}", query);
+
+        const auto result = co_await env.execute_cql(query);
+        result->throw_if_exception();
+
+        query_operation_result_visitor visitor{format};
+        result->accept(visitor);
+    }, {});
+}
+
+>>>>>>> ac9062644f (cql3: Represent create_statement using managed_string)
 const std::vector<operation_option> global_options {
     typed_option<sstring>("schema-file", "schema.cql", "use the file containing the schema description as the schema source"),
     typed_option<sstring>("keyspace", "keyspace name"),

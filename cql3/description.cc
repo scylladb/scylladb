@@ -32,7 +32,7 @@ std::vector<managed_bytes_opt> description::serialize(bool serialize_create_stat
     result.push_back(to_managed_bytes(cql3::util::maybe_quote(name)));
 
     if (serialize_create_statement && create_statement) {
-        result.push_back(to_managed_bytes(*create_statement));
+        result.push_back(create_statement.value().as_managed_bytes());
     } else if (serialize_create_statement) {
         on_internal_error(dlogger, "create_statement field is empty");
     }

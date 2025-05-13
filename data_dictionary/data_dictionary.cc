@@ -398,12 +398,12 @@ no_such_column_family::no_such_column_family(std::string_view ks_name, const tab
 }
 
 cql3::description keyspace_metadata::describe(const replica::database& db, cql3::with_create_statement with_create_statement) const {
-    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<managed_string> {
         if (!with_create_statement) {
             return std::nullopt;
         }
 
-        std::ostringstream os;
+        fragmented_ostringstream os;
 
         os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
            << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
@@ -416,7 +416,7 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
                 os << ", " << cql3::util::single_quote(e.first) << ": " << cql3::util::single_quote(e.second);
             }
         }
-        os << "} AND durable_writes = " << std::boolalpha << _durable_writes << std::noboolalpha;
+        os << "} AND durable_writes = " << fmt::to_string(_durable_writes);
         if (db.features().tablets) {
             if (!_initial_tablets.has_value()) {
                 os << " AND tablets = {'enabled': false}";
@@ -428,7 +428,7 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
         }
         os << ";";
 
-        return std::move(os).str();
+        return std::move(os).to_managed_string();
     });
 
     return cql3::description {

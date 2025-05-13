@@ -33,6 +33,7 @@
 #include "service/topology_state_machine.hh"
 #include "utils/sorting.hh"
 #include <seastar/core/reactor.hh>
+#include "utils/managed_string.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -972,12 +973,14 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
             continue;
         }
 
+        sstring create_statement = describe_service_level(sl_name, sl.slo);
+
         result.push_back(cql3::description {
             // Service levels do not belong to any keyspace.
             .keyspace = std::nullopt,
             .type = "service_level",
             .name = sl_name,
-            .create_statement = describe_service_level(sl_name, sl.slo)
+            .create_statement = managed_string(create_statement)
         });
 
         co_await coroutine::maybe_yield();
@@ -998,21 +1001,22 @@ future<std::vector<cql3::description>> service_level_controller::describe_attach
         const auto formatted_role = cql3::util::maybe_quote(role);
         const auto formatted_sl = cql3::util::maybe_quote(service_level);
 
+        sstring create_statement = seastar::format("ATTACH SERVICE LEVEL {} TO {};", formatted_sl, formatted_role);
+
         result.push_back(cql3::description {
             // Attaching a service level doesn't belong to any keyspace.
             .keyspace = std::nullopt,
             .type = "service_level_attachment",
             .name = service_level,
-            .create_statement = seastar::format("ATTACH SERVICE LEVEL {} TO {};", formatted_sl, formatted_role)
+            .create_statement = managed_string(create_statement)
         });
 
         co_await coroutine::maybe_yield();
     }
 
-    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) noexcept {
+    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) {
         return std::make_tuple(std::ref(desc.name), std::ref(*desc.create_statement));
     });
-
 
     co_return result;
 }

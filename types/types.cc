@@ -44,6 +44,7 @@
 #include "utils/ascii.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/managed_string.hh"
 
 #include "types/user.hh"
 #include "types/tuple.hh"
@@ -3232,12 +3233,12 @@ sstring user_type_impl::get_name_as_cql_string() const {
 }
 
 cql3::description user_type_impl::describe(cql3::with_create_statement with_create_statement) const {
-    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<managed_string> {
         if (!with_create_statement) {
             return std::nullopt;
         }
 
-        std::ostringstream os;
+        fragmented_ostringstream os;
 
         os << "CREATE TYPE " << cql3::util::maybe_quote(_keyspace) << "." << get_name_as_cql_string() << " (\n";
         for (size_t i = 0; i < _string_field_names.size(); i++) {
@@ -3249,7 +3250,7 @@ cql3::description user_type_impl::describe(cql3::with_create_statement with_crea
         }
         os << ");";
 
-        return std::move(os).str();
+        return std::move(os).to_managed_string();
     });
 
     return cql3::description {

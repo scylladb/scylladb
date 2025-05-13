@@ -47,6 +47,7 @@
 #include "data_dictionary/keyspace_metadata.hh"
 #include "service/storage_service.hh"
 #include "service_permit.hh"
+#include "utils/managed_string.hh"
 
 using namespace std::chrono_literals;
 
@@ -467,12 +468,14 @@ future<std::vector<cql3::description>> service::describe_roles(bool with_hashed_
         const bool can_login = co_await _role_manager->can_login(role);
         const bool is_superuser = co_await _role_manager->is_superuser(role);
 
+        sstring create_statement = produce_create_statement(formatted_role_name, maybe_hashed_password, can_login, is_superuser);
+
         result.push_back(cql3::description {
             // Roles do not belong to any keyspace.
             .keyspace = std::nullopt,
             .type = "role",
             .name = role,
-            .create_statement = produce_create_statement(formatted_role_name, maybe_hashed_password, can_login, is_superuser)
+            .create_statement = managed_string(create_statement)
         });
     }
 
@@ -613,19 +616,21 @@ future<std::vector<cql3::description>> service::describe_permissions() const {
 
     for (const auto& permissions : permission_list) {
         for (const auto& permission : permissions.permissions) {
+            sstring create_statement = describe_resource_kind(permission, permissions.resource, permissions.role_name);
+
             result.push_back(cql3::description {
                 // Permission grants do not belong to any keyspace.
                 .keyspace = std::nullopt,
                 .type = "grant_permission",
                 .name = permissions.role_name,
-                .create_statement = describe_resource_kind(permission, permissions.resource, permissions.role_name)
+                .create_statement = managed_string(create_statement)
             });
         }
 
         co_await coroutine::maybe_yield();
     }
 
-    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) noexcept {
+    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) {
         return std::make_tuple(std::ref(desc.name), std::ref(*desc.create_statement));
     });
 
