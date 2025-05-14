@@ -762,17 +762,9 @@ static
 future<json::json_return_type>
 rest_force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
-        auto params = req_params({
-            std::pair("keyspace", mandatory::yes),
-            std::pair("cf", mandatory::no),
-            std::pair("flush_memtables", mandatory::no),
-            std::pair("consider_only_existing_data", mandatory::no),
-        });
-        params.process(*req);
-        auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
-        auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
-        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+        auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
+        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
         apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
