@@ -323,6 +323,8 @@ public:
 public:
     iterator insert(const_iterator pos, const T& x);
     iterator insert(const_iterator pos, T&& x);
+    template <typename Iterator>
+    iterator insert(const_iterator post, Iterator first, Iterator last);
     template <typename... Args>
     iterator emplace(const_iterator pos, Args&&... args);
     iterator erase(iterator pos);
@@ -622,6 +624,18 @@ chunked_vector<T, max_contiguous_allocation>::insert(const_iterator pos, T&& x) 
     auto insert_idx = pos - begin();
     push_back(std::move(x));
     std::rotate(begin() + insert_idx, end() - 1, end());
+    return begin() + insert_idx;
+}
+
+template <typename T, size_t max_contiguous_allocation>
+template <typename Iterator>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::insert(const_iterator pos, Iterator first, Iterator last) {
+    auto insert_idx = pos - begin();
+    auto n_insert = std::distance(first, last);
+    reserve(size() + n_insert);
+    std::copy(first, last, std::back_inserter(*this));
+    std::rotate(begin() + insert_idx, end() - n_insert, end());
     return begin() + insert_idx;
 }
 
