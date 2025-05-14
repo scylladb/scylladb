@@ -84,6 +84,11 @@ struct rebind_container_wrapping_to_nonwrapping_interval<std::vector<wrapping_in
 };
 
 template <typename T>
+struct rebind_container_wrapping_to_nonwrapping_interval<utils::chunked_vector<wrapping_interval<T>>> {
+    using type = utils::chunked_vector<interval<T>>;
+};
+
+template <typename T>
 struct rebind_container_nonwrapping_to_wrapping_interval;
 
 template <typename T>
@@ -92,6 +97,11 @@ using rebind_container_nonwrapping_to_wrapping_interval_t = rebind_container_non
 template <typename T>
 struct rebind_container_nonwrapping_to_wrapping_interval<std::vector<interval<T>>> {
     using type = std::vector<wrapping_interval<T>>;
+};
+
+template <typename T>
+struct rebind_container_nonwrapping_to_wrapping_interval<utils::chunked_vector<interval<T>>> {
+    using type = utils::chunked_vector<wrapping_interval<T>>;
 };
 
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
@@ -167,13 +177,13 @@ wrap(Container&& v) {
 
 inline
 dht::token_range_vector
-unwrap(const std::vector<wrapping_interval<dht::token>>& v) {
+unwrap(const utils::chunked_vector<wrapping_interval<dht::token>>& v) {
     return unwrap(v, dht::token_comparator());
 }
 
 inline
 dht::token_range_vector
-unwrap(std::vector<wrapping_interval<dht::token>>&& v) {
+unwrap(utils::chunked_vector<wrapping_interval<dht::token>>&& v) {
     return unwrap(std::move(v), dht::token_comparator());
 }
 
