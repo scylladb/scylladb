@@ -441,6 +441,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
     if (should_resolve_options_credentials()) {
         auto key_id = std::getenv("AWS_ACCESS_KEY_ID");
         auto key = std::getenv("AWS_SECRET_ACCESS_KEY");
+        auto token = std::getenv("AWS_SESSION_TOKEN");
         if (_options.aws_access_key_id.empty() && key_id) {
             kms_log.debug("No aws id specified. Using environment AWS_ACCESS_KEY_ID");
             _options.aws_access_key_id = key_id;
@@ -448,6 +449,10 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
         if (_options.aws_secret_access_key.empty() && key) {
             kms_log.debug("No aws secret specified. Using environment AWS_SECRET_ACCESS_KEY");
             _options.aws_secret_access_key = key;
+        }
+        if (_options.aws_session.empty() && token) {
+            kms_log.debug("No aws session token. Using environment AWS_SESSION_TOKEN");
+            _options.aws_session = token;
         }
     }
 
@@ -467,7 +472,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
                     static std::regex cred_line(R"foo(\s*\[(?:profile\s+)?([\w-]+)\]|([^\s]+)\s*=\s*([^\s]+)\s*\n)foo");
                     std::cregex_iterator i(buf.get(), buf.get() + buf.size(), cred_line), e;
 
-                    std::string id, secret;
+                    std::string id, secret, token;
                     while (i != e) {
                         if ((*i)[1].length() > 0) {
                             profile = (*i)[1].str();
@@ -479,6 +484,8 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
                                 id = val;
                             } else if (key == "aws_secret_access_key") {
                                 secret = val;
+                            } else if (key == "aws_session_token") {
+                                token = val;
                             }
                         }
                         ++i;
@@ -492,6 +499,9 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
                     }
                     if (!secret.empty() && _options.aws_secret_access_key.empty()) {
                         _options.aws_secret_access_key = secret;
+                    }
+                    if (!token.empty() && _options.aws_session.empty()) {
+                        _options.aws_session = token;
                     }
                     if (_options.aws_access_key_id.empty() || _options.aws_secret_access_key.empty()) {
                         throw configuration_error(fmt::format("Could not find credentials for profile {}", _options.aws_profile));
@@ -509,7 +519,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
 
     auto aws_access_key_id = _options.aws_access_key_id;
     auto aws_secret_access_key = _options.aws_secret_access_key;
-    auto session = ""s;
+    auto session = _options.aws_session;
 
     if (_options.aws_use_ec2_credentials) {
         auto [res, token] = co_await query_ec2_meta("/latest/meta-data/iam/security-credentials/", gtoken);
