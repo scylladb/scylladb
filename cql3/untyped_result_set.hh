@@ -60,7 +60,7 @@ public:
 
     bool has(std::string_view) const;
     view_type get_view(std::string_view name) const;
-    bytes get_blob(std::string_view name) const {
+    bytes get_blob_unfragmented(std::string_view name) const {
         return to_bytes(get_view(name));
     }
     managed_bytes get_blob_fragmented(std::string_view name) const {
@@ -128,7 +128,7 @@ public:
                         value_cast<set_type_impl::native_type>(
                                         set_type_impl::get_instance(valtype,
                                                         false)->deserialize(
-                                                        get_blob(name)));
+                                                        get_blob_unfragmented(name)));
         std::transform(vec.begin(), vec.end(), out, [](auto& p) {
             return value_cast<V>(p);
         });

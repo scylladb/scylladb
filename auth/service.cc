@@ -885,7 +885,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                 for (const auto& col : schema->all_columns()) {
                     if (row.has(col.name_as_text())) {
                         values.push_back(
-                                col.type->deserialize(row.get_blob(col.name_as_text())));
+                                col.type->deserialize(row.get_blob_unfragmented(col.name_as_text())));
                     } else {
                         values.push_back(unset_value{});
                     }

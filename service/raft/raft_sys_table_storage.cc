@@ -103,7 +103,7 @@ future<raft::log_entries> raft_sys_table_storage::load_log() {
         }
         raft::term_t term = raft::term_t(row.get_as<int64_t>("term"));
         raft::index_t idx = raft::index_t(row.get_as<int64_t>("index"));
-        auto raw_data = row.get_blob("data");
+        auto raw_data = row.get_blob_unfragmented("data");
         auto in = ser::as_input_stream(raw_data);
         using data_variant_type = decltype(raft::log_entry::data);
         data_variant_type data = ser::deserialize(in, std::type_identity<data_variant_type>());

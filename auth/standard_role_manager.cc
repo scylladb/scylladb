@@ -126,7 +126,7 @@ static future<record> require_record(cql3::query_processor& qp, std::string_view
 }
 
 static bool has_can_login(const cql3::untyped_result_set_row& row) {
-    return row.has("can_login") && !(boolean_type->deserialize(row.get_blob("can_login")).is_null());
+    return row.has("can_login") && !(boolean_type->deserialize(row.get_blob_unfragmented("can_login")).is_null());
 }
 
 standard_role_manager::standard_role_manager(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)

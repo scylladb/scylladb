@@ -449,7 +449,7 @@ public:
         auto query = fmt_query("SELECT * FROM {}.{} WHERE keyspace_name = ?", db::system_keyspace::legacy::USERTYPES);
         return _qp.execute_internal(query, {dst.name}, cql3::query_processor::cache_internal::yes).then([this, &dst](result_set_type result) {
             return parallel_for_each(*result, [this, &dst](row_type& row) {
-                auto name = row.get_blob("type_name");
+                auto name = row.get_blob_unfragmented("type_name");
                 auto columns = row.get_list<bytes>("field_names");
                 auto types = row.get_list<sstring>("field_types");
                 std::vector<data_type> field_types;
