@@ -35,7 +35,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from pytest import Config
-from test import BUILD_DIR, COMBINED_TESTS
+from test import BUILD_DIR, COMBINED_TESTS, TOP_SRC_DIR
 from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
 
@@ -119,7 +119,7 @@ class BoostTestFacade(CppTestFacade):
         # Tests are written in the way that everything after '--' passes to the test itself rather than to the test framework
         args.append('--')
         args.extend(test_args)
-        os.chdir(self.temp_dir.parent)
+        os.chdir(TOP_SRC_DIR)
         p, stdout = run_process(args, timeout)
 
         with open(stdout_file_path, 'w') as fd:

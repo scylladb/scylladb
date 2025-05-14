@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Sequence
 
+from test import TOP_SRC_DIR
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
 
 TIMEOUT = 60 * 10 # seconds
@@ -34,7 +35,7 @@ class UnitTestFacade(CppTestFacade):
         env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         args = [str(executable), *test_args]
-        os.chdir(self.temp_dir.parent)
+        os.chdir(TOP_SRC_DIR)
         p, stdout = run_process(args, TIMEOUT)
 
         if p.returncode != 0:
