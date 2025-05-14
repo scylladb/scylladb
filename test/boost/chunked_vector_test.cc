@@ -30,7 +30,7 @@ using deque = std::deque<int>;
 
 BOOST_AUTO_TEST_CASE(test_random_walk) {
     auto rand = std::default_random_engine();
-    auto op_gen = std::uniform_int_distribution<unsigned>(0, 12);
+    auto op_gen = std::uniform_int_distribution<unsigned>(0, 13);
     auto nr_dist = std::geometric_distribution<size_t>(0.7);
     deque d;
     disk_array c;
@@ -123,6 +123,15 @@ BOOST_AUTO_TEST_CASE(test_random_walk) {
             auto end = std::uniform_int_distribution<size_t>(start, d.size())(rand);
             c.erase(c.begin() + start, c.begin() + end);
             d.erase(d.begin() + start, d.begin() + end);
+            break;
+        }
+        case 13: {
+            auto start = std::uniform_int_distribution<size_t>(0, d.size())(rand);
+            auto nr = std::uniform_int_distribution<size_t>(0, 20)(rand);
+            auto n = rand();
+            auto data = std::views::iota(n, n + nr);
+            c.insert(c.begin() + start, data.begin(), data.end());
+            d.insert(d.begin() + start, data.begin(), data.end());
             break;
         }
         default:
@@ -549,4 +558,15 @@ BOOST_AUTO_TEST_CASE(test_erase_single) {
     BOOST_REQUIRE_EQUAL(r3 - std::begin(vec), 1);
     BOOST_REQUIRE_EQUAL(vec[0], 2);
     BOOST_REQUIRE_EQUAL(vec[1], 8);
+}
+
+BOOST_AUTO_TEST_CASE(test_insert_range) {
+    auto vec = utils::chunked_vector<int, 8>();
+    vec.push_back(1);
+    vec.push_back(2);
+    vec.push_back(3);
+    vec.push_back(4);
+    auto data = std::views::iota(8, 12);
+    vec.insert(vec.begin() + 2, data.begin(), data.end());
+    BOOST_REQUIRE(std::ranges::equal(vec, std::array{1, 2, 8, 9, 10, 11, 3, 4}));
 }
