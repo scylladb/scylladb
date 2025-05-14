@@ -55,6 +55,13 @@ target_sources(utils
     stream_compressor.cc
     s3/aws_error.cc
     s3/client.cc
+    s3/helpers/bucket_lister.cc
+    s3/helpers/copy_s3_object.cc
+    s3/helpers/do_upload_file.cc
+    s3/helpers/download_source.cc
+    s3/helpers/multipart_upload.cc
+    s3/helpers/readable_file.cc
+    s3/helpers/upload_sinks.cc
     s3/retryable_http_client.cc
     s3/retry_strategy.cc
     s3/s3_retry_strategy.cc
@@ -63,7 +70,8 @@ target_sources(utils
     s3/credentials_providers/instance_profile_credentials_provider.cc
     s3/credentials_providers/sts_assume_role_credentials_provider.cc
     s3/credentials_providers/aws_credentials_provider_chain.cc
-    s3/utils/manip_s3.cc)
+    s3/utils/manip_s3.cc
+    s3/utils/client_utils.cc)
 target_include_directories(utils
   PUBLIC
     ${CMAKE_SOURCE_DIR}
