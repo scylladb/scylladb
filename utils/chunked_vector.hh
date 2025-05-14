@@ -60,7 +60,6 @@ struct chunked_vector_free_deleter {
 
 template <typename T, size_t max_contiguous_allocation = 128*1024>
 class chunked_vector {
-    static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move constructible");
     using chunk_ptr = std::unique_ptr<T[], chunked_vector_free_deleter>;
     // Each chunk holds max_chunk_capacity() items, except possibly the last
     utils::small_vector<chunk_ptr, 1> _chunks;
@@ -445,6 +444,10 @@ chunked_vector<T, max_contiguous_allocation>::operator=(chunked_vector&& x) noex
 
 template <typename T, size_t max_contiguous_allocation>
 chunked_vector<T, max_contiguous_allocation>::~chunked_vector() {
+    // This assert logically belongs as a constraint on T, but then
+    // we can't forward-declare typedefs that use chunked_vector<T> on
+    // an incomplete type T.
+    static_assert(std::is_nothrow_move_constructible<T>::value, "T must be nothrow move constructible");
     if constexpr (!std::is_trivially_destructible_v<T>) {
         for (auto cp = _chunks.begin(); _size; ++cp) {
             auto now = std::min(_size, max_chunk_capacity());
