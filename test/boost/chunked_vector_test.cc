@@ -570,3 +570,15 @@ BOOST_AUTO_TEST_CASE(test_insert_range) {
     vec.insert(vec.begin() + 2, data.begin(), data.end());
     BOOST_REQUIRE(std::ranges::equal(vec, std::array{1, 2, 8, 9, 10, 11, 3, 4}));
 }
+
+BOOST_AUTO_TEST_CASE(test_swap) {
+    auto v1 = utils::chunked_vector<int, 8>();
+    auto v2 = utils::chunked_vector<int, 8>();
+
+    v1.push_back(1);
+    v2.push_back(2);
+    v2.push_back(4);
+    v1.swap(v2);
+    BOOST_REQUIRE(std::ranges::equal(v1, std::array{2, 4}));
+    BOOST_REQUIRE(std::ranges::equal(v2, std::array{1}));
+}
