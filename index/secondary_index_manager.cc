@@ -8,11 +8,12 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <functional>
 #include <optional>
 #include <ranges>
 #include <seastar/core/shared_ptr.hh>
 #include <string_view>
-#include <unordered_set>
+#include <unordered_map>
 
 #include "index/secondary_index_manager.hh"
 
@@ -358,15 +359,12 @@ std::optional<sstring> secondary_index_manager::custom_index_class(const schema&
 }
 
 // We pass the feature_service as the supported custom classes will depend on the features
-bool secondary_index_manager::is_custom_class_supported(const gms::feature_service& fs, const sstring& class_name) {
+std::optional<std::function<std::shared_ptr<custom_index>()>> secondary_index_manager::get_custom_class(const gms::feature_service& fs, const sstring& class_name) {
 
-    // TODO: Change this set to a map to implementation 
-    // when https://github.com/scylladb/vector-store/issues/115 is done
-
-    const static std::unordered_set<std::string_view> classes = {
-        "vector_index",
+    std::unordered_map<std::string_view, std::function<std::shared_ptr<custom_index>()>> classes = {
+        {"vector_index", vector_index_factory},
     };
-    return classes.contains(class_name);
+    return classes.find(class_name) != classes.end() ? std::make_optional(classes[class_name]) : std::nullopt;
 }
 
 void vector_index::validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) {

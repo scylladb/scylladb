@@ -126,7 +126,7 @@ public:
     bool is_index(const schema& s) const;
     bool is_global_index(const schema& s) const;
     std::optional<sstring> custom_index_class(const schema& s) const;
-    static bool is_custom_class_supported(const gms::feature_service& fs, const sstring& class_name);
+    static std::optional<std::function<std::shared_ptr<custom_index>()>> get_custom_class(const gms::feature_service& fs, const sstring& class_name);
 private:
     void add_index(const index_metadata& im);
 };
