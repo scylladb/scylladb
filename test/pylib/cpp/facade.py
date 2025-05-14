@@ -25,15 +25,17 @@
 #
 from __future__ import annotations
 
+import logging
+import os
 import shlex
 import subprocess
 from abc import ABC
 from pathlib import Path
-from subprocess import TimeoutExpired
 from typing import Sequence
 
 from pytest import Config
 
+logger = logging.getLogger(__name__)
 
 class CppTestFailure(Exception):
     def __init__(self, filename: str, line_num: int, contents: str) -> None:
@@ -65,17 +67,27 @@ class CppTestFacade(ABC):
          raise NotImplementedError
 
 
-def run_process(args: list[str], timeout):
+def run_process(args: list[str], timeout, env: dict = None) -> tuple[subprocess.Popen[str], str]:
     args = shlex.split(' '.join(args))
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if env:
+        env.update(os.environ)
+    else:
+        env = os.environ.copy()
+    p = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        text=True,
+        env=env,
+    )
     try:
         stdout, stderr = p.communicate(timeout=timeout)
-    except TimeoutExpired:
-        print('Timeout reached')
-        p.kill()
+    except subprocess.TimeoutExpired:
+        logger.critical(f"Process {args} timed out")
         stdout = p.stdout.read()
-        stderr = p.stderr.read()
+        p.kill()
     except KeyboardInterrupt:
         p.kill()
         raise
-    return p, stderr, stdout
+    return p, stdout

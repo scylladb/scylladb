@@ -103,7 +103,6 @@ class BoostTestFacade(CppTestFacade):
         root_log_dir = self.temp_dir / mode / 'pytest'
         log_xml = root_log_dir / f"{test_name}.log"
         stdout_file_path = root_log_dir/ f"{test_name}_stdout.log"
-        stderr_file_path = root_log_dir / f"{test_name}_stderr.log"
         report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
                  '--output_format=XML',
@@ -121,12 +120,10 @@ class BoostTestFacade(CppTestFacade):
         args.append('--')
         args.extend(test_args)
         os.chdir(self.temp_dir.parent)
-        p, stderr, stdout = run_process(args, timeout)
+        p, stdout = run_process(args, timeout)
 
         with open(stdout_file_path, 'w') as fd:
             fd.write(stdout)
-        with open(stderr_file_path, 'w') as fd:
-            fd.write(stderr)
         log = read_file(log_xml)
         report = read_file(report_xml)
 
@@ -138,7 +135,6 @@ class BoostTestFacade(CppTestFacade):
                 'Internal Error: calling {executable} '
                 'for test {test_id} failed (return_code={return_code}):\n'
                 'output file:{stdout}\n'
-                'std error file:{stderr}\n'
                 'log:{log}\n'
                 'report:{report}\n'
                 'command to repeat:{command}'
@@ -151,7 +147,6 @@ class BoostTestFacade(CppTestFacade):
                     executable=executable,
                     test_id=test_name,
                     stdout=stdout_file_path.absolute(),
-                    stderr=stderr_file_path.absolute(),
                     log=log,
                     report=report,
                     command=' '.join(p.args),
