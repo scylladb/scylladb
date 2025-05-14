@@ -149,7 +149,14 @@ class compact_mutation_state {
     gc_clock::time_point _query_time;
     max_purgeable_fn _get_max_purgeable;
     can_gc_fn _can_gc;
+<<<<<<< HEAD
     api::timestamp_type _max_purgeable = api::missing_timestamp;
+||||||| parent of 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
+    max_purgeable _max_purgeable;
+=======
+    max_purgeable _max_purgeable_regular;
+    max_purgeable _max_purgeable_shadowable;
+>>>>>>> 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
     std::optional<gc_clock::time_point> _gc_before;
     const query::partition_slice& _slice;
     uint64_t _row_limit{};
@@ -288,12 +295,31 @@ private:
         if (!t) {
             return false;
         }
+<<<<<<< HEAD
         if (_max_purgeable == api::missing_timestamp) {
             _max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
+||||||| parent of 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
+        if (!_max_purgeable) {
+            _max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
+=======
+        auto& max_purgeable = is_shadowable ? _max_purgeable_shadowable : _max_purgeable_regular;
+        if (!max_purgeable) {
+            max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
+>>>>>>> 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
         }
+<<<<<<< HEAD
         auto ret = t.timestamp < _max_purgeable;
         mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, _max_purgeable, ret);
         return ret;
+||||||| parent of 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
+        auto ret = t.timestamp < _max_purgeable.timestamp;
+        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, _max_purgeable.timestamp, ret);
+        return std::make_pair(ret, _max_purgeable.source);
+=======
+        auto ret = t.timestamp < max_purgeable.timestamp;
+        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, max_purgeable.timestamp, ret);
+        return std::make_pair(ret, max_purgeable.source);
+>>>>>>> 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
     };
 
 public:
@@ -347,7 +373,14 @@ public:
         _static_row_live = false;
         _partition_tombstone = {};
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
+<<<<<<< HEAD
         _max_purgeable = api::missing_timestamp;
+||||||| parent of 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
+        _max_purgeable = {};
+=======
+        _max_purgeable_regular = {};
+        _max_purgeable_shadowable = {};
+>>>>>>> 7db956965e (mutation/mutation_compactor: cache regular/shadowable max-purgable in separate members)
         _gc_before = std::nullopt;
         _last_static_row.reset();
         _last_pos = position_in_partition::for_partition_start();
