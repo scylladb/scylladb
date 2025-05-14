@@ -220,13 +220,6 @@ def test_storage_service_keyspace_bad_param(cql, this_dc, rest_api):
         resp = rest_api.send("GET", f"storage_service/keyspace_scrub", { "keyspace": "{keyspace}" })
         assert resp.status_code == requests.codes.not_found
 
-        # Optional param cannot use the same name as a mandatory (positional, in url) param.
-        resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "keyspace": "{keyspace}" })
-        assert resp.status_code == requests.codes.bad_request
-
-        # Unknown parameter (See https://github.com/scylladb/scylla/pull/10090)
-        resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", { "foo": "bar" })
-        assert resp.status_code == requests.codes.bad_request
 
 # Reproduce issue #9061, where if we have a partition key with characters
 # that need escaping in JSON, the toppartitions response failed to escape

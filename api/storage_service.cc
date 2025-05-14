@@ -230,28 +230,19 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
 
 future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req) {
     scrub_info info;
-    auto rp = req_params({
-        {"keyspace", {mandatory::yes}},
-        {"cf", {""}},
-        {"scrub_mode", {}},
-        {"skip_corrupted", {}},
-        {"disable_snapshot", {}},
-        {"quarantine_mode", {}},
-    });
-    rp.process(*req);
-    info.keyspace = validate_keyspace(ctx, *rp.get("keyspace"));
-    info.column_families = parse_table_infos(info.keyspace, ctx, *rp.get("cf")) | std::views::transform([] (auto ti) { return ti.name; }) | std::ranges::to<std::vector>();
-    auto scrub_mode_opt = rp.get("scrub_mode");
+    auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+    info.keyspace = std::move(keyspace);
+    info.column_families = table_infos | std::views::transform([] (auto ti) { return ti.name; }) | std::ranges::to<std::vector>();
+    auto scrub_mode_str = req->get_query_param("scrub_mode");
     auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
 
-    if (!scrub_mode_opt) {
-        const auto skip_corrupted = rp.get_as<bool>("skip_corrupted").value_or(false);
+    if (scrub_mode_str.empty()) {
+        const auto skip_corrupted = validate_bool_x(req->get_query_param("skip_corrupted"), false);
 
         if (skip_corrupted) {
             scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
         }
     } else {
-        auto scrub_mode_str = *scrub_mode_opt;
         if (scrub_mode_str == "ABORT") {
             scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
         } else if (scrub_mode_str == "SKIP") {
