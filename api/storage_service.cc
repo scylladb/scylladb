@@ -127,6 +127,21 @@ bool validate_bool(const sstring& param) {
     }
 }
 
+bool validate_bool_x(const sstring& param, bool default_value) {
+    if (param.empty()) {
+        return default_value;
+    }
+
+    if (strcasecmp(param.c_str(), "true") == 0 || strcasecmp(param.c_str(), "yes") == 0 || param == "1") {
+        return true;
+    }
+    if (strcasecmp(param.c_str(), "false") == 0 || strcasecmp(param.c_str(), "no") == 0 || param == "0") {
+        return false;
+    }
+
+    throw std::runtime_error("Invalid boolean parameter value");
+}
+
 static
 int64_t validate_int(const sstring& param) {
     return std::atoll(param.c_str());
