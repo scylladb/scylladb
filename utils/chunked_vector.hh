@@ -332,6 +332,7 @@ public:
     iterator erase(const_iterator pos);
     iterator erase(iterator first, iterator last);
     iterator erase(const_iterator first, const_iterator last);
+    void swap(chunked_vector& x) noexcept;
 };
 
 template<typename T, size_t max_contiguous_allocation>
@@ -672,6 +673,15 @@ template <typename T, size_t max_contiguous_allocation>
 typename chunked_vector<T, max_contiguous_allocation>::iterator
 chunked_vector<T, max_contiguous_allocation>::erase(iterator pos) {
     return erase(const_iterator(pos));
+}
+
+template <typename T, size_t max_contiguous_allocation>
+void
+chunked_vector<T, max_contiguous_allocation>::swap(chunked_vector& x) noexcept {
+    using std::swap;
+    swap(_chunks, x._chunks);
+    swap(_size, x._size);
+    swap(_capacity, x._capacity);
 }
 
 template <typename T, size_t max_contiguous_allocation>
