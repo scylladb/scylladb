@@ -944,9 +944,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::get_built_indexes.set(r, [&ctx, &sys_ks](std::unique_ptr<http::request> req) {
-        auto ks_cf = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        auto&& ks = std::get<0>(ks_cf);
-        auto&& cf_name = std::get<1>(ks_cf);
+        auto [ks, cf_name] = parse_fully_qualified_cf_name(req->get_path_param("name"));
         // Use of load_built_views() as filtering table should be in sync with
         // built_indexes_virtual_reader filtering with BUILT_VIEWS table
         return sys_ks.local().load_built_views().then([ks, cf_name, &ctx](const std::vector<db::system_keyspace::view_name>& vb) mutable {
