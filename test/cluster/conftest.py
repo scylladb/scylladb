@@ -16,11 +16,13 @@ import urllib.parse
 from multiprocessing import Event, Process
 from pathlib import Path
 from typing import TYPE_CHECKING
+from test.conftest import testpy_test_fixture_scope
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster import ScyllaClusterManager
+from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_cql_connection_options
 import logging
 import pytest
@@ -158,10 +160,10 @@ def cluster_con(hosts: list[IPAddress | EndPoint], port: int, use_ssl: bool, aut
                    )
 
 
-@pytest.fixture(scope="module")
-async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Test) -> AsyncGenerator[str]:
-    if manager_api := request.config.getoption("--manager-api"):
-        yield manager_api
+@pytest.fixture(scope=testpy_test_fixture_scope)
+async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Test | None) -> AsyncGenerator[str]:
+    if testpy_test is None:
+        yield request.config.getoption("--manager-api")
     else:
         test_uname = testpy_test.uname
         clusters = testpy_test.suite.clusters
@@ -190,7 +192,7 @@ async def manager_api_sock_path(request: pytest.FixtureRequest, testpy_test: Tes
         manager_process.join()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path: str) -> Callable[[], ManagerClient]:
     """Session fixture to prepare client object for communicating with the Cluster API.
        Pass the Unix socket path where the Manager server API is listening.
@@ -218,10 +220,11 @@ async def manager_internal(request: pytest.FixtureRequest, manager_api_sock_path
 async def manager(request: pytest.FixtureRequest,
                   manager_internal: Callable[[], ManagerClient],
                   record_property: Callable[[str, object], None],
-                  testpy_test: Test) -> AsyncGenerator[ManagerClient]:
+                  build_mode: str) -> AsyncGenerator[ManagerClient]:
     """
     Per test fixture to notify Manager client object when tests begin so it can perform checks for cluster state.
     """
+    testpy_test = await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
     test_case_name = request.node.name
     suite_testpy_log = testpy_test.log_filename
     test_log = suite_testpy_log.parent / f"{Path(suite_testpy_log.stem).stem}.{test_case_name}.log"

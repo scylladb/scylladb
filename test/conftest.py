@@ -20,7 +20,7 @@ from test.pylib.report_plugin import ReportPlugin
 from test.pylib.util import get_configured_modes
 from test.pylib.suite.base import (
     TestSuite,
-    find_suite_config,
+    get_testpy_test,
     init_testsuite_globals,
     prepare_dirs,
     start_3rd_party_services,
@@ -108,20 +108,27 @@ def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]
         logger.info("ScyllaDB log file: %s", scylla_log_filename)
 
 
-@pytest.fixture(scope="module")
-async def testpy_testsuite(request: pytest.FixtureRequest, build_mode: str) -> TestSuite:
-    suite_config = find_suite_config(path=request.path)
-    return TestSuite.opt_create(path=str(suite_config.parent), options=request.config.option, mode=build_mode)
+def testpy_test_fixture_scope(fixture_name: str, config: pytest.Config) -> str:
+    """Dynamic scope for fixtures which rely on a current test.py suite/test.
+
+    test.py runs tests file-by-file as separate pytest sessions, so, `session` scope is effectively close to be the
+    same as `module` (can be a difference in the order.)  In case of running tests with bare pytest command, we
+    need to use `module` scope to maintain same behavior as test.py, since we run all tests in one pytest session.
+    """
+    if config.getoption("--test-py-init"):
+        return "module"
+    return "session"
+
+testpy_test_fixture_scope.__test__ = False
 
 
-@pytest.fixture(scope="module")
-async def testpy_test(request: pytest.FixtureRequest, testpy_testsuite: TestSuite) -> Test:
-    # this name modification is done to have the same output as everywhere is used:
-    # suite_name.directory_subdirectory_file
-    # The first directory represents suite, and it deleted since later it added in Test class
-    shortname = "_".join(request.node.nodeid.split('.')[0].split('/')[1:])
-    await testpy_testsuite.add_test(shortname=shortname, casename=None)
-    return testpy_testsuite.tests[-1]  # most recent test added to the test suite; i.e., by the previous line.
+@pytest.fixture(scope=testpy_test_fixture_scope)
+async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test | None:
+    """Create an instance of Test class for the current test.py test."""
+
+    if request.scope == "module":
+        return await get_testpy_test(path=request.path, options=request.config.option, mode=build_mode)
+    return None
 
 
 def pytest_configure(config: pytest.Config) -> None:
