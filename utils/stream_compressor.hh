@@ -57,7 +57,7 @@ struct raw_stream final : public stream_compressor, public stream_decompressor {
 class zstd_dstream final : public stream_decompressor {
     struct ctx_deleter {
         void operator()(ZSTD_DStream* stream) const noexcept {
-            ZSTD_freeDStream(stream);
+            free(stream);
         }
     };
     std::unique_ptr<ZSTD_DStream, ctx_deleter> _ctx;
@@ -76,7 +76,7 @@ public:
 class zstd_cstream final : public stream_compressor {
     struct ctx_deleter {
         void operator()(ZSTD_CStream* stream) const noexcept {
-            ZSTD_freeCStream(stream);
+            free(stream);
         }
     };
     std::unique_ptr<ZSTD_CStream, ctx_deleter> _ctx;
