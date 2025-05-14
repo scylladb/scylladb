@@ -103,12 +103,12 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
     }
 
     if (_properties && _properties->custom_class) {
-        if (!secondary_index::secondary_index_manager::is_custom_class_supported(db.features(), *_properties->custom_class)) {
+
+        auto validator = secondary_index::secondary_index_manager::get_custom_class_factory(*_properties->custom_class);
+        if (!validator) {
             throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *(_properties->custom_class)));
         }
-        
-        //TODO: run custom index class validation once added
-        //See https://github.com/scylladb/vector-store/issues/115
+        (*validator)()->validate(*schema, *_properties, targets, db.features());
     }
 
     if (targets.size() > 1) {

@@ -15,6 +15,7 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/statements/index_target.hh"
+#include "cql3/statements/index_prop_defs.hh"
 
 #include <string_view>
 #include <vector>
@@ -88,6 +89,12 @@ public:
     }
 };
 
+class custom_index {
+public:
+    virtual ~custom_index() = default;
+    virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) = 0;
+};
+
 class secondary_index_manager {
     data_dictionary::table _cf;
     /// The key of the map is the name of the index as stored in system tables.
@@ -102,7 +109,7 @@ public:
     bool is_index(const schema& s) const;
     bool is_global_index(const schema& s) const;
     std::optional<sstring> custom_index_class(const schema& s) const;
-    static bool is_custom_class_supported(const gms::feature_service& fs, const sstring& class_name);
+    static std::optional<std::function<std::unique_ptr<custom_index>()>> get_custom_class_factory(const sstring& class_name);
 private:
     void add_index(const index_metadata& im);
 };
