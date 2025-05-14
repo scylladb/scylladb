@@ -369,4 +369,30 @@ bool secondary_index_manager::is_custom_class_supported(const gms::feature_servi
     return classes.contains(class_name);
 }
 
+void vector_index::validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) {
+    if (targets.size() != 1) {
+        throw exceptions::invalid_request_exception("Vector index can only be created on a single column");
+    }
+
+    auto target = targets[0];
+    auto c_def = schema.get_column_definition(to_bytes(target->column_name()));
+    if (!c_def) {
+        throw exceptions::invalid_request_exception(format("Column {} not found in schema", target->column_name()));
+    }
+    auto type = c_def->type;
+    if (!type->is_vector() || static_cast<const vector_type_impl*>(type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
+        throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
+    }
+
+    for (auto option: properties.get_raw_options()) {
+        if (supported_options.find(option.first) == supported_options.end()) {
+            throw exceptions::invalid_request_exception(format("Unsupported option {} for vector index", option.first));
+        }
+    }
+}
+
+std::shared_ptr<secondary_index::custom_index> vector_index_factory() {
+    return dynamic_pointer_cast<custom_index>(std::make_shared<vector_index>());
+}
+
 }

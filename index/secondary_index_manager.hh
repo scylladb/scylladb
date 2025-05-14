@@ -15,6 +15,7 @@
 
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/statements/index_target.hh"
+#include "cql3/statements/index_prop_defs.hh"
 
 #include <string_view>
 #include <vector>
@@ -87,6 +88,29 @@ public:
         return _target_type;
     }
 };
+
+class custom_index {
+public:
+    virtual ~custom_index() = default;
+    virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) = 0;
+};
+
+class vector_index: public custom_index {
+
+    const std::unordered_set<std::string_view> supported_options = {
+        "similarity_function",
+        "maximum_node_connections",
+        "construction_beam_width",
+        "search_beam_width",
+    };
+
+public:
+    vector_index() = default;
+    ~vector_index() override = default;
+    void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) override;
+};
+
+std::shared_ptr<secondary_index::custom_index> vector_index_factory();
 
 class secondary_index_manager {
     data_dictionary::table _cf;
