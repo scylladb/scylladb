@@ -110,13 +110,13 @@ wrap(Container<interval<T>>&& v) {
 
 inline
 dht::token_range_vector
-unwrap(const std::vector<wrapping_interval<dht::token>>& v) {
+unwrap(const utils::chunked_vector<wrapping_interval<dht::token>>& v) {
     return unwrap(v, dht::token_comparator());
 }
 
 inline
 dht::token_range_vector
-unwrap(std::vector<wrapping_interval<dht::token>>&& v) {
+unwrap(utils::chunked_vector<wrapping_interval<dht::token>>&& v) {
     return unwrap(std::move(v), dht::token_comparator());
 }
 
