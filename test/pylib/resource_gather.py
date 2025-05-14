@@ -69,7 +69,7 @@ class ResourceGather(ABC):
         self.db_path = self.test.suite.log_dir / DEFAULT_DB_NAME
         standardized_name = self.test.shortname.replace("/", "_")
         self.cgroup_path = Path(
-            f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.suite.mode}.{self.test.id}"
+            f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.mode}.{self.test.id}"
         )
         self.logger = logging.getLogger(__name__)
 
