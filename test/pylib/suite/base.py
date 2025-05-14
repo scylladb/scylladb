@@ -590,3 +590,12 @@ def find_suite_config(path: pathlib.Path) -> pathlib.Path:
         if suite_config.exists():
             return suite_config
     raise FileNotFoundError(f"Unable to find a suite config file ({SUITE_CONFIG_FILENAME}) related to {path}")
+
+
+async def get_testpy_test(path: pathlib.Path, options: argparse.Namespace, mode: str) -> Test:
+    """Create an instance of Test class for the path provided."""
+
+    suite_config = find_suite_config(path)
+    suite = TestSuite.opt_create(path=str(suite_config.parent), options=options, mode=mode)
+    await suite.add_test(shortname=str(path.relative_to(suite.suite_path).with_suffix("")), casename=None)
+    return suite.tests[-1]
