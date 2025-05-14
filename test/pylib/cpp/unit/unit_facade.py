@@ -35,7 +35,7 @@ class UnitTestFacade(CppTestFacade):
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         args = [str(executable), *test_args]
         os.chdir(self.temp_dir.parent)
-        p, stderr, stdout = run_process(args, TIMEOUT)
+        p, stdout = run_process(args, TIMEOUT)
 
         if p.returncode != 0:
             msg = (
@@ -43,7 +43,6 @@ class UnitTestFacade(CppTestFacade):
                 'Internal Error: calling {executable} '
                 'for test {test_id} failed (returncode={returncode}):\n'
                 'output:{stdout}\n'
-                'std error:{stderr}\n'
                 'command to repeat:{command}'
             )
             failure = CppTestFailure(
@@ -54,7 +53,6 @@ class UnitTestFacade(CppTestFacade):
                     executable=executable,
                     test_id=test_name,
                     stdout=stdout,
-                    stderr=stderr,
                     command=' '.join(p.args),
                     returncode=p.returncode,
                 ),
