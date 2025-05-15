@@ -35,12 +35,9 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from pytest import Config
-from test import BUILD_DIR, COMBINED_TESTS, TOP_SRC_DIR
+from test import BUILD_DIR, COMBINED_TESTS
 from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
-from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
-
-TIMEOUT_DEBUG = 60 * 30 # seconds
-TIMEOUT = 60 * 15 # seconds
+from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
 
 class BoostTestFacade(CppTestFacade):
     """
@@ -98,11 +95,8 @@ class BoostTestFacade(CppTestFacade):
                     return f.read()
             except IOError:
                 return ''
-
-        timeout = TIMEOUT_DEBUG if mode=='debug' else TIMEOUT
         root_log_dir = self.temp_dir / mode / 'pytest'
         log_xml = root_log_dir / f"{test_name}.log"
-        stdout_file_path = root_log_dir/ f"{test_name}_stdout.log"
         report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
                  '--output_format=XML',
@@ -119,17 +113,14 @@ class BoostTestFacade(CppTestFacade):
         # Tests are written in the way that everything after '--' passes to the test itself rather than to the test framework
         args.append('--')
         args.extend(test_args)
-        os.chdir(TOP_SRC_DIR)
-        p, stdout = run_process(args, timeout)
+        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
 
-        with open(stdout_file_path, 'w') as fd:
-            fd.write(stdout)
         log = read_file(log_xml)
         report = read_file(report_xml)
 
         results = self._parse_log(log=log)
 
-        if p.returncode != 0:
+        if not test_passed:
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
@@ -149,16 +140,16 @@ class BoostTestFacade(CppTestFacade):
                     stdout=stdout_file_path.absolute(),
                     log=log,
                     report=report,
-                    command=' '.join(p.args),
-                    return_code=p.returncode,
+                    command=' '.join(args),
+                    return_code=return_code,
                 ),
             )
-            return [failure], stdout
+            return [failure], ''
 
         if results:
-            return results, stdout
+            return results, ''
 
-        return None, stdout
+        return None, ''
 
     def _parse_log(self, log: str) -> list[CppTestFailure]:
         """

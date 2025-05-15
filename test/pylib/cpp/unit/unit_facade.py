@@ -9,10 +9,7 @@ import os
 from pathlib import Path
 from typing import Sequence
 
-from test import TOP_SRC_DIR
-from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
-
-TIMEOUT = 60 * 10 # seconds
+from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
 
 class UnitTestFacade(CppTestFacade):
 
@@ -35,10 +32,9 @@ class UnitTestFacade(CppTestFacade):
         env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         args = [str(executable), *test_args]
-        os.chdir(TOP_SRC_DIR)
-        p, stdout = run_process(args, TIMEOUT)
+        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
 
-        if p.returncode != 0:
+        if not test_passed:
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
@@ -53,10 +49,10 @@ class UnitTestFacade(CppTestFacade):
                     working_dir=os.getcwd(),
                     executable=executable,
                     test_id=test_name,
-                    stdout=stdout,
-                    command=' '.join(p.args),
-                    returncode=p.returncode,
+                    stdout=stdout_file_path.absolute(),
+                    command=' '.join(args),
+                    returncode=return_code,
                 ),
             )
-            return [failure], stdout
-        return None, stdout
+            return [failure], ''
+        return None, ''
