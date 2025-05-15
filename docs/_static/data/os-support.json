@@ -7,7 +7,7 @@
     },
     "ScyllaDB Versions": [
       {
-        "version": "Enterprise 2025.1",
+        "version": "ScyllaDB 2025.1",
         "supported_OS": {
           "Ubuntu": ["20.04", "22.04", "24.04"],
           "Debian": ["11"],
