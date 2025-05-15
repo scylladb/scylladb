@@ -185,7 +185,7 @@ private:
     seal_immediate_fn_type _seal_immediate_fn;
     std::function<schema_ptr()> _current_schema;
     replica::dirty_memory_manager* _dirty_memory_manager;
-    memtable_table_shared_data _table_shared_data;
+    memtable_table_shared_data& _table_shared_data;
     std::optional<shared_future<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
     replica::table_stats& _table_stats;
