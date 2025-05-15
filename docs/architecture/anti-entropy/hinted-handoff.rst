@@ -98,7 +98,7 @@ Examples:
     $ curl -X GET "http://127.0.0.1:10000/hinted_handoff/sync_point?timeout=-1"
     {"message": "Missing mandatory parameter 'id'", "code": 400}
 
-See also the Hinted Handoff section of the :doc:`API reference </reference/api-reference>`.
+See also the Hinted Handoff section of the :doc:`API reference </reference/api/hinted-handoff>`.
 
 .. note:: If the node is turned off while you are awaiting a sync point on it, you will receive an error as the response. You should try awaiting the sync point again when the node has been turned on again.
 
