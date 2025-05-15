@@ -628,7 +628,7 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
     }
 }
 
-void test_download_data_source(const client_maker_function& client_maker, unsigned chunks) {
+void test_download_data_source(const client_maker_function& client_maker, bool is_chunked, unsigned chunks) {
     const sstring name(fmt::format("/{}/testdatasourceobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
 
     testlog.info("Make client\n");
@@ -650,21 +650,52 @@ void test_download_data_source(const client_maker_function& client_maker, unsign
         out.flush().get();
     }
 
+    auto buffcmp = []<typename LHS, typename RHS>(const LHS& lhs, const RHS& rhs, std::string& status) {
+        status.clear();
+        if (lhs.size() != rhs.size()) {
+            status = "Buffers differ in size.";
+            return false;
+        }
+
+        auto [first, last] = std::mismatch(lhs.begin(), lhs.end(), rhs.begin());
+        if (first != lhs.end() && last != rhs.end()) {
+            std::stringstream stream;
+            stream << "Buffer comparison failed. lhs byte at index " << std::distance(lhs.begin(), first) << " (0x" << std::hex
+                   << static_cast<uint16_t>(static_cast<char>(*first)) << ") is not equal to " << "(0x" << std::hex
+                   << static_cast<uint16_t>(static_cast<char>(*last)) << ")";
+            status = stream.str();
+            return false;
+        }
+
+        return true;
+    };
     testlog.info("Download object");
-    auto in = input_stream<char>(cln->make_download_source(name, {}));
+    auto in = is_chunked ? input_stream<char>(cln->make_chunked_download_source(name, {})) : input_stream<char>(cln->make_download_source(name, {}));
     auto close = seastar::deferred_close(in);
+    std::string status;
     for (unsigned ch = 0; ch < chunks; ch++) {
         auto buf = in.read_exactly(chunk_size).get();
-        BOOST_REQUIRE_EQUAL(memcmp(buf.begin(), rnd.begin(), 1000), 0);
+        auto cmp = buffcmp(buf, rnd, status);
+        BOOST_TEST_CONTEXT(status) {
+            BOOST_REQUIRE_EQUAL(cmp, true);
+        }
     }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_download_data_source_minio) {
-    test_download_data_source(make_minio_client, 128 * 1024);
+    test_download_data_source(make_minio_client, false, 128 * 1024);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_download_data_source_proxy) {
-    test_download_data_source(make_proxy_client, 3 * 1024);
+    test_download_data_source(make_proxy_client, false, 3 * 1024);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_minio) {
+    test_download_data_source(make_minio_client, true, 128 * 1024);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_proxy) {
+    test_download_data_source(make_proxy_client, true, 3 * 1024);
 }
 
 void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {
