@@ -68,7 +68,7 @@ class ResourceGather(ABC):
             self.loop = asyncio.new_event_loop()
             self.own_loop = True
         self.test = test
-        self.db_path = self.test.suite.log_dir.parent / DEFAULT_DB_NAME
+        self.db_path = self.test.suite.log_dir / DEFAULT_DB_NAME
         standardized_name = self.test.shortname.replace("/", "_")
         self.cgroup_path = Path(
             f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.mode}.{self.test.id}"
