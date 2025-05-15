@@ -36,7 +36,7 @@ struct collection_mutation_description {
 
     // Expires cells based on query_time. Expires tombstones based on max_purgeable and gc_before.
     // Removes cells covered by tomb or this->tomb.
-    compact_and_expire_result compact_and_expire(column_id id, row_tombstone tomb, gc_clock::time_point query_time,
+    compact_and_expire_result compact_and_expire(const column_definition& col, row_tombstone tomb, gc_clock::time_point query_time,
         can_gc_fn&, gc_clock::time_point gc_before, compaction_garbage_collector* collector = nullptr);
 
     // Packs the data to a serialized blob.

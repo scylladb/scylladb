@@ -179,7 +179,7 @@ public:
         return ::query::consume_page(std::get<mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
                 partition_limit, query_time).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
             const auto& cstats = _compaction_state->stats();
-            tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead), {} range tombstone(s) and {} cell(s) ({} live, {} dead)",
+            tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead), {} range tombstone(s) and {} cell(s) ({} live, {} live internal, {} dead)",
                     cstats.partitions,
                     cstats.static_rows.total(),
                     cstats.static_rows.live,
@@ -188,8 +188,9 @@ public:
                     cstats.clustering_rows.live,
                     cstats.clustering_rows.dead,
                     cstats.range_tombstones,
-                    cstats.live_cells() + cstats.dead_cells(),
+                    cstats.live_cells() + cstats.live_internal_cells() + cstats.dead_cells(),
                     cstats.live_cells(),
+                    cstats.live_internal_cells(),
                     cstats.dead_cells());
             maybe_log_tombstone_warning(
                     "rows",

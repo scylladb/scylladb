@@ -167,7 +167,7 @@ collection_mutation_view_description::materialize(const abstract_type& type) con
     return m;
 }
 
-compact_and_expire_result collection_mutation_description::compact_and_expire(column_id id, row_tombstone base_tomb, gc_clock::time_point query_time,
+compact_and_expire_result collection_mutation_description::compact_and_expire(const column_definition& col, row_tombstone base_tomb, gc_clock::time_point query_time,
     can_gc_fn& can_gc, gc_clock::time_point gc_before, compaction_garbage_collector* collector)
 {
     compact_and_expire_result res{};
@@ -214,11 +214,15 @@ compact_and_expire_result collection_mutation_description::compact_and_expire(co
             res.dead_cells++;
         } else {
             survivors.emplace_back(std::move(name_and_cell));
-            res.live_cells++;
+            if (col.is_internal()) {
+                res.live_internal_cells++;
+            } else {
+                res.live_cells++;
+            }
         }
     }
     if (collector) {
-        collector->collect(id, collection_mutation_description{purged_tomb, std::move(losers)});
+        collector->collect(col.id, collection_mutation_description{purged_tomb, std::move(losers)});
     }
     cells = std::move(survivors);
     return res;
