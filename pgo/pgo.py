@@ -20,7 +20,6 @@ import logging
 import os
 import pathlib
 import random
-import re
 import shlex
 import shutil
 import signal
@@ -101,32 +100,6 @@ def configure_cpusets():
         CS_CPUSET.set(None)
     config_logger.info(f"Choosing cpusets for nodes: {NODE_CPUSETS.get()}")
     config_logger.info(f"Choosing cpuset for load generators: {CS_CPUSET.get()}")
-
-JAVA_HOME: ContextVar[Optional[str]] = ContextVar('JAVA_HOME')
-
-async def configure_java() -> None:
-    """
-    cassandra-stress can only deal with Java 11
-    """
-    version_output = (await bash("java -version", stderr=asyncio.subprocess.PIPE))[2]
-    assert isinstance(version_output, bytes)
-    version_first_line = version_output.decode().split(sep='\n')[0]
-    config_logger.info(f"First line of java -version: {version_first_line}")
-    version = 11
-    if re.search(rf'version.*{version}\.[0-9]+\.[0-9]+', version_first_line):
-        config_logger.info(f"Default Java version recognized as Java {version}. Proceeding with the default.")
-        JAVA_HOME.set(None)
-        return
-
-    config_logger.info(f"Default Java version is not recognized as Java {version}.")
-    if os.path.exists(java_path := f'/usr/lib/jvm/java-{version}'):
-        config_logger.warning(f"{java_path} found. Choosing it as JAVA_HOME.")
-        JAVA_HOME.set(java_path)
-        return
-
-    error = f"Failed to find a suitable Java version. Java {version} is required."
-    config_logger.error(error)
-    raise RuntimeError(error)
 
 ################################################################################
 # Child process utilities
@@ -534,7 +507,7 @@ async def with_cluster(executable: PathLike, workdir: PathLike, cpusets: Optiona
 
 def cs_command(cmd: list[str], n: int, node: str, cl: str, pop: Optional[str] = None, warmup: bool = False, rate: str = "threads=200", schema: Optional[str] = None) -> list[str]:
     """Strings together a cassandra-stress command from given options."""
-    return (["env", f"JAVA_HOME={JAVA_HOME.get()}"] if JAVA_HOME.get() else []) + [
+    return [
         "cassandra-stress",
         *cmd,
         f"n={n}",
@@ -817,7 +790,6 @@ async def train_full(executable: PathLike, output_profile_file: PathLike, datase
     training_logger.info(f"Starting training of executable {executable}. Exhaustive logs can be found in {LOGDIR.get()}/")
 
     configure_cpusets()
-    await configure_java()
 
     assert executable_exists(executable)
 
