@@ -96,7 +96,7 @@ class BoostTestFacade(CppTestFacade):
                     return f.read()
             except IOError:
                 return ''
-        root_log_dir = self.temp_dir / mode / 'pytest'
+        root_log_dir = self.temp_dir / mode
         log_xml = root_log_dir / f"{test_name}.log"
         report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
@@ -147,6 +147,9 @@ class BoostTestFacade(CppTestFacade):
                 ),
             )
             return [failure], ''
+
+        log_xml.unlink(missing_ok=True)
+        stdout_file_path.unlink(missing_ok=True)
 
         if results:
             return results, ''

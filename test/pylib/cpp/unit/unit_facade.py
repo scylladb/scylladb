@@ -58,4 +58,5 @@ class UnitTestFacade(CppTestFacade):
                 ),
             )
             return [failure], ''
+        stdout_file_path.unlink(missing_ok=True)
         return None, ''
