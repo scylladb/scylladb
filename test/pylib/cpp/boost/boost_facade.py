@@ -74,9 +74,10 @@ class BoostTestFacade(CppTestFacade):
             #     _0*
             #     _1*
             #     _2*
-            # however, it's only possible to run test_singular_tree_ptr_sz that executes all test cases
-            # this line catches only test function name ignoring unrelated lines like '_0'
+            # this line catches only test function name ignoring lines like '_0', so it will count test with dataprovider
+            # as one test case.
             # Note: this ignores any test case starting with a '_' symbol
+            # TODO: add support for test cases with dataprovider
             return False, [case[:-1] for case in output.splitlines() if
                          case.endswith('*') and not case.strip().startswith('_')]
 
@@ -203,6 +204,19 @@ def get_combined_tests(config: Config):
                 current_suite = line.strip().rstrip('*')
                 suites[mode][current_suite] = []
             else:
-                case_name = line.strip().rstrip('*')
-                suites[mode][current_suite].append(case_name)
+                # --list_content produces the list of all test cases in the file. When BOOST_DATA_TEST_CASE is used it
+                # additionally produce the lines with numbers for each case preserving the function name like this:
+                # group0_voter_calculator_test *
+                #     existing_voters_are_kept_across_racks *
+                #     leader_is_retained_as_voter *
+                #         _0 *
+                #         _1 *
+                #         _2 *
+                # this line catches only test function name ignoring lines like '_0', so it will count test with dataprovider
+                # as one test case.
+                # Note: this ignores any test case starting with a '_' symbol
+                # TODO: add support for test cases with dataprovider
+                case_name = line.strip()
+                if not case_name.startswith('_'):
+                    suites[mode][current_suite].append(case_name.rstrip('*'))
     return suites
