@@ -148,18 +148,11 @@ private:
         }
     }
 
-    struct bound_ref {
-        bool exists;
-        bool inclusive;
-        const T* value;
-    };
-
-    bound_ref start_ref() const {
-        return { _start_exists, _start_inclusive, &_start_value.value };
-    }
-
-    bound_ref end_ref() const {
-        return { _end_exists, _end_inclusive, &_end_value.value };
+    std::optional<bound> end_ignoring_singularity() const {
+        std::optional<bound> ret;
+        if (_end_exists) {
+            ret.emplace(_end_value.value, _end_inclusive);
+        }
     }
 
     static bool greater_than_or_equal(end_bound_ref end, start_bound_ref start, IntervalComparatorFor<T> auto&& cmp) {
@@ -304,19 +297,17 @@ public:
     }
     void reverse() {
         if (!_singular) {
-            std::swap(_start_exists, _end_exists);
-            std::swap(_start_inclusive, _end_inclusive);
             if (_start_exists && _end_exists) {
                 std::swap(_start_value.value, _end_value.value);
-            } else if (_start_exists) {
-                // Note: _start_exists is the state after the swap
+            } else if (_end_exists) {
                 std::construct_at(&_start_value.value, std::move(_end_value.value));
                 std::destroy_at(&_end_value.value);
-            } else if (_end_exists) {
-                // Note: _end_exists is the state after the swap
+            } else if (_start_exists) {
                 std::construct_at(&_end_value.value, std::move(_start_value.value));
                 std::destroy_at(&_start_value.value);
             }
+            std::swap(_start_exists, _end_exists);
+            std::swap(_start_inclusive, _end_inclusive);
         }
     }
     const optional<bound>& start() const {
@@ -341,10 +332,10 @@ public:
     // or they're equal and at least one bound is not inclusive.
     // Comparator must define a total ordering on T.
     bool is_wrap_around(IntervalComparatorFor<T> auto&& cmp) const {
-        if (_end_exists && _start_exists) {
-            auto r = cmp(_end_value.value, _start_value.value);
+        if (end_bound().exists && start_bound().exists) {
+            auto r = cmp(*end_bound().value, *start_bound().value);
             return r < 0
-                   || (r == 0 && (!_start_inclusive || !_end_inclusive));
+                   || (r == 0 && (!start_bound().inclusive || !end_bound().inclusive));
         } else {
             return false; // open ended interval or singular interval don't wrap around
         }
@@ -377,13 +368,13 @@ public:
 
         if (this_wraps && other_wraps) {
             return require_ordering_and_on_equal_return(
-                            cmp(start()->value(), other.start()->value()),
+                            cmp(*start_bound().value, *other.start_bound().value),
                             std::strong_ordering::less,
-                            start()->is_inclusive() || !other.start()->is_inclusive())
+                            start_bound().inclusive || !other.start_bound().inclusive)
                 && require_ordering_and_on_equal_return(
-                            cmp(end()->value(), other.end()->value()),
+                            cmp(*end_bound().value, *other.end_bound().value),
                             std::strong_ordering::greater,
-                            end()->is_inclusive() || !other.end()->is_inclusive());
+                            end_bound().inclusive || !other.end_bound().inclusive);
         }
 
         if (!this_wraps && !other_wraps) {
@@ -392,18 +383,18 @@ public:
         }
 
         if (other_wraps) { // && !this_wraps
-            return !start() && !end();
+            return !start_bound().exists && !end_bound().exists;
         }
 
         // !other_wraps && this_wraps
-        return (other.start() && require_ordering_and_on_equal_return(
-                                    cmp(start()->value(), other.start()->value()),
+        return (other.start_bound().exists && require_ordering_and_on_equal_return(
+                                    cmp(*start_bound().value, *other.start_bound().value),
                                     std::strong_ordering::less,
-                                    start()->is_inclusive() || !other.start()->is_inclusive()))
-                || (other.end() && (require_ordering_and_on_equal_return(
-                                        cmp(end()->value(), other.end()->value()),
+                                    start_bound().inclusive || !other.start_bound().inclusive))
+                || (other.end_bound().exists && (require_ordering_and_on_equal_return(
+                                        cmp(*end_bound().value, *other.end_bound.value),
                                         std::strong_ordering::greater,
-                                        end()->is_inclusive() || !other.end()->is_inclusive())));
+                                        end_bound().inclusive || !other.end_bound().inclusive)));
     }
     // Returns intervals which cover all values covered by this interval but not covered by the other interval.
     // Ranges are not overlapping and ordered.
@@ -443,10 +434,10 @@ public:
                 auto tmp = std::move(r1);
                 left.pop_front();
                 if (!greater_than_or_equal(r2.end_bound(), tmp.end_bound(), cmp)) {
-                    left.push_front({bound(r2.end()->value(), !r2.end()->is_inclusive()), tmp.end()});
+                    left.push_front({bound(*r2.end_bound().value, !r2.end_bound().inclusive), tmp.end()});
                 }
                 if (!less_than_or_equal(r2.start_bound(), tmp.start_bound(), cmp)) {
-                    left.push_front({tmp.start(), bound(r2.start()->value(), !r2.start()->is_inclusive())});
+                    left.push_front({tmp.start(), bound(*r2.start_bound().value, !r2.start_bound().inclusive)});
                 }
             }
         }
@@ -470,9 +461,9 @@ public:
     // Comparator must define a total ordering on T.
     std::optional<wrapping_interval<T>> split_after(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
         if (contains(split_point, std::forward<decltype(cmp)>(cmp))
-                && (!end() || cmp(split_point, end()->value()) != 0)) {
+                && (!end_bound().exists || cmp(split_point, *end_bound().value) != 0)) {
             return wrapping_interval(bound(split_point, false), end());
-        } else if (end() && cmp(split_point, end()->value()) >= 0) {
+        } else if (end_bound().exists && cmp(split_point, *end_bound().value) >= 0) {
             // whether to return std::nullopt or the full interval is not
             // well-defined for wraparound intervals; we return nullopt
             // if split_point is after the end.
@@ -492,17 +483,17 @@ public:
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename Transformer, typename U = transformed_type<Transformer>>
     wrapping_interval<U> transform(Transformer&& transformer) && {
-        return wrapping_interval<U>(transform_bound(std::move(_start), transformer), transform_bound(std::move(_end), transformer), _singular);
+        return wrapping_interval<U>(transform_bound(start(), transformer), transform_bound(end_ignoring_singularity(), transformer), _singular);
     }
     template<typename Transformer, typename U = transformed_type<Transformer>>
     wrapping_interval<U> transform(Transformer&& transformer) const & {
-        return wrapping_interval<U>(transform_bound(_start, transformer), transform_bound(_end, transformer), _singular);
+        return wrapping_interval<U>(transform_bound(start(), transformer), transform_bound(end_ignoring_singularity(), transformer), _singular);
     }
     bool equal(const wrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
-        return bool(_start) == bool(other._start)
-               && bool(_end) == bool(other._end)
-               && (!_start || _start->equal(*other._start, cmp))
-               && (!_end || _end->equal(*other._end, cmp))
+        return _start_exists == other._start_exists
+               && _end_exists == other._end_exists
+               && (!_start_exists || _start_value.value.equal(*other._start_value.value, cmp))
+               && (!_end_exists || _end_value.value->equal(*other._end_value.value, cmp))
                && _singular == other._singular;
     }
     bool operator==(const wrapping_interval& other) const {
