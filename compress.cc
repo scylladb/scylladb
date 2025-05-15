@@ -808,7 +808,7 @@ class dictionary_holder : public weakly_referencable<dictionary_holder> {
     std::map<zstd_cdict_id, const zstd_cdict*> _zstd_cdicts;
     std::map<dict_id, const zstd_ddict*> _zstd_ddicts;
     std::map<dict_id, const lz4_cdict*> _lz4_cdicts;
-    std::map<table_id, foreign_ptr<lw_shared_ptr<const raw_dict>>> _recommended;
+    std::map<table_id, lw_shared_ptr<foreign_ptr<lw_shared_ptr<const raw_dict>>>> _recommended;
 
     size_t memory_budget() const {
         return _cfg.memory_fraction_starting_at_which_we_stop_writing_dicts() * seastar::memory::stats().total_memory();
@@ -951,7 +951,7 @@ public:
         if (dict) {
             compressor_factory_logger.debug("set_recommended_dict: table={} size={} id={}",
                 t, dict->raw().size(), fmt_hex(dict->id()));
-            _recommended.emplace(t, std::move(dict));
+            _recommended.emplace(t, make_lw_shared(std::move(dict)));
         } else {
             compressor_factory_logger.debug("set_recommended_dict: table={} size=0", t);
         }
@@ -961,7 +961,10 @@ public:
         if (rec_it == _recommended.end()) {
             co_return nullptr;
         }
-        co_return co_await rec_it->second.copy();
+        // Note that rec_it might be invalidated while we are doing the copy(),
+        // so we have to make a copy of the outer shared ptr first.
+        lw_shared_ptr<foreign_ptr<lw_shared_ptr<const raw_dict>>> ptr = rec_it->second;
+        co_return co_await ptr->copy();
     }
 
     void account_memory_delta(ssize_t n) {
