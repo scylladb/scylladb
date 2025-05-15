@@ -34,6 +34,7 @@ from functools import cache
 from pathlib import Path
 from xml.etree import ElementTree
 
+import allure
 from pytest import Config
 from test import BUILD_DIR, COMBINED_TESTS
 from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
@@ -121,6 +122,7 @@ class BoostTestFacade(CppTestFacade):
         results = self._parse_log(log=log)
 
         if not test_passed:
+            allure.attach(stdout_file_path.read_bytes(), name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '

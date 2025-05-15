@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 from typing import Sequence
 
+import allure
+
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
 
 class UnitTestFacade(CppTestFacade):
@@ -35,6 +37,7 @@ class UnitTestFacade(CppTestFacade):
         test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
 
         if not test_passed:
+            allure.attach(stdout_file_path.read_bytes(), name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
