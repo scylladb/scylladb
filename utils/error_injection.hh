@@ -487,12 +487,18 @@ public:
     }
 
     template <typename T = std::string_view>
-    std::optional<T> inject_parameter(const std::string_view& name) {
+    std::optional<T> inject_parameter(const std::string_view& name, const std::string_view param_name) {
         auto* data = get_data(name);
         if (!data) {
             return std::nullopt;
         }
-        return data->shared_data->template get<T>("value");
+        return data->shared_data->template get<T>(std::string(param_name));
+    }
+
+    template <typename T = std::string_view>
+    [[gnu::always_inline]]
+    std::optional<T> inject_parameter(const std::string_view& name) {
+         return inject_parameter<T>(name, "value");
     }
 
     // \brief Export the value of the parameter with the given name
@@ -636,6 +642,12 @@ public:
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name, waiting_handler_fun func, bool share_messages = true) {
         return make_ready_future<>();
+    }
+
+    template <typename T>
+    [[gnu::always_inline]]
+    std::optional<T> inject_parameter(const std::string_view& name, const std::string_view param_name) {
+        return std::nullopt;
     }
 
     template <typename T>

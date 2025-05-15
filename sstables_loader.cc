@@ -277,8 +277,24 @@ future<> sstable_streamer::stream_sstable_mutations(const dht::partition_range& 
     const auto cf_id = s->id();
     const auto reason = streaming::stream_reason::repair;
 
+<<<<<<< HEAD
     size_t nr_sst_total = _sstables.size();
     size_t nr_sst_current = 0;
+||||||| parent of c77f710a0c (sstables: Fix quadratic space complexity in partitioned_sstable_set)
+    auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, false));
+    size_t estimated_partitions = 0;
+    for (auto& sst : sstables) {
+        estimated_partitions += sst->estimated_keys_for_range(token_range);
+        sst_set->insert(sst);
+    }
+=======
+    auto sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, std::move(token_range)));
+    size_t estimated_partitions = 0;
+    for (auto& sst : sstables) {
+        estimated_partitions += sst->estimated_keys_for_range(token_range);
+        sst_set->insert(sst);
+    }
+>>>>>>> c77f710a0c (sstables: Fix quadratic space complexity in partitioned_sstable_set)
 
         // FIXME: indentation
         auto ops_uuid = streaming::plan_id{utils::make_random_uuid()};

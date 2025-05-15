@@ -1848,7 +1848,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
 }
 
 SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
     auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
     const auto decorated_keys = tests::generate_partition_keys(8, s);
@@ -1877,7 +1877,7 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     };
 
     {
-        sstable_set set = cs.make_sstable_set(s);
+        sstable_set set = env.make_sstable_set(cs, s);
         std::vector<shared_sstable> ssts;
         ssts.push_back(new_sstable(set, 0, 1, 1));
         ssts.push_back(new_sstable(set, 0, 1, 1));
@@ -1897,10 +1897,10 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
     }
 
     {
-        sstable_set set = cs.make_sstable_set(s);
+        sstable_set set = env.make_sstable_set(cs, s);
         std::unordered_map<dht::token, std::unordered_set<shared_sstable>> map;
         std::vector<shared_sstable> ssts;
-        ssts.push_back(new_sstable(set, 0, 1, 0));
+        ssts.push_back(new_sstable(set, 0, 7, 0)); // simulates L0 sstable spanning most of the range.
         ssts.push_back(new_sstable(set, 0, 1, 1));
         ssts.push_back(new_sstable(set, 0, 1, 1));
         ssts.push_back(new_sstable(set, 3, 4, 1));
@@ -1917,20 +1917,18 @@ SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
         check(sel, 6, std::unordered_set<shared_sstable>{ssts[0]});
         check(sel, 7, std::unordered_set<shared_sstable>{ssts[0]});
     }
-
-    return make_ready_future<>();
   });
 }
 
 SEASTAR_TEST_CASE(sstable_set_erase) {
-  return test_env::do_with([] (test_env& env) {
+  return test_env::do_with_async([] (test_env& env) {
     auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
     const auto key = tests::generate_partition_key(s).key();
 
     // check that sstable_set::erase is capable of working properly when a non-existing element is given.
     {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
-        sstable_set set = cs.make_sstable_set(s);
+        sstable_set set = env.make_sstable_set(cs, s);
 
         auto sst = sstable_for_overlapping_test(env, s, key, key, 0);
         set.insert(sst);
@@ -1946,7 +1944,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
 
     {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
-        sstable_set set = cs.make_sstable_set(s);
+        sstable_set set = env.make_sstable_set(cs, s);
 
         // triggers use-after-free, described in #4572, by operating on interval that relies on info of a destroyed sstable object.
         {
@@ -1964,7 +1962,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
 
     {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
-        sstable_set set = cs.make_sstable_set(s);
+        sstable_set set = env.make_sstable_set(cs, s);
 
         auto sst = sstable_for_overlapping_test(env, s, key, key, 0);
         set.insert(sst);
@@ -1975,8 +1973,6 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
         assert_sstable_set_size(set, 1);
         BOOST_REQUIRE(set.all()->contains(sst));
     }
-
-    return make_ready_future<>();
   });
 }
 
@@ -2716,12 +2712,12 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
 }
 
 SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
-    return test_env::do_with([] (test_env& env) {
+    return test_env::do_with_async([] (test_env& env) {
         auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
 
-        lw_shared_ptr<sstables::sstable_set> set1 = make_lw_shared(cs.make_sstable_set(s));
-        lw_shared_ptr<sstables::sstable_set> set2 = make_lw_shared(cs.make_sstable_set(s));
+        lw_shared_ptr<sstables::sstable_set> set1 = make_lw_shared(env.make_sstable_set(cs, s));
+        lw_shared_ptr<sstables::sstable_set> set2 = make_lw_shared(env.make_sstable_set(cs, s));
         lw_shared_ptr<sstables::sstable_set> compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
 
         const auto keys = tests::generate_partition_keys(2, s);
@@ -2745,7 +2741,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
             assert_sstable_set_size(cloned_compound, 3);
         }
 
-        set2 = make_lw_shared(cs.make_sstable_set(s));
+        set2 = make_lw_shared(env.make_sstable_set(cs, s));
         compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
         {
             unsigned found = 0;
@@ -2756,8 +2752,6 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
             BOOST_REQUIRE(compound_size == 1);
             BOOST_REQUIRE(compound_size == found);
         }
-
-        return make_ready_future<>();
     }, test_env_config{ .use_uuid = false });
 }
 
@@ -3129,7 +3123,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
         auto sst = make_sstable_containing(env.make_sstable(s), muts);
 
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
-        sstable_set set = cs.make_sstable_set(s);
+        sstable_set set = env.make_sstable_set(cs, s);
         set.insert(sst);
 
         auto first_key_pr = dht::partition_range::make_singular(sst->get_first_decorated_key());
