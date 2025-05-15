@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <seastar/util/short_streams.hh>
+
 #include "test/lib/log.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/random_schema.hh"
@@ -284,16 +286,41 @@ SEASTAR_THREAD_TEST_CASE(test_mv_index) {
             {view_type::view, view_type::index, view_type::view, view_type::index});
 }
 
-void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_path, const utils::chunked_vector<mutation>& mutations) {
+void check_schema_columns(schema::const_iterator_range_type a, schema::const_iterator_range_type b, bool check_names) {
+    BOOST_REQUIRE_EQUAL(std::ranges::distance(a), std::ranges::distance(b));
+
+    for (const auto& [col_a, col_b] : std::views::zip(a, b)) {
+        if (check_names) {
+            BOOST_REQUIRE_EQUAL(col_a.name(), col_b.name());
+        }
+        // Type instances can be different for collections and user-types, so compare names instead.
+        BOOST_REQUIRE_EQUAL(col_a.type->name(), col_b.type->name());
+    }
+}
+
+void check_schema_columns(const schema& a, const schema& b, bool check_key_column_names) {
+    check_schema_columns(a.columns(column_kind::partition_key), b.columns(column_kind::partition_key), check_key_column_names);
+    check_schema_columns(a.columns(column_kind::clustering_key), b.columns(column_kind::clustering_key), check_key_column_names);
+    check_schema_columns(a.columns(column_kind::static_column), b.columns(column_kind::static_column), true);
+    check_schema_columns(a.columns(column_kind::regular_column), b.columns(column_kind::regular_column), true);
+}
+
+void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_path, const utils::chunked_vector<mutation>& mutations, bool has_scylla_metadata) {
     db::config dbcfg;
 
     auto schema = tools::load_schema_from_sstable(dbcfg, sst_path).get();
+
+    check_schema_columns(*schema, *mutations.front().schema(), has_scylla_metadata);
 
     const auto ed = sstables::parse_path(sst_path, "ks", "tbl");
     const auto dir_path = sst_path.parent_path();
     auto sst = env.make_sstable(schema, dir_path.c_str(), ed.generation, ed.version, ed.format);
 
     sst->load(schema->get_sharder()).get();
+
+    const auto scylla_metadata = sst->get_scylla_metadata();
+    const bool has_schema_metadata = scylla_metadata && scylla_metadata->data.get<sstables::scylla_metadata_type::Schema, sstables::scylla_metadata::sstable_schema>();
+    BOOST_REQUIRE_EQUAL(has_schema_metadata, has_scylla_metadata);
 
     auto rd = assert_that(sst->make_reader(schema, env.make_reader_permit(), query::full_partition_range, schema->full_slice()));
     for (const auto& m : mutations) {
@@ -327,9 +354,39 @@ SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
                 mr.consume_in_thread(std::move(wr));
             }
 
+            const auto sst_path = std::filesystem::path(fmt::to_string(sst->get_filename()));
+
             // Do the check in a separate method to ensure we don't accidentally
             // re-use the original schema.
-            check_sstable_schema(env, std::filesystem::path(fmt::to_string(sst->get_filename())), mutations);
+            check_sstable_schema(env, sst_path, mutations, true);
+
+            // Drop the scylla-metadata to also test the fall-back schema loader from Statistics
+            {
+                // rm Scylla.db
+                const auto scylla_metadata_path = fmt::to_string(sstables::component_name(*sst, component_type::Scylla));
+                remove_file(scylla_metadata_path).get();
+
+                // drop Scylla.db from TOC.txt
+
+                const auto toc_path = fmt::to_string(sstables::component_name(*sst, component_type::TOC));
+                auto toc_file = open_file_dma(toc_path, open_flags::rw).get();
+                auto ifstream = make_file_input_stream(toc_file);
+
+                auto toc = util::read_entire_stream_contiguous(ifstream).get();
+                const char scylla_component_name[] = "Scylla.db\n";
+                const auto scylla_component_name_pos = toc.find(scylla_component_name, 0, strlen(scylla_component_name));
+                BOOST_REQUIRE_NE(scylla_component_name_pos, sstring::npos);
+                toc.replace(scylla_component_name_pos, strlen(scylla_component_name), "", 0);
+
+                toc_file.truncate(0).get();
+
+                auto ofstream = make_file_output_stream(toc_file).get();
+                ofstream.write(toc).get();
+                ofstream.close().get();
+            }
+
+            check_sstable_schema(env, sst_path, mutations, false);
+
         }
     });
 }
