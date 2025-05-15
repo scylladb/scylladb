@@ -27,13 +27,18 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
-import subprocess
 from abc import ABC
 from pathlib import Path
 from typing import Sequence
 
 from pytest import Config
+
+from test import TOP_SRC_DIR
+from test.pylib.cpp.util import make_test_object
+from test.pylib.resource_gather import get_resource_gather
+
+TIMEOUT_DEBUG = 60 * 30 # seconds
+TIMEOUT = 60 * 15 # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,8 @@ class CppTestFailureList(Exception):
 class CppTestFacade(ABC):
     def __init__(self, config: Config, combined_tests: dict[str, list[str]] = None):
         self.temp_dir: Path = Path(config.getoption('tmpdir'))
+        self.run_id: int = config.getoption('run_id') or 1
+        self.gather_metrics: bool = config.getoption('gather_metrics')
         self.combined_suites: dict[str, list[str]] = combined_tests
 
     def list_tests(self, executable: Path , no_parallel: bool, mode: str) -> tuple[bool,list[str]]:
@@ -66,28 +73,23 @@ class CppTestFacade(ABC):
                  test_args: Sequence[str] = (), env: dict = None) -> tuple[Sequence[CppTestFailure] | None, str]:
          raise NotImplementedError
 
+    def run_process(self, test_name: str, mode: str, file_name: Path, args: list[str] = (),
+                    env: dict = None) -> \
+            tuple[bool, Path, int]:
+        root_log_dir = self.temp_dir / mode
+        stdout_file_path = root_log_dir / f"{test_name}_stdout.log"
+        test = make_test_object(test_name, file_name.parent.name, self.run_id, mode, log_dir=self.temp_dir)
 
-def run_process(args: list[str], timeout, env: dict = None) -> tuple[subprocess.Popen[str], str]:
-    args = shlex.split(' '.join(args))
-    if env:
-        env.update(os.environ)
-    else:
-        env = os.environ.copy()
-    p = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-        text=True,
-        env=env,
-    )
-    try:
-        stdout, stderr = p.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        logger.critical(f"Process {args} timed out")
-        stdout = p.stdout.read()
-        p.kill()
-    except KeyboardInterrupt:
-        p.kill()
-        raise
-    return p, stdout
+        resource_gather = get_resource_gather(self.gather_metrics, test=test)
+        resource_gather.make_cgroup()
+        os.chdir(TOP_SRC_DIR)
+        timeout = TIMEOUT_DEBUG if mode == 'debug' else TIMEOUT
+        p, out = resource_gather.run_process(args, timeout, env)
+
+        with open(stdout_file_path, 'w') as fd:
+            fd.write(out)
+        metrics = resource_gather.get_test_metrics()
+        test_passed = p.returncode == 0
+        resource_gather.write_metrics_to_db(metrics, success=test_passed)
+        resource_gather.remove_cgroup()
+        return test_passed, stdout_file_path, p.returncode
