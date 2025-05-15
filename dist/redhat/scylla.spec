@@ -1,4 +1,4 @@
-Name:           %{product}
+Name:           scylla
 Version:        %{version}
 Release:        %{release}
 Summary:        Scylla is a highly scalable, eventually consistent, distributed, partitioned row DB.
@@ -7,12 +7,12 @@ Group:          Applications/Databases
 License:        ScyllaDB-Source-Available-1.0
 URL:            http://www.scylladb.com/
 Source0:        %{reloc_pkg}
-Requires:       %{product}-server = %{version}-%{release}
-Requires:       %{product}-conf = %{version}-%{release}
-Requires:       %{product}-python3 = %{version}-%{release}
-Requires:       %{product}-kernel-conf = %{version}-%{release}
-Requires:       %{product}-node-exporter = %{version}-%{release}
-Requires:       %{product}-cqlsh = %{version}-%{release}
+Requires:       scylla-server = %{version}-%{release}
+Requires:       scylla-conf = %{version}-%{release}
+Requires:       scylla-python3 = %{version}-%{release}
+Requires:       scylla-kernel-conf = %{version}-%{release}
+Requires:       scylla-node-exporter = %{version}-%{release}
+Requires:       scylla-cqlsh = %{version}-%{release}
 Provides:       scylla-enterprise = %{version}-%{release}
 Obsoletes:      scylla-enterprise < 2025.1.0
 
@@ -22,21 +22,16 @@ Obsoletes:      scylla-enterprise < 2025.1.0
 %global __brp_mangle_shebangs %{nil}
 
 %undefine _find_debuginfo_dwz_opts
-
-# Prevent find-debuginfo.sh from tempering with scylla's build-id (#5881)
 %undefine _unique_build_ids
 %global _no_recompute_build_ids 1
-
-# rpm causes missing build-id error on node_exporter, so ignore it
 %undefine _missing_build_ids_terminate_build
 
 %description
 Scylla is a highly scalable, eventually consistent, distributed,
 partitioned row DB.
-This package installs all required packages for ScyllaDB,  including
-%{product}-server, %{product}-node-exporter.
+This package installs all required packages for ScyllaDB, including
+scylla-server, scylla-node-exporter.
 
-# this is needed to prevent python compilation error on CentOS (#2235)
 %if 0%{?rhel}
 %global __os_install_post    \
     /usr/lib/rpm/redhat/brp-compress \
@@ -66,14 +61,14 @@ install_arg="--housekeeping"
 %clean
 rm -rf $RPM_BUILD_ROOT
 
-%package        server
+%package server
 Group:          Applications/Databases
 Summary:        The Scylla database server
-Requires:       %{product}-conf = %{version}-%{release}
-Requires:       %{product}-python3 = %{version}-%{release}
+Requires:       scylla-conf = %{version}-%{release}
+Requires:       scylla-python3 = %{version}-%{release}
 AutoReqProv:    no
-Provides:       %{product}-tools:%{_bindir}/nodetool
-Provides:       %{product}-tools:%{_sysconfigdir}/bash_completion.d/nodetool-completion
+Provides:       scylla-tools:%{_bindir}/nodetool
+Provides:       scylla-tools:%{_sysconfigdir}/bash_completion.d/nodetool-completion
 Provides:       scylla-enterprise-tools:%{_bindir}/nodetool
 Provides:       scylla-enterprise-tools:%{_sysconfigdir}/bash_completion.d/nodetool-completion
 Provides:       scylla-enterprise-server = %{version}-%{release}
@@ -88,7 +83,6 @@ getent passwd scylla || /usr/sbin/useradd -g scylla -s /sbin/nologin -r -d %{_sh
 
 %post server
 /opt/scylladb/scripts/scylla_post_install.sh
-
 if [ $1 -eq 1 ] ; then
     /usr/bin/systemctl preset scylla-server.service ||:
 fi
@@ -103,15 +97,14 @@ fi
 /usr/bin/systemctl daemon-reload ||:
 
 %posttrans server
-if  [ -d /tmp/%{name}-%{version}-%{release} ]; then
-    cp -a /tmp/%{name}-%{version}-%{release}/* /etc/scylla/
-    rm -rf /tmp/%{name}-%{version}-%{release}/
+if [ -d /tmp/scylla-%{version}-%{release} ]; then
+    cp -a /tmp/scylla-%{version}-%{release}/* /etc/scylla/
+    rm -rf /tmp/scylla-%{version}-%{release}/
 fi
 ln -sfT /etc/scylla /var/lib/scylla/conf
 
 %files server
 %defattr(-,root,root)
-
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-server
 %config(noreplace) %{_sysconfdir}/sysconfig/scylla-housekeeping
 %attr(0755,root,root) %dir %{_sysconfdir}/scylla.d
@@ -177,23 +170,19 @@ This package contains the main scylla configuration file.
 %config(noreplace) %{_sysconfdir}/scylla.d/housekeeping.cfg
 %endif
 
-
 %package kernel-conf
 Group:          Applications/Databases
 Summary:        Scylla configuration package for the Linux kernel
 Requires:       kmod
-# tuned overwrites our sysctl settings
 Obsoletes:      tuned >= 2.11.0
 Provides:       scylla-enterprise-kernel-conf = %{version}-%{release}
 Obsoletes:      scylla-enterprise-kernel-conf < 2025.1.0
 
 %description kernel-conf
-This package contains Linux kernel configuration changes for the Scylla database.  Install this package
+This package contains Linux kernel configuration changes for the Scylla database. Install this package
 if Scylla is the main application on your server and you wish to optimize its latency and throughput.
 
 %post kernel-conf
-# We cannot use the sysctl_apply rpm macro because it is not present in 7.0
-# following is a "manual" expansion
 /usr/lib/systemd/systemd-sysctl 99-scylla-vm.conf >/dev/null 2>&1 || :
 /usr/lib/systemd/systemd-sysctl 99-scylla-inotify.conf >/dev/null 2>&1 || :
 /usr/lib/systemd/systemd-sysctl 99-scylla-aio.conf >/dev/null 2>&1 || :
@@ -215,7 +204,6 @@ fi
 %{_unitdir}/scylla-tune-sched.service
 /opt/scylladb/kernel_conf/*
 %ghost /etc/sysctl.d/99-scylla-perfevent.conf
-
 
 %package node-exporter
 Group:          Applications/Databases
@@ -251,6 +239,23 @@ fi
 /opt/scylladb/node_exporter/licenses/NOTICE
 /etc/systemd/system/scylla-node-exporter.service.d/dependencies.conf
 
+# Transitional package for scylla-enterprise
+%package -n scylla-enterprise
+Group:          Applications/Databases
+Summary:        Transitional package for Scylla Enterprise
+Requires:       scylla = %{version}-%{release}
+Provides:       scylla-enterprise = %{version}-%{release}
+Obsoletes:      scylla-enterprise < 2025.1.0
+
+%description -n scylla-enterprise
+This is a transitional package for Scylla Enterprise, depending on the scylla metapackage.
+It can safely be removed after installation.
+
+%files -n scylla-enterprise
+# No files, just a dependency placeholder
+
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>
-- initial version of scylla.spec
+- Initial version of scylla.spec
+* Mon Apr 07 2025 [Your Name] <your.email@example.com>
+- Added scylla-enterprise transitional package
