@@ -204,6 +204,7 @@ def get_combined_tests(config: Config):
                 current_suite = line.strip().rstrip('*')
                 suites[mode][current_suite] = []
             else:
-                case_name = line.strip().rstrip('*')
-                suites[mode][current_suite].append(case_name)
+                case_name = line.strip()
+                if not case_name.startswith('_'):
+                    suites[mode][current_suite].append(case_name.rstrip('*'))
     return suites
