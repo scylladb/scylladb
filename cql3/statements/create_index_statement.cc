@@ -12,6 +12,7 @@
 #include "create_index_statement.hh"
 #include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
+#include "types/types.hh"
 #include "validation.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
@@ -99,6 +100,15 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
     std::vector<::shared_ptr<index_target>> targets;
     for (auto& raw_target : _raw_targets) {
         targets.emplace_back(raw_target->prepare(*schema));
+    }
+
+    if (_properties && _properties->custom_class) {
+        if (!secondary_index::secondary_index_manager::is_custom_class_supported(db.features(), *_properties->custom_class)) {
+            throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *(_properties->custom_class)));
+        }
+        
+        //TODO: run custom index class validation once added
+        //See https://github.com/scylladb/vector-store/issues/115
     }
 
     if (targets.size() > 1) {
@@ -348,9 +358,9 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     }
     index_metadata_kind kind;
     index_options_map index_options;
-    if (_properties->is_custom) {
-        kind = index_metadata_kind::custom;
+    if (_properties->custom_class) {
         index_options = _properties->get_options();
+        kind = index_metadata_kind::custom;
     } else {
         kind = schema->is_compound() ? index_metadata_kind::composites : index_metadata_kind::keys;
     }
