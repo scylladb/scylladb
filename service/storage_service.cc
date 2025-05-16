@@ -7166,11 +7166,7 @@ void storage_service::init_messaging_service() {
             [this] (const rpc::client_info& cinfo, streaming::stream_files_request req) -> future<streaming::stream_files_response> {
         streaming::stream_files_response resp;
         resp.stream_bytes = co_await container().map_reduce0([req] (storage_service& ss) -> future<size_t> {
-            auto res = co_await streaming::tablet_stream_files_handler(ss._db.local(), ss._messaging.local(), req, [&ss] (locator::host_id host) -> future<gms::inet_address> {
-                return ss.container().invoke_on(0, [host] (storage_service& ss) {
-                    return ss.host2ip(host);
-                });
-            });
+            auto res = co_await streaming::tablet_stream_files_handler(ss._db.local(), ss._messaging.local(), req);
             co_return res.stream_bytes;
         },
         size_t(0),
