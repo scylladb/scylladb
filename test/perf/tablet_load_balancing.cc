@@ -81,7 +81,7 @@ sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, in
 static
 size_t get_tablet_count(const tablet_metadata& tm) {
     size_t count = 0;
-    for (auto& [table, tmap] : tm.all_tables()) {
+    for (const auto& [table, tmap] : tm.all_tables_ungrouped()) {
         count += std::accumulate(tmap->tablets().begin(), tmap->tablets().end(), size_t(0),
                                  [] (size_t accumulator, const locator::tablet_info& info) {
                                      return accumulator + info.replicas.size();
