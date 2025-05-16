@@ -2263,7 +2263,8 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         }
         table_id tid = t->schema()->id();
         // Invoke group0 read barrier before obtaining erm pointer so that it sees all prior metadata changes
-        auto dropped = co_await streaming::table_sync_and_check(_db.local(), _mm, tid);
+        auto dropped = !utils::get_local_injector().enter("repair_tablets_no_sync") &&
+            co_await streaming::table_sync_and_check(_db.local(), _mm, tid);
         if (dropped) {
             rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
             continue;

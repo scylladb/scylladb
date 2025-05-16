@@ -864,6 +864,50 @@ async def test_two_tablets_concurrent_repair_and_migration(manager: ManagerClien
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_split_finalization_with_repair(manager: ManagerClient):
+    injection = "handle_tablet_resize_finalization_wait"
+    cfg = {
+        'enable_tablets': True,
+        'error_injections_at_startup': [
+            injection,
+            "repair_tablets_no_sync",
+            'short_tablet_stats_refresh_interval',
+            ]
+        }
+    cmdline = [
+        '--target-tablet-size-in-bytes', '8192',
+    ]
+    servers = await manager.servers_add(2, cmdline=cmdline, config=cfg)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE test WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4};")
+    await cql.run_async("CREATE TABLE test.test (pk int PRIMARY KEY, c int) WITH compaction = {'class': 'NullCompactionStrategy'};")
+
+    read_barrier(manager.api, servers[0].ip_addr)
+
+    log = await manager.server_open_log(servers[0].server_id)
+
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k%3});") for k in range(5000)])
+    await manager.api.keyspace_flush(servers[0].ip_addr, "test", "test")
+    test_table_id = (await cql.run_async("SELECT id FROM system_schema.tables WHERE keyspace_name = 'test' AND table_name = 'test'"))[0].id
+
+    logger.info("Wait for tablets to split")
+    mark = await log.wait_for(f"handle_tablet_resize_finalization: waiting")
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    async def repair():
+        await manager.api.client.post(f"/storage_service/repair_async/test", host=servers[0].ip_addr)
+
+    async def check_repair_waits():
+        await logs[0].wait_for("Topology is busy, waiting for it to quiesce", from_mark=marks[0])
+        await manager.api.message_injection(servers[0].ip_addr, injection)
+
+    await asyncio.gather(repair(), check_repair_waits())
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ManagerClient):
     injection = "repair_writer_impl_create_writer_wait"
     cmdline = [
