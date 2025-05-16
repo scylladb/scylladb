@@ -292,6 +292,9 @@ IF some_column LIKE :pattern
 is an error if `:pattern` is `NULL` on Cassandra, but is accepted by
 Scylla. The result of the pattern match is `FALSE`.
 
+For more details, see:
+- [Lightweight Transactions](../features/lwt.rst)
+- [How does ScyllaDB LWT Differ from Apache Cassandra?](../kb/lwt-differences.rst)
 
 ## REDUCEFUNC for UDA
 
