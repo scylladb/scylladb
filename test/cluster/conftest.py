@@ -55,6 +55,8 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
+    parser.addoption('--skip-internet-dependent-tests', action='store_true',
+                     help='Skip tests which depend on artifacts from the internet')
     parser.addoption('--host', action='store', default='localhost',
                      help='CQL server host to connect to')
     parser.addoption('--port', action='store', default='9042',
