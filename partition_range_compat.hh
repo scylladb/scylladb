@@ -21,9 +21,9 @@ using wrapping_partition_range = wrapping_interval<dht::ring_position>;
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<interval<T>>
+utils::chunked_vector<interval<T>>
 unwrap(std::vector<wrapping_interval<T>>&& v, Comparator&& cmp) {
-    std::vector<interval<T>> ret;
+    utils::chunked_vector<interval<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
@@ -40,9 +40,9 @@ unwrap(std::vector<wrapping_interval<T>>&& v, Comparator&& cmp) {
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
 template <typename T, typename Comparator>
-std::vector<interval<T>>
+utils::chunked_vector<interval<T>>
 unwrap(const std::vector<wrapping_interval<T>>& v, Comparator&& cmp) {
-    std::vector<interval<T>> ret;
+    utils::chunked_vector<interval<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
@@ -58,7 +58,7 @@ unwrap(const std::vector<wrapping_interval<T>>& v, Comparator&& cmp) {
 
 template <typename T>
 std::vector<wrapping_interval<T>>
-wrap(const std::vector<interval<T>>& v) {
+wrap(const utils::chunked_vector<interval<T>>& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_interval<T>>();
@@ -72,7 +72,7 @@ wrap(const std::vector<interval<T>>& v) {
 
 template <typename T>
 std::vector<wrapping_interval<T>>
-wrap(std::vector<interval<T>>&& v) {
+wrap(utils::chunked_vector<interval<T>>&& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_interval<T>>();
