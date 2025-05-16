@@ -10,8 +10,17 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, TabletReplicas
+<<<<<<< HEAD:test/topology_custom/test_tablets2.py
 from test.topology.conftest import skip_mode
 from test.topology.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+||||||| parent of 434c2c4649 (replica: Fix use-after-free with concurrent schema change and sstable set update):test/cluster/test_tablets2.py
+from test.cluster.conftest import skip_mode
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+=======
+from test.cluster.conftest import skip_mode
+from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
+from test.cqlpy.cassandra_tests.validation.entities.secondary_index_test import dotestCreateAndDropIndex
+>>>>>>> 434c2c4649 (replica: Fix use-after-free with concurrent schema change and sstable set update):test/cluster/test_tablets2.py
 
 import pytest
 import asyncio
@@ -1745,3 +1754,111 @@ async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, o
 
     logger.info(f"Running {operation} {ks}.test")
     await cql.run_async(f"{operation} {ks}.test")
+<<<<<<< HEAD:test/topology_custom/test_tablets2.py
+||||||| parent of 434c2c4649 (replica: Fix use-after-free with concurrent schema change and sstable set update):test/cluster/test_tablets2.py
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_truncate_during_topology_change(manager: ManagerClient):
+    """Test truncate operation during topology change."""
+
+    # Start 3 node cluster
+    servers = await manager.servers_add(3, config = { 'enable_tablets': True })
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (k int PRIMARY KEY, v int)")
+
+        logger.info("Populating table")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (k, v) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.QUORUM
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(10000)))
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
+
+        async def truncate_table():
+            await asyncio.sleep(10)
+            logger.info("Executing truncate during bootstrap")
+            await cql.run_async(f"TRUNCATE {ks}.test USING TIMEOUT 1m")
+
+        truncate_task = asyncio.create_task(truncate_table())
+        logger.info("Adding fourth node")
+        new_server = await manager.server_add(config={'error_injections_at_startup': ['delay_bootstrap_120s'], 'enable_tablets': True})
+        await truncate_task
+
+        # Wait for bootstrap completion
+        await wait_for_cql_and_get_hosts(cql, servers + [new_server], time.time() + 60)
+
+        rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test")
+        assert rows[0].count == 0, "Table should be empty after truncation"
+=======
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_truncate_during_topology_change(manager: ManagerClient):
+    """Test truncate operation during topology change."""
+
+    # Start 3 node cluster
+    servers = await manager.servers_add(3, config = { 'enable_tablets': True })
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (k int PRIMARY KEY, v int)")
+
+        logger.info("Populating table")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (k, v) VALUES (?, ?)")
+        stmt.consistency_level = ConsistencyLevel.QUORUM
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(10000)))
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
+
+        async def truncate_table():
+            await asyncio.sleep(10)
+            logger.info("Executing truncate during bootstrap")
+            await cql.run_async(f"TRUNCATE {ks}.test USING TIMEOUT 1m")
+
+        truncate_task = asyncio.create_task(truncate_table())
+        logger.info("Adding fourth node")
+        new_server = await manager.server_add(config={'error_injections_at_startup': ['delay_bootstrap_120s'], 'enable_tablets': True})
+        await truncate_task
+
+        # Wait for bootstrap completion
+        await wait_for_cql_and_get_hosts(cql, servers + [new_server], time.time() + 60)
+
+        rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test")
+        assert rows[0].count == 0, "Table should be empty after truncation"
+
+# Reproducer for https://github.com/scylladb/scylladb/issues/22040.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_concurrent_schema_change_with_compaction_completion(manager: ManagerClient):
+    cmdline = ['--smp=2']
+    servers = [await manager.server_add(cmdline=cmdline)]
+
+    await manager.api.enable_injection(servers[0].ip_addr, "sstable_list_builder_delay", one_shot=False)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        table = f"{ks}.test"
+        await cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int);")
+
+        stop_compaction = False
+        async def background_compaction():
+            while stop_compaction == False:
+                await manager.api.keyspace_compaction(servers[0].ip_addr, ks)
+
+        compaction_task = asyncio.create_task(background_compaction())
+
+        for i in range(5):
+            dotestCreateAndDropIndex(cql, table, "CamelCase", False)
+            dotestCreateAndDropIndex(cql, table, "CamelCase2", True)
+
+        stop_compaction = True
+        await compaction_task
+
+        async def force_minor_compaction():
+            for i in range(4):
+                cql.run_async(f"INSERT INTO {ks}.test (a, b) VALUES (1, 1);")
+                await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        await cql.run_async(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'TimeWindowCompactionStrategy' }};")
+        await force_minor_compaction()
+        await cql.run_async(f"ALTER TABLE {table} WITH compaction = {{ 'class' : 'IncrementalCompactionStrategy' }};")
+        await force_minor_compaction()
+>>>>>>> 434c2c4649 (replica: Fix use-after-free with concurrent schema change and sstable set update):test/cluster/test_tablets2.py
