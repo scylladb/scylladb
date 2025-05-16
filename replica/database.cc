@@ -601,6 +601,9 @@ database::setup_metrics() {
         sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
                        sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
 
+        sm::make_counter("total_writes_rejected_due_to_out_of_space_prevention", _stats->total_writes_rejected_due_to_out_of_space_prevention,
+                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level),
+
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
@@ -732,6 +735,13 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
         } catch (...) {
             dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, std::current_exception());
         }
+    });
+}
+
+future<> database::disable_user_table_writes_on_all_shards(sharded<database>& sharded_db, bool disabled)
+{
+    return sharded_db.invoke_on_all([disabled] (replica::database& db) {
+        db._disable_user_table_writes = disabled;
     });
 }
 
@@ -897,6 +907,14 @@ static bool is_system_table(const schema& s) {
 
 sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
     return get_sstables_manager(system_keyspace(is_system_table(s)));
+}
+
+static bool are_writes_disabled_for_schema(const database& db, const schema& s)
+{
+    // MVs/SIs, CDC Log table (are located in the same keyspace as the associated user table) and audit
+    // are not internal keyspaces in terms of the below statement. So writes to these tables will be rejected
+    // similarly to the user table writes.
+    return db.are_user_table_writes_disabled() && !db.as_data_dictionary().find_keyspace(s.ks_name()).is_internal();
 }
 
 void database::init_schema_commitlog() {
@@ -1850,6 +1868,10 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
+    if (are_writes_disabled_for_schema(*this, *s)) {
+        update_write_metrics_for_rejected_writes();
+        return make_exception_future<mutation>(replica::critical_disk_utilization_exception{});
+    }
   return update_write_metrics(seastar::futurize_invoke([&] {
     if (!s->is_synced()) {
         throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
@@ -2093,13 +2115,24 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
+void database::update_write_metrics_for_rejected_writes() {
+    ++_stats->total_writes;
+    ++_stats->total_writes_failed;
+    ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
+}
+
 future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
+
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
+    }
+    if (are_writes_disabled_for_schema(*this, *s)) {
+        update_write_metrics_for_rejected_writes();
+        return make_exception_future<>(replica::critical_disk_utilization_exception{});
     }
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
@@ -2110,6 +2143,10 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
 future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply hint {}", m.pretty_printer(s));
+    }
+    if (are_writes_disabled_for_schema(*this, *s)) {
+        update_write_metrics_for_rejected_writes();
+        return make_exception_future<>(replica::critical_disk_utilization_exception{});
     }
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
@@ -2434,11 +2471,11 @@ static future<> force_new_commitlog_segments(std::unique_ptr<db::commitlog>& cl1
 
 future<> database::flush_tables_on_all_shards(sharded<database>& sharded_db, std::vector<table_info> tables) {
     /**
-     * #14870 
+     * #14870
      * To ensure tests which use nodetool flush to force data
      * to sstables and do things post this get what they expect,
      * we do an extra call here and below, asking commitlog
-     * to discard the currently active segment, This ensures we get 
+     * to discard the currently active segment, This ensures we get
      * as sstable-ish a universe as we can, as soon as we can.
     */
     if (utils::get_local_injector().enter("flush_tables_on_all_shards_table_drop")) {
@@ -2658,9 +2695,9 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // TODO: indexes.
     // Note: since discard_sstables was changed to only count tables owned by this shard,
     // we can get zero rp back. Changed SCYLLA_ASSERT, and ensure we save at least low_mark.
-    // #6995 - the SCYLLA_ASSERT below was broken in c2c6c71 and remained so for many years. 
+    // #6995 - the SCYLLA_ASSERT below was broken in c2c6c71 and remained so for many years.
     // We nowadays do not flush tables with sstables but autosnapshot=false. This means
-    // the low_mark assertion does not hold, because we maybe/probably never got around to 
+    // the low_mark assertion does not hold, because we maybe/probably never got around to
     // creating the sstables that would create them.
     //
     // What we want to assert is that only data generated until truncation time was included,
