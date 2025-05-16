@@ -100,6 +100,7 @@ class BoostTestFacade(CppTestFacade):
         log_xml = root_log_dir / f"{test_name}.log"
         report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
+                 '--report_level=no',
                  '--output_format=XML',
                  f"--report_sink={report_xml}",
                  f"--log_sink={log_xml}",
