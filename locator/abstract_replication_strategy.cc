@@ -334,7 +334,7 @@ abstract_replication_strategy::get_range_host_ids(const token_metadata& tm) cons
 
 future<dht::token_range_vector>
 abstract_replication_strategy::get_pending_address_ranges(const token_metadata_ptr tmptr, std::unordered_set<token> pending_tokens, locator::host_id pending_address, locator::endpoint_dc_rack dr) const {
-    dht::token_range_vector ret;
+    std::unordered_set<dht::token_range> unique_ranges;
     auto temp = co_await tmptr->clone_only_token_map();
     temp.update_topology(pending_address, std::move(dr));
     co_await temp.update_normal_tokens(pending_tokens, pending_address);
@@ -343,11 +343,11 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
         if (eps.contains(pending_address)) {
             dht::token_range_vector r = temp.get_primary_ranges_for(t);
             rslogger.debug("get_pending_address_ranges: token={} primary_range={} endpoint={}", t, r, pending_address);
-            ret.insert(ret.end(), r.begin(), r.end());
+            unique_ranges.insert(r.begin(), r.end());
         }
     }
     co_await temp.clear_gently();
-    co_return ret;
+    co_return unique_ranges | std::ranges::to<dht::token_range_vector>();
 }
 
 static const auto default_replication_map_key = dht::token::from_int64(0);
