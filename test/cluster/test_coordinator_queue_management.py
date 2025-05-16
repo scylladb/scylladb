@@ -42,10 +42,12 @@ async def test_coordinator_queue_management(manager: ManagerClient):
              asyncio.create_task(manager.remove_node(servers[0].server_id, servers[3].server_id)),
              asyncio.create_task(manager.remove_node(servers[0].server_id, servers[4].server_id, [s3_id]))]
 
-    await wait_for_first_completed([l.wait_for("received request to join from host_id", m) for l, m in zip(logs[:3], marks[:3])])
+    await wait_for_first_completed([
+        l.wait_for("received request to join from host_id", from_mark=m) for l, m in zip(logs[:3], marks[:3])
+    ])
 
-    marks[0] = await logs[0].wait_for("raft_topology - removenode: waiting for completion", marks[0])
-    marks[0] = await logs[0].wait_for("raft_topology - removenode: waiting for completion", marks[0])
+    marks[0], _ = await logs[0].wait_for("raft_topology - removenode: waiting for completion", from_mark=marks[0])
+    marks[0], _ = await logs[0].wait_for("raft_topology - removenode: waiting for completion", from_mark=marks[0])
 
     [await manager.api.message_injection(s.ip_addr, inj) for s in servers[:3]]
 
@@ -62,9 +64,11 @@ async def test_coordinator_queue_management(manager: ManagerClient):
     tasks = [asyncio.create_task(manager.server_start(s.server_id, expected_error="request canceled because some required nodes are dead")),
              asyncio.create_task(manager.decommission_node(servers[1].server_id, expected_error="Decommission failed. See earlier errors"))]
 
-    await wait_for_first_completed([l.wait_for("received request to join from host_id", m) for l, m in zip(logs[:3], marks[:3])])
+    await wait_for_first_completed([
+        l.wait_for("received request to join from host_id", from_mark=m) for l, m in zip(logs[:3], marks[:3])
+    ])
 
-    await logs[1].wait_for("raft_topology - decommission: waiting for completion", marks[1])
+    await logs[1].wait_for("raft_topology - decommission: waiting for completion", from_mark=marks[1])
 
     [await manager.api.message_injection(s.ip_addr, inj) for s in servers[:3]]
 
