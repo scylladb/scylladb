@@ -54,6 +54,10 @@ debian_base_packages=(
     slapd
     ldap-utils
     libcpp-jwt-dev
+    elfutils
+    curl
+    jq
+    git-lfs
 )
 
 fedora_packages=(
@@ -137,6 +141,8 @@ fedora_packages=(
     buildah
 
     https://github.com/scylladb/cassandra-stress/releases/download/v3.17.5/cassandra-stress-3.17.5-1.noarch.rpm
+    elfutils
+    jq
 )
 
 fedora_python3_packages=(
