@@ -252,67 +252,6 @@ public:
     operator T() const { return value; }
 };
 
-using mandatory = bool_class<struct mandatory_tag>;
-
-class req_params {
-public:
-    struct def {
-        std::optional<sstring> value;
-        mandatory is_mandatory = mandatory::no;
-
-        def(std::optional<sstring> value_ = std::nullopt, mandatory is_mandatory_ = mandatory::no)
-            : value(std::move(value_))
-            , is_mandatory(is_mandatory_)
-        { }
-
-        def(mandatory is_mandatory_)
-            : is_mandatory(is_mandatory_)
-        { }
-    };
-
-private:
-    std::unordered_map<sstring, def> params;
-
-public:
-    req_params(std::initializer_list<std::pair<sstring, def>> l) {
-        for (const auto& [name, ent] : l) {
-            add(std::move(name), std::move(ent));
-        }
-    }
-
-    void add(sstring name, def ent) {
-        params.emplace(std::move(name), std::move(ent));
-    }
-
-    void process(const request& req);
-
-    const std::optional<sstring>& get(const char* name) const {
-        return params.at(name).value;
-    }
-
-    template <typename T = sstring>
-    const std::optional<T> get_as(const char* name) const {
-        return get(name);
-    }
-
-    template <typename T = sstring>
-    requires std::same_as<T, bool>
-    const std::optional<bool> get_as(const char* name) const {
-        auto value = get(name);
-        if (!value) {
-            return std::nullopt;
-        }
-        std::transform(value->begin(), value->end(), value->begin(), ::tolower);
-        if (value == "true" || value == "yes" || value == "1") {
-            return true;
-        }
-        if (value == "false" || value == "no" || value == "0") {
-            return false;
-        }
-        throw boost::bad_lexical_cast{};
-    }
-};
-
 httpd::utils_json::estimated_histogram time_to_json_histogram(const utils::time_estimated_histogram& val);
 
 }

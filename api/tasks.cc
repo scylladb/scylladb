@@ -39,15 +39,8 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& snap_ctl) {
     t::force_keyspace_compaction_async.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto params = req_params({
-            std::pair("keyspace", mandatory::yes),
-            std::pair("cf", mandatory::no),
-            std::pair("flush_memtables", mandatory::no),
-        });
-        params.process(*req);
-        auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
-        auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
-        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
+        auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
         apilog.debug("force_keyspace_compaction_async: keyspace={} tables={}, flush={}", keyspace, table_infos, flush);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
