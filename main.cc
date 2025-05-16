@@ -1754,6 +1754,24 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
             };
 
+            debug::the_stream_manager = &stream_manager;
+            checkpoint(stop_signal, "starting streaming service");
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
+            auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
+                // FIXME -- keep the instances alive, just call .stop on them
+                stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
+            });
+
+            checkpoint(stop_signal, "starting streaming manager");
+            stream_manager.invoke_on_all([&stop_signal] (streaming::stream_manager& sm) {
+                return sm.start(stop_signal.as_local_abort_source());
+            }).get();
+
+            api::set_server_stream_manager(ctx, stream_manager).get();
+            auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
+                api::unset_server_stream_manager(ctx).get();
+            });
+
             checkpoint(stop_signal, "initializing storage service");
             debug::the_storage_service = &ss;
             ss.start(std::ref(stop_signal.as_sharded_abort_source()),
@@ -1922,24 +1940,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks), std::ref(group0_client), std::ref(tsm)).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
-            });
-
-            debug::the_stream_manager = &stream_manager;
-            checkpoint(stop_signal, "starting streaming service");
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
-            auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
-                // FIXME -- keep the instances alive, just call .stop on them
-                stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
-            });
-
-            checkpoint(stop_signal, "starting streaming manager");
-            stream_manager.invoke_on_all([&stop_signal] (streaming::stream_manager& sm) {
-                return sm.start(stop_signal.as_local_abort_source());
-            }).get();
-
-            api::set_server_stream_manager(ctx, stream_manager).get();
-            auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
-                api::unset_server_stream_manager(ctx).get();
             });
 
             checkpoint(stop_signal, "starting hinted handoff manager");
