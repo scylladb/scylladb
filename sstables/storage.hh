@@ -95,11 +95,10 @@ class storage {
 public:
     virtual ~storage() {}
 
-    using absolute_path = bool_class<class absolute_path_tag>; // FIXME -- should go away eventually
     using sync_dir = bool_class<struct sync_dir_tag>; // meaningful only to filesystem storage
 
     virtual future<> seal(const sstable& sst) = 0;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen = {}) const = 0;
+    virtual future<> snapshot(const sstable& sst, sstring dir, std::optional<generation_type> gen = {}) const = 0;
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
