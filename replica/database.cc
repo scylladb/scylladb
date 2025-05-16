@@ -397,7 +397,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _view_update_read_concurrency_semaphores_group(
             max_memory_concurrent_view_update_reads(),
             utils::updateable_value<int>(max_count_concurrent_view_update_reads),
-            max_inactive_view_update_queue_length(),
+            std::numeric_limits<size_t>::max(),
             _cfg.view_update_reader_concurrency_semaphore_serialize_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_kill_limit_multiplier,
             _cfg.view_update_reader_concurrency_semaphore_cpu_concurrency,
