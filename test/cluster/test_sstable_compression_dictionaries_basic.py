@@ -74,7 +74,7 @@ async def test_retrain_dict(manager: ManagerClient):
 
     servers = (await manager.servers_add(2, cmdline=[
         *common_debug_cli_options,
-    ]))
+    ], auto_rack_dc="dc1"))
 
     logger.info("Creating table")
     cql = manager.get_cql()
@@ -185,7 +185,7 @@ async def test_estimate_compression_ratios(manager: ManagerClient):
 
     servers = (await manager.servers_add(2, cmdline=[
         *common_debug_cli_options,
-    ]))
+    ], auto_rack_dc="dc1"))
 
     cql = manager.get_cql()
 

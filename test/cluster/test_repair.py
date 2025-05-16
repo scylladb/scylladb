@@ -40,8 +40,7 @@ async def test_enable_compacting_data_for_streaming_and_repair_live_update(manag
     silently broken in the past.
     """
     cmdline = ["--enable-compacting-data-for-streaming-and-repair", "0", "--smp", "1", "--logger-log-level", "api=trace"]
-    node1 = await manager.server_add(cmdline=cmdline)
-    node2 = await manager.server_add(cmdline=cmdline)
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
 
@@ -89,8 +88,7 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
             "--hinted-handoff-enabled", "0",
             "--smp", "1",
             "--logger-log-level", "api=trace:database=trace"]
-    node1 = await manager.server_add(cmdline=cmdline)
-    node2 = await manager.server_add(cmdline=cmdline)
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
 
@@ -149,10 +147,7 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_repair_succeeds_with_unitialized_bm(manager):
-    await manager.server_add()
-    await manager.server_add()
-    servers = await manager.running_servers()
-
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
     cql = manager.get_cql()
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
@@ -171,8 +166,7 @@ async def do_batchlog_flush_in_repair(manager, cache_time_in_ms):
     total_repair_duration = 0
 
     cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(cache_time_in_ms), "--smp", "1", "--logger-log-level", "api=trace"]
-    node1 = await manager.server_add(cmdline=cmdline)
-    node2 = await manager.server_add(cmdline=cmdline)
+    node1, node2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
@@ -226,10 +220,7 @@ async def test_batchlog_flush_in_repair_without_cache(manager):
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_repair_abort(manager):
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
-    await manager.server_add(config=cfg)
-    await manager.server_add(config=cfg)
-    servers = await manager.running_servers()
-
+    servers = await manager.servers_add(2, config=cfg, auto_rack_dc="dc1")
     cql = manager.get_cql()
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
