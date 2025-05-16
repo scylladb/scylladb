@@ -383,8 +383,14 @@ async def test_read_repair_with_trace_logging(request, manager):
     cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace"]
     config = {"read_request_timeout_in_ms": 60000}
 
+<<<<<<< HEAD:test/topology_custom/test_read_repair.py
     for i in range(2):
         await manager.server_add(cmdline=cmdline, config=config)
+||||||| parent of dbb8835fdf (test/cluster: Adjust simple tests to RF-rack-validity):test/cluster/test_read_repair.py
+    [node1, node2] = await manager.servers_add(2, cmdline=cmdline, config=config)
+=======
+    [node1, node2] = await manager.servers_add(2, cmdline=cmdline, config=config, auto_rack_dc="dc1")
+>>>>>>> dbb8835fdf (test/cluster: Adjust simple tests to RF-rack-validity):test/cluster/test_read_repair.py
 
     cql = manager.get_cql()
     srvs = await manager.running_servers()

@@ -18,20 +18,20 @@ from test.topology.util import create_new_test_keyspace
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('zero_token_nodes', [1, 2])
-async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token_nodes: int):
+@pytest.mark.parametrize('rf_rack_valid_keyspaces', [False, True])
+async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token_nodes: int, rf_rack_valid_keyspaces: bool):
     """
     Test the basic functionality of a DC with zero-token nodes:
     - adding zero-token nodes to a new DC succeeds
     - with tablets, ensuring enough replicas for tables depends on the number of token-owners in a DC, not all nodes
     - client requests in the presence of zero-token nodes succeed (also when zero-token nodes coordinate)
     """
-    normal_cfg = {'endpoint_snitch': 'GossipingPropertyFileSnitch'}
-    zero_token_cfg = {'endpoint_snitch': 'GossipingPropertyFileSnitch', 'join_ring': False}
-    property_file_dc1 = {'dc': 'dc1', 'rack': 'rack'}
+    normal_cfg = {'endpoint_snitch': 'GossipingPropertyFileSnitch', 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
+    zero_token_cfg = normal_cfg | {'join_ring': False}
     property_file_dc2 = {'dc': 'dc2', 'rack': 'rack'}
 
     logging.info('Creating dc1 with 2 token-owning nodes')
-    servers = await manager.servers_add(2, config=normal_cfg, property_file=property_file_dc1)
+    servers = await manager.servers_add(2, config=normal_cfg, auto_rack_dc='dc1')
 
     normal_nodes_in_dc2 = 2 - zero_token_nodes
     logging.info(f'Creating dc2 with {normal_nodes_in_dc2} token-owning and {zero_token_nodes} zero-token nodes')
@@ -47,7 +47,17 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
 
     ks_names = list[str]()
     logging.info('Trying to create tables for different replication factors')
-    for rf in range(3):
+
+    # With `rf_rack_valid_keyspaces` set to true, we cannot create a keyspace with RF > #racks.
+    # Because of that, the test will fail not at the stage when a TABLE is created, but when
+    # the KEYSPACE is. We want to avoid that and hence this statement.
+    #
+    # rf_rack_valid_keyspaces == False: We'll attempt to create tables in keyspaces with too few normal token owners.
+    # rf_rack_valid_keyspaces == True:  We'll only create RF-rack-valid keyspaces and so all of the created tables
+    #                                   will have enough normal token owners.
+    rf_range = (normal_nodes_in_dc2 + 1) if rf_rack_valid_keyspaces else 3
+
+    for rf in range(rf_range):
         failed = False
         ks_name = await create_new_test_keyspace(dc2_cql, f"""WITH replication =
                                      {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2, 'dc2': {rf}}}

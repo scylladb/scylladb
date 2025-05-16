@@ -58,10 +58,10 @@ async def test_putget_2dc_with_rf(
     table_name = "test_table_name"
     columns = [Column("name", TextType), Column("value", TextType)]
     logger.info("Create two servers in different DC's")
-    for i in nodes_list:
+    for rack_idx, dc_idx in enumerate(nodes_list):
         s_info = await manager.server_add(
             config=CONFIG,
-            property_file={"dc": f"dc{i}", "rack": "myrack"},
+            property_file={"dc": f"dc{dc_idx}", "rack": f"rack{rack_idx}"},
         )
         logger.info(s_info)
     conn = manager.get_cql()

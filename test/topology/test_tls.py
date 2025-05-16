@@ -13,6 +13,14 @@ import logging
 import pytest
 
 logger = logging.getLogger(__name__)
+<<<<<<< HEAD:test/topology/test_tls.py
+||||||| parent of dbb8835fdf (test/cluster: Adjust simple tests to RF-rack-validity):test/cluster/test_tls.py
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
+=======
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
+>>>>>>> dbb8835fdf (test/cluster: Adjust simple tests to RF-rack-validity):test/cluster/test_tls.py
 
 @pytest.mark.asyncio
 async def test_upgrade_to_ssl(manager: ManagerClient) -> None:
