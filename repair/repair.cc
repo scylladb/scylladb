@@ -2292,11 +2292,15 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         while (true) {
             _repair_module->check_in_shutdown();
             erm = t->get_effective_replication_map();
+            auto local_version = erm->get_token_metadata().get_version();
             const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
-            if (!tmap.has_transitions()) {
+            if (!tmap.has_transitions() && co_await container().invoke_on(0, [local_version] (repair_service& rs) {
+                    // We need to ensure that there is no ongoing global request.
+                    return local_version == rs._tsm.local()._topology.version && !rs._tsm.local()._topology.is_busy();
+                })) {
                 break;
             }
-            rlogger.info("repair[{}] Table {}.{} has tablet transitions, waiting for topology to quiesce", rid.uuid(), keyspace_name, table_name);
+            rlogger.info("repair[{}] Topology is busy, waiting for it to quiesce", rid.uuid());
             erm = nullptr;
             co_await container().invoke_on(0, [] (repair_service& rs) {
                 return rs._tsm.local().await_not_busy();
