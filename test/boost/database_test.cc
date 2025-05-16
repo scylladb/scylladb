@@ -596,9 +596,10 @@ future<> do_with_some_data(std::vector<sstring> cf_names, std::function<future<>
                                                   cf_name))
                         .get();
                     f1.get();
-                    e.get_system_keyspace().local().load_built_views().get();
 
+                    auto f2 = e.local_view_builder().wait_until_built("ks", "index_cf_index");
                     e.execute_cql(seastar::format("CREATE INDEX index_{0} ON {0} (r1);", cf_name)).get();
+                    f2.get();
                 }
             }
 
