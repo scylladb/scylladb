@@ -253,8 +253,8 @@ future<> task_manager::task::impl::finish() noexcept {
         _status.end_time = db_clock::now();
         _status.state = task_manager::task_state::done;
         co_await maybe_fold_into_parent();
-        _done.set_value();
         co_await release_resources();
+        _done.set_value();
     }
 }
 
@@ -264,8 +264,8 @@ future<> task_manager::task::impl::finish_failed(std::exception_ptr ex, std::str
         _status.state = task_manager::task_state::failed;
         _status.error = std::move(error);
         co_await maybe_fold_into_parent();
-        _done.set_exception(ex);
         co_await release_resources();
+        _done.set_exception(ex);
     }
 }
 
