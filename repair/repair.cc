@@ -2269,208 +2269,207 @@ static std::unordered_set<locator::host_id> get_token_owners_in_dcs(std::vector<
 
 // Repair all tablets belong to this node for the given table
 future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> hosts, std::unordered_set<locator::host_id> ignore_nodes, std::optional<int> ranges_parallelism) {
-    // FIXME: fix indentation
     std::exception_ptr ex = nullptr;
     std::set<locator::effective_replication_map_ptr> erms;
     tasks::task_manager::task_ptr task = nullptr;
     shared_ptr<sharded<std::vector<tablet_repair_task_meta>>> task_metas = make_shared<sharded<std::vector<tablet_repair_task_meta>>>();
     co_await task_metas->start();
     try {
-    for (auto& table_name : table_names) {
-        lw_shared_ptr<replica::table> t;
-        try {
-            t = _db.local().find_column_family(keyspace_name, table_name).shared_from_this();
-        } catch (replica::no_such_column_family& e) {
-            rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
-            continue;
-        }
-        if (!t->uses_tablets()) {
-            throw std::runtime_error(format("repair[{}] Table {}.{} is not a tablet table", rid.uuid(), keyspace_name, table_name));
-        }
-        table_id tid = t->schema()->id();
-        // Invoke group0 read barrier before obtaining erm pointer so that it sees all prior metadata changes
-        auto dropped = co_await streaming::table_sync_and_check(_db.local(), _mm, tid);
-        if (dropped) {
-            rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
-            continue;
-        }
-        locator::effective_replication_map_ptr erm;
-        while (true) {
-            _repair_module->check_in_shutdown();
-            erm = t->get_effective_replication_map();
-            const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
-            if (!tmap.has_transitions()) {
-                break;
-            }
-            rlogger.info("repair[{}] Table {}.{} has tablet transitions, waiting for topology to quiesce", rid.uuid(), keyspace_name, table_name);
-            erm = nullptr;
-            co_await container().invoke_on(0, [] (repair_service& rs) {
-                return rs._tsm.local().await_not_busy();
-            });
-            rlogger.info("repair[{}] Topology quiesced", rid.uuid());
-        }
-        auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
-        struct repair_tablet_meta {
-            locator::tablet_id id;
-            dht::token_range range;
-            locator::host_id master_host_id;
-            locator::tablet_replica_set replicas;
-        };
-        sharded<std::vector<repair_tablet_meta>> metas;
-        co_await metas.start();
-        try {
-        auto myhostid = erm->get_token_metadata_ptr()->get_my_id();
-        auto mydc = erm->get_topology().get_datacenter();
-        bool select_primary_ranges_within_dc = false;
-        // If the user specified the ranges option, ignore the primary_replica_only option.
-        // Since the ranges are requested explicitly.
-        if (!ranges_specified.empty()) {
-            primary_replica_only = false;
-        }
-        if (primary_replica_only) {
-            // The logic below follows existing vnode table repair.
-            // When "primary_range" option is on, neither data_centers nor hosts
-            // may be set, except data_centers may contain only local DC (-local)
-            if (data_centers.size() == 1 && data_centers[0] == mydc) {
-                select_primary_ranges_within_dc = true;
-            } else if (data_centers.size() > 0 || hosts.size() > 0) {
-                throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
-            }
-        }
-        if (!hosts.empty()) {
-            if (!hosts.contains(myhostid)) {
-                throw std::runtime_error("The current host must be part of the repair");
-            }
-        }
-        co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
-            auto range = tmap.get_token_range(id);
-            auto& replicas = info.replicas;
-            auto myhostid_ = myhostid;
-
-            if (primary_replica_only) {
-                const auto pr = select_primary_ranges_within_dc ? tmap.get_primary_replica_within_dc(id, erm->get_topology(), mydc) : tmap.get_primary_replica(id);
-                if (pr.host == myhostid_) {
-                    co_await metas.invoke_on(pr.shard, [&] (auto& local_metas) {
-                        local_metas.push_back(repair_tablet_meta{id, range, myhostid_, replicas});
-                    });
-                }
-                co_return;
-            }
-
-            bool found = false;
-            shard_id master_shard_id;
-            // Repair all tablets belong to this node
-            for (auto& r : replicas) {
-                if (r.host == myhostid) {
-                    master_shard_id = r.shard;
-                    found = true;
-                    break;
-                }
-            }
-            if (found) {
-                co_await metas.invoke_on(master_shard_id, [&] (auto& local_metas) {
-                    local_metas.push_back(repair_tablet_meta{id, range, myhostid_, replicas});
-                });
-            }
-            co_return;
-        });
-
-        std::unordered_set<locator::host_id> dc_endpoints = get_token_owners_in_dcs(data_centers, erm);
-        if (!data_centers.empty() && !dc_endpoints.contains(myhostid)) {
-            throw std::runtime_error("The current host must be part of the repair");
-        }
-
-        auto create_tablet_repair_task_metas = [&] (const std::vector<repair_tablet_meta>& metas) -> future<bool> {
-        bool metas_added = false;
-        size_t nr = 0;
-        for (auto& m : metas) {
-            nr++;
-            rlogger.debug("repair[{}] Collect {} out of {} tablets: table={}.{} tablet_id={} range={} replicas={} primary_replica_only={}",
-                rid.uuid(), nr, metas.size(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only);
-            std::vector<locator::host_id> nodes;
-            auto master_shard_id = this_shard_id();
-            auto range = m.range;
-            dht::token_range_vector intersection_ranges;
-            if (!ranges_specified.empty()) {
-                for (auto& r : ranges_specified) {
-                    // When the management tool, e.g., scylla manager, uses
-                    // ranges option to select which ranges to repair for a
-                    // tablet table to schedule repair work, it needs to
-                    // disable tablet migration to make sure the node and token
-                    // range mapping does not change.
-                    //
-                    // If the migration is not disabled, the ranges provided by
-                    // the user might not match exactly with the token range of the
-                    // tablets. We do the intersection of the ranges to repair
-                    // as a best effort.
-                    auto intersection_opt = range.intersection(r, dht::token_comparator());
-                    if (intersection_opt) {
-                        intersection_ranges.push_back(intersection_opt.value());
-                        rlogger.debug("repair[{}] Select tablet table={}.{} tablet_id={} range={} replicas={} primary_replica_only={} ranges_specified={} intersection_ranges={}",
-                            rid.uuid(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only, ranges_specified, intersection_opt.value());
-                    }
-                    co_await coroutine::maybe_yield();
-                }
-            } else {
-                intersection_ranges.push_back(range);
-            }
-            if (intersection_ranges.empty()) {
-                rlogger.debug("repair[{}] Skip tablet table={}.{} tablet_id={} range={} replicas={} primary_replica_only={} ranges_specified={}",
-                    rid.uuid(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only, ranges_specified);
+        for (auto& table_name : table_names) {
+            lw_shared_ptr<replica::table> t;
+            try {
+                t = _db.local().find_column_family(keyspace_name, table_name).shared_from_this();
+            } catch (replica::no_such_column_family& e) {
+                rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
                 continue;
             }
-            std::vector<shard_id> shards;
-            for (auto& r : m.replicas) {
-                auto shard = r.shard;
-                if (r.host != myhostid) {
-                    bool select = data_centers.empty() ? true : dc_endpoints.contains(r.host);
-
-                    if (select && !hosts.empty()) {
-                        select = hosts.contains(r.host);
-                    }
-
-                    if (select && !ignore_nodes.empty()) {
-                        select = !ignore_nodes.contains(r.host);
-                    }
-
-                    if (select) {
-                        rlogger.debug("repair[{}] Repair get neighbors table={}.{} hostid={} shard={} myhostid={}",
-                                rid.uuid(), keyspace_name, table_name, r.host, shard, myhostid);
-                        shards.push_back(shard);
-                        nodes.push_back(r.host);
+            if (!t->uses_tablets()) {
+                throw std::runtime_error(format("repair[{}] Table {}.{} is not a tablet table", rid.uuid(), keyspace_name, table_name));
+            }
+            table_id tid = t->schema()->id();
+            // Invoke group0 read barrier before obtaining erm pointer so that it sees all prior metadata changes
+            auto dropped = co_await streaming::table_sync_and_check(_db.local(), _mm, tid);
+            if (dropped) {
+                rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
+                continue;
+            }
+            locator::effective_replication_map_ptr erm;
+            while (true) {
+                _repair_module->check_in_shutdown();
+                erm = t->get_effective_replication_map();
+                const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+                if (!tmap.has_transitions()) {
+                    break;
+                }
+                rlogger.info("repair[{}] Table {}.{} has tablet transitions, waiting for topology to quiesce", rid.uuid(), keyspace_name, table_name);
+                erm = nullptr;
+                co_await container().invoke_on(0, [] (repair_service& rs) {
+                    return rs._tsm.local().await_not_busy();
+                });
+                rlogger.info("repair[{}] Topology quiesced", rid.uuid());
+            }
+            auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
+            struct repair_tablet_meta {
+                locator::tablet_id id;
+                dht::token_range range;
+                locator::host_id master_host_id;
+                locator::tablet_replica_set replicas;
+            };
+            sharded<std::vector<repair_tablet_meta>> metas;
+            co_await metas.start();
+            try {
+                auto myhostid = erm->get_token_metadata_ptr()->get_my_id();
+                auto mydc = erm->get_topology().get_datacenter();
+                bool select_primary_ranges_within_dc = false;
+                // If the user specified the ranges option, ignore the primary_replica_only option.
+                // Since the ranges are requested explicitly.
+                if (!ranges_specified.empty()) {
+                    primary_replica_only = false;
+                }
+                if (primary_replica_only) {
+                    // The logic below follows existing vnode table repair.
+                    // When "primary_range" option is on, neither data_centers nor hosts
+                    // may be set, except data_centers may contain only local DC (-local)
+                    if (data_centers.size() == 1 && data_centers[0] == mydc) {
+                        select_primary_ranges_within_dc = true;
+                    } else if (data_centers.size() > 0 || hosts.size() > 0) {
+                        throw std::runtime_error("You need to run primary range repair on all nodes in the cluster.");
                     }
                 }
+                if (!hosts.empty()) {
+                    if (!hosts.contains(myhostid)) {
+                        throw std::runtime_error("The current host must be part of the repair");
+                    }
+                }
+                co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+                    auto range = tmap.get_token_range(id);
+                    auto& replicas = info.replicas;
+                    auto myhostid_ = myhostid;
+
+                    if (primary_replica_only) {
+                        const auto pr = select_primary_ranges_within_dc ? tmap.get_primary_replica_within_dc(id, erm->get_topology(), mydc) : tmap.get_primary_replica(id);
+                        if (pr.host == myhostid_) {
+                            co_await metas.invoke_on(pr.shard, [&] (auto& local_metas) {
+                                local_metas.push_back(repair_tablet_meta{id, range, myhostid_, replicas});
+                            });
+                        }
+                        co_return;
+                    }
+
+                    bool found = false;
+                    shard_id master_shard_id;
+                    // Repair all tablets belong to this node
+                    for (auto& r : replicas) {
+                        if (r.host == myhostid) {
+                            master_shard_id = r.shard;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) {
+                        co_await metas.invoke_on(master_shard_id, [&] (auto& local_metas) {
+                            local_metas.push_back(repair_tablet_meta{id, range, myhostid_, replicas});
+                        });
+                    }
+                    co_return;
+                });
+
+                std::unordered_set<locator::host_id> dc_endpoints = get_token_owners_in_dcs(data_centers, erm);
+                if (!data_centers.empty() && !dc_endpoints.contains(myhostid)) {
+                    throw std::runtime_error("The current host must be part of the repair");
+                }
+
+                auto create_tablet_repair_task_metas = [&] (const std::vector<repair_tablet_meta>& metas) -> future<bool> {
+                    bool metas_added = false;
+                    size_t nr = 0;
+                    for (auto& m : metas) {
+                        nr++;
+                        rlogger.debug("repair[{}] Collect {} out of {} tablets: table={}.{} tablet_id={} range={} replicas={} primary_replica_only={}",
+                            rid.uuid(), nr, metas.size(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only);
+                        std::vector<locator::host_id> nodes;
+                        auto master_shard_id = this_shard_id();
+                        auto range = m.range;
+                        dht::token_range_vector intersection_ranges;
+                        if (!ranges_specified.empty()) {
+                            for (auto& r : ranges_specified) {
+                                // When the management tool, e.g., scylla manager, uses
+                                // ranges option to select which ranges to repair for a
+                                // tablet table to schedule repair work, it needs to
+                                // disable tablet migration to make sure the node and token
+                                // range mapping does not change.
+                                //
+                                // If the migration is not disabled, the ranges provided by
+                                // the user might not match exactly with the token range of the
+                                // tablets. We do the intersection of the ranges to repair
+                                // as a best effort.
+                                auto intersection_opt = range.intersection(r, dht::token_comparator());
+                                if (intersection_opt) {
+                                    intersection_ranges.push_back(intersection_opt.value());
+                                    rlogger.debug("repair[{}] Select tablet table={}.{} tablet_id={} range={} replicas={} primary_replica_only={} ranges_specified={} intersection_ranges={}",
+                                        rid.uuid(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only, ranges_specified, intersection_opt.value());
+                                }
+                                co_await coroutine::maybe_yield();
+                            }
+                        } else {
+                            intersection_ranges.push_back(range);
+                        }
+                        if (intersection_ranges.empty()) {
+                            rlogger.debug("repair[{}] Skip tablet table={}.{} tablet_id={} range={} replicas={} primary_replica_only={} ranges_specified={}",
+                                rid.uuid(), keyspace_name, table_name, m.id, m.range, m.replicas, primary_replica_only, ranges_specified);
+                            continue;
+                        }
+                        std::vector<shard_id> shards;
+                        for (auto& r : m.replicas) {
+                            auto shard = r.shard;
+                            if (r.host != myhostid) {
+                                bool select = data_centers.empty() ? true : dc_endpoints.contains(r.host);
+
+                                if (select && !hosts.empty()) {
+                                    select = hosts.contains(r.host);
+                                }
+
+                                if (select && !ignore_nodes.empty()) {
+                                    select = !ignore_nodes.contains(r.host);
+                                }
+
+                                if (select) {
+                                    rlogger.debug("repair[{}] Repair get neighbors table={}.{} hostid={} shard={} myhostid={}",
+                                            rid.uuid(), keyspace_name, table_name, r.host, shard, myhostid);
+                                    shards.push_back(shard);
+                                    nodes.push_back(r.host);
+                                }
+                            }
+                        }
+                        if (!intersection_ranges.empty()) {
+                            metas_added = true;
+                        }
+                        for (auto& r : intersection_ranges) {
+                            rlogger.debug("repair[{}] Repair tablet task table={}.{} master_shard_id={} range={} neighbors={} replicas={}",
+                                    rid.uuid(), keyspace_name, table_name, master_shard_id, r, repair_neighbors(nodes, shards).shard_map, m.replicas);
+                            task_metas->local().push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, r, repair_neighbors(nodes, shards), m.replicas});
+                            co_await coroutine::maybe_yield();
+                        }
+                    }
+                    co_return metas_added;
+                };
+                auto metas_added = co_await metas.map_reduce0([&] (const auto& local_metas) {
+                    return create_tablet_repair_task_metas(local_metas);
+                }, false, std::logical_or<bool>{});
+                if (metas_added) {
+                    erms.emplace(std::move(erm));
+                }
+            } catch (...) {
+                ex = std::current_exception();
             }
-            if (!intersection_ranges.empty()) {
-                metas_added = true;
-            }
-            for (auto& r : intersection_ranges) {
-                rlogger.debug("repair[{}] Repair tablet task table={}.{} master_shard_id={} range={} neighbors={} replicas={}",
-                        rid.uuid(), keyspace_name, table_name, master_shard_id, r, repair_neighbors(nodes, shards).shard_map, m.replicas);
-                task_metas->local().push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, r, repair_neighbors(nodes, shards), m.replicas});
-                co_await coroutine::maybe_yield();
+            co_await metas.stop();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(ex);
             }
         }
-        co_return metas_added;
-        };
-        auto metas_added = co_await metas.map_reduce0([&] (const auto& local_metas) {
-            return create_tablet_repair_task_metas(local_metas);
-        }, false, std::logical_or<bool>{});
-        if (metas_added) {
-            erms.emplace(std::move(erm));
-        }
-        } catch (...) {
-            ex = std::current_exception();
-        }
-        co_await metas.stop();
-        if (ex) {
-            co_await coroutine::return_exception_ptr(ex);
-        }
-    }
-    size_t metas_size = co_await task_metas->map_reduce0([] (const auto& local_metas) { return local_metas.size(); }, 0, std::plus<size_t>());
-    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, rid, keyspace_name, tasks::task_id::create_null_id(), table_names, streaming::stream_reason::repair, task_metas, metas_size, ranges_parallelism, service::default_session_id, std::move(erms));
-    task = co_await _repair_module->make_task(task_impl_ptr, {});
-    task->start();
+        size_t metas_size = co_await task_metas->map_reduce0([] (const auto& local_metas) { return local_metas.size(); }, 0, std::plus<size_t>());
+        auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, rid, keyspace_name, tasks::task_id::create_null_id(), table_names, streaming::stream_reason::repair, task_metas, metas_size, ranges_parallelism, service::default_session_id, std::move(erms));
+        task = co_await _repair_module->make_task(task_impl_ptr, {});
+        task->start();
     } catch (...) {
         ex = std::current_exception();
     }
@@ -2548,25 +2547,25 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     shared_ptr<sharded<std::vector<tablet_repair_task_meta>>> task_metas = make_shared<sharded<std::vector<tablet_repair_task_meta>>>();
     co_await task_metas->start();
     try {
-    co_await task_metas->invoke_on(*master_shard_id, [&] (auto& local_metas) {
-        local_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, range, repair_neighbors(nodes, shards), replicas});
-    });
-    size_t metas_size = 1;
-    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, task_metas, metas_size, ranges_parallelism, topo_guard, std::set<locator::effective_replication_map_ptr>{}, rebuild_replicas.has_value());
-    task_impl_ptr->sched_by_scheduler = true;
-    task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
-    task->start();
-    co_await task->done();
-    auto flush_time = task_impl_ptr->get_flush_time();
-    auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
-    if (delay) {
-        rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
-        co_await seastar::sleep(std::chrono::milliseconds(*delay));
-    }
-    auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
-    rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
-            id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
-    co_return flush_time;
+        co_await task_metas->invoke_on(*master_shard_id, [&] (auto& local_metas) {
+            local_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, range, repair_neighbors(nodes, shards), replicas});
+        });
+        size_t metas_size = 1;
+        auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, task_metas, metas_size, ranges_parallelism, topo_guard, std::set<locator::effective_replication_map_ptr>{}, rebuild_replicas.has_value());
+        task_impl_ptr->sched_by_scheduler = true;
+        task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
+        task->start();
+        co_await task->done();
+        auto flush_time = task_impl_ptr->get_flush_time();
+        auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
+        if (delay) {
+            rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
+            co_await seastar::sleep(std::chrono::milliseconds(*delay));
+        }
+        auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
+        rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
+                id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
+        co_return flush_time;
     } catch (...) {
         ex = std::current_exception();
     }
