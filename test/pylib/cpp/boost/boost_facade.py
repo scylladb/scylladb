@@ -99,10 +99,9 @@ class BoostTestFacade(CppTestFacade):
                 return ''
         root_log_dir = self.temp_dir / mode
         log_xml = root_log_dir / f"{test_name}.log"
-        report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
+                 '--report_level=no',
                  '--output_format=XML',
-                 f"--report_sink={report_xml}",
                  f"--log_sink={log_xml}",
                  '--catch_system_errors=no',
                  '--color_output=false',
@@ -118,7 +117,6 @@ class BoostTestFacade(CppTestFacade):
         test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
 
         log = read_file(log_xml)
-        report = read_file(report_xml)
 
         results = self._parse_log(log=log)
 
@@ -130,7 +128,6 @@ class BoostTestFacade(CppTestFacade):
                 'for test {test_id} failed (return_code={return_code}):\n'
                 'output file:{stdout}\n'
                 'log:{log}\n'
-                'report:{report}\n'
                 'command to repeat:{command}'
             )
             failure = CppTestFailure(
@@ -142,7 +139,6 @@ class BoostTestFacade(CppTestFacade):
                     test_id=test_name,
                     stdout=stdout_file_path.absolute(),
                     log=log,
-                    report=report,
                     command=' '.join(args),
                     return_code=return_code,
                 ),
