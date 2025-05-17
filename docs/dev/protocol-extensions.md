@@ -224,3 +224,15 @@ Having a designated flag gives the ability to skip tablet metadata generation
 
 The feature is identified by the `TABLETS_ROUTING_V1` key, which is meant to be sent
 in the SUPPORTED message.
+
+## Negotiate sending metadata id
+
+This extension allows the driver to inform the database that it is aware of
+`metadata id` and is able to interpret the metadata id information.
+
+Metadata id was originally introduced in CQLv5 to make metadata of prepared statement
+consistent between driver and database. This extension allows to use
+the same mechanism for other protocol versions, such as CQLv4.
+
+The feature is identified by the `SCYLLA_USE_METADATA_ID` key, which is meant to be sent
+in the SUPPORTED message.
