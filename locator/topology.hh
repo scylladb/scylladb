@@ -63,6 +63,7 @@ private:
     state _state;
     shard_id _shard_count = 0;
     bool _excluded = false;
+    bool _drained = false;
 
     // Is this node the `localhost` instance
     this_node _is_this_node;
@@ -134,6 +135,16 @@ public:
 
     void set_excluded(bool excluded) {
         _excluded = excluded;
+    }
+
+    // Drained nodes are about to be decommissioned and tablet scheduler
+    // moves tablet replicas away from them.
+    bool is_drained() const {
+        return _drained;
+    }
+
+    void set_drained(bool drained) {
+        _drained = drained;
     }
 
     bool is_leaving() const noexcept {
