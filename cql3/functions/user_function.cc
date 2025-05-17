@@ -70,7 +70,7 @@ bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
 }
 
 description user_function::describe(with_create_statement with_stmt) const {
-    auto maybe_create_statement = std::invoke([&] -> std::optional<sstring> {
+    auto maybe_create_statement = std::invoke([&] -> std::optional<managed_bytes> {
         if (!with_stmt) {
             return std::nullopt;
         }
@@ -82,7 +82,7 @@ description user_function::describe(with_create_statement with_stmt) const {
                     return seastar::format("{} {}", name, type);
                 });
 
-        return seastar::format("CREATE FUNCTION {}.{}({})\n"
+        sstring create_statement = seastar::format("CREATE FUNCTION {}.{}({})\n"
                 "{} ON NULL INPUT\n"
                 "RETURNS {}\n"
                 "LANGUAGE {}\n"
@@ -92,6 +92,7 @@ description user_function::describe(with_create_statement with_stmt) const {
                 _return_type->cql3_type_name_without_frozen(),
                 _language,
                 _body);
+        return to_managed_bytes(std::move(create_statement));
     });
 
     return description {

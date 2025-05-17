@@ -910,7 +910,7 @@ public:
 
     // Generate ALTER TABLE/MATERIALIZED VIEW statement containing all properties with current values.
     // The method cannot be used on index, as indexes don't support alter statement.
-    std::ostream& describe_alter_with_properties(const schema_describe_helper& helper, std::ostream& os) const;
+    bytes_ostream& describe_alter_with_properties(const schema_describe_helper& helper, bytes_ostream& os) const;
     friend bool operator==(const schema&, const schema&);
     const column_mapping& get_column_mapping() const;
     friend class schema_registry_entry;
@@ -931,9 +931,9 @@ public:
     static table_schema_version calculate_digest(const raw_schema& r);
 private:
     // Print all schema properties in CQL syntax
-    std::ostream& schema_properties(const schema_describe_helper& helper, std::ostream& os) const;
+    bytes_ostream& schema_properties(const schema_describe_helper& helper, bytes_ostream& os) const;
 
-    sstring get_create_statement(const schema_describe_helper& helper, bool with_internals) const;
+    managed_bytes get_create_statement(const schema_describe_helper& helper, bool with_internals) const;
 public:
     const v3_columns& v3() const {
         return _v3_columns;
