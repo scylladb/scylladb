@@ -134,7 +134,7 @@ async def test_reshape_with_tablets(manager: ManagerClient):
         await manager.server_restart(server.server_id)
         await reconnect_driver(manager)
 
-        await log.wait_for(f"Reshape {ks}.test .* Reshaped 32 sstables to .*", mark, 30)
+        await log.wait_for(f"Reshape {ks}.test .* Reshaped 32 sstables to .*", from_mark=mark, timeout=30)
         sstable_info = await manager.api.get_sstable_info(server.ip_addr, ks, "test")
         assert len(sstable_info[0]['sstables']) == number_of_tablets
 
@@ -1052,7 +1052,7 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     # Wait for splits to finalise; they don't execute yet as they are prevented by the error injection
     logger.info("Wait for tablets to split")
     log = await manager.server_open_log(servers[0].server_id)
-    mark = await log.wait_for(f"Finalizing resize decision for table {test_table_id} as all replicas agree on sequence number 1")
+    await log.wait_for(f"Finalizing resize decision for table {test_table_id} as all replicas agree on sequence number 1")
 
     logger.info("Create and populate `blocker` table")
     await cql.run_async("CREATE TABLE test.blocker (pk int PRIMARY KEY, c int);")
@@ -1075,18 +1075,18 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
 
     logger.info("Re-enable tablet balancing; it should be blocked by pending split finalization")
     await manager.api.enable_tablet_balancing(servers[0].ip_addr)
-    mark = await log.wait_for("Setting tablet balancing to true")
+    mark, _ = await log.wait_for("Setting tablet balancing to true")
 
     logger.info("Unblock resize finalisation and verify that the finalisation is preferred over migrations")
     await manager.api.disable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone")
-    split_finalization_mark = await log.wait_for("Finished tablet split finalization", mark)
+    split_finalization_mark, _ = await log.wait_for("Finished tablet split finalization", from_mark=mark)
     for table_id in [test_table_id, blocker_table_id]:
-        migration_mark = await log.wait_for(f"Will set tablet {table_id}:\\d+ stage to write_both_read_old", mark)
+        migration_mark, _ = await log.wait_for(f"Will set tablet {table_id}:\\d+ stage to write_both_read_old", from_mark=mark)
         assert split_finalization_mark < migration_mark, f"Tablet migration of {table_id} was scheduled before resize finalization"
 
     # ensure all migrations complete
     logger.info("Waiting for migrations to complete")
-    await log.wait_for("Tablet load balancer did not make any plan", migration_mark)
+    await log.wait_for("Tablet load balancer did not make any plan", from_mark=migration_mark)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')

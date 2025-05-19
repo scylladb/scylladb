@@ -120,7 +120,7 @@ async def test_random_failures(manager: ManagerClient,
         coordinator_log_mark = await coordinator_log.mark()
         s_info = await manager.server_add(config=rf_rack_cfg, expected_server_up_state=ServerUpState.PROCESS_STARTED)
         await coordinator_log.wait_for(
-            pattern="topology_coordinator_pause_after_updating_cdc_generation: waiting",
+            "topology_coordinator_pause_after_updating_cdc_generation: waiting",
             from_mark=coordinator_log_mark,
         )
         await manager.server_pause(server_id=s_info.server_id)

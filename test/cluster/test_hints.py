@@ -316,7 +316,7 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     s1_log = await manager.server_open_log(s1.server_id)
 
     # Make sure the node still knows about the decommissioned node and does start draining for it.
-    await s1_log.wait_for(f"Draining starts for {host_id2}", s1_mark)
+    await s1_log.wait_for(f"Draining starts for {host_id2}", from_mark=s1_mark)
 
     # Make sure draining finishes successfully.
     assert await_sync_point(s1, sync_point, 60)
