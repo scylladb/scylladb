@@ -77,6 +77,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
+            .with_column("base_table", uuid_type, column_kind::static_column)
             .with_hash_version()
             .build();
 }
@@ -125,9 +126,17 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         data_value(id.uuid()).serialize_nonnull()
     ));
     m.partition().apply(tombstone(tombstone_ts, gc_now));
-    m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
     m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
+
+    if (auto base_table = tablets.base_table()) {
+        m.set_static_cell("base_table", data_value(base_table->uuid()), ts);
+        // Don't store the rest of the information when we have a base table.
+        // It should be read from the base table map.
+        co_return std::move(m);
+    }
+
+    m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
     m.set_static_cell("resize_type", data_value(tablets.resize_decision().type_name()), ts);
     m.set_static_cell("resize_seq_number", data_value(int64_t(tablets.resize_decision().sequence_number)), ts);
     if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
@@ -294,6 +303,19 @@ tablet_mutation_builder::del_resize_task_info(const gms::feature_service& featur
     return *this;
 }
 
+tablet_mutation_builder&
+tablet_mutation_builder::set_base_table(table_id base_table) {
+    _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::del_base_table() {
+    auto col = _s->get_column_definition("base_table");
+    _m.set_static_cell(*col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    return *this;
+}
+
 mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     auto s = db::system_keyspace::tablets();
     mutation m(s, partition_key::from_single_value(*s,
@@ -361,8 +383,8 @@ locator::repair_scheduler_config deserialize_repair_scheduler_config(cql3::untyp
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
     tablet_logger.trace("Saving tablet metadata: {}", tm);
     std::vector<mutation> muts;
-    muts.reserve(tm.all_tables().size());
-    for (auto&& [id, tablets] : tm.all_tables()) {
+    muts.reserve(tm.all_tables_raw().size());
+    for (auto&& [id, tablets] : tm.all_tables_raw()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         auto s = db.find_schema(id);
         muts.emplace_back(
@@ -576,7 +598,7 @@ struct tablet_metadata_builder {
     struct active_tablet_map {
         table_id table;
         tablet_map map;
-        tablet_id tid;
+        std::optional<tablet_id> tid;
     };
     std::optional<active_tablet_map> current;
 
@@ -587,9 +609,15 @@ struct tablet_metadata_builder {
             if (current) {
                 tm.set_tablet_map(current->table, std::move(current->map));
             }
-            auto tablet_count = row.get_as<int>("tablet_count");
-            auto tmap = tablet_map(tablet_count);
-            current = active_tablet_map{table, tmap, tmap.first_tablet()};
+            if (row.has("base_table")) {
+                auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
+                auto tmap = tablet_map(base_table);
+                current = active_tablet_map{table, tmap, std::nullopt};
+            } else {
+                auto tablet_count = row.get_as<int>("tablet_count");
+                auto tmap = tablet_map(tablet_count);
+                current = active_tablet_map{table, tmap, tmap.first_tablet()};
+            }
 
             // Resize decision fields are static columns, so set them only once per table.
             if (row.has("resize_type") && row.has("resize_seq_number")) {
@@ -609,7 +637,9 @@ struct tablet_metadata_builder {
             }
         }
 
-        current->tid = process_one_row(db, current->table, current->map, current->tid, row);
+        if (row.has("last_token")) {
+            current->tid = process_one_row(db, current->table, current->map, *current->tid, row);
+        }
     }
 
     void on_end_of_stream() {
@@ -854,7 +884,20 @@ lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr s, const
     return tablet_sstable_set::make(std::move(s), sgm, tmap);
 }
 
+future<std::optional<table_id>> read_base_table(cql3::query_processor& qp, table_id tid) {
+    auto rs = co_await qp.execute_internal("select * from system.tablets where table_id = ?",
+            {tid.uuid()}, cql3::query_processor::cache_internal::no);
+    if (rs->empty() || !rs->front().has("base_table")) {
+        co_return std::nullopt;
+    }
+
+    co_return table_id(rs->front().get_as<utils::UUID>("base_table"));
+}
+
 future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token) {
+    if (auto base_table = co_await read_base_table(qp, tid)) {
+        tid = *base_table;
+    }
     auto rs = co_await qp.execute_internal("select stage from system.tablets where table_id = ? and last_token = ?",
             {tid.uuid(), dht::token::to_int64(last_token)}, cql3::query_processor::cache_internal::no);
     if (rs->empty() || !rs->one().has("stage")) {
