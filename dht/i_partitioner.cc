@@ -535,6 +535,30 @@ auto_refreshing_sharder::token_for_next_shard_for_reads(const dht::token& t, sha
     return _sharder->token_for_next_shard_for_reads(t, shard, spans);
 }
 
+double overlap_ratio(const dht::token_range& base, const dht::token_range& other) {
+    auto bound_range = [] (const token_range& tr) {
+        auto full_range = dht::token_range::make(first_token(), last_token());
+        return full_range.intersection(tr, token_comparator());
+    };
+    auto bounded_base = bound_range(base);
+    auto bounded_other = bound_range(other);
+    if (!bounded_base || !bounded_other) {
+        return 0.0;
+    }
+
+    // intersection of two bounded intervals should never yield an interval with unbounded range.
+    auto intersection = bounded_base->intersection(*bounded_other, token_comparator());
+    if (!intersection) {
+        return 0.0;
+    }
+    auto size_of_bounded_range = [] (const token_range& tr) {
+        // uses unbiased token (uint64_t) to avoid overflow when calculating size
+        return tr.end()->value().unbias() - tr.start()->value().unbias();
+    };
+
+    return double(size_of_bounded_range(*intersection)) / size_of_bounded_range(*bounded_base);
+}
+
 }
 
 auto fmt::formatter<dht::ring_position_view>::format(const dht::ring_position_view& pos, fmt::format_context& ctx) const
