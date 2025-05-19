@@ -1042,6 +1042,12 @@ void view_updates::update_entry(data_dictionary::database db, const partition_ke
     auto view_rows = get_view_rows(base_key, update, std::nullopt, {});
 
     const auto kind = update.column_kind();
+
+    // We can skip if the diff is empty, when both update and existing are not tomb.
+    if (update.cells().difference(*_base, kind, existing.cells()).empty()) {
+        return;
+    }
+
     for (const auto& [r, action] : view_rows) {
         if (auto rm = std::get_if<row_marker>(&action)) {
             r->apply(*rm);
