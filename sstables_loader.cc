@@ -548,8 +548,8 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
         throw std::runtime_error("Skipping cleanup is not possible when doing load-and-stream");
     }
 
-    llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}",
-            ks_name, cf_name, load_and_stream_desc, primary_replica_only);
+    llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, skip_cleanup={}",
+            ks_name, cf_name, load_and_stream_desc, primary_replica_only, skip_cleanup);
     try {
         if (load_and_stream) {
             ::table_id table_id;
