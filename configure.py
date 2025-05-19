@@ -274,8 +274,8 @@ def generate_compdb(compdb, ninja, buildfile, modes):
             mode_out = outdir + '/' + mode
             submodule_compdbs = [mode_out + '/' + submodule + '/' + compdb for submodule in ['seastar', 'abseil']]
             with open(mode_out + '/' + compdb, 'w+b') as combined_mode_specific_compdb:
-                subprocess.run(['./scripts/merge-compdb.py', outdir + '/' + mode,
-                                ninja_compdb.name] + submodule_compdbs, stdout=combined_mode_specific_compdb)
+                subprocess.run(['./scripts/merge-compdb.py', ninja_compdb.name + ':' + mode_out] + submodule_compdbs, 
+                               stdout=combined_mode_specific_compdb)
 
     # sort modes by supposed indexing speed
     for mode in ['dev', 'debug', 'release', 'sanitize']:
@@ -2846,13 +2846,7 @@ def generate_compdb_for_cmake_build(source_dir, build_dir):
     assert seastar_compdb_path, "Seasetar's building system is not configured yet."
     # if the file exists, just overwrite it so we can keep it updated
     with open(os.path.join(source_dir, compdb), 'w+b') as merged_compdb:
-        # "merge-compdb.py" considers all object files under the "--prefix"
-        # directory as relevant. Since CMake generates .o files in
-        # "CMakeFiles" directories, we preserve the compilation rules for
-        # these generated files.
-        prefix = ""
         subprocess.run([os.path.join(source_dir, 'scripts/merge-compdb.py'),
-                        prefix,
                         scylla_compdb_path,
                         seastar_compdb_path],
                        stdout=merged_compdb,
