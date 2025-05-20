@@ -265,6 +265,12 @@ static int32_t paxos_ttl_sec(const schema& s) {
     return std::chrono::duration_cast<std::chrono::seconds>(s.paxos_grace_seconds()).count();
 }
 
+static sstring paxos_state_cf_filter(const schema& s, const schema& state_schema) {
+    return state_schema.cf_name() == db::system_keyspace::PAXOS
+        ? format(" AND cf_id = {}", s.id().uuid())
+        : sstring();
+}
+
 paxos_store::paxos_store(db::system_keyspace& sys_ks)
 : _sys_ks(sys_ks)
 {
@@ -302,13 +308,20 @@ future<column_mapping> paxos_store::get_column_mapping(table_id table_id, table_
     return service::get_column_mapping(_sys_ks, table_id, version);
 }
 
+future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const {
+    co_return db::system_keyspace::paxos();
+}
+
 future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
     db::timeout_clock::time_point timeout)
 {
-    static auto cql = format("SELECT * FROM system.{} WHERE row_key = ? AND cf_id = ?", db::system_keyspace::PAXOS);
+    const auto state_schema = co_await get_paxos_state_schema(*s, timeout);
+    const auto cql = format("SELECT * FROM {}.{} WHERE row_key = ?{}", 
+        state_schema->ks_name(), state_schema->cf_name(), 
+        paxos_state_cf_filter(*s, *state_schema));
     // FIXME: we need execute_cql_with_now()
     (void)now;
-    const auto results = co_await execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()), s->id().uuid());
+    const auto results = co_await execute_cql_with_timeout(cql, timeout, to_legacy(*key.get_compound_type(*s), key.representation()));
     if (results->empty()) {
         co_return service::paxos::paxos_state();
     }
@@ -337,19 +350,24 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
 }
 
 future<> paxos_store::save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
-    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ? AND cf_id = ?", db::system_keyspace::PAXOS);
+    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
+    const auto cql = format("UPDATE {}.{} USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ?{}",
+        state_schema->ks_name(), state_schema->cf_name(), 
+        paxos_state_cf_filter(s, *state_schema));
     co_return co_await execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
             paxos_ttl_sec(s),
             ballot,
-            to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id().uuid()
+            to_legacy(*key.get_compound_type(s), key.representation())
         ).discard_result();
 }
 
 future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& proposal, db::timeout_clock::time_point timeout) {
-    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ? AND cf_id = ?", db::system_keyspace::PAXOS);
+    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
+    const auto cql = format("UPDATE {}.{} USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ?{}", 
+        state_schema->ks_name(), state_schema->cf_name(), 
+        paxos_state_cf_filter(s, *state_schema));
     partition_key_view key = proposal.update.key();
     co_return co_await execute_cql_with_timeout(cql,
             timeout,
@@ -358,20 +376,23 @@ future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& propo
             proposal.ballot,
             proposal.ballot,
             ser::serialize_to_buffer<bytes>(proposal.update),
-            to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id().uuid()
+            to_legacy(*key.get_compound_type(s), key.representation())
         ).discard_result();
 }
 
 future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decision, db::timeout_clock::time_point timeout) {
+    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
+
     // We always erase the last proposal when we learn about a new Paxos decision. The ballot
     // timestamp of the decision is used for entire mutation, so if the "erased" proposal is more
     // recent it will naturally stay on top.
     // Erasing the last proposal is just an optimization and does not affect correctness:
     // sp::begin_and_repair_paxos will exclude an accepted proposal if it is older than the most
     // recent commit.
-    static auto cql = format("UPDATE system.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null,"
-            " most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ? AND cf_id = ?", db::system_keyspace::PAXOS);
+    const auto cql = format("UPDATE {}.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null,"
+            " most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ?{}",
+        state_schema->ks_name(), state_schema->cf_name(), 
+        paxos_state_cf_filter(s, *state_schema));
     partition_key_view key = decision.update.key();
     co_return co_await execute_cql_with_timeout(cql,
             timeout,
@@ -379,22 +400,24 @@ future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decis
             paxos_ttl_sec(s),
             decision.ballot,
             ser::serialize_to_buffer<bytes>(decision.update),
-            to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id().uuid()
+            to_legacy(*key.get_compound_type(s), key.representation())
         ).discard_result();
 }
 
 future<> paxos_store::delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
+    const auto state_schema = co_await get_paxos_state_schema(s, timeout);
+
     // This should be called only if a learn stage succeeded on all replicas.
     // In this case we can remove learned paxos value using ballot's timestamp which
     // guarantees that if there is more recent round it will not be affected.
-    static auto cql = format("DELETE most_recent_commit FROM system.{} USING TIMESTAMP ?  WHERE row_key = ? AND cf_id = ?", db::system_keyspace::PAXOS);
+    const auto cql = format("DELETE most_recent_commit FROM {}.{} USING TIMESTAMP ? WHERE row_key = ?{}",
+        state_schema->ks_name(), state_schema->cf_name(), 
+        paxos_state_cf_filter(s, *state_schema));
 
     co_return co_await execute_cql_with_timeout(cql,
             timeout,
             utils::UUID_gen::micros_timestamp(ballot),
-            to_legacy(*key.get_compound_type(s), key.representation()),
-            s.id().uuid()
+            to_legacy(*key.get_compound_type(s), key.representation())
         ).discard_result();
 }
 
