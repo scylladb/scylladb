@@ -128,7 +128,7 @@ public:
     future<> save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
     future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout);
     future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout);
-    future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
+    future<> delete_paxos_decision(const schema& s, const partition_key& key, utils::UUID ballot, db::timeout_clock::time_point timeout);
 };
 
 } // end of namespace "service::paxos"
