@@ -1119,7 +1119,7 @@ SEASTAR_TEST_CASE(test_user_function_filtering) {
         // Expect error until UDFs can be used for filtering.
         // See #5607
         BOOST_REQUIRE_EXCEPTION(e.execute_cql("SELECT val FROM my_table WHERE my_func(val) > 10;").get(),
-                                exceptions::syntax_exception, message_equals("line 1:31 no viable alternative at input 'my_func'"));
+                                exceptions::syntax_exception, message_equals("line 1:38 no viable alternative at input '('"));
 
         // Reproduce #7977 and verify the internal error exception
         e.execute_cql("CREATE FUNCTION minutesAgo(ago int, now bigint) \

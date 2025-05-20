@@ -478,6 +478,7 @@ countArgument
                 } }
     ;
 
+// TODO: rename whereClause to conditionalExpressions
 whereClause returns [uexpression clause]
     @init { std::vector<expression> terms; }
     : e1=relation { terms.push_back(std::move(e1)); } (K_AND en=relation { terms.push_back(std::move(en)); })*
@@ -507,6 +508,7 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
         auto attrs = std::make_unique<cql3::attributes::raw>();
         std::vector<::shared_ptr<cql3::column_identifier::raw>> column_names;
         std::vector<expression> values;
+        std::optional<expression> cond_opt;
         bool if_not_exists = false;
         bool default_unset = false;
         std::optional<expression> json_value;
@@ -515,24 +517,26 @@ insertStatement returns [std::unique_ptr<raw::modification_statement> expr]
         ('(' c1=cident { column_names.push_back(c1); }  ( ',' cn=cident { column_names.push_back(cn); } )* ')'
             K_VALUES
             '(' v1=term { values.push_back(std::move(v1)); } ( ',' vn=term { values.push_back(std::move(vn)); } )* ')'
-            ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+            ( K_IF (K_NOT K_EXISTS { if_not_exists = true; } | conditions=whereClause { cond_opt = std::move(conditions); } ))?
             ( usingClause[attrs] )?
               {
               $expr = std::make_unique<raw::insert_statement>(std::move(cf),
                                                        std::move(attrs),
                                                        std::move(column_names),
                                                        std::move(values),
+                                                       std::move(cond_opt),
                                                        if_not_exists);
               }
         | K_JSON
           json_token=jsonValue { json_value = std::move(json_token); }
             ( K_DEFAULT K_UNSET { default_unset = true; } | K_DEFAULT K_NULL )?
-            ( K_IF K_NOT K_EXISTS { if_not_exists = true; } )?
+            ( K_IF (K_NOT K_EXISTS { if_not_exists = true; } | conditions=whereClause { cond_opt = std::move(conditions); } ))?
             ( usingClause[attrs] )?
               {
               $expr = std::make_unique<raw::insert_json_statement>(std::move(cf),
                                                        std::move(attrs),
                                                        std::move(*json_value),
+                                                       std::move(cond_opt),
                                                        if_not_exists,
                                                        default_unset);
               }
@@ -592,7 +596,7 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
       ( usingClause[attrs] )?
       K_SET columnOperation[operations] (',' columnOperation[operations])*
       K_WHERE wclause=whereClause
-      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
+      ( K_IF (K_EXISTS{ if_exists = true; } | conditions=whereClause { cond_opt = std::move(conditions); } ))?
       {
           return std::make_unique<raw::update_statement>(std::move(cf),
                                                   std::move(attrs),
@@ -601,17 +605,6 @@ updateStatement returns [std::unique_ptr<raw::update_statement> expr]
                                                   std::move(cond_opt),
                                                   if_exists);
      }
-    ;
-
-updateConditions returns [uexpression cond]
-    @init {
-        std::vector<expression> conditions;
-    }
-    : c1=columnCondition { conditions.emplace_back(std::move(c1)); }
-         ( K_AND cn=columnCondition { conditions.emplace_back(std::move(cn)); } )*
-    {
-        return conjunction{std::move(conditions)};
-    }
     ;
 
 /**
@@ -632,7 +625,7 @@ deleteStatement returns [std::unique_ptr<raw::delete_statement> expr]
       K_FROM cf=columnFamilyName
       ( usingTimestampTimeoutClause[attrs] )?
       K_WHERE wclause=whereClause
-      ( K_IF ( K_EXISTS { if_exists = true; } | conditions=updateConditions { cond_opt = std::move(conditions); } ))?
+      ( K_IF ( K_EXISTS { if_exists = true; } | conditions=whereClause { cond_opt = std::move(conditions); } ))?
       {
           return std::make_unique<raw::delete_statement>(cf,
                                             std::move(attrs),
@@ -1775,32 +1768,6 @@ singleColumnInValuesOrMarkerExpr returns [uexpression e]
     | m=marker { e = std::move(m); }
     ;
 
-columnCondition returns [uexpression e]
-    // Note: we'll reject duplicates later
-    : key=subscriptExpr
-        ( op=relationType t=term {
-                    e = binary_operator(
-                            std::move(key),
-                            op,
-                            std::move(t));
-                }
-        | K_IN
-            values=singleColumnInValuesOrMarkerExpr {
-                    e = binary_operator(
-                            std::move(key),
-                            oper_t::IN,
-                            std::move(values));
-                }
-        | K_NOT K_IN
-            values=singleColumnInValuesOrMarkerExpr {
-                    e = binary_operator(
-                            std::move(key),
-                            oper_t::NOT_IN,
-                            std::move(values));
-                }
-        )
-    ;
-
 properties[cql3::statements::property_definitions& props]
     : property[props] (K_AND property[props])*
     ;
@@ -1833,40 +1800,50 @@ relationType returns [oper_t op = oper_t{}]
 
 relation returns [uexpression e]
     @init{ oper_t rt; }
-    : name=cident type=relationType t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, type, std::move(t)); }
+    : id=cident (
+        '[' key=term ']' (
+            type=relationType t=term
+                { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(id)}, .sub = std::move(key)}, type, std::move(t)); }
+          | K_IN values=singleColumnInValuesOrMarkerExpr
+                { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(id)}, .sub = std::move(key)}, oper_t::IN, std::move(values)); }
+          | K_NOT K_IN values=singleColumnInValuesOrMarkerExpr
+                { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(id)}, .sub = std::move(key)}, oper_t::NOT_IN, std::move(values)); }
+        )
+      | K_IN marker1=marker
+            { $e = binary_operator(unresolved_identifier{std::move(id)}, oper_t::IN, std::move(marker1)); }
+      | K_IN in_values=singleColumnInValues
+            { $e = binary_operator(unresolved_identifier{std::move(id)}, oper_t::IN,
+                collection_constructor {
+                    .style = collection_constructor::style_type::list_or_vector,
+                    .elements = std::move(in_values)
+                }); }
+      | K_NOT K_IN marker1=marker
+            { $e = binary_operator(unresolved_identifier{std::move(id)}, oper_t::NOT_IN, std::move(marker1)); }
+      | K_NOT K_IN in_values=singleColumnInValues
+            { $e = binary_operator(unresolved_identifier{std::move(id)}, oper_t::NOT_IN,
+                collection_constructor {
+                    .style = collection_constructor::style_type::list_or_vector,
+                    .elements = std::move(in_values)
+                }); }
+      | K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })? t=term
+            { $e = binary_operator(unresolved_identifier{std::move(id)}, rt, std::move(t)); }
+      | K_IS K_NOT K_NULL
+            { $e = binary_operator(unresolved_identifier{std::move(id)}, oper_t::IS_NOT, make_untyped_null()); }
+      | type=relationType t=term
+            { $e = binary_operator(unresolved_identifier{std::move(id)}, type, std::move(t)); }
+    )
 
     | K_TOKEN l=tupleOfIdentifiers type=relationType t=term
         {
-          $e = binary_operator(
-            function_call{functions::function_name::native_function("token"), std::move(l.elements)},
-            type,
-            std::move(t));
+            $e = binary_operator(
+                function_call{functions::function_name::native_function("token"), std::move(l.elements)},
+                type,
+                std::move(t));
         }
-    | name=cident K_IS K_NOT K_NULL {
-          $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IS_NOT, make_untyped_null()); }
-    | name=cident K_IN marker1=marker
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN, std::move(marker1)); }
-    | name=cident K_IN in_values=singleColumnInValues
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::IN,
-        collection_constructor {
-            .style = collection_constructor::style_type::list_or_vector,
-            .elements = std::move(in_values)
-        }); }
-    | name=cident K_NOT K_IN marker1=marker
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN, std::move(marker1)); }
-    | name=cident K_NOT K_IN in_values=singleColumnInValues
-        { $e = binary_operator(unresolved_identifier{std::move(name)}, oper_t::NOT_IN,
-        collection_constructor {
-            .style = collection_constructor::style_type::list_or_vector,
-            .elements = std::move(in_values)
-        }); }
-    | name=cident K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
-        t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t)); }
-    | name=cident '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
-    | ids=tupleOfIdentifiers
-      ( K_IN
-          ( '(' ')'
-              {
+
+    | ids=tupleOfIdentifiers (
+        K_IN (
+            '(' ')' {
                 $e = binary_operator(
                     ids,
                     oper_t::IN,
