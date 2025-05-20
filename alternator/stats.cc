@@ -94,16 +94,48 @@ stats::stats() : api_operations{} {
                     seastar::metrics::description("number of rows read during filtering operations")),
             seastar::metrics::make_total_operations("filtered_rows_matched_total", cql_stats.filtered_rows_matched_total,
                     seastar::metrics::description("number of rows read and matched during filtering operations")),
+<<<<<<< HEAD
             seastar::metrics::make_counter("rcu_total", rcu_total,
                     seastar::metrics::description("total number of consumed read units, counted as half units")).set_skip_when_empty(),
+||||||| parent of 5ae11746fa (Alternator: Change the WCU/RCU to use units)
+            seastar::metrics::make_counter("rcu_total", rcu_total,
+                    seastar::metrics::description("total number of consumed read units, counted as half units"))(alternator_label).set_skip_when_empty(),
+=======
+            seastar::metrics::make_counter("rcu_total", [this]{return 0.5 * rcu_half_units_total;},
+                    seastar::metrics::description("total number of consumed read units"))(alternator_label).set_skip_when_empty(),
+>>>>>>> 5ae11746fa (Alternator: Change the WCU/RCU to use units)
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::PUT_ITEM],
+<<<<<<< HEAD
                     seastar::metrics::description("total number of consumed write units, counted as half units"),{op("PutItem")}).set_skip_when_empty(),
+||||||| parent of 5ae11746fa (Alternator: Change the WCU/RCU to use units)
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("PutItem")})(alternator_label).set_skip_when_empty(),
+=======
+                    seastar::metrics::description("total number of consumed write units"),{op("PutItem")})(alternator_label).set_skip_when_empty(),
+>>>>>>> 5ae11746fa (Alternator: Change the WCU/RCU to use units)
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::DELETE_ITEM],
+<<<<<<< HEAD
                     seastar::metrics::description("total number of consumed write units, counted as half units"),{op("DeleteItem")}).set_skip_when_empty(),
+||||||| parent of 5ae11746fa (Alternator: Change the WCU/RCU to use units)
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("DeleteItem")})(alternator_label).set_skip_when_empty(),
+=======
+                    seastar::metrics::description("total number of consumed write units"),{op("DeleteItem")})(alternator_label).set_skip_when_empty(),
+>>>>>>> 5ae11746fa (Alternator: Change the WCU/RCU to use units)
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::UPDATE_ITEM],
+<<<<<<< HEAD
                     seastar::metrics::description("total number of consumed write units, counted as half units"),{op("UpdateItem")}).set_skip_when_empty(),
+||||||| parent of 5ae11746fa (Alternator: Change the WCU/RCU to use units)
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("UpdateItem")})(alternator_label).set_skip_when_empty(),
+=======
+                    seastar::metrics::description("total number of consumed write units"),{op("UpdateItem")})(alternator_label).set_skip_when_empty(),
+>>>>>>> 5ae11746fa (Alternator: Change the WCU/RCU to use units)
             seastar::metrics::make_counter("wcu_total", wcu_total[wcu_types::INDEX],
+<<<<<<< HEAD
                     seastar::metrics::description("total number of consumed write units, counted as half units"),{op("Index")}).set_skip_when_empty(),
+||||||| parent of 5ae11746fa (Alternator: Change the WCU/RCU to use units)
+                    seastar::metrics::description("total number of consumed write units, counted as half units"),{op("Index")})(alternator_label).set_skip_when_empty(),
+=======
+                    seastar::metrics::description("total number of consumed write units"),{op("Index")})(alternator_label).set_skip_when_empty(),
+>>>>>>> 5ae11746fa (Alternator: Change the WCU/RCU to use units)
             seastar::metrics::make_total_operations("filtered_rows_dropped_total", [this] { return cql_stats.filtered_rows_read_total - cql_stats.filtered_rows_matched_total; },
                     seastar::metrics::description("number of rows read and dropped during filtering operations")),
             seastar::metrics::make_counter("batch_item_count", seastar::metrics::description("The total number of items processed across all batches"),{op("BatchWriteItem")},
