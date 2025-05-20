@@ -6521,8 +6521,11 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
 
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
-        auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
+        if (!_features.lwt_with_tablets) {
+            auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
+        }
+        co_await remote().paxos_store().ensure_initialized(*schema, write_timeout);
     }
 
     SCYLLA_ASSERT(partition_ranges.size() == 1);

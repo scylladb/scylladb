@@ -21,6 +21,10 @@ namespace cql3 {
     class untyped_result_set;
 }
 
+namespace gms {
+    class feature_service;
+}
+
 namespace service {
 class storage_proxy;
 }
@@ -117,12 +121,20 @@ class paxos_store:
     public seastar::async_sharded_service<paxos_store>
 {
     db::system_keyspace& _sys_ks;
+    gms::feature_service& _features;
+    replica::database& _db;
+    migration_manager& _mm;
 
     template <typename... Args>
     future<cql3::untyped_result_set> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
     future<schema_ptr> get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const;
+    future<> create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout);
+    static schema_ptr create_paxos_state_schema(const schema& s);
+    schema_ptr try_get_paxos_state_schema(const schema& s) const;
+    void check_raft_is_enabled(const schema& s) const;
 public:
-    explicit paxos_store(db::system_keyspace& sys_ks);
+    explicit paxos_store(db::system_keyspace& sys_ks, gms::feature_service& _features, replica::database& _db, migration_manager& _mm);
+    future<> ensure_initialized(const schema& s, db::timeout_clock::time_point timeout);
     future<column_mapping> get_column_mapping(table_id, table_schema_version v);
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
         db::timeout_clock::time_point timeout);

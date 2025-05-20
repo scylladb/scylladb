@@ -19,11 +19,13 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "schema/schema_builder.hh"
 
 #include "utils/error_injection.hh"
 
 #include "db/schema_tables.hh"
 #include "service/migration_manager.hh"
+#include "gms/feature_service.hh"
 
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
@@ -299,9 +301,111 @@ static sstring paxos_state_cf_filter(const schema& s, const schema& state_schema
         : sstring();
 }
 
-paxos_store::paxos_store(db::system_keyspace& sys_ks)
-: _sys_ks(sys_ks)
+static const sstring paxos_state_table_suffix = "$paxos";
+
+static sstring paxos_state_table_name(std::string_view table_name) {
+    sstring result(sstring::initialized_later(), table_name.size() + paxos_state_table_suffix.size());
+    auto it = result.begin();
+    it = std::copy(table_name.begin(), table_name.end(), it);
+    std::copy(paxos_state_table_suffix.begin(), paxos_state_table_suffix.end(), it);
+    return result;
+}
+
+paxos_store::paxos_store(db::system_keyspace& sys_ks, gms::feature_service& features, replica::database& db, migration_manager& mm)
+    : _sys_ks(sys_ks)
+    , _features(features)
+    , _db(db)
+    , _mm(mm)
 {
+}
+
+schema_ptr paxos_store::create_paxos_state_schema(const schema& s) {
+    schema_builder builder(std::nullopt, s.ks_name(), paxos_state_table_name(s.cf_name()),
+        // partition key
+        {{"row_key", bytes_type}}, // byte representation of a row key that hashes to the same token as original
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"promise", timeuuid_type},
+            {"most_recent_commit", bytes_type}, // serialization format is defined by frozen_mutation idl
+            {"most_recent_commit_at", timeuuid_type},
+            {"proposal", bytes_type}, // serialization format is defined by frozen_mutation idl
+            {"proposal_ballot", timeuuid_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        fmt::format("Paxos state for {}.{}", s.ks_name(), s.cf_name())
+    );
+    builder.set_gc_grace_seconds(0);
+    builder.with_hash_version();
+    return builder.build(schema_builder::compact_storage::no);
+}
+
+schema_ptr paxos_store::try_get_paxos_state_schema(const schema& s) const {
+    // Throw if the base table has been dropped or recreated.
+    // We can't rely on s.table() since a table is stored in tables_metadata as an lw_shared_ptr,
+    // and can live for a while without being referenced from it.
+    _db.find_column_family(s.id());
+
+    const auto& tables = _db.get_tables_metadata();
+    const auto state_table_id = tables.get_table_id_if_exists({s.ks_name(), paxos_state_table_name(s.cf_name())});
+    return state_table_id ? tables.get_table(state_table_id).schema() : nullptr;
+}
+
+void paxos_store::check_raft_is_enabled(const schema& s) const {
+    if (!_mm.use_raft()) {
+        throw std::runtime_error(format("Cannot create paxos state table for {}.{} "
+            "because raft-based schema management is not enabled.",
+            s.ks_name(), s.cf_name()));
+    }
+}
+
+future<> paxos_store::create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout) {
+    auto retries = _mm.get_concurrent_ddl_retries();
+    while (true) {
+        try {
+            auto guard = co_await _mm.start_group0_operation(raft_timeout{.value = timeout});
+            if (try_get_paxos_state_schema(s)) {
+                // read_apply_mutex is acquired in start_group0_operation and in
+                // group0_state_machine::apply. This guarantees that merge_schema has
+                // already completed, the new schema is published on all shards,
+                // and it's safe to use it on the original shard once we return from invoke_on.
+
+                break;
+            }
+            const auto state_schema = create_paxos_state_schema(s);
+            auto muts = co_await prepare_new_column_family_announcement(_mm.get_storage_proxy(), 
+                std::move(state_schema),
+                guard.write_timestamp());
+            co_await _mm.announce(std::move(muts),
+                std::move(guard),
+                fmt::format("Create paxos state table for \"{}.{}\"", s.ks_name(), s.cf_name()),
+                raft_timeout{.value = timeout});
+            break;
+        } catch (const service::group0_concurrent_modification& ex) {
+            paxos_state::logger.warn("Failed to create paxos state table for \"{}.{}\" due to guard conflict.{}.",
+                s.ks_name(), s.cf_name(),
+                retries ? " Retrying" : " Number of retries exceeded, giving up");
+            if (retries--) {
+                continue;
+            }
+            throw;
+        }
+    }
+}
+
+future<> paxos_store::ensure_initialized(const schema& s, db::timeout_clock::time_point timeout) {
+    if (try_get_paxos_state_schema(s)) {
+        return make_ready_future<>();
+    }
+    check_raft_is_enabled(s);
+    paxos_state::logger.info("Creating paxos state table for \"{}.{}\", timeout {} millis", 
+        s.ks_name(), s.cf_name(), duration_cast<std::chrono::milliseconds>(timeout - lowres_clock::now()).count());
+    return container().invoke_on(0, &paxos_store::create_paxos_state_table, std::ref(s), timeout);
 }
 
 static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
@@ -349,7 +453,56 @@ future<column_mapping> paxos_store::get_column_mapping(table_id table_id, table_
 }
 
 future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const {
-    co_return db::system_keyspace::paxos();
+    if (!s.table().uses_tablets()) {
+        co_return db::system_keyspace::paxos();
+    }
+
+    // The paxos state schema only includes the partition key from the base table.
+    // Since partition keys can't be altered via CQL, the paxos schema doesn't need to change
+    // when the base schema changes.
+    // When the LWT coordinator sends RPCs to replicas, some may not yet have the paxos schema.
+    // Wait for the schema to appear here via read_barrier, or throw 'no_such_column_family'
+    // if the base table was dropped (see try_get_paxos_state_schema).
+
+    if (!_features.lwt_with_tablets) {
+        on_internal_error(paxos_state::logger, "lwt_with_tablets is not supported");
+    }
+    if (const auto state_schema = try_get_paxos_state_schema(s); state_schema) {
+        co_return state_schema;
+    }
+
+    check_raft_is_enabled(s);
+    paxos_state::logger.debug("get_paxos_state_schema for {}.{}({}), paxos state table doesn't exist, "
+        "running group0.read_barrier", s.ks_name(), s.cf_name(), s.id());
+    abort_on_expiry aoe(timeout);
+    co_await _mm.get_group0_barrier().trigger(aoe.abort_source());
+
+    if (const auto state_schema = try_get_paxos_state_schema(s); state_schema) {
+        co_return state_schema;
+    }
+
+    // 1. It is guaranteed that the `s` parameter refers to the exact same schema version
+    // that was present at the beginning of sp::cas(). This holds because the schema
+    // version is passed explicitly as an RPC argument to replicas.
+    //
+    // 2. The initial call to ensure_initialized() in sp::cas() ensures that the Paxos state
+    // table is created for that specific schema version of the user table.
+    //
+    // 3. The call to group0.read_barrier() (get_group0_barrier().trigger above) ensures that
+    // the current node and shard observe the latest version of the group0 state.
+    // While this version may include unrelated schema changes, it cannot miss the
+    // Paxos state table creation (from step 2), as that happens before sending RPCs to replicas.
+    //
+    // 4. The "unrelated schema changes" may include a drop of the base user table
+    // (and with it, the Paxos state table). However, we guard against this case via the
+    // db.find_column_family(s.id()) check in try_get_paxos_state_schema().
+    //
+    // 5. If we still encounter a case where the base table exists but the Paxos state table
+    // does not, it likely indicates a broken invariant — possibly due to a bug, so we
+    // call on_internal_error() here.
+
+    on_internal_error(paxos_state::logger, fmt::format("failed to obtain paxos state schema for '{}.{}'",
+        s.ks_name(), s.cf_name()));
 }
 
 future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
@@ -359,7 +512,7 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
     // FIXME: we need execute_cql_with_now()
     (void)now;
     const auto results = co_await execute_cql_with_timeout(
-        format("SELECT * FROM {}.{} WHERE row_key = ?{}", 
+        format("SELECT * FROM \"{}\".\"{}\" WHERE row_key = ?{}", 
             state_schema->ks_name(), state_schema->cf_name(), 
             paxos_state_cf_filter(*s, *state_schema)
         ),
@@ -396,7 +549,7 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
 future<> paxos_store::save_paxos_promise(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout) {
     const auto state_schema = co_await get_paxos_state_schema(s, timeout);
     co_await execute_cql_with_timeout(
-            format("UPDATE {}.{} USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ?{}",
+            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET promise = ? WHERE row_key = ?{}",
                 state_schema->ks_name(), state_schema->cf_name(), 
                 paxos_state_cf_filter(s, *state_schema)
             ),
@@ -412,7 +565,7 @@ future<> paxos_store::save_paxos_proposal(const schema& s, const proposal& propo
     const auto state_schema = co_await get_paxos_state_schema(s, timeout);
     partition_key_view key = proposal.update.key();
     co_await execute_cql_with_timeout(
-            format("UPDATE {}.{} USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ?{}", 
+            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET promise = ?, proposal_ballot = ?, proposal = ? WHERE row_key = ?{}", 
                 state_schema->ks_name(), state_schema->cf_name(), 
                 paxos_state_cf_filter(s, *state_schema)
             ),
@@ -437,7 +590,7 @@ future<> paxos_store::save_paxos_decision(const schema& s, const proposal& decis
     // recent commit.
     partition_key_view key = decision.update.key();
     co_await execute_cql_with_timeout(
-            format("UPDATE {}.{} USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null, "
+            format("UPDATE \"{}\".\"{}\" USING TIMESTAMP ? AND TTL ? SET proposal_ballot = null, proposal = null, "
                    "most_recent_commit_at = ?, most_recent_commit = ? WHERE row_key = ?{}",
                 state_schema->ks_name(), state_schema->cf_name(), 
                 paxos_state_cf_filter(s, *state_schema)
@@ -459,7 +612,7 @@ future<> paxos_store::delete_paxos_decision(const schema& s, const partition_key
     // guarantees that if there is more recent round it will not be affected.
 
     co_await execute_cql_with_timeout(
-            format("DELETE most_recent_commit FROM {}.{} USING TIMESTAMP ? WHERE row_key = ?{}",
+            format("DELETE most_recent_commit FROM \"{}\".\"{}\" USING TIMESTAMP ? WHERE row_key = ?{}",
                 state_schema->ks_name(), state_schema->cf_name(), 
                 paxos_state_cf_filter(s, *state_schema)
             ),

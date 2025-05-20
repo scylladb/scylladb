@@ -1945,7 +1945,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "initializing paxos store");
             static seastar::sharded<service::paxos::paxos_store> paxos_store;
-            paxos_store.start(std::ref(sys_ks)).get();
+            paxos_store.start(std::ref(sys_ks), std::ref(feature_service), std::ref(db), std::ref(mm)).get();
             auto stop_paxos_store = defer_verbose_shutdown("paxos store", [] {
                 paxos_store.stop().get();
             });
