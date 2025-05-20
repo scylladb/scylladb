@@ -1003,7 +1003,7 @@ private:
 
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
 
-            _paxos_store.start(std::ref(_sys_ks)).get();
+            _paxos_store.start(std::ref(_sys_ks), std::ref(_feature_service), std::ref(_db), std::ref(_mm)).get();
             auto stop_paxos_store = defer_verbose_shutdown("paxos store", [this] {
                 _paxos_store.stop().get();
             });
