@@ -252,7 +252,7 @@ class storage_proxy::remote {
 public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
                 raft_group0_client& group0_client, topology_state_machine& tsm)
-        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _paxos_store(_sys_ks.local()), _group0_client(group0_client), _topology_state_machine(tsm)
+        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _paxos_store(_sys_ks.local(), _sp.features(), _sp.local_db(), _mm), _group0_client(group0_client), _topology_state_machine(tsm)
         , _truncate_gate("storage_proxy::remote::truncate_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
@@ -6463,8 +6463,11 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
-        auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
+        if (!_features.lwt_with_tablets) {
+            auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
+        }
+        co_await remote().paxos_store().ensure_initialized(*schema);
     }
 
     SCYLLA_ASSERT(partition_ranges.size() == 1);

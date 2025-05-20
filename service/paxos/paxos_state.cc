@@ -19,11 +19,13 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "schema/schema_builder.hh"
 
 #include "utils/error_injection.hh"
 
 #include "db/schema_tables.hh"
 #include "service/migration_manager.hh"
+#include "gms/feature_service.hh"
 
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
@@ -271,9 +273,102 @@ static sstring paxos_state_cf_filter(const schema& s, const schema& state_schema
         : sstring();
 }
 
-paxos_store::paxos_store(db::system_keyspace& sys_ks)
-: _sys_ks(sys_ks)
+static const sstring paxos_state_table_suffix = "_scylla_paxos_state";
+
+static sstring paxos_state_table_name(const schema& s) {
+    return sstring(s.cf_name()) + paxos_state_table_suffix;
+}
+
+static schema_ptr try_get_paxos_state_schema(const replica::database& db, const schema& s) {
+    const auto& tables = db.get_tables_metadata();
+    const auto state_table_id = tables.get_table_id_if_exists({s.ks_name(), paxos_state_table_name(s)});
+    if (!state_table_id) {
+        // Throw early if the base table has already been dropped.
+        s.table();
+    
+        return nullptr;
+    }
+    return tables.get_table(state_table_id).schema();
+}
+
+static schema_ptr create_paxos_state_schema(const schema& s, std::optional<table_id> table_id) {
+    schema_builder builder(table_id, s.ks_name(), paxos_state_table_name(s),
+        // partition key
+        {{"row_key", bytes_type}}, // byte representation of a row key that hashes to the same token as original
+        // clustering key
+        {},
+        // regular columns
+        {
+            {"promise", timeuuid_type},
+            {"most_recent_commit", bytes_type}, // serialization format is defined by frozen_mutation idl
+            {"most_recent_commit_at", timeuuid_type},
+            {"proposal", bytes_type}, // serialization format is defined by frozen_mutation idl
+            {"proposal_ballot", timeuuid_type},
+        },
+        // static columns
+        {},
+        // regular column name type
+        utf8_type,
+        // comment
+        fmt::format("Paxos state for {}.{}", s.ks_name(), s.cf_name())
+    );
+    builder.set_gc_grace_seconds(0);
+    builder.with_hash_version();
+    return builder.build(schema_builder::compact_storage::no);
+}
+
+paxos_store::paxos_store(db::system_keyspace& sys_ks, gms::feature_service& features, replica::database& db, migration_manager& mm)
+    : _sys_ks(sys_ks)
+    , _features(features)
+    , _db(db)
+    , _mm(mm)
 {
+}
+
+future<> paxos_store::ensure_initialized(const schema& s) {
+    if (try_get_paxos_state_schema(_db, s)) {
+        return make_ready_future<>();
+    }
+    paxos_state::logger.info("Creating paxos state table for \"{}.{}\"", 
+        s.ks_name(), s.cf_name());
+    return _mm.container().invoke_on(0, [&s, &db=_db.container()](migration_manager& mm) -> future<> {
+        auto retries = mm.get_concurrent_ddl_retries();
+        while (true) {
+            try {
+                auto guard = co_await mm.start_group0_operation();
+                if (try_get_paxos_state_schema(db.local(), s)) {
+                    // read_apply_mutex is acquired in start_group0_operation and in
+                    // group0_state_machine::apply. This guarantees that merge_schema has
+                    // already completed, the new schema is published on all shards,
+                    // and it's safe to use it on the original shard once we return from invoke_on.
+
+                    co_return;
+                }
+                const auto state_schema = create_paxos_state_schema(s, std::nullopt);
+                auto muts = db::schema_tables::make_create_table_mutations(state_schema, guard.write_timestamp());
+
+                // Notify the tablet allocator to allocate tablets for the new table.
+                {
+                    auto& local_db = db.local();
+                    const auto ksm = local_db.find_keyspace(s.ks_name()).metadata();
+                    local_db.get_notifier().before_create_column_family(*ksm, *state_schema, muts, guard.write_timestamp());
+                }
+
+                co_await mm.announce(std::move(muts),
+                    std::move(guard),
+                    fmt::format("Create paxos state table for \"{}.{}\"", s.ks_name(), s.cf_name()));
+                break;
+            } catch (const service::group0_concurrent_modification& ex) {
+                paxos_state::logger.warn("Failed to create paxos state table for \"{}.{}\" due to guard conflict.{}.",
+                    s.ks_name(), s.cf_name(),
+                    retries ? " Retrying" : " Number of retries exceeded, giving up");
+                if (retries--) {
+                    continue;
+                }
+                throw;
+            }
+        }
+    });
 }
 
 template <typename... Args>
@@ -309,7 +404,36 @@ future<column_mapping> paxos_store::get_column_mapping(table_id table_id, table_
 }
 
 future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const {
-    co_return db::system_keyspace::paxos();
+    if (const auto& table = s.table(); !table.uses_tablets()) {
+        co_return db::system_keyspace::paxos();
+    }
+
+    // The paxos state schema only includes the partition key from the base table.
+    // Since partition keys can't be altered via CQL, the paxos schema doesn't need to change
+    // when the base schema changes.
+    // When the LWT coordinator sends RPCs to replicas, some may not yet have the paxos schema.
+    // Wait for the schema to appear here via read_barrier, or throw 'no_such_column_family'
+    // if the base table was dropped (see try_get_paxos_state_schema).
+
+    if (!_features.lwt_with_tablets) {
+        on_internal_error(paxos_state::logger, "lwt_with_tablets is not supported");
+    }
+    if (const auto state_schema = try_get_paxos_state_schema(_db, s); state_schema) {
+        co_return state_schema;
+    }
+
+    if(!_mm.use_raft()) {
+        on_internal_error(paxos_state::logger, "lwt_with_tablets requires raft");
+    }
+    abort_on_expiry aoe(timeout);
+    co_await _mm.get_group0_barrier().trigger(aoe.abort_source());
+
+    if (const auto state_schema = try_get_paxos_state_schema(_db, s); state_schema) {
+        co_return state_schema;
+    }
+    const std::string error_message = fmt::format("failed to obtain paxos state schema for '{}.{}'", 
+            s.ks_name(), s.cf_name());
+    on_internal_error(paxos_state::logger, error_message);
 }
 
 future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
