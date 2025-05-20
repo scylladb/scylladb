@@ -67,8 +67,10 @@ class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
 class effective_replication_map;
 
+using rack_list = std::vector<sstring>;
+
 class replication_factor_data {
-    std::variant<size_t, std::vector<sstring>> _data;
+    std::variant<size_t, rack_list> _data;
 
 public:
     explicit replication_factor_data(const sstring& rf, const std::unordered_set<sstring>* allowed_racks = nullptr) {
@@ -80,6 +82,14 @@ public:
         [] (const size_t& count) { return count; },
         [] (const std::vector<sstring>& racks) { return racks.size(); },
         }, _data);
+    }
+
+    bool is_rack_based() const noexcept {
+        return std::holds_alternative<rack_list>(_data);
+    }
+
+    const rack_list& get_rack_list() const {
+        return std::get<rack_list>(_data);
     }
 
 private:

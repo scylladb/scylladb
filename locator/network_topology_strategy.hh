@@ -34,6 +34,24 @@ public:
         return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second.count();
     }
 
+    bool is_rack_based() const override {
+        auto i = _dc_rep_factor.begin();
+        const replication_factor_data& rf = i->second;
+        return rf.is_rack_based();
+    }
+
+    const rack_list& get_dc_racks(const sstring& dc) const override {
+        auto dc_rack = _dc_rep_factor.find(dc);
+        if (dc_rack == _dc_rep_factor.end()) {
+            static rack_list empty_rack_list; // for now
+            rslogger.warn("get_dc_racks: no racks found for dc={}", dc);
+            return empty_rack_list;
+        }
+        const replication_factor_data& rf = dc_rack->second;
+        assert(rf.is_rack_based());
+        return rf.get_rack_list();
+    }
+
     const std::vector<sstring>& get_datacenters() const {
         return _datacenteres;
     }
@@ -70,6 +88,22 @@ private:
     tablet_replica_set drop_tablets_in_dc(schema_ptr, const locator::topology&, load_sketch&, tablet_id,
             const tablet_replica_set& cur_replicas,
             sstring dc, size_t dc_node_count, size_t dc_rf) const;
+
+    tablet_replica_set drop_tablets_in_racks(schema_ptr,
+                                             token_metadata_ptr,
+                                             load_sketch&,
+                                             tablet_id,
+                                             const tablet_replica_set& cur_replicas,
+                                             const sstring& dc,
+                                             const rack_list& racks_to_drop) const;
+
+    tablet_replica_set add_tablets_in_racks(schema_ptr,
+                                            token_metadata_ptr,
+                                            load_sketch&,
+                                            tablet_id,
+                                            const tablet_replica_set& cur_replicas,
+                                            const sstring& dc,
+                                            const rack_list& racks_to_add) const;
 
     // map: data centers -> replication factor
     dc_rep_factor_map _dc_rep_factor;
