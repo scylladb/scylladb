@@ -24,6 +24,7 @@
 #include "gms/gossip_address_map.hh"
 #include "tasks/types.hh"
 #include "utils/advanced_rpc_compressor.hh"
+#include "utils/chunked_vector.hh"
 
 #include <list>
 #include <vector>
@@ -64,7 +65,7 @@ namespace dht {
     class ring_position;
     using partition_range = interval<ring_position>;
     using token_range = interval<token>;
-    using token_range_vector = std::vector<token_range>;
+    using token_range_vector = utils::chunked_vector<token_range>;
 }
 
 namespace query {
