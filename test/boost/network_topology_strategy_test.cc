@@ -1543,4 +1543,47 @@ SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_gt_rack
     test_complex_rack_aware_view_pairing_test(true);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_rack_diff) {
+    BOOST_REQUIRE(diff_racks({}, {}).empty());
+
+    {
+        rack_list l1 = {"rack1", "rack2", "rack3"};
+        rack_list l2 = {"rack1", "rack2", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE(diff.empty());
+    }
+
+    {
+        rack_list l1 = {"rack3", "rack2", "rack1"};
+        rack_list l2 = {"rack1", "rack2", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE(diff.empty());
+    }
+
+    {
+        rack_list l1 = {"rack1", "rack2"};
+        rack_list l2 = {"rack1", "rack2", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE_EQUAL(diff.added, rack_list{"rack3"});
+        BOOST_REQUIRE(diff.removed.empty());
+    }
+
+    {
+        rack_list l1 = {"rack1", "rack2", "rack3"};
+        rack_list l2 = {"rack1", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE_EQUAL(diff.removed, rack_list{"rack2"});
+        BOOST_REQUIRE(diff.added.empty());
+    }
+
+    {
+        rack_list l1 = {"rack3", "rack2", "rack1"};
+        rack_list l2 = {"rack4", "rack2"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE_EQUAL(diff.added, rack_list{"rack4"});
+        BOOST_REQUIRE_EQUAL(diff.removed | std::ranges::to<std::unordered_set<sstring>>(),
+                            std::unordered_set<sstring>({"rack1", "rack3"}));
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

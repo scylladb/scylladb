@@ -338,30 +338,121 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
     std::unordered_map<sstring, size_t> nodes_per_dc;
     // Current replicas per dc/rack
     std::unordered_map<sstring, std::map<sstring, std::unordered_set<locator::host_id>>> replicas_per_dc_rack;
+    std::unordered_map<sstring, rack_list> old_racks_per_dc;
 
     replicas = cur_tablets.get_tablet_info(tb).replicas;
     for (const auto& tr : replicas) {
         const auto& node = tm->get_topology().get_node(tr.host);
         replicas_per_dc_rack[node.dc_rack().dc][node.dc_rack().rack].insert(tr.host);
         ++nodes_per_dc[node.dc_rack().dc];
+        old_racks_per_dc[node.dc_rack().dc].push_back(node.dc_rack().rack);
     }
 
     // #22688 - take all dcs in topology into account when determining migration.
     // Any change should still have been pre-checked to never exceed rf factor one.
     for (const auto& dc : tm->get_topology().get_datacenters()) {
-        auto dc_rf = get_replication_factor(dc);
-        auto dc_node_count = nodes_per_dc[dc];
-        if (dc_rf == dc_node_count) {
-            continue;
-        }
-        if (dc_rf > dc_node_count) {
-            replicas = co_await add_tablets_in_dc(s, tm, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf);
+        auto new_rf = get_replication_factor_data(dc);
+
+        if (new_rf && new_rf->is_rack_based()) {
+            auto diff = diff_racks(old_racks_per_dc[dc], new_rf->get_rack_list());
+
+            tablet_logger.debug("reallocate_tablets {}.{} tablet_id={} dc={} old_racks={} add_racks={} del_racks={}",
+                    s->ks_name(), s->cf_name(), tb, dc, old_racks_per_dc[dc], diff.added, diff.removed);
+
+            if (!diff) {
+                continue;
+            }
+
+            if (!diff.added.empty() && !diff.removed.empty()) {
+                throw std::runtime_error("replacing racks unsupported");
+            } else if (!diff.added.empty()) {
+                replicas = add_tablets_in_racks(s, tm, load, tb, replicas, dc, diff.added);
+            } else { // diff.removed
+                replicas = drop_tablets_in_racks(s, tm, load, tb, replicas, dc, diff.removed);
+            }
         } else {
-            replicas = drop_tablets_in_dc(s, tm->get_topology(), load, tb, replicas, dc, dc_node_count, dc_rf);
+            auto dc_rf = new_rf ? new_rf->count() : 0;
+            auto dc_node_count = nodes_per_dc[dc];
+            if (dc_rf == dc_node_count) {
+                continue;
+            }
+            if (dc_rf > dc_node_count) {
+                replicas = co_await add_tablets_in_dc(s, tm, load, tb, replicas_per_dc_rack[dc], replicas, dc, dc_node_count, dc_rf);
+            } else {
+                replicas = drop_tablets_in_dc(s, tm->get_topology(), load, tb, replicas, dc, dc_node_count, dc_rf);
+            }
         }
     }
 
     co_return replicas;
+}
+
+tablet_replica_set network_topology_strategy::drop_tablets_in_racks(schema_ptr s,
+                                                                    token_metadata_ptr tm,
+                                                                    load_sketch& load,
+                                                                    tablet_id tb,
+                                                                    const tablet_replica_set& cur_replicas,
+                                                                    const sstring& dc,
+                                                                    const rack_list& racks_to_drop) const {
+    auto& topo = tm->get_topology();
+    tablet_replica_set filtered;
+    auto is_rack_to_drop = [&racks_to_drop] (const sstring& rack) {
+        return std::ranges::contains(racks_to_drop, rack);
+    };
+    for (const auto& tr : cur_replicas) {
+        auto& node = topo.get_node(tr.host);
+        if (node.dc_rack().dc == dc && is_rack_to_drop(node.dc_rack().rack)) {
+            tablet_logger.debug("drop_tablets_in_rack {}.{} tablet_id={} dc={} rack={} removing replica: {}",
+                            s->ks_name(), s->cf_name(), tb, node.dc_rack().dc, node.dc_rack().rack, tr);
+            load.unload(tr.host, tr.shard);
+        } else {
+            filtered.emplace_back(tr);
+        }
+    }
+    return filtered;
+}
+
+tablet_replica_set network_topology_strategy::add_tablets_in_racks(schema_ptr s,
+                                                                   token_metadata_ptr tm,
+                                                                   load_sketch& load,
+                                                                   tablet_id tb,
+                                                                   const tablet_replica_set& cur_replicas,
+                                                                   const sstring& dc,
+                                                                   const rack_list& racks_to_add) const {
+    auto nodes = tm->get_datacenter_racks_token_owners_nodes();
+    auto& dc_nodes = nodes.at(dc);
+    auto new_replicas = cur_replicas;
+
+    for (auto&& rack: racks_to_add) {
+        host_id min_node;
+        double min_load = std::numeric_limits<double>::max();
+
+        for (auto&& node: dc_nodes.at(rack)) {
+            if (!node.get().is_normal()) {
+                continue;
+            }
+            // Assume that if there was a diff to add a rack, we don't already have a replica
+            // in the target rack so all nodes in the rack are eligible.
+            // FIXME: pick based on storage utilization: https://github.com/scylladb/scylladb/issues/26366
+            auto node_load = load.get_real_avg_shard_load(node.get().host_id());
+            if (node_load < min_load) {
+                min_load = node_load;
+                min_node = node.get().host_id();
+            }
+        }
+
+        if (!min_node) {
+            throw std::runtime_error(
+                    fmt::format("No candidate node in rack {}.{} to allocate tablet replica", dc, rack));
+        }
+
+        auto new_replica = tablet_replica{min_node, load.next_shard(min_node)};
+        new_replicas.push_back(new_replica);
+
+        tablet_logger.trace("add_tablet_in_rack {}.{} tablet_id={} dc={} rack={} load={} new_replica={}",
+                            s->ks_name(), s->cf_name(), tb.id, dc, rack, min_load, new_replica);
+    }
+    return new_replicas;
 }
 
 future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_ptr s, token_metadata_ptr tm, load_sketch& load, tablet_id tb,
@@ -411,6 +502,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             }
             const auto& host_id = node.get().host_id();
             if (!existing.contains(host_id)) {
+                // FIXME: https://github.com/scylladb/scylladb/issues/26366
                 candidate.nodes.emplace_back(host_id, load.get_avg_shard_load(host_id));
             }
         }

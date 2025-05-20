@@ -34,6 +34,21 @@ public:
         return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second.count();
     }
 
+    const replication_factor_data* get_replication_factor_data(const sstring& dc) const override {
+        auto dc_factor = _dc_rep_factor.find(dc);
+        if (dc_factor == _dc_rep_factor.end()) {
+            return nullptr;
+        }
+        return &dc_factor->second;
+    }
+
+    bool is_rack_based(const sstring& dc) const override {
+        if (auto rf = get_replication_factor_data(dc)) {
+            return rf->is_rack_based();
+        }
+        return false;
+    }
+
     const std::vector<sstring>& get_datacenters() const {
         return _datacenteres;
     }
@@ -70,6 +85,22 @@ private:
     tablet_replica_set drop_tablets_in_dc(schema_ptr, const locator::topology&, load_sketch&, tablet_id,
             const tablet_replica_set& cur_replicas,
             sstring dc, size_t dc_node_count, size_t dc_rf) const;
+
+    tablet_replica_set drop_tablets_in_racks(schema_ptr,
+                                             token_metadata_ptr,
+                                             load_sketch&,
+                                             tablet_id,
+                                             const tablet_replica_set& cur_replicas,
+                                             const sstring& dc,
+                                             const rack_list& racks_to_drop) const;
+
+    tablet_replica_set add_tablets_in_racks(schema_ptr,
+                                            token_metadata_ptr,
+                                            load_sketch&,
+                                            tablet_id,
+                                            const tablet_replica_set& cur_replicas,
+                                            const sstring& dc,
+                                            const rack_list& racks_to_add) const;
 
     // map: data centers -> replication factor
     dc_rep_factor_map _dc_rep_factor;
