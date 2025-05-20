@@ -106,7 +106,7 @@ public:
     // Replica RPC endpoint for Paxos "learn".
     static future<> learn(storage_proxy& sp, paxos_store& sys_ks, schema_ptr schema, proposal decision, clock_type::time_point timeout, tracing::trace_state_ptr tr_state);
     // Replica RPC endpoint for pruning Paxos table
-    static future<> prune(paxos_store& sys_ks, schema_ptr schema, const partition_key& key, utils::UUID ballot, clock_type::time_point timeout,
+    static future<> prune(paxos_store& sys_ks, schema_ptr schema, const partition_key& key, const utils::UUID& ballot, clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state);
 };
 
