@@ -52,6 +52,12 @@ public:
               : _value(std::move(value))
               , _inclusive(inclusive)
     { }
+    interval_bound(interval_bound<const T&> b) requires (!std::is_reference_v<T>)
+              : interval_bound(b.value(), b.is_inclusive())
+    { }
+    operator interval_bound<const T&>() const requires (!std::is_reference_v<T>) {
+        return interval_bound<const T&>(_value, _inclusive);
+    }
     const T& value() const & { return _value; }
     T&& value() && { return std::move(_value); }
     bool is_inclusive() const { return _inclusive; }
@@ -62,6 +68,9 @@ public:
         return _inclusive == other._inclusive && cmp(_value, other._value) == 0;
     }
 };
+
+template <typename T>
+using interval_bound_const_ref = interval_bound<const T&>;
 
 template<typename T>
 class interval;
@@ -74,6 +83,7 @@ class wrapping_interval {
     using optional = std::optional<U>;
 public:
     using bound = interval_bound<T>;
+    using bound_const_ref = interval_bound_const_ref<T>;
 
     template <typename Transformer>
     using transformed_type = typename std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Transformer, T>>>;
@@ -97,8 +107,8 @@ public:
     constexpr wrapping_interval() : wrapping_interval({}, {}) { }
 private:
     // Bound wrappers for compile-time dispatch and safety.
-    struct start_bound_ref { const optional<bound>& b; };
-    struct end_bound_ref { const optional<bound>& b; };
+    struct start_bound_ref { const optional<bound_const_ref> b; };
+    struct end_bound_ref { const optional<bound_const_ref> b; };
 
     start_bound_ref start_bound() const { return { start() }; }
     end_bound_ref end_bound() const { return { end() }; }
@@ -248,15 +258,23 @@ public:
             std::swap(_start, _end);
         }
     }
-    const optional<bound>& start() const {
+    /// Returns the start bound of the interval, as a view into the interval object.
+    /// Copying the bound still points into the original interval object.
+    optional<bound_const_ref> start() const {
         return _start;
     }
-    const optional<bound>& end() const {
+    /// Returns the end bound of the interval, as a view into the interval object.
+    /// Copying the bound still points into the original interval object.
+    optional<bound_const_ref> end() const {
         return _singular ? _start : _end;
     }
+    /// Returns the start bound of the interval, as a materialized object
+    /// independent of the original interval.
     optional<bound> start_copy() const {
         return _start;
     }
+    /// Returns the end bound of the interval, as a materialized object
+    /// independent of the original interval.
     optional<bound> end_copy() const {
         return _singular ? _start : _end;
     }
@@ -484,6 +502,7 @@ class interval {
     using optional = std::optional<U>;
 public:
     using bound = interval_bound<T>;
+    using bound_const_ref = interval_bound_const_ref<T>;
 
     template <typename Transformer>
     using transformed_type = typename wrapping_interval<T>::template transformed_type<Transformer>;
@@ -560,15 +579,24 @@ public:
     bool is_full() const {
         return _interval.is_full();
     }
-    const optional<bound>& start() const {
+    /// Returns the start bound of the interval, as a view into the interval object.
+    /// Copying the bound still points into the original interval object.
+    const optional<bound_const_ref> start() const {
         return _interval.start();
     }
-    const optional<bound>& end() const {
+    /// Returns the end bound of the interval, as a view into the interval object.
+    /// Copying the bound still points into the original interval object.
+    const optional<bound_const_ref> end() const {
         return _interval.end();
     }
+    /// Returns the start bound of the interval, as a materialized object
+    /// independent of the original interval.
     optional<bound> start_copy() const {
         return _interval.start_copy();
     }
+
+    /// Returns the end bound of the interval, as a materialized object
+    /// independent of the original interval.
     optional<bound> end_copy() const {
         return _interval.end_copy();
     }
