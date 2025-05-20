@@ -5,4 +5,3 @@ The cassandra-stress tool is used for benchmarking and load testing both ScyllaD
 
 Cassandra Stress is not part of ScyllaDB and it is not distributed along side it anymore. It has it's own separate repository and release cycle. More information about it can be found on `GitHub <https://github.com/scylladb/cassandra-stress>`_ or on `DockerHub <https://hub.docker.com/r/scylladb/cassandra-stress>`_.
 
-.. include:: /rst_include/apache-copyrights.rst
