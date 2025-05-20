@@ -16,6 +16,11 @@
 #include "utils/UUID_gen.hh"
 #include "service/paxos/prepare_response.hh"
 
+namespace cql3 {
+    class query_processor;
+    class untyped_result_set;
+}
+
 namespace service {
 class storage_proxy;
 }
@@ -112,6 +117,9 @@ class paxos_store:
     public seastar::async_sharded_service<paxos_store>
 {
     db::system_keyspace& _sys_ks;
+
+    template <typename... Args>
+    future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
 public:
     explicit paxos_store(db::system_keyspace& sys_ks);
     future<column_mapping> get_column_mapping(table_id, table_schema_version v);
