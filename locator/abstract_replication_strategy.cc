@@ -206,6 +206,16 @@ void replication_factor_data::validate(const std::unordered_set<sstring>& allowe
     }, _data);
 }
 
+rack_diff diff_racks(const rack_list& old_racks, const rack_list& new_racks) {
+    std::set<sstring> old_racks_set(old_racks.begin(), old_racks.end());
+    std::set<sstring> new_racks_set(new_racks.begin(), new_racks.end());
+
+    rack_diff diff;
+    std::ranges::set_difference(new_racks_set, old_racks_set, std::back_inserter(diff.added));
+    std::ranges::set_difference(old_racks_set, new_racks_set, std::back_inserter(diff.removed));
+    return diff;
+}
+
 static
 void
 insert_token_range_to_sorted_container_while_unwrapping(
