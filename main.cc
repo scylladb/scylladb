@@ -118,7 +118,7 @@
 #include "utils/disk_space_monitor.hh"
 #include "utils/labels.hh"
 #include "tools/utils.hh"
-
+#include "replica/out_of_space_controller.hh"
 
 #define P11_KIT_FUTURE_UNSTABLE_API
 extern "C" {
@@ -714,6 +714,7 @@ sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
     std::optional<utils::disk_space_monitor> disk_space_monitor_shard0;
+    std::optional<replica::out_of_space_controller> out_of_space_controller_shard0;
     sharded<compaction_manager> cm;
     sharded<sstables::storage_manager> sstm;
     distributed<replica::database> db;
@@ -779,7 +780,8 @@ sharded<locator::shared_token_metadata> token_metadata;
         return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker,
+                &out_of_space_controller_shard0] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -1047,7 +1049,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             }).get();
             // storage_proxy holds a reference on it and is not yet stopped.
             // what's worse is that the calltrace
-            //   storage_proxy::do_query 
+            //   storage_proxy::do_query
             //                ::query_partition_key_range
             //                ::query_partition_key_range_concurrent
             // leaves unwaited futures on the reactor and once it gets there
@@ -1532,7 +1534,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             debug::the_messaging_service = &messaging;
 
             std::shared_ptr<seastar::tls::credentials_builder> creds;
-            if (mscfg.encrypt != netw::messaging_service::encrypt_what::none 
+            if (mscfg.encrypt != netw::messaging_service::encrypt_what::none
                 || (cfg->ssl_storage_port() != 0 && seo.contains("certificate"))
             ) {
                 creds = std::make_shared<seastar::tls::credentials_builder>();
@@ -1915,7 +1917,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 }
             }
 
-            // Once stuff is replayed, we can empty RP:s from truncation records. 
+            // Once stuff is replayed, we can empty RP:s from truncation records.
             // This ensures we can't mis-mash older records with a newer crashed run.
             // I.e: never keep replay_positions alive across a restart cycle.
             sys_ks.local().drop_truncation_rp_records().get();
@@ -2214,6 +2216,19 @@ sharded<locator::shared_token_metadata> token_metadata;
             });
             auto stop_sst_dict_autotrainer = defer_verbose_shutdown("sstable_dict_autotrainer", [&] {
                 sst_dict_autotrainer.stop().get();
+            });
+
+            checkpoint(stop_signal, "starting write throttling controller");
+            auto out_of_space_controller_cfg = replica::out_of_space_controller::config {
+                .db = db,
+                .cm = cm,
+                .rs = repair,
+                .critical_disk_utilization_threshold = cfg->critical_disk_utilization_level,
+            };
+            out_of_space_controller_shard0.emplace(std::move(out_of_space_controller_cfg), *disk_space_monitor_shard0,
+                                                       stop_signal.as_local_abort_source());
+            auto stop_streaming_controller = defer_verbose_shutdown("write throttling controller", [&] {
+                out_of_space_controller_shard0->stop().get();
             });
 
             checkpoint(stop_signal, "starting tracing");
