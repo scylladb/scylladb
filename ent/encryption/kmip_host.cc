@@ -867,8 +867,8 @@ future<std::vector<kmip_host::id_type>> kmip_host::impl::find_matching_keys(cons
 
     auto [kdl_attrs, crypt_alg] = make_attributes(info, false);
 
-    static const char kmip_tag_cryptographic_length[] = KMIP_TAG_CRYPTOGRAPHIC_LENGTH_STR;
-    static const char kmip_tag_cryptographic_usage_mask[] = KMIP_TAG_CRYPTOGRAPHIC_USAGE_MASK_STR;
+    static const char kmip_tag_cryptographic_length[] = KMIP_TAGSTR_CRYPTOGRAPHIC_LENGTH;
+    static const char kmip_tag_cryptographic_usage_mask[] = KMIP_TAGSTR_CRYPTOGRAPHIC_USAGE_MASK;
 
     // #1079. Query mask apparently ignores things like cryptographic 
     // attribute set of options, instead we must specify the query 
