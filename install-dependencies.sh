@@ -151,6 +151,7 @@ fedora_python3_packages=(
     python3-click
     python3-six
     python3-pyudev
+    python3-opensearch-py
 )
 
 # an associative array from packages to constrains
