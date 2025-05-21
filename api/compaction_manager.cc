@@ -14,6 +14,7 @@
 #include "api/api.hh"
 #include "api/api-doc/compaction_manager.json.hh"
 #include "api/api-doc/storage_service.json.hh"
+#include "db/compaction_history_entry.hh"
 #include "db/system_keyspace.hh"
 #include "column_family.hh"
 #include "unimplemented.hh"
@@ -159,8 +160,11 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
                 co_await cm.local().get_compaction_history([&s, &first](const db::compaction_history_entry& entry) mutable -> future<> {
                         cm::history h;
                         h.id = fmt::to_string(entry.id);
+                        h.shard_id = entry.shard_id;
                         h.ks = std::move(entry.ks);
                         h.cf = std::move(entry.cf);
+                        h.compaction_type = entry.compaction_type;
+                        h.started_at = entry.started_at;
                         h.compacted_at = entry.compacted_at;
                         h.bytes_in = entry.bytes_in;
                         h.bytes_out =  entry.bytes_out;
@@ -172,6 +176,24 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
                             e.value = it.second;
                             h.rows_merged.push(std::move(e));
                         }
+                        for (const auto& data : entry.sstables_in) {
+                            httpd::compaction_manager_json::sstableinfo sstable;
+                            sstable.generation = fmt::to_string(data.generation),
+                            sstable.origin = data.origin,
+                            sstable.size = data.size,
+                            h.sstables_in.push(std::move(sstable));
+                        }
+                        for (const auto& data : entry.sstables_out) {
+                            httpd::compaction_manager_json::sstableinfo sstable;
+                            sstable.generation = fmt::to_string(data.generation),
+                            sstable.origin = data.origin,
+                            sstable.size = data.size,
+                            h.sstables_out.push(std::move(sstable));
+                        }
+                        h.total_tombstone_purge_attempt = entry.total_tombstone_purge_attempt;
+                        h.total_tombstone_purge_failure_due_to_overlapping_with_memtable = entry.total_tombstone_purge_failure_due_to_overlapping_with_memtable;
+                        h.total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable = entry.total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable;
+
                         if (!first) {
                             co_await s.write(", ");
                         }

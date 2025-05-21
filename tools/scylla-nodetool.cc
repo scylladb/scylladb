@@ -39,6 +39,7 @@
 #include "api/scrub_status.hh"
 #include "gms/application_state.hh"
 #include "db/config.hh"
+#include "db/compaction_history_entry.hh"
 #include "db_clock.hh"
 #include "utils/log.hh"
 #include "release.hh"
@@ -105,11 +106,21 @@ struct fmt::formatter<file_size_printer> : fmt::formatter<string_view> {
     }
 };
 
+template <>
+struct fmt::formatter<sstables::basic_info> : fmt::formatter<string_view> {
+    template <typename FormatContext>
+    auto format(const sstables::basic_info& sstable, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{generation: {}, origin: {}, size: {}}}", data_value(sstable.generation), sstable.origin, sstable.size);
+    }
+};
+
 namespace {
 
 const auto app_name = "nodetool";
 
 logging::logger nlog(format("scylla-{}", app_name));
+
+using history_entry = db::compaction_history_entry;
 
 struct operation_failed_on_scylladb : public std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -624,17 +635,47 @@ void print_compactionhistory(const std::vector<Entry>& history) {
     for (const auto& e : history) {
         auto output = seq->add_map();
         output->add_item("id", fmt::to_string(e.id));
-        output->add_item("columnfamily_name", e.table);
-        output->add_item("keyspace_name", e.keyspace);
+        output->add_item("shard_id", e.shard_id);
+        output->add_item("columnfamily_name", e.cf);
+        output->add_item("keyspace_name", e.ks);
+        output->add_item("compaction_type", e.compaction_type);
+        output->add_item("started_at", format_compacted_at(e.started_at));
         output->add_item("compacted_at", format_compacted_at(e.compacted_at));
         output->add_item("bytes_in", e.bytes_in);
         output->add_item("bytes_out", e.bytes_out);
-        auto seq = output->add_seq("rows_merged");
-        for (const auto& [key, value] : e.rows_merged) {
-            auto output = seq->add_map();
-            output->add_item("key", key);
-            output->add_item("value", value);
+        {
+            auto seq = output->add_seq("rows_merged");
+            for (const auto& [key, value] : std::map<int32_t, int64_t>(e.rows_merged.begin(), e.rows_merged.end())) {
+                auto output = seq->add_map();
+                output->add_item("key", key);
+                output->add_item("value", value);
+            }
         }
+        {
+            auto seq = output->add_seq("sstables_in");
+            for (const auto& sstable : e.sstables_in) {
+                auto output = seq->add_map();
+                output->add_item("generation", fmt::to_string(data_value(sstable.generation)));
+                output->add_item("origin", sstable.origin);
+                output->add_item("size", sstable.size);
+            }
+        }
+        {
+            auto seq = output->add_seq("sstables_out");
+            for (const auto& sstable : e.sstables_out) {
+                auto output = seq->add_map();
+                output->add_item("generation", fmt::to_string(data_value(sstable.generation)));
+                output->add_item("origin", sstable.origin);
+                output->add_item("size", sstable.size);
+            }
+        }
+        output->add_item("total_tombstone_purge_attempt", e.total_tombstone_purge_attempt);
+        output->add_item(
+                "total_tombstone_purge_failure_due_to_overlapping_with_memtable",
+                e.total_tombstone_purge_failure_due_to_overlapping_with_memtable);
+        output->add_item(
+                "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable",
+                e.total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable);
     }
 }
 
@@ -647,22 +688,12 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
     }
 
     const auto history_json = client.get("/compaction_manager/compaction_history");
-
-    struct history_entry {
-        utils::UUID id;
-        std::string table;
-        std::string keyspace;
-        int64_t compacted_at;
-        int64_t bytes_in;
-        int64_t bytes_out;
-        std::map<int32_t, int64_t> rows_merged;
-    };
     std::vector<history_entry> history;
 
     for (const auto& history_entry_json : history_json.GetArray()) {
         const auto& history_entry_json_object = history_entry_json.GetObject();
 
-        std::map<int32_t, int64_t> rows_merged;
+        std::unordered_map<int32_t, int64_t> rows_merged;
         if (history_entry_json_object.HasMember("rows_merged")) {
             for (const auto& rows_merged_json : history_entry_json_object["rows_merged"].GetArray()) {
                 const auto& rows_merged_json_object = rows_merged_json.GetObject();
@@ -670,45 +701,94 @@ void compactionhistory_operation(scylla_rest_client& client, const bpo::variable
             }
         }
 
+        std::vector<sstables::basic_info> sstables_in;
+        if (history_entry_json_object.HasMember("sstables_in")) {
+            sstables_in.reserve(history_entry_json_object["sstables_in"].GetArray().Size());
+            for (const auto& sstables_in_json : history_entry_json_object["sstables_in"].GetArray()) {
+                const auto& sstables_in_json_object = sstables_in_json.GetObject();
+                sstables_in.emplace_back(sstables::generation_type::from_string(std::string(rjson::to_string_view(sstables_in_json_object["generation"]))),
+                        sstring(rjson::to_string_view(sstables_in_json_object["origin"])),  sstables_in_json_object["size"].GetInt64());
+            }
+        }
+
+        std::vector<sstables::basic_info> sstables_out;
+        if (history_entry_json_object.HasMember("sstables_out")) {
+            sstables_out.reserve(history_entry_json_object["sstables_out"].GetArray().Size());
+            for (const auto& sstables_in_json : history_entry_json_object["sstables_out"].GetArray()) {
+                const auto& sstables_in_json_object = sstables_in_json.GetObject();
+                sstables_out.emplace_back(sstables::generation_type::from_string(std::string(rjson::to_string_view(sstables_in_json_object["generation"]))),
+                        sstring(rjson::to_string_view(sstables_in_json_object["origin"])),  sstables_in_json_object["size"].GetInt64());
+            }
+        }
+
         history.emplace_back(history_entry{
                 .id = utils::UUID(rjson::to_string_view(history_entry_json_object["id"])),
-                .table = std::string(rjson::to_string_view(history_entry_json_object["cf"])),
-                .keyspace = std::string(rjson::to_string_view(history_entry_json_object["ks"])),
+                .shard_id = history_entry_json_object["shard_id"].GetInt(),
+                .ks = sstring(rjson::to_string_view(history_entry_json_object["ks"])),
+                .cf = sstring(rjson::to_string_view(history_entry_json_object["cf"])),
+                .compaction_type = sstring(rjson::to_string_view(history_entry_json_object["compaction_type"])),
+                .started_at = history_entry_json_object["started_at"].GetInt64(),
                 .compacted_at = history_entry_json_object["compacted_at"].GetInt64(),
                 .bytes_in = history_entry_json_object["bytes_in"].GetInt64(),
                 .bytes_out = history_entry_json_object["bytes_out"].GetInt64(),
-                .rows_merged = std::move(rows_merged)});
+                .rows_merged = std::move(rows_merged),
+                .sstables_in = std::move(sstables_in),
+                .sstables_out = std::move(sstables_out),
+                .total_tombstone_purge_attempt = history_entry_json_object["total_tombstone_purge_attempt"].GetInt64(),
+                .total_tombstone_purge_failure_due_to_overlapping_with_memtable =
+                        history_entry_json_object["total_tombstone_purge_failure_due_to_overlapping_with_memtable"].GetInt64(),
+                .total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable =
+                        history_entry_json_object["total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable"].GetInt64()});
     }
 
     std::ranges::sort(history, [] (const history_entry& a, const history_entry& b) { return a.compacted_at > b.compacted_at; });
 
     if (format == "text") {
-        std::array<std::string, 7> header_row{"id", "keyspace_name", "columnfamily_name", "compacted_at", "bytes_in", "bytes_out", "rows_merged"};
-        std::array<size_t, 7> max_column_length{};
+        static constexpr std::array header_row{"id", "shard_id", "keyspace_name", "columnfamily_name", "compaction_type", "started_at", "compacted_at",
+                        "bytes_in", "bytes_out", "rows_merged", "sstables_in", "sstables_out", "total_tombstone_purge_attempt",
+                        "total_tombstone_purge_failure_due_to_overlapping_with_memtable",
+                        "total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable"};
+        static constexpr size_t column_count = header_row.size();
+
+        std::array<size_t, column_count> max_column_length{};
         for (size_t c = 0; c < header_row.size(); ++c) {
-            max_column_length[c] = header_row[c].size();
+            max_column_length[c] = strlen(header_row[c]);
         }
 
-        std::vector<std::array<std::string, 7>> rows;
+        std::vector<std::array<std::string, column_count>> rows;
         rows.reserve(history.size());
         for (const auto& e : history) {
-            rows.push_back({fmt::to_string(e.id), e.keyspace, e.table, format_compacted_at(e.compacted_at), fmt::to_string(e.bytes_in),
-                    fmt::to_string(e.bytes_out), fmt::to_string(e.rows_merged)});
+            rows.push_back({fmt::to_string(e.id), fmt::to_string(e.shard_id), e.ks, e.cf, e.compaction_type, format_compacted_at(e.started_at),
+                    format_compacted_at(e.compacted_at), fmt::to_string(e.bytes_in), fmt::to_string(e.bytes_out),
+                    fmt::to_string(std::map<int32_t, int64_t>(e.rows_merged.begin(), e.rows_merged.end())), fmt::to_string(e.sstables_in),
+                    fmt::to_string(e.sstables_out), fmt::to_string(e.total_tombstone_purge_attempt),
+                    fmt::to_string(e.total_tombstone_purge_failure_due_to_overlapping_with_memtable),
+                    fmt::to_string(e.total_tombstone_purge_failure_due_to_overlapping_with_uncompacting_sstable)});
             for (size_t c = 0; c < rows.back().size(); ++c) {
                 max_column_length[c] = std::max(max_column_length[c], rows.back()[c].size());
             }
         }
 
-        const auto header_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}}\n", max_column_length[0],
-                max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4], max_column_length[5], max_column_length[6]);
-        const auto regular_row_format = fmt::format("{{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:>{}}} {{:>{}}} {{:<{}}}\n", max_column_length[0],
-                max_column_length[1], max_column_length[2], max_column_length[3], max_column_length[4], max_column_length[5], max_column_length[6]);
+        const auto header_row_format =
+                fmt::format("{} \n", fmt::join(max_column_length | std::views::transform([](size_t value) { return fmt::format("{{:<{}}}", value); }), " "));
+
+        static auto regular_row_formatter = [] <typename... Args> (Args&&... args) {
+            return fmt::format("{{:<{}}} {{:>{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:>{}}} {{:>{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} {{:<{}}} \n",
+                               std::forward<Args>(args)...);
+        };
+        const auto regular_row_format = std::apply(regular_row_formatter, max_column_length);
 
         fmt::print(std::cout, "Compaction History:\n");
-        fmt::print(std::cout, fmt::runtime(header_row_format.c_str()), header_row[0], header_row[1], header_row[2], header_row[3], header_row[4],
-                header_row[5], header_row[6]);
+        auto header_row_printer = [format=header_row_format.c_str()] <typename... Args> (Args&&... args) {
+            fmt::print(std::cout, fmt::runtime(format), std::forward<Args>(args)...);
+        };
+        std::apply(header_row_printer, header_row);
+
+        auto regular_row_printer = [format=regular_row_format.c_str()] <typename... Args> (Args&&... args) {
+            fmt::print(std::cout, fmt::runtime(format), std::forward<Args>(args)...);
+        };
         for (const auto& r : rows) {
-            fmt::print(std::cout, fmt::runtime(regular_row_format.c_str()), r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
+            std::apply(regular_row_printer, r);
         }
     } else if (format == "json") {
         print_compactionhistory<json_writer>(history);
