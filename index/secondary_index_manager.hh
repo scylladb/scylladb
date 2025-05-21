@@ -17,6 +17,7 @@
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/index_prop_defs.hh"
 
+#include <functional>
 #include <string_view>
 #include <vector>
 
@@ -95,13 +96,16 @@ public:
     virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) = 0;
 };
 
+template <int MAX>
+void validate_numeric_option(const sstring& value);
+void validate_similarity_function(const sstring& similarity_function);
 class vector_index: public custom_index {
 
-    const std::unordered_set<std::string_view> supported_options = {
-        "similarity_function",
-        "maximum_node_connections",
-        "construction_beam_width",
-        "search_beam_width",
+    const std::unordered_map<std::string_view, std::function<void(const sstring&)>> supported_options = {
+        {"similarity_function", validate_similarity_function},
+        {"maximum_node_connections", validate_numeric_option<512>},
+        {"construction_beam_width", validate_numeric_option<4096>},
+        {"search_beam_width", validate_numeric_option<4096>},
     };
 
 public:

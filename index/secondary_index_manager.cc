@@ -14,6 +14,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "index/secondary_index_manager.hh"
 
@@ -367,6 +368,32 @@ std::optional<std::function<std::shared_ptr<custom_index>()>> secondary_index_ma
     return classes.find(class_name) != classes.end() ? std::make_optional(classes[class_name]) : std::nullopt;
 }
 
+template <int MAX>
+void validate_numeric_option(const sstring& value) {
+    int num_value;
+    try {
+        num_value = std::stoi(value);
+    } catch (...) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+    }
+
+    if (num_value < 0 || num_value > MAX) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} out of valid range (0 - {})", value, MAX));
+    }
+}
+
+void validate_similarity_function(const sstring& value) {
+    static std::unordered_set<std::string_view> supported_functions = {
+        "COSINE",
+        "EUCLIDEAN",
+        "DOT_PRODUCT",
+    };
+
+    if (supported_functions.find(value) == supported_functions.end()) {
+        throw exceptions::invalid_request_exception(format("Similarity function {} is not supported", value));
+    }
+}
+
 void vector_index::validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) {
     if (targets.size() != 1) {
         throw exceptions::invalid_request_exception("Vector index can only be created on a single column");
@@ -385,6 +412,8 @@ void vector_index::validate(const schema &schema, cql3::statements::index_prop_d
     for (auto option: properties.get_raw_options()) {
         if (supported_options.find(option.first) == supported_options.end()) {
             throw exceptions::invalid_request_exception(format("Unsupported option {} for vector index", option.first));
+        } else {
+            supported_options.at(option.first)(option.second);
         }
     }
 }
