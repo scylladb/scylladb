@@ -8,13 +8,20 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <functional>
+#include <optional>
+#include <ranges>
 #include <seastar/core/shared_ptr.hh>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "index/secondary_index_manager.hh"
 
 #include "cql3/statements/index_target.hh"
 #include "cql3/expr/expression.hh"
 #include "index/target_parser.hh"
+#include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "db/view/view.hh"
 #include "concrete_types.hh"
@@ -339,6 +346,80 @@ bool secondary_index_manager::is_global_index(const schema& s) const {
     return std::ranges::any_of(_indices | std::views::values, [&s] (const index& i) {
         return !i.metadata().local() && s.cf_name() == index_table_name(i.metadata().name());
     });
+}
+
+std::optional<sstring> secondary_index_manager::custom_index_class(const schema& s) const {
+
+    auto idx = _indices.find(index_name_from_table_name(s.cf_name()));
+
+    if (idx == _indices.end() || !(*idx).second.metadata().options().contains(cql3::statements::index_target::custom_index_option_name)) {
+        return std::nullopt;
+    } else {
+        return (*idx).second.metadata().options().at(cql3::statements::index_target::custom_index_option_name);
+    }
+}
+
+// We pass the feature_service as the supported custom classes will depend on the features
+std::optional<std::function<std::shared_ptr<custom_index>()>> secondary_index_manager::get_custom_class(const gms::feature_service& fs, const sstring& class_name) {
+
+    std::unordered_map<std::string_view, std::function<std::shared_ptr<custom_index>()>> classes = {
+        {"vector_index", vector_index_factory},
+    };
+    return classes.find(class_name) != classes.end() ? std::make_optional(classes[class_name]) : std::nullopt;
+}
+
+template <int MAX>
+void validate_numeric_option(const sstring& value) {
+    int num_value;
+    try {
+        num_value = std::stoi(value);
+    } catch (...) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} is not a valid number", value));
+    }
+
+    if (num_value < 0 || num_value > MAX) {
+        throw exceptions::invalid_request_exception(format("Numeric option {} out of valid range (0 - {})", value, MAX));
+    }
+}
+
+void validate_similarity_function(const sstring& value) {
+    static std::unordered_set<std::string_view> supported_functions = {
+        "COSINE",
+        "EUCLIDEAN",
+        "DOT_PRODUCT",
+    };
+
+    if (supported_functions.find(value) == supported_functions.end()) {
+        throw exceptions::invalid_request_exception(format("Similarity function {} is not supported", value));
+    }
+}
+
+void vector_index::validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) {
+    if (targets.size() != 1) {
+        throw exceptions::invalid_request_exception("Vector index can only be created on a single column");
+    }
+
+    auto target = targets[0];
+    auto c_def = schema.get_column_definition(to_bytes(target->column_name()));
+    if (!c_def) {
+        throw exceptions::invalid_request_exception(format("Column {} not found in schema", target->column_name()));
+    }
+    auto type = c_def->type;
+    if (!type->is_vector() || static_cast<const vector_type_impl*>(type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
+        throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
+    }
+
+    for (auto option: properties.get_raw_options()) {
+        if (supported_options.find(option.first) == supported_options.end()) {
+            throw exceptions::invalid_request_exception(format("Unsupported option {} for vector index", option.first));
+        } else {
+            supported_options.at(option.first)(option.second);
+        }
+    }
+}
+
+std::shared_ptr<secondary_index::custom_index> vector_index_factory() {
+    return dynamic_pointer_cast<custom_index>(std::make_shared<vector_index>());
 }
 
 }

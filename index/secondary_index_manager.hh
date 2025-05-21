@@ -10,11 +10,15 @@
 
 #pragma once
 
+#include "gms/feature_service.hh"
 #include "schema/schema.hh"
 
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/statements/index_target.hh"
+#include "cql3/statements/index_prop_defs.hh"
 
+#include <functional>
+#include <string_view>
 #include <vector>
 
 namespace cql3::expr {
@@ -86,6 +90,32 @@ public:
     }
 };
 
+class custom_index {
+public:
+    virtual ~custom_index() = default;
+    virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) = 0;
+};
+
+template <int MAX>
+void validate_numeric_option(const sstring& value);
+void validate_similarity_function(const sstring& similarity_function);
+class vector_index: public custom_index {
+
+    const std::unordered_map<std::string_view, std::function<void(const sstring&)>> supported_options = {
+        {"similarity_function", validate_similarity_function},
+        {"maximum_node_connections", validate_numeric_option<512>},
+        {"construction_beam_width", validate_numeric_option<4096>},
+        {"search_beam_width", validate_numeric_option<4096>},
+    };
+
+public:
+    vector_index() = default;
+    ~vector_index() override = default;
+    void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets) override;
+};
+
+std::shared_ptr<secondary_index::custom_index> vector_index_factory();
+
 class secondary_index_manager {
     data_dictionary::table _cf;
     /// The key of the map is the name of the index as stored in system tables.
@@ -99,6 +129,8 @@ public:
     bool is_index(view_ptr) const;
     bool is_index(const schema& s) const;
     bool is_global_index(const schema& s) const;
+    std::optional<sstring> custom_index_class(const schema& s) const;
+    static std::optional<std::function<std::shared_ptr<custom_index>()>> get_custom_class(const gms::feature_service& fs, const sstring& class_name);
 private:
     void add_index(const index_metadata& im);
 };
