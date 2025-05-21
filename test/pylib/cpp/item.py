@@ -137,7 +137,7 @@ class CppFile(pytest.File):
     def collect(self) -> Iterator[CppTestFunction]:
         for mode in self.modes:
             test_name = self.path.stem
-            self.env['TMPDIR'] = Path(self.parent.config.getoption('tmpdir'), mode).absolute()
+            self.env['TMPDIR'] = (self.facade.temp_dir / mode).absolute()
             if test_name in self.disabled_tests[mode]:
                 continue
             executable = Path(f'{BUILD_DIR}/{mode}/test/{self.path.parent.name}/{test_name}')
