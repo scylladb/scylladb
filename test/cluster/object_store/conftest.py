@@ -1,4 +1,9 @@
-#!/usr/bin/python3
+#
+# Copyright (C) 2023-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+#
+
 import os
 import boto3
 import logging
@@ -6,23 +11,11 @@ import pytest
 import pathlib
 # use minio_server
 from test.pylib.minio_server import MinioServer
+from test.pylib.suite.python import add_s3_options
 
 
 def pytest_addoption(parser):
-    parser.addoption('--keep-tmp', action='store_true',
-                     help="keep the whole temp path")
-    # reserved for tests with real S3
-    s3_options = parser.getgroup("s3-server", description="S3 Server settings")
-    s3_options.addoption('--s3-server-address')
-    s3_options.addoption('--s3-server-port', type=int)
-    s3_options.addoption('--aws-access-key')
-    s3_options.addoption('--aws-secret-key')
-    s3_options.addoption('--aws-region')
-    s3_options.addoption('--s3-server-bucket')
-    parser.addoption("--input", action="store", default="",
-                     help="Input file")
-    parser.addoption("--output", action="store", default="",
-                     help="Output file")
+    add_s3_options(parser)
 
 
 def format_tuples(tuples=None, **kwargs):
