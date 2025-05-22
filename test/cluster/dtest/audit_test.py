@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
+import asyncio
 import copy
 import datetime
 import enum
@@ -30,6 +31,8 @@ from dtest_class import Tester, create_ks
 from tools.assertions import assert_invalid
 from tools.cluster import run_rest_api
 from tools.data import rows_to_list, run_in_parallel
+
+from test.pylib.rest_client import read_barrier
 
 logger = logging.getLogger(__name__)
 
@@ -1096,6 +1099,10 @@ class TestCQLAudit(AuditTester):
             session.execute("CREATE USER test WITH PASSWORD 'test'")
             session.execute("GRANT SELECT ON ks.test1 TO test")
             session.execute("INSERT INTO test1 (k, v1) VALUES (1, 1)")
+
+            logging.info("Waiting for appling permissions")
+            for srv in self.cluster.manager.running_servers():
+                asyncio.run(read_barrier(self.cluster.manager.api, srv.ip_addr))
 
             test_session = self.patient_cql_connection(self.cluster.nodelist()[0], user="test", password="test")
 
