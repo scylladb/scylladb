@@ -12,6 +12,8 @@ import logging
 import asyncio
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')

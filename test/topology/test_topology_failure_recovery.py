@@ -14,6 +14,7 @@ import random
 import sys
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.prepare_3_nodes_cluster
 
 
 def init_random_seed():
