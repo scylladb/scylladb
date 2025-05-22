@@ -700,7 +700,7 @@ size_t hash_value(const shared_ptr<const abstract_type>& x) {
 struct no_match_for_native_data_type {};
 
 template <typename T>
-inline constexpr auto data_type_for_v = no_match_for_native_data_type();
+inline constexpr thread_local auto data_type_for_v = no_match_for_native_data_type();
 
 template <typename Type>
 inline

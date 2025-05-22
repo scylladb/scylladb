@@ -168,7 +168,7 @@ executor::executor(gms::gossiper& gossiper,
 
 
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
-    rjson::add(descr, "CreationDateTime", rjson::value(std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count()));
+    rjson::add(descr, "CreationDateTime", rjson::value(schema.creation_timestamp()));
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
@@ -564,7 +564,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
 
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
     // FIXME: take the tables creation time, not the current time!
-    size_t creation_date_seconds = std::chrono::duration_cast<std::chrono::seconds>(gc_clock::now().time_since_epoch()).count();
+    auto creation_date_seconds = schema->creation_timestamp();
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
