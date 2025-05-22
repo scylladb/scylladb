@@ -18,6 +18,7 @@
 #include "cql3/util.hh"
 #include "schema.hh"
 #include "schema_builder.hh"
+#include "internal_column_set.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema_registry.hh"
 #include <type_traits>
@@ -755,17 +756,23 @@ sstring index_metadata::get_default_index_name(const sstring& cf_name,
     return cf_name + "_idx";
 }
 
-column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_computation_ptr computation, api::timestamp_type dropped_at)
+column_definition::column_definition(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_is_internal is_internal, column_computation_ptr computation, api::timestamp_type dropped_at)
         : _name(std::move(name))
         , _dropped_at(dropped_at)
         , _is_atomic(type->is_atomic())
         , _is_counter(type->is_counter())
         , _is_view_virtual(is_view_virtual)
+        , _is_internal(is_internal)
         , _computation(std::move(computation))
         , type(std::move(type))
         , id(component_index)
         , kind(kind)
-{}
+{
+    if (_is_internal) {
+        SCYLLA_ASSERT(_is_view_virtual == column_view_virtual::no);
+        SCYLLA_ASSERT(kind == column_kind::regular_column || kind == column_kind::static_column);
+    }
+}
 
 auto fmt::formatter<column_definition>::format(const column_definition& cd, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
@@ -774,6 +781,9 @@ auto fmt::formatter<column_definition>::format(const column_definition& cd, fmt:
                          cd.name_as_text(), cd.type->name(), to_sstring(cd.kind));
     if (cd.is_view_virtual()) {
         out = fmt::format_to(out, ", view_virtual");
+    }
+    if (cd.is_internal()) {
+        out = fmt::format_to(out, ", internal");
     }
     if (cd.is_computed()) {
         out = fmt::format_to(out, ", computed:{}", cd.get_computation().serialize());
@@ -1036,7 +1046,7 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
             else {
                 os << "    SELECT ";
                 for (auto& cdef : all_columns()) {
-                    if (cdef.is_hidden_from_cql()) {
+                    if (cdef.is_view_virtual() || cdef.is_internal()) {
                         continue;
                     }
                     if (n++ != 0) {
@@ -1051,6 +1061,9 @@ sstring schema::get_create_statement(const schema_describe_helper& helper, bool 
     } else {
         os << "TABLE " << cql3::util::maybe_quote(ks_name()) << "." << cql3::util::maybe_quote(cf_name()) << " (";
         for (auto& cdef : all_columns()) {
+            if (cdef.is_internal()) {
+                continue;
+            }
             if (with_internals && dropped_columns().contains(cdef.name_as_text())) {
                 // If the column has been re-added after a drop, we don't include it right away. Instead, we'll add the
                 // dropped one first below, then we'll issue the DROP and then the actual ADD for this column, thus
@@ -1355,16 +1368,16 @@ bool schema_builder::has_column(const cql3::column_identifier& c) {
 }
 
 schema_builder& schema_builder::with_column_ordered(const column_definition& c) {
-    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual(), c.get_computation_ptr());
+    return with_column(bytes(c.name()), data_type(c.type), column_kind(c.kind), c.position(), c.view_virtual(), c.is_internal(), c.get_computation_ptr());
 }
 
-schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_view_virtual is_view_virtual) {
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_view_virtual is_view_virtual, column_is_internal is_internal) {
     // component_index will be determined by schema constructor
-    return with_column(name, type, kind, 0, is_view_virtual);
+    return with_column(name, type, kind, 0, is_view_virtual, is_internal);
 }
 
-schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_computation_ptr computation) {
-    _raw._columns.emplace_back(name, type, kind, component_index, is_view_virtual, std::move(computation));
+schema_builder& schema_builder::with_column(bytes name, data_type type, column_kind kind, column_id component_index, column_view_virtual is_view_virtual, column_is_internal is_internal, column_computation_ptr computation) {
+    _raw._columns.emplace_back(name, type, kind, component_index, is_view_virtual, is_internal, std::move(computation));
     if (type->is_multi_cell()) {
         with_collection(name, type);
     } else if (type->is_counter()) {
@@ -1374,7 +1387,7 @@ schema_builder& schema_builder::with_column(bytes name, data_type type, column_k
 }
 
 schema_builder& schema_builder::with_computed_column(bytes name, data_type type, column_kind kind, column_computation_ptr computation) {
-    return with_column(name, type, kind, 0, column_view_virtual::no, std::move(computation));
+    return with_column(name, type, kind, 0, column_view_virtual::no, column_is_internal::no, std::move(computation));
 }
 
 schema_builder& schema_builder::remove_column(bytes name, std::optional<api::timestamp_type> timestamp)
@@ -1734,6 +1747,33 @@ gc_clock::duration schema::paxos_grace_seconds() const {
 
 schema_ptr schema_builder::build(compact_storage cp) {
     return with(cp).build();
+}
+
+internal_column_set::internal_column_set(bytes prefix_arg,
+    std::vector<schema::column> regular_columns_arg,
+    std::vector<schema::column> static_columns_arg)
+    : prefix(std::move(prefix_arg))
+    , regular_columns(std::move(regular_columns_arg))
+    , static_columns(std::move(static_columns_arg))
+{
+    if (!prefix.starts_with('$')) {
+        utils::on_internal_error(fmt::format("Column set prefix \"{}\" must start with the '$' symbol",
+            to_string_view(prefix)));
+    }
+    const auto all_cols = std::views::join(std::array{
+        std::span{regular_columns}, 
+        std::span{static_columns}
+    });
+    if (all_cols.empty()) {
+        utils::on_internal_error(fmt::format("Column set \"{}\" must contain at least one column",
+            to_string_view(prefix)));
+    }
+    for (const auto& c: all_cols) {
+        if (!c.name.starts_with(prefix)) {
+            utils::on_internal_error(fmt::format("Column name \"{}\" must start with the column set prefix \"{}\"",
+                to_string_view(c.name), to_string_view(prefix)));
+        }
+    }
 }
 
 // Useful functions to manipulate the schema's comparator field

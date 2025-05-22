@@ -29,6 +29,7 @@
 #include "gms/gossiper.hh"
 #include "view_info.hh"
 #include "schema/schema_builder.hh"
+#include "schema/internal_column_set.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
 #include "db/schema_applier.hh"
@@ -1002,6 +1003,71 @@ template
 future<> migration_manager::announce<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
 template
 future<> migration_manager::announce<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+
+future<schema_ptr> migration_manager::inject_internal_columns(schema_ptr target, 
+        const internal_column_set& column_set)
+{
+    const auto find_schema = [table_id=target->id()](migration_manager& mm) {
+        return mm._storage_proxy.get_db().local().find_schema(table_id);
+    };
+    const auto columns_exist = [&column_set](const schema& s) {
+        const auto& non_empty = column_set.regular_columns.empty()
+            ? column_set.static_columns
+            : column_set.regular_columns;
+        return s.get_column_definition(non_empty.begin()->name) != nullptr;
+    };
+
+    if (columns_exist(*target)) {
+        co_return target;
+    }
+    mlogger.info("Injecting internal column set \"{}\" into the table \"{}.{}\"", 
+        to_string_view(column_set.prefix), target->ks_name(), target->cf_name());
+    co_await container().invoke_on(0, coroutine::lambda([&column_set, &find_schema, &columns_exist] (migration_manager& mm) -> future<> {
+        auto retries = mm.get_concurrent_ddl_retries();
+        while (true)  {
+            try {
+                auto guard = co_await mm.start_group0_operation();
+                const auto s = find_schema(mm);
+                if (columns_exist(*s)) {
+                    // read_apply_mutex is acquired in start_group0_operation and in
+                    // group0_state_machine::apply. This guarantees that merge_schema has
+                    // already completed, the new schema is published on all shards,
+                    // and it's safe to use it on the original shard once we return from smp::submit_to.
+
+                    co_return;
+                }
+                auto cfm = schema_builder(s);
+                for (const auto& c: column_set.regular_columns) {
+                    cfm.with_column(c.name, c.type, column_kind::regular_column, 
+                        column_view_virtual::no, column_is_internal::yes);
+                }
+                for (const auto& c: column_set.static_columns) {
+                    cfm.with_column(c.name, c.type, column_kind::static_column, 
+                        column_view_virtual::no, column_is_internal::yes);
+                }
+                auto mutations = co_await prepare_column_family_update_announcement(mm._storage_proxy,
+                    std::move(cfm).build(),
+                    {},
+                    guard.write_timestamp());
+                co_await mm.announce(std::move(mutations),
+                    std::move(guard),
+                    fmt::format("Add internal column set \"{}\"", to_string_view(column_set.prefix)));
+                break;
+            } catch (const service::group0_concurrent_modification& ex) {
+                mlogger.warn("Failed to inject column set \"{}\" due to guard conflict.{}.",
+                    to_string_view(column_set.prefix),
+                    retries ? " Retrying" : " Number of retries exceeded, giving up");
+                if (retries--) {
+                    continue;
+                }
+                throw;
+            }
+        }
+    }));
+    auto result = find_schema(*this);
+    SCYLLA_ASSERT(columns_exist(*result));
+    co_return result;
+}
 
 future<group0_guard> migration_manager::start_group0_operation() {
     SCYLLA_ASSERT(this_shard_id() == 0);
