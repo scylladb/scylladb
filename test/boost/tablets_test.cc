@@ -1965,7 +1965,7 @@ alter_result alter_replication(cql_test_env& e,
     new_ks_props.add_property("replication", alter_options);
     new_ks_props.validate();
     BOOST_REQUIRE(new_ks_props.get_replication_strategy_class().has_value());
-    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, e.local_db().features());
+    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, e.local_db().features(), e.local_db().get_config());
     auto new_options = ks_md->strategy_options();
 
     testlog.info("Altering {} from {} using {} to {}", ks_name, rs.get_config_options(), alter_options, new_options);
