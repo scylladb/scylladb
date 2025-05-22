@@ -1488,7 +1488,7 @@ static db::rate_limiter::can_proceed account_singular_ranges_to_rate_limit(
         if (!range.is_singular()) {
             continue;
         }
-        auto token = dht::token::to_int64(ranges.front().start_ref()->value().token());
+        auto token = dht::token::to_int64(ranges.front().start()->value().token());
         if (limiter.account_operation(read_label, token, table_limit, rate_limit_info) == db::rate_limiter::can_proceed::no) {
             // Don't return immediately - account all ranges first
             ret = can_proceed::no;

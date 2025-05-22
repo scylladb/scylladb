@@ -127,7 +127,7 @@ cas_request::old_row cas_request::find_old_row(const cas_row_update& op) const {
     if (_key.empty()) {
         throw exceptions::invalid_request_exception("Empty partition key range");
     }
-    const partition_key& pkey = _key.front().start_ref()->value().key().value();
+    const partition_key& pkey = _key.front().start()->value().key().value();
     // We must ignore statement clustering column restriction when
     // choosing a row to check the conditions. If there is no
     // exact match, choose static row to check if the statement
@@ -141,7 +141,7 @@ cas_request::old_row cas_request::find_old_row(const cas_row_update& op) const {
     if (op.ranges.empty()) {
         throw exceptions::invalid_request_exception("Empty clustering range");
     }
-    const clustering_key& ckey = op.ranges.front().start_ref() ?  op.ranges.front().start_ref()->value() : empty_ckey;
+    const clustering_key& ckey = op.ranges.front().start() ?  op.ranges.front().start()->value() : empty_ckey;
     auto row = _rows.find_row(pkey, ckey);
     auto ckey_ptr = &ckey;
     if (row == nullptr && !ckey.is_empty() &&
@@ -159,7 +159,7 @@ seastar::shared_ptr<cql_transport::messages::result_message>
 cas_request::build_cas_result_set(seastar::shared_ptr<cql3::metadata> metadata,
                                   const column_set& columns,
                                   bool is_applied) const {
-    const partition_key& pkey = _key.front().start_ref()->value().key().value();
+    const partition_key& pkey = _key.front().start()->value().key().value();
     const clustering_key empty_ckey = clustering_key::make_empty();
     auto result_set = std::make_unique<cql3::result_set>(metadata);
 

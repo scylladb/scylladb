@@ -11,13 +11,13 @@
 static inline
 const dht::token& start_token(const dht::partition_range& r) {
     static const dht::token min_token = dht::minimum_token();
-    return r.start_ref() ? r.start_ref()->value().token() : min_token;
+    return r.start() ? r.start()->value().token() : min_token;
 }
 
 static inline
 const dht::token& end_token(const dht::partition_range& r) {
     static const dht::token max_token = dht::maximum_token();
-    return r.end_ref() ? r.end_ref()->value().token() : max_token;
+    return r.end() ? r.end()->value().token() : max_token;
 }
 
 query_ranges_to_vnodes_generator::query_ranges_to_vnodes_generator(std::unique_ptr<locator::token_range_splitter> splitter, schema_ptr s, dht::partition_range_vector ranges, bool local) :

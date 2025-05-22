@@ -1711,8 +1711,8 @@ create_sharding_metadata(utils::chunked_vector<dht::partition_range> ranges) {
     for (auto&& range : std::move(ranges)) {
         if (true) { // keep indentation
             // we know left/right are not infinite
-            auto&& left = range.start_ref()->value();
-            auto&& right = range.end_ref()->value();
+            auto&& left = range.start()->value();
+            auto&& right = range.end()->value();
             auto&& left_token = left.token();
             auto left_exclusive = !left.has_key() && left.bound() == dht::ring_position::token_bound::end;
             auto&& right_token = right.token();
@@ -2862,16 +2862,16 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_sample_indexes_for_ran
         return uint64_t((binary_search(_schema->get_partitioner(), _components->summary.entries, k, token) + 1) * -1);
     };
     uint64_t left = 0;
-    if (range.start_ref()) {
-        left = search(range.start_ref()->is_inclusive(), range.start_ref()->value());
+    if (range.start()) {
+        left = search(range.start()->is_inclusive(), range.start()->value());
         if (left == entries_size) {
             // left is past the end of the sampling.
             return std::nullopt;
         }
     }
     uint64_t right = entries_size;
-    if (range.end_ref()) {
-        right = search(!range.end_ref()->is_inclusive(), range.end_ref()->value());
+    if (range.end()) {
+        right = search(!range.end()->is_inclusive(), range.end()->value());
         if (right == 0) {
             // The first key is strictly greater than right.
             return std::nullopt;
@@ -2914,10 +2914,10 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(
     index_comparator cmp(*_schema);
     dht::ring_position_comparator rp_cmp(*_schema);
     uint64_t left = 0;
-    if (range.start_ref()) {
-        dht::ring_position_view pos = range.start_ref()->is_inclusive()
-            ? dht::ring_position_view::starting_at(range.start_ref()->value())
-            : dht::ring_position_view::ending_at(range.start_ref()->value());
+    if (range.start()) {
+        dht::ring_position_view pos = range.start()->is_inclusive()
+            ? dht::ring_position_view::starting_at(range.start()->value())
+            : dht::ring_position_view::ending_at(range.start()->value());
 
         // There is no summary entry for the last key, so in order to determine
         // if pos overlaps with the sstable or not we have to compare with the
@@ -2935,10 +2935,10 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(
         }
     }
     uint64_t right = entries_size;
-    if (range.end_ref()) {
-        dht::ring_position_view pos = range.end_ref()->is_inclusive()
-                                      ? dht::ring_position_view::ending_at(range.end_ref()->value())
-                                      : dht::ring_position_view::starting_at(range.end_ref()->value());
+    if (range.end()) {
+        dht::ring_position_view pos = range.end()->is_inclusive()
+                                      ? dht::ring_position_view::ending_at(range.end()->value())
+                                      : dht::ring_position_view::starting_at(range.end()->value());
 
         right = std::distance(std::begin(entries),
             std::lower_bound(entries.begin(), entries.end(), pos, cmp));

@@ -1322,7 +1322,7 @@ private:
     future<> initialize() {
         if (_single_partition_read) {
             _sst->get_stats().on_single_partition_read();
-            const auto& key = dht::ring_position_view(_pr.start_ref()->value());
+            const auto& key = dht::ring_position_view(_pr.start()->value());
             const auto present = co_await get_index_reader().advance_lower_and_check_if_present(key);
 
             if (!present) {

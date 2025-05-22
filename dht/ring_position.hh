@@ -193,11 +193,11 @@ public:
     }
 
     static ring_position_view for_range_start(const partition_range& r) {
-        return r.start_ref() ? ring_position_view(r.start_ref()->value(), after_key(!r.start_ref()->is_inclusive())) : min();
+        return r.start() ? ring_position_view(r.start()->value(), after_key(!r.start()->is_inclusive())) : min();
     }
 
     static ring_position_view for_range_end(const partition_range& r) {
-        return r.end_ref() ? ring_position_view(r.end_ref()->value(), after_key(r.end_ref()->is_inclusive())) : max();
+        return r.end() ? ring_position_view(r.end()->value(), after_key(r.end()->is_inclusive())) : max();
     }
 
     static ring_position_view for_after_key(const dht::decorated_key& dk) {
@@ -311,11 +311,11 @@ public:
     }
 
     static ring_position_ext for_range_start(const partition_range& r) {
-        return r.start_ref() ? ring_position_ext(r.start_ref()->value(), after_key(!r.start_ref()->is_inclusive())) : min();
+        return r.start() ? ring_position_ext(r.start()->value(), after_key(!r.start()->is_inclusive())) : min();
     }
 
     static ring_position_ext for_range_end(const partition_range& r) {
-        return r.end_ref() ? ring_position_ext(r.end_ref()->value(), after_key(r.end_ref()->is_inclusive())) : max();
+        return r.end() ? ring_position_ext(r.end()->value(), after_key(r.end()->is_inclusive())) : max();
     }
 
     static ring_position_ext for_after_key(const dht::decorated_key& dk) {
