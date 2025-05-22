@@ -350,6 +350,7 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     valid_keyspaces = [
         create_ok([0, 0]),
         create_ok([1, 0]),
+        create_ok([2, 0]),
         create_ok([3, 0]),
         create_ok(0)
     ]
@@ -358,7 +359,6 @@ async def test_arbiter_dc_rf_rack_valid_keyspaces(manager: ManagerClient):
     # because then we can't predict what error will say.
     invalid_keyspaces = [
         create_fail([4, 0], 1, 4, 3),
-        create_fail([2, 0], 1, 2, 3),
         create_fail([0, 1], 2, 1, 0),
         create_fail([0, 2], 2, 2, 0),
         create_fail([0, 3], 2, 3, 0),
