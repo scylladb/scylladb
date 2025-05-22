@@ -12,6 +12,7 @@
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
 #include "locator/host_id.hh"
+#include "locator/tablets.hh"
 #include "locator/types.hh"
 #include "locator/snitch_base.hh"
 #include "utils/assert.hh"
@@ -513,7 +514,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                 "NetworkTopologyStrategy", params);
         auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(tab_awr_ptr);
-        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
+        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count, std::nullopt).get();
         full_ring_check(tmap, ars_ptr, stm.get());
 
         // Test reallocate_tablets after randomizing a different set of options
@@ -523,7 +524,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                 "NetworkTopologyStrategy", params);
         auto realloc_tab_awr_ptr = realloc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(realloc_tab_awr_ptr);
-        auto realloc_tmap = tab_awr_ptr->reallocate_tablets(s, stm.get(), tmap).get();
+        auto realloc_tmap = tab_awr_ptr->reallocate_tablets(s, stm.get(), tmap, std::nullopt).get();
         full_ring_check(realloc_tmap, realloc_ars_ptr, stm.get());
     }
 }
@@ -605,7 +606,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     auto nts_ptr = dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
-    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, tmptr, tablet_count).get();
+    auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, tmptr, tablet_count, std::nullopt).get();
     full_ring_check(tmap, ars_ptr, stm.get());
     check_tablets_balance(tmap, nts_ptr, topo);
 
@@ -618,7 +619,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         auto inc_nts_ptr = dynamic_cast<const network_topology_strategy*>(inc_ars_ptr.get());
         auto inc_tab_awr_ptr = inc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(inc_tab_awr_ptr);
-        auto inc_tmap = inc_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap).get();
+        auto inc_tmap = inc_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap, std::nullopt).get();
         full_ring_check(inc_tmap, ars_ptr, stm.get());
         check_tablets_balance(inc_tmap, inc_nts_ptr, topo);
     }
@@ -632,7 +633,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         auto dec_nts_ptr = dynamic_cast<const network_topology_strategy*>(dec_ars_ptr.get());
         auto dec_tab_awr_ptr = dec_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(dec_tab_awr_ptr);
-        auto dec_tmap = dec_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap).get();
+        auto dec_tmap = dec_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap, std::nullopt).get();
         full_ring_check(dec_tmap, ars_ptr, stm.get());
         check_tablets_balance(dec_tmap, dec_nts_ptr, topo);
     }
@@ -1293,11 +1294,11 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
             "NetworkTopologyStrategy", params);
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
-    auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1).get();
+    auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1, std::nullopt).get();
     auto base_table_id = base_schema->id();
     testlog.debug("base_table_id={}", base_table_id);
     auto view_table_id = view_schema->id();
-    auto view_tmap = tab_awr_ptr->allocate_tablets_for_new_table(view_schema, tmptr, 1).get();
+    auto view_tmap = tab_awr_ptr->allocate_tablets_for_new_table(view_schema, tmptr, 1, std::nullopt).get();
     testlog.debug("view_table_id={}", view_table_id);
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
@@ -1446,11 +1447,11 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
             "NetworkTopologyStrategy", params);
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
-    auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1).get();
+    auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1, std::nullopt).get();
     auto base_table_id = base_schema->id();
     testlog.debug("base_table_id={}", base_table_id);
     auto view_table_id = view_schema->id();
-    auto view_tmap = tab_awr_ptr->allocate_tablets_for_new_table(view_schema, tmptr, 1).get();
+    auto view_tmap = tab_awr_ptr->allocate_tablets_for_new_table(view_schema, tmptr, 1, std::nullopt).get();
     testlog.debug("view_table_id={}", view_table_id);
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
@@ -1527,6 +1528,143 @@ SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_lt_rack
 
 SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_gt_racks) {
     test_complex_rack_aware_view_pairing_test(true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rf_rack_valid_tablet_allocation) {
+    auto& random_engine = seastar::testing::local_random_engine;
+    locator::token_metadata::config tm_cfg;
+    auto my_address = gms::inet_address("localhost");
+
+    constexpr size_t NODES = 30;
+    constexpr size_t RUNS = 10;
+
+    host_id_vector_replica_set nodes;
+    nodes.reserve(NODES);
+    std::generate_n(std::back_inserter(nodes), NODES, [i = 0u]() mutable {
+        return host_id{utils::UUID(0, ++i)};
+    });
+
+    tm_cfg.topo_cfg.this_endpoint = my_address;
+    tm_cfg.topo_cfg.this_cql_address = my_address;
+    tm_cfg.topo_cfg.this_host_id = nodes[0];
+    tm_cfg.topo_cfg.local_dc_rack = locator::endpoint_dc_rack::default_location;
+
+    for (size_t run = 0; run < RUNS; ++run) {
+        semaphore sem(1);
+        shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
+        std::unordered_map<sstring, size_t> racks_per_dc;
+
+        stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+            int free_nodes = nodes.size();
+            int dc_index = 0;
+            while (free_nodes) {
+                auto dc = fmt::format("dc{}", dc_index++);
+                auto rf = tests::random::get_int(1, std::min(free_nodes, 6));
+                free_nodes -= rf;
+                racks_per_dc[dc] = rf;
+            }
+
+            auto nodes_it = nodes.begin();
+            double point = 1;
+            for (auto& [dc, rack_count] : racks_per_dc) {
+                for (size_t i = 0; i < rack_count; ++i) {
+                    std::unordered_set<token> tokens;
+                    tokens.insert(token{tests::d2t(point / nodes.size())});
+                    tm.get_topology().add_or_update_endpoint(*nodes_it, endpoint_dc_rack{dc, to_sstring(i)}, locator::node::state::normal, 1);
+                    co_await tm.update_normal_tokens(std::move(tokens), *nodes_it);
+                    ++nodes_it;
+                    ++point;
+                }
+            }
+            co_return;
+        }).get();
+
+
+        auto s = schema_builder("ks", "tb")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
+
+        auto make_random_options = [&] () {
+            auto option_dcs = racks_per_dc | std::views::keys | std::ranges::to<std::vector>();
+            std::map<sstring, sstring> options;
+            std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
+            size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
+            for (size_t i = 0; i < num_option_dcs; ++i) {
+                const auto& dc = option_dcs[i];
+                size_t rf_for_dc = tests::random::get_int(racks_per_dc[dc]);
+                options.emplace(dc, fmt::to_string(rf_for_dc));
+            }
+            return options;
+        };
+
+        // Create the replication strategy
+        auto options = make_random_options();
+        size_t tablet_count = 1 + tests::random::get_int(99);
+        testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
+        locator::replication_strategy_params params(options, tablet_count);
+        auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
+                "NetworkTopologyStrategy", params);
+        auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
+        BOOST_REQUIRE(tab_awr_ptr);
+        auto chosen_racks = tab_awr_ptr->choose_racks(s, stm.get(), tablet_map(1ul << log2ceil(tablet_count))).get();
+        auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count, chosen_racks).get();
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            tm.tablets().set_tablet_map(s->id(), tmap);
+            return make_ready_future();
+        }).get();
+        // Validate that the keyspace is rf-rack-valid (by checking its only table)
+        auto first_tablet_racks = locator::get_racks_per_dc_used_by_table(stm.get(), s);
+        locator::validate_rf_rack_valid_replication_for_table(stm.get(), s, first_tablet_racks, s->cf_name());
+
+        auto s2 = schema_builder("ks", "tb2")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("v", utf8_type)
+            .build();
+        auto tmap2 = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count, first_tablet_racks).get();
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            tm.tablets().set_tablet_map(s2->id(), tmap2);
+            return make_ready_future();
+        }).get();
+        // Validate that the keyspace is rf-rack-valid (by checking its only table)
+        locator::validate_rf_rack_valid_replication_for_table(stm.get(), s2, first_tablet_racks, s2->cf_name());
+
+        // Test reallocate_tablets after randomizing a different set of options
+        auto realloc_options = make_random_options();
+        locator::replication_strategy_params realloc_params(realloc_options, tablet_count);
+        auto realloc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
+                "NetworkTopologyStrategy", params);
+        auto realloc_tab_awr_ptr = realloc_ars_ptr->maybe_as_tablet_aware();
+        BOOST_REQUIRE(realloc_tab_awr_ptr);
+        chosen_racks = realloc_tab_awr_ptr->choose_racks(s, stm.get(), tmap).get();
+        auto realloc_tmap = tab_awr_ptr->reallocate_tablets(s, stm.get(), tmap, chosen_racks).get();
+        auto realloc_tmap2 = tab_awr_ptr->reallocate_tablets(s2, stm.get(), tmap2, chosen_racks).get();
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            tm.tablets().set_tablet_map(s->id(), realloc_tmap);
+            tm.tablets().set_tablet_map(s2->id(), realloc_tmap2);
+            return make_ready_future();
+        }).get();
+        // Validate that the keyspace is rf-rack-valid (by checking both tables)
+        auto realloc_first_tablet_racks = locator::get_racks_per_dc_used_by_table(stm.get(), s);
+        locator::validate_rf_rack_valid_replication_for_table(stm.get(), s, realloc_first_tablet_racks, s->cf_name());
+        locator::validate_rf_rack_valid_replication_for_table(stm.get(), s2, realloc_first_tablet_racks, s->cf_name());
+
+        // Now validate that 'choose_racks' throws if the options are not rf-rack-valid (rf for some random dc is higher than the number of racks)
+        std::map<sstring, sstring> invalid_options = make_random_options();
+        auto option_dcs = racks_per_dc | std::views::keys | std::ranges::to<std::vector>();
+        std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
+        sstring invalid_dc = option_dcs.front();
+        invalid_options[invalid_dc] = fmt::format("{}", racks_per_dc[invalid_dc] + tests::random::get_int(1, 3));
+        locator::replication_strategy_params invalid_params(invalid_options, tablet_count);
+        auto invalid_ars_ptr = abstract_replication_strategy::create_replication_strategy(
+                "NetworkTopologyStrategy", invalid_params);
+        auto invalid_tab_awr_ptr = invalid_ars_ptr->maybe_as_tablet_aware();
+        BOOST_REQUIRE(invalid_tab_awr_ptr);
+        set_abort_on_internal_error(false);
+        BOOST_REQUIRE_THROW(
+            invalid_tab_awr_ptr->choose_racks(s, stm.get(), tablet_map(tablet_count)).get(),
+            std::runtime_error);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

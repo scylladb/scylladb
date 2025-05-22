@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
@@ -2059,6 +2060,9 @@ public:
                 if (node.dc() != src_info.dc() || node.drained) {
                     continue;
                 }
+                if (_db.get_config().rf_rack_valid_keyspaces() && node.rack() != src_info.rack()) {
+                    continue;
+                }
                 viable_targets.emplace(id);
             }
 
@@ -2096,9 +2100,14 @@ public:
         if (dst_info.rack() != src_info.rack()) {
             auto targets = get_viable_targets();
             if (!targets.contains(dst_info.id)) {
-                auto new_rack_load = rack_load[dst_info.rack()] + 1;
-                lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
-                               tablet, dst_info.rack(), new_rack_load, max_rack_load);
+                if (_db.get_config().rf_rack_valid_keyspaces()) {
+                    lblogger.debug("candidate tablet {} skipped because `rf_rack_valid_keyspaces` is enabled, RF is greater than 1 in dc {}"
+                        " and source is on a different rack than destination ({} and {})", tablet.tablet, src_info.dc(), src_info.rack(), dst_info.rack());
+                } else {
+                    auto new_rack_load = rack_load[dst_info.rack()] + 1;
+                    lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
+                                tablet, dst_info.rack(), new_rack_load, max_rack_load);
+                }
                 _stats.for_dc(src_info.dc()).tablets_skipped_rack++;
                 return skip_info{std::move(targets)};
             }
@@ -3145,7 +3154,25 @@ public:
                         table_plan.target_tablet_count_aligned, s.ks_name(), s.cf_name());
             }
             auto tablet_count = table_plan.target_tablet_count_aligned;
-            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
+            std::optional<std::unordered_map<sstring, std::set<sstring>>> dc_racks;
+            if (_db.get_config().rf_rack_valid_keyspaces()) {
+                if (!ksm.tables().empty()) {
+                    dc_racks = std::unordered_map<sstring, std::set<sstring>>();
+                    auto first_table_id = ksm.tables().front()->id();
+                    auto first_table_tablet_map = tm->tablets().get_tablet_map(first_table_id);
+                    auto first_table_tablet_info = first_table_tablet_map.get_tablet_info(first_table_tablet_map.first_tablet());
+                    for (auto& replica : first_table_tablet_info.replicas) {
+                        auto node = tm->get_topology().find_node(replica.host);
+                        if (!node) {
+                            on_internal_error(lblogger, format("Node {} not found in topology", replica.host));
+                        }
+                        (*dc_racks)[node->dc()].insert(node->rack());
+                    }
+                } else {
+                    dc_racks = tablet_rs->choose_racks(s.shared_from_this(), tm, tablet_map(2)).get();
+                }
+            }
+            auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count, std::move(dc_racks)).get();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
         }
     }
