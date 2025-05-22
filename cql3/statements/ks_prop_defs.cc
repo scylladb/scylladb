@@ -32,12 +32,13 @@ static std::map<sstring, sstring> prepare_options(
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
+    const auto& all_dcs = tm.get_topology().get_datacenter_racks();
 
-    logger.info("prepare_options: {}: is_nts={} {{{}}}", strategy_class, is_nts,
+    logger.info("prepare_options: {}: is_nts={} {{{}}}: all_dcs={}", strategy_class, is_nts,
             fmt::join(options | std::views::transform([] (auto& x) {
                             return fmt::format("{}:{}", x.first, x.second);
                     }),
-                    ","));
+                    ","), all_dcs);
 
     if (!is_nts) {
         return options;
@@ -47,7 +48,6 @@ static std::map<sstring, sstring> prepare_options(
     // If the user simply switches from another strategy without providing any options,
     // but the other strategy used the 'replication_factor' option, it will also be expanded.
     // See issue CASSANDRA-14303.
-
     std::optional<sstring> rf;
     auto it = options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
     if (it != options.end()) {
@@ -63,6 +63,35 @@ static std::map<sstring, sstring> prepare_options(
         }
     }
 
+    auto expand_dc_racks = [&] (const sstring& dc, const sstring& rf) {
+        if (!std::all_of(rf.begin(), rf.end(), [] (char c) {return isdigit(c);})) {
+            return;
+        }
+
+        auto it = all_dcs.find(dc);
+        if (it == all_dcs.end()) {
+            return;
+        }
+        const auto& dc_racks = it->second;
+        auto ordered_racks = dc_racks | std::views::transform([] (const auto& x) { return x.first; }) | std::ranges::to<std::vector<sstring>>();
+        std::ranges::sort(ordered_racks);
+
+        auto allowed_racks = std::ranges::to<std::unordered_set<sstring>>(ordered_racks);
+        locator::abstract_replication_strategy::parse_replication_factor(rf, allowed_racks);
+
+        sstring val;
+        size_t nr_racks = std::stol(rf);
+        if (nr_racks > dc_racks.size()) {
+            logger.warn("Cannot expand rf={}: dc_racks={}", rf, fmt::join(dc_racks | std::views::keys, ","));
+            val = rf;
+        } else {
+            ordered_racks.resize(nr_racks);
+            val = fmt::format("{}", fmt::join(ordered_racks, ","));
+        }
+        logger.debug("Expanding {}: {}", dc, val);
+        options[dc] = val;
+    };
+
     if (rf.has_value()) {
 
         // We keep previously specified DC factors for safety.
@@ -72,22 +101,12 @@ static std::map<sstring, sstring> prepare_options(
             }
         }
 
-        for (const auto& [dc, dc_racks] : tm.get_topology().get_datacenter_racks()) {
-            auto ordered_racks = dc_racks | std::views::transform([] (const auto& x) { return x.first; }) | std::ranges::to<std::vector<sstring>>();
-            std::ranges::sort(ordered_racks);
-
-            auto allowed_racks = std::ranges::to<std::unordered_set<sstring>>(ordered_racks);
-            locator::abstract_replication_strategy::parse_replication_factor(*rf, allowed_racks);
-
-            sstring val;
-            size_t nr_racks = std::stol(*rf);
-            if (nr_racks > dc_racks.size()) {
-                val = *rf;
-            } else {
-                ordered_racks.resize(nr_racks);
-                val = fmt::format("{}", fmt::join(ordered_racks, ","));
-            }
-            options.emplace(dc, val);
+        for (const auto& dc : all_dcs | std::views::keys) {
+            expand_dc_racks(dc, *rf);
+        }
+    } else {
+        for (const auto& [dc, dc_rf] : options) {
+            expand_dc_racks(dc, dc_rf);
         }
     }
 
