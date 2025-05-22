@@ -10,7 +10,6 @@ import enum
 import itertools
 import logging
 import os.path
-import signal
 import socketserver
 import tempfile
 import threading
@@ -18,22 +17,19 @@ import uuid
 from collections import namedtuple
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 import requests
 from cassandra import AlreadyExists, AuthenticationFailed, ConsistencyLevel, InvalidRequest, Unauthorized, Unavailable, WriteFailure
 from cassandra.cluster import NoHostAvailable, Session
 from cassandra.query import SimpleStatement, named_tuple_factory
-from ccmlib.node import NodeError
-from ccmlib.scylla_node import ScyllaNode
+from ccmlib.scylla_node import ScyllaNode, NodeError
 
 from dtest_class import Tester, create_ks
 from tools.assertions import assert_invalid
 from tools.cluster import run_rest_api
-from tools.cluster_topology import generate_cluster_topology
 from tools.data import rows_to_list, run_in_parallel
-from tools.marks import issue_open
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +263,6 @@ class AuditBackendSyslog(AuditBackend):
         self.socket_path = new_socket_path
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestCQLAudit(AuditTester):
     """
@@ -696,7 +691,7 @@ class TestCQLAudit(AuditTester):
 
         expected_error = r"Startup failed: audit::audit_exception \(Bad configuration: invalid 'audit': invalid\)"
         self.ignore_log_patterns.append(expected_error)
-        self.cluster.nodes["node1"].watch_log_for(expected_error)
+        self.cluster.nodelist()[0].watch_log_for(expected_error)
 
     # TODO: verify that the syslog file doesn't exist
     def test_audit_empty_settings(self):
@@ -741,7 +736,8 @@ class TestCQLAudit(AuditTester):
                 pass
             expected_error = r"Startup failed: audit::audit_exception \(Bad configuration: invalid 'audit_categories': INVALID\)"
             self.ignore_log_patterns.append(expected_error)
-            self.cluster.nodes["node1"].watch_log_for(expected_error)
+            self.cluster.nodelist()[0].watch_log_for(expected_error)
+
 
     def test_audit_table(self):
         self.verify_table(audit_settings=AuditTester.audit_default_settings, table_prefix="test_audit_table")
@@ -1033,6 +1029,10 @@ class TestCQLAudit(AuditTester):
 
         audit_paritition_nodes, insert_node, node_to_stop, query_to_fail = self._test_insert_failure_doesnt_report_success_assign_nodes(session=session)
 
+        #TODO remove when host_id is set on startup, we make it only to cache host_id
+        for node in audit_paritition_nodes + [insert_node] + [node_to_stop]:
+            node.cluster.manager.get_host_id(node.server_id) 
+
         if len(audit_paritition_nodes) != 3 or node_to_stop is None or insert_node is None:
             raise pytest.skip(f"Failed to assign nodes for insert failure test")
 
@@ -1250,14 +1250,16 @@ class TestCQLAudit(AuditTester):
 
     class AuditSighupConfigChanger(AuditConfigChanger):
         def change_config(self, test, settings, expected_result):
-            test.cluster.set_configuration_options(settings)
             for node in test.cluster.nodelist():
+                logger.info(f"Changing config via manager.server_update_config: Node={node.address()} settings={settings}")
                 mark = node.mark_log()
-                # send SIGHUP to re-read configuration
-                node.kill(signal.SIGHUP)
-                for param in settings:
-                    node.watch_log_for(r"completed re-reading configuration file", from_mark=mark, timeout=60)
-                    self.verify_change(node, param, settings[param], mark, expected_result)
+                for param, value in settings.items():
+                    mark_per_param = node.mark_log()
+                    logger.info(f"server_update_config: param={param} value={value}")
+                    node.cluster.manager.server_update_config(node.server_id, param, value)
+                    node.watch_log_for(r"completed re-reading configuration file", from_mark=mark_per_param, timeout=60)
+                for param, value in settings.items():
+                    self.verify_change(node, param, value, mark, expected_result)
 
     class AuditCqlConfigChanger(AuditConfigChanger):
         def change_config(self, test, settings, expected_result):
@@ -1275,7 +1277,7 @@ class TestCQLAudit(AuditTester):
 
     @pytest.mark.require("scylladb/scylla-enterprise#1789")
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(issue_open("scylladb/scylla-enterprise#3861"), reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_config_liveupdate(self, helper_class, audit_config_changer):
         """
         Test liveupdate config changes in audit.
@@ -1335,8 +1337,8 @@ class TestCQLAudit(AuditTester):
             with self.assert_no_audit_entries_were_added(session):
                 session.execute(auditted_query)
 
-    @pytest.mark.parametrize("audit_config_changer", [pytest.param(AuditSighupConfigChanger, marks=pytest.mark.xfail(issue_open("#5382"), reason="unfixed #5382")), AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(issue_open("scylladb/scylla-enterprise#3861"), reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("audit_config_changer", [pytest.param(AuditSighupConfigChanger, marks=pytest.mark.xfail(reason="unfixed github.com/scylladb/scylla-enterprise/issues/5382")), AuditCqlConfigChanger])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
@@ -1376,9 +1378,10 @@ class TestCQLAudit(AuditTester):
         """
         with helper_class() as helper:
             audit_settings = helper.update_audit_settings(self.audit_default_settings, modifiers={"audit_keyspaces": "ks,kss", "authenticator": "org.apache.cassandra.auth.PasswordAuthenticator", "authorizer": "org.apache.cassandra.auth.CassandraAuthorizer"})
-            session = self.prepare(nodes=3, helper=helper, audit_settings=audit_settings, user="cassandra", password="cassandra")
 
-            session.execute("CREATE KEYSPACE kss WITH replication = { 'class':'NetworkTopologyStrategy', 'replication_factor': 3 }")
+            session = self.prepare(nodes=1, helper=helper, audit_settings=audit_settings, user="cassandra", password="cassandra")
+
+            session.execute("CREATE KEYSPACE kss WITH replication = { 'class':'NetworkTopologyStrategy', 'replication_factor': 1 }")
             session.execute("CREATE ROLE c")
             session.execute("CREATE SERVICE LEVEL sl")
             num = 100
@@ -1387,7 +1390,7 @@ class TestCQLAudit(AuditTester):
                     session.execute("ATTACH SERVICE_LEVEL sl TO c")
                     session.execute("DETACH SERVICE_LEVEL FROM c")
             def f2():
-                with self.patient_exclusive_cql_connection(self.cluster.nodelist()[1], user="cassandra", password="cassandra") as conn:
+                with self.patient_exclusive_cql_connection(self.cluster.nodelist()[0], user="cassandra", password="cassandra") as conn:
                     for i in range(num):
                         import time
                         time.sleep(0.07)
