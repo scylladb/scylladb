@@ -10,6 +10,7 @@
 #include <fmt/ranges.h>
 #include "db/tablet_options.hh"
 #include "gms/inet_address.hh"
+#include "gms/feature_service.hh"
 #include "inet_address_vectors.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/host_id.hh"
@@ -42,8 +43,10 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/topology_builder.hh"
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
+#include "db/config.hh"
 
 using namespace locator;
 
@@ -946,6 +949,144 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
                     exceptions::configuration_exception);
         };
     });
+}
+
+static
+sstring describe(cql_test_env& e, sstring ks_name) {
+    auto& ks = e.local_db().find_keyspace(ks_name);
+    cql3::description desc = ks.metadata()->describe(e.local_db(), cql3::with_create_statement::yes);
+    auto result = desc.create_statement->linearize();
+    testlog.info("DESCRIBE KEYSPACE {}: {}", ks_name, result);
+    return result;
+}
+
+SEASTAR_TEST_CASE(test_rack_list_rf) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.start_new_dc({"dc1", "rack1a"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack1b");
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_dc({"dc2", "rack2a"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack2b");
+        topo.add_node(service::node_state::normal, shard_count);
+
+        // Single rack
+        e.execute_cql("CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}").get();
+        BOOST_REQUIRE(describe(e, "ks11").contains("'dc1': ['rack1a']"));
+
+        // Two racks
+        e.execute_cql("CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']}").get();
+        BOOST_REQUIRE(describe(e, "ks12").contains("'dc1': ['rack1a', 'rack1b']"));
+
+        // Two DCs, two racks each
+        {
+            e.execute_cql("CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b'], "
+                "'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}").get();
+            auto& opts = e.local_db().find_keyspace("ks22").get_replication_strategy().get_config_options();
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).get_rack_list(),
+                                std::vector<sstring>({"rack1a", "rack1b"}));
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).get_rack_list(),
+                                std::vector<sstring>({"rack2a", "rack2b"}));
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).count(), 2);
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).count(), 2);
+            BOOST_REQUIRE(describe(e, "ks22").contains("'dc1': ['rack1a', 'rack1b']"));
+            BOOST_REQUIRE(describe(e, "ks22").contains("'dc2': ['rack2a', 'rack2b']"));
+        }
+
+        // Two DCs, one using rack list, one using numeric RF
+        // No auto-expansion to rack list.
+        {
+            e.execute_cql("CREATE KEYSPACE ks2n2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2, "
+                "'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}").get();
+            auto& opts = e.local_db().find_keyspace("ks2n2").get_replication_strategy().get_config_options();
+            BOOST_REQUIRE(replication_factor_data(opts.at("dc1")).is_numeric());
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).get_rack_list(),
+                                std::vector<sstring>({"rack2a", "rack2b"}));
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).count(), 2);
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).count(), 2);
+            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc1': '2'"));
+            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc2': ['rack2a', 'rack2b']"));
+        }
+
+        // Non-existent DC
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc3': ['rack2a']}").get(),
+            exceptions::configuration_exception);
+
+        // Rack from the wrong DC
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack2a']}").get(),
+            exceptions::configuration_exception);
+
+        // Duplicated racks
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1a']}").get(),
+            exceptions::configuration_exception);
+
+        // Duplicated racks
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1a']}").get(),
+            exceptions::configuration_exception);
+
+        // Alter to numeric with different count
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "ALTER KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}").get(),
+            exceptions::configuration_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "ALTER KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1}").get(),
+            exceptions::configuration_exception);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_rack_list_rejected_when_feature_not_enabled) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.disabled_features.insert("RACK_LIST_RF");
+    return do_with_cql_env_thread([] (auto& e) {
+        auto& topo = e.get_shared_token_metadata().local().get()->get_topology();
+        auto loc = topo.get_location();
+        auto create_stmt = fmt::format("CREATE KEYSPACE test WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
+                    " '{}': ['{}']}}", loc.dc, loc.rack);
+        BOOST_REQUIRE_THROW(e.execute_cql(create_stmt).get(), exceptions::configuration_exception);
+
+        // Auto-expansion to numeric RF should not happen
+        e.execute_cql(fmt::format("CREATE KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', '{}': 1}}", loc.dc)).get();
+        auto& opts = e.local_db().find_keyspace("test2").get_replication_strategy().get_config_options();
+        BOOST_REQUIRE(replication_factor_data(opts.at(loc.dc)).is_numeric());
+        BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at(loc.dc)).count(), 1);
+        BOOST_REQUIRE(describe(e, "test2").contains(fmt::format("'{}': '1'", loc.dc)));
+
+        // When feature is enabled, rack list is accepted.
+        e.get_feature_service().local().rack_list_rf.enable();
+        e.execute_cql(create_stmt).get();
+
+        // Altering numeric RF to rack list is not supported yet.
+        BOOST_REQUIRE_THROW(e.execute_cql(fmt::format("ALTER KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
+                                                      " '{}': ['{}']}}", loc.dc, loc.rack)).get(),
+                            exceptions::configuration_exception);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_rack_list_rejected_when_using_vnodes) {
+    auto cfg = cql_test_config();
+    return do_with_cql_env_thread([] (auto& e) {
+        auto& topo = e.get_shared_token_metadata().local().get()->get_topology();
+        auto loc = topo.get_location();
+        auto create_stmt = [&] (bool tablets) {
+            return fmt::format("CREATE KEYSPACE abc WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
+                               " '{}': ['{}']}} and TABLETS = {{'enabled': {}}}",
+                               loc.dc, loc.rack, tablets ? "true" : "false");
+        };
+
+        BOOST_REQUIRE_THROW(e.execute_cql(create_stmt(false)).get(), exceptions::configuration_exception);
+        e.execute_cql(create_stmt(true)).get();
+    }, cfg);
 }
 
 } // namespace network_topology_strategy_test

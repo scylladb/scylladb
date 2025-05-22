@@ -156,6 +156,13 @@ public:
         return rack();
     }
 
+    // Starts building a new rack in the current DC.
+    // Returns location of the new rack.
+    endpoint_dc_rack start_new_rack(sstring rack_name) {
+        _rack = std::move(rack_name);
+        return rack();
+    }
+
     // Starts building a new DC.
     // DC is named uniquely in the scope of the process, not just this object.
     endpoint_dc_rack start_new_dc() {
@@ -163,6 +170,13 @@ public:
         _dc = fmt::format("dc{}", next_id.fetch_add(1));
         _rack_id = 0;
         return start_new_rack();
+    }
+
+    // Starts building a new DC.
+    endpoint_dc_rack start_new_dc(endpoint_dc_rack dc_and_rack) {
+        _dc = dc_and_rack.dc;
+        _rack = dc_and_rack.rack;
+        return rack();
     }
 
     locator::load_stats_ptr get_load_stats() const {
