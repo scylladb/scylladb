@@ -300,6 +300,8 @@ class ScyllaNode:
                            wait_seconds: int | None = None,
                            marks: list[tuple[ScyllaNode, int]] | None = None,
                            dump_core: bool = True) -> None:  # not implemented
+        if wait_seconds is None:
+            wait_seconds = 127 if self.scylla_mode() != "debug" else 600
         if not wait_for(func=lambda: not self.is_running(), timeout=wait_seconds):
             raise NodeError(f"Problem stopping node {self.name}")
 
