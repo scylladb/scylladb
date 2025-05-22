@@ -90,6 +90,8 @@ def fixture_dtest_setup(request: FixtureRequest,
         for name, value in cluster_options.kwargs.items():
             dtest_setup.cluster_options.setdefault(name, value)
 
+    dtest_setup.init_default_config()
+
     # at this point we're done with our setup operations in this fixture
     # yield to allow the actual test to run
     yield dtest_setup
