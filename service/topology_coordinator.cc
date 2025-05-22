@@ -944,7 +944,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto tmptr = get_token_metadata_ptr();
                     cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
                     new_ks_props.validate();
-                    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features());
+                    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
                     locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 

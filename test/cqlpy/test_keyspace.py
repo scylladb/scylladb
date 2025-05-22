@@ -10,16 +10,22 @@ import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread
 
+from ..cluster.util import parse_replication_options
+
+
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
 def test_create_and_drop_keyspace(cql, this_dc):
     cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
-def assert_keyspace(cql, keyspace, expected_class, rf_key):
+def get_replication(cql, keyspace):
     row = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
-    rep = row.replication
+    return parse_replication_options(row.replication)
+
+def assert_keyspace(cql, keyspace, expected_class, rf_key):
+    rep = get_replication(cql, keyspace)
     assert rep["class"] == expected_class
-    assert rep[rf_key] == "1"
+    assert rep[rf_key] == ["rack1"]
 
 # Trying to create a keyspace specifying replication options without replication strategy
 # should result in NetworkTopologyStrategy being set by default.
