@@ -2396,8 +2396,8 @@ void view_builder::reshard(
         if (!opt_range) {
             continue; // Treat it as a new table.
         }
-        auto start_bound = opt_range->start() ? std::move(opt_range->start()->value()) : dht::minimum_token();
-        auto end_bound = opt_range->end() ? std::move(opt_range->end()->value()) : dht::minimum_token();
+        auto start_bound = opt_range->start_ref() ? std::move(opt_range->start_ref()->value()) : dht::minimum_token();
+        auto end_bound = opt_range->end_ref() ? std::move(opt_range->end_ref()->value()) : dht::minimum_token();
         auto s = view_build_status{std::move(view), std::move(start_bound), std::move(end_bound)};
         load_view_status(std::move(s), loaded_views);
     }
@@ -3197,7 +3197,7 @@ public:
 
             // before going back to the minimum token, advance current_key to the end
             // and check for built views in that range.
-            _step.current_key = {_step.prange.end().value_or(dht::ring_position::max()).value().token(), partition_key::make_empty()};
+            _step.current_key = { _step.prange.end_ref().value_or(dht::ring_position::max()).value().token(), partition_key::make_empty()};
             check_for_built_views();
 
             _step.current_key = {dht::minimum_token(), partition_key::make_empty()};

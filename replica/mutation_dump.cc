@@ -102,7 +102,7 @@ private:
             const auto force_inclusive = exploded_ck.size() > i + 1;
             return typename interval<T>::bound(value_cast<T>(ck_types.at(i)->deserialize_value(exploded_ck[i])), force_inclusive || b->is_inclusive());
         };
-        return interval<T>(transform_bound(cr.start()), transform_bound(cr.end()));
+        return interval<T>(transform_bound(cr.start_ref()), transform_bound(cr.end_ref()));
     }
 
     query::clustering_range transform_to_underlying_cr(const exploded_clustering_range& cr) {
@@ -140,7 +140,7 @@ private:
             }
             return query::clustering_range::bound(std::move(underlying_ck), is_inclusive);
         };
-        return query::clustering_range(transform_range_bound(cr.start(), false), transform_range_bound(cr.end(), true));
+        return query::clustering_range(transform_range_bound(cr.start_ref(), false), transform_range_bound(cr.end_ref(), true));
     }
 
     void create_underlying_mutation_sources() {
@@ -493,7 +493,7 @@ private:
             co_return;
         }
         if (_prs.front().is_singular()) {
-            _dks.emplace_back(_prs.front().start()->value().as_decorated_key());
+            _dks.emplace_back(_prs.front().start_ref()->value().as_decorated_key());
             _prs.pop_front();
             co_return;
         }
@@ -539,7 +539,7 @@ noncopyable_function<future<std::optional<dht::decorated_key>>()>
 make_partition_key_generator(distributed<replica::database>& db, schema_ptr schema, const dht::partition_range_vector& prs,
         tracing::trace_state_ptr ts, db::timeout_clock::time_point timeout) {
     if (prs.size() == 1 && prs.front().is_singular()) {
-        auto dk_opt = std::optional(prs.front().start()->value().as_decorated_key());
+        auto dk_opt = std::optional(prs.front().start_ref()->value().as_decorated_key());
         return [dk_opt = std::move(dk_opt)] () mutable {
             return make_ready_future<std::optional<dht::decorated_key>>(std::exchange(dk_opt, std::nullopt));
         };

@@ -471,7 +471,7 @@ future<> cache_mutation_reader::read_from_underlying() {
                             if (!_has_rt) {
                             with_allocator(_snp->region().allocator(), [&] {
                                 auto e = alloc_strategy_unique_ptr<rows_entry>(
-                                    current_allocator().construct<rows_entry>(_ck_ranges_curr->start()->value()));
+                                    current_allocator().construct<rows_entry>(_ck_ranges_curr->start_ref()->value()));
                                 // Use _next_row iterator only as a hint, because there could be insertions after _upper_bound.
                                 auto insert_result = rows.insert_before_hint(
                                         _next_row.at_a_row() ? _next_row.get_iterator_in_latest_version() : rows.begin(),
@@ -916,7 +916,7 @@ void cache_mutation_reader::move_to_range(query::clustering_row_ranges::const_it
         // for a hit (before, at and after). If we supported the concept of an incomplete row,
         // we could insert such a row for the lower bound if it's full instead, for both singular and
         // non-singular ranges.
-        if (_ck_ranges_curr->start() && !query::is_single_row(*_schema, *_ck_ranges_curr)) {
+        if (_ck_ranges_curr->start_ref() && !query::is_single_row(*_schema, *_ck_ranges_curr)) {
             // Insert dummy for lower bound
             if (can_populate()) {
                 // FIXME: _lower_bound could be adjacent to the previous row, in which case we could skip this

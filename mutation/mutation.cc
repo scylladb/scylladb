@@ -119,15 +119,15 @@ slice(const std::vector<mutation>& partitions, const dht::partition_range& r) {
     };
 
     return std::ranges::subrange(
-        r.start()
-            ? (r.start()->is_inclusive()
-                ? std::lower_bound(partitions.begin(), partitions.end(), r.start()->value(), cmp())
-                : std::upper_bound(partitions.begin(), partitions.end(), r.start()->value(), cmp()))
+        r.start_ref()
+            ? (r.start_ref()->is_inclusive()
+                ? std::lower_bound(partitions.begin(), partitions.end(), r.start_ref()->value(), cmp())
+                : std::upper_bound(partitions.begin(), partitions.end(), r.start_ref()->value(), cmp()))
             : partitions.cbegin(),
-        r.end()
-            ? (r.end()->is_inclusive()
-              ? std::upper_bound(partitions.begin(), partitions.end(), r.end()->value(), cmp())
-              : std::lower_bound(partitions.begin(), partitions.end(), r.end()->value(), cmp()))
+        r.end_ref()
+            ? (r.end_ref()->is_inclusive()
+              ? std::upper_bound(partitions.begin(), partitions.end(), r.end_ref()->value(), cmp())
+              : std::lower_bound(partitions.begin(), partitions.end(), r.end_ref()->value(), cmp()))
             : partitions.cend());
 }
 

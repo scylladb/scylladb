@@ -699,7 +699,7 @@ mutation_partition_v2::append_clustered_row(const schema& s, position_in_partiti
 mutation_partition_v2::rows_type::const_iterator
 mutation_partition_v2::lower_bound(const schema& schema, const query::clustering_range& r) const {
     check_schema(schema);
-    if (!r.start()) {
+    if (!r.start_ref()) {
         return std::cbegin(_rows);
     }
     return _rows.lower_bound(position_in_partition_view::for_range_start(r), rows_entry::tri_compare(schema));
@@ -708,7 +708,7 @@ mutation_partition_v2::lower_bound(const schema& schema, const query::clustering
 mutation_partition_v2::rows_type::const_iterator
 mutation_partition_v2::upper_bound(const schema& schema, const query::clustering_range& r) const {
     check_schema(schema);
-    if (!r.end()) {
+    if (!r.end_ref()) {
         return std::cend(_rows);
     }
     return _rows.lower_bound(position_in_partition_view::for_range_end(r), rows_entry::tri_compare(schema));

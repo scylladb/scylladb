@@ -65,11 +65,11 @@ static bool ring_position_matches(const schema& s, const dht::partition_range& r
     const auto comparator = dht::ring_position_comparator(s);
 
     if (is_reversed && !range.is_singular()) {
-        const auto& end = range.end();
+        const auto& end = range.end_ref();
         return end && comparator(end->value(), expected_start) == 0 && end->is_inclusive() == expected_inclusiveness;
     }
 
-    const auto& start = range.start();
+    const auto& start = range.start_ref();
     return start && comparator(start->value(), expected_start) == 0 && start->is_inclusive() == expected_inclusiveness;
 }
 
@@ -97,7 +97,7 @@ static bool clustering_position_matches(const schema& s, const query::partition_
     // If the page ended mid-partition the first partition range should start
     // with the last clustering key (exclusive).
     const auto& first_row_range = row_ranges.front();
-    const auto& start = is_reversed ? first_row_range.end() : first_row_range.start();
+    const auto& start = is_reversed ? first_row_range.end_ref() : first_row_range.start_ref();
     if (!start) {
         return false;
     }
@@ -116,7 +116,7 @@ static bool ranges_match(const schema& s, const dht::partition_range& original_r
 
     // For singular ranges end() == start() so they are interchangeable.
     // For non-singular ranges we check only the end().
-    return bound_eq(original_range.end(), new_range.end());
+    return bound_eq(original_range.end_ref(), new_range.end_ref());
 }
 
 static bool ranges_match(const schema& s, dht::partition_ranges_view original_ranges, dht::partition_ranges_view new_ranges) {
@@ -452,7 +452,7 @@ void querier::maybe_log_tombstone_warning(std::string_view what, uint64_t live, 
     }
     if (_range->is_singular()) {
         qrlogger.log(log_level::warn, rl, "Read {} live {} and {} dead {}/tombstones for {}.{} partition key \"{}\" {} (see tombstone_warn_threshold)",
-                      live, what, dead, what, _schema->ks_name(), _schema->cf_name(), _range->start()->value().key()->with_schema(*_schema), (*_range));
+                      live, what, dead, what, _schema->ks_name(), _schema->cf_name(), _range->start_ref()->value().key()->with_schema(*_schema), (*_range));
     } else {
         qrlogger.log(log_level::debug, rl, "Read {} live {} and {} dead {}/tombstones for {}.{} <partition-range-scan> {} (see tombstone_warn_threshold)",
                       live, what, dead, what, _schema->ks_name(), _schema->cf_name(), (*_range));

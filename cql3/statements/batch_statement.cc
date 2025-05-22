@@ -367,7 +367,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional BATCH"));
     }
 
-    auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
+    auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, request->key()[0].start_ref()->value().as_decorated_key().token());
     if (shard != this_shard_id()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 qp.bounce_to_shard(shard, std::move(cached_fn_calls))

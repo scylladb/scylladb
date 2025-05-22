@@ -842,8 +842,8 @@ private:
     future<stop_iteration> for_each_sstable_set_gently_until(const dht::partition_range&, std::function<future<stop_iteration>(lw_shared_ptr<const sstables::sstable_set>)>) const;
 
     auto subrange(const dht::partition_range& pr) const {
-        size_t candidate_start = pr.start() ? group_of(pr.start()->value().token()) : size_t(0);
-        size_t candidate_end = pr.end() ? group_of(pr.end()->value().token()) : (_tablet_map.tablet_count() - 1);
+        size_t candidate_start = pr.start_ref() ? group_of(pr.start_ref()->value().token()) : size_t(0);
+        size_t candidate_end = pr.end_ref() ? group_of(pr.end_ref()->value().token()) : (_tablet_map.tablet_count() - 1);
         return std::ranges::subrange(_sstable_set_ids.lower_bound(candidate_start), _sstable_set_ids.upper_bound(candidate_end));
     }
 
@@ -1033,7 +1033,7 @@ tablet_sstable_set::create_single_key_sstable_reader(
         mutation_reader::forwarding fwd_mr,
         const sstables::sstable_predicate& predicate) const {
     // The singular partition_range start bound must be engaged.
-    auto idx = group_of(pr.start()->value().token());
+    auto idx = group_of(pr.start_ref()->value().token());
     const auto& set = find_sstable_set(idx);
     return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
 }

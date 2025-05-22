@@ -106,7 +106,7 @@ table::make_sstable_reader(schema_ptr s,
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
     // regardless of what the fwd_mr parameter says.
-    if (pr.is_singular() && pr.start()->value().has_key()) {
+    if (pr.is_singular() && pr.start_ref()->value().has_key()) {
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
                 _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
     } else {
@@ -186,8 +186,8 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
     };
 
     // point queries can be optimized as they span a single compaction group.
-    if (range.is_singular() && range.start()->value().has_key()) {
-        const dht::ring_position& pos = range.start()->value();
+    if (range.is_singular() && range.start_ref()->value().has_key()) {
+        const dht::ring_position& pos = range.start_ref()->value();
         auto& sg = storage_group_for_token(pos.token());
         reserve_fn(sg.memtable_count());
         sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
@@ -1161,8 +1161,8 @@ utils::chunked_vector<storage_group_ptr> tablet_storage_group_manager::storage_g
     utils::chunked_vector<storage_group_ptr> ret;
     auto cmp = dht::token_comparator();
 
-    size_t candidate_start = tr.start() ? tablet_id_for_token(tr.start()->value()) : size_t(0);
-    size_t candidate_end = tr.end() ? tablet_id_for_token(tr.end()->value()) : (tablet_count() - 1);
+    size_t candidate_start = tr.start_ref() ? tablet_id_for_token(tr.start_ref()->value()) : size_t(0);
+    size_t candidate_end = tr.end_ref() ? tablet_id_for_token(tr.end_ref()->value()) : (tablet_count() - 1);
 
     while (candidate_start <= candidate_end) {
         auto it = _storage_groups.find(candidate_start++);
@@ -3392,9 +3392,9 @@ table::local_base_lock(
     // This will allow more parallelism in concurrent modifications to the
     // same row - probably not a very urgent case.
     _row_locker.upgrade(s);
-    if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
+    if (rows.size() == 1 && rows[0].is_singular() && rows[0].start_ref() && !rows[0].start_ref()->value().is_empty(*s)) {
         // A single clustering row is involved.
-        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _row_locker_stats);
+        return _row_locker.lock_ck(pk, rows[0].start_ref()->value(), true, timeout, _row_locker_stats);
     } else {
         // More than a single clustering row is involved. Most commonly it's
         // the entire partition, so let's lock the entire partition. We could

@@ -1853,12 +1853,12 @@ dht::partition_range_vector partition_ranges_from_token(const expr::expression& 
         return {};
     }
     const auto bounds = to_range(values);
-    const auto start_token = bounds.start() ? bounds.start()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
+    const auto start_token = bounds.start_ref() ? bounds.start_ref()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
             : dht::minimum_token();
-    auto end_token = bounds.end() ? bounds.end()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
+    auto end_token = bounds.end_ref() ? bounds.end_ref()->value().with_linearized([] (bytes_view bv) { return dht::token::from_bytes(bv); })
             : dht::maximum_token();
-    const bool include_start = bounds.start() && bounds.start()->is_inclusive();
-    const auto include_end = bounds.end() && bounds.end()->is_inclusive();
+    const bool include_start = bounds.start_ref() && bounds.start_ref()->is_inclusive();
+    const auto include_end = bounds.end_ref() && bounds.end_ref()->is_inclusive();
 
     auto start = dht::partition_range::bound(include_start
                                              ? dht::ring_position::starting_at(start_token)
@@ -1983,30 +1983,30 @@ bool starts_before_start(
         const query::clustering_range& r1,
         const query::clustering_range& r2,
         const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
-    if (!r2.start()) {
+    if (!r2.start_ref()) {
         return false; // r2 start is -inf, nothing is before that.
     }
-    if (!r1.start()) {
+    if (!r1.start_ref()) {
         return true; // r1 start is -inf, while r2 start is finite.
     }
-    const auto diff = cmp(r1.start()->value(), r2.start()->value());
+    const auto diff = cmp(r1.start_ref()->value(), r2.start_ref()->value());
     if (diff < 0) { // r1 start is strictly before r2 start.
         return true;
     }
     if (diff > 0) { // r1 start is strictly after r2 start.
         return false;
     }
-    const auto len1 = r1.start()->value().representation().size();
-    const auto len2 = r2.start()->value().representation().size();
+    const auto len1 = r1.start_ref()->value().representation().size();
+    const auto len2 = r2.start_ref()->value().representation().size();
     if (len1 == len2) { // The values truly are equal.
         // (a)>=(1) starts before (a)>(1)
-        return r1.start()->is_inclusive() && !r2.start()->is_inclusive();
+        return r1.start_ref()->is_inclusive() && !r2.start_ref()->is_inclusive();
     } else if (len1 < len2) { // r1 start is a prefix of r2 start.
         // (a)>=(1) starts before (a,b)>=(1,1), but (a)>(1) doesn't.
-        return r1.start()->is_inclusive();
+        return r1.start_ref()->is_inclusive();
     } else { // r2 start is a prefix of r1 start.
         // (a,b)>=(1,1) starts before (a)>(1) but after (a)>=(1).
-        return !r2.start()->is_inclusive();
+        return !r2.start_ref()->is_inclusive();
     }
 }
 
@@ -2015,30 +2015,30 @@ bool starts_before_or_at_end(
         const query::clustering_range& r1,
         const query::clustering_range& r2,
         const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
-    if (!r1.start()) {
+    if (!r1.start_ref()) {
         return true; // r1 start is -inf, must be before r2 end.
     }
-    if (!r2.end()) {
+    if (!r2.end_ref()) {
         return true; // r2 end is +inf, everything is before it.
     }
-    const auto diff = cmp(r1.start()->value(), r2.end()->value());
+    const auto diff = cmp(r1.start_ref()->value(), r2.end_ref()->value());
     if (diff < 0) { // r1 start is strictly before r2 end.
         return true;
     }
     if (diff > 0) { // r1 start is strictly after r2 end.
         return false;
     }
-    const auto len1 = r1.start()->value().representation().size();
-    const auto len2 = r2.end()->value().representation().size();
+    const auto len1 = r1.start_ref()->value().representation().size();
+    const auto len2 = r2.end_ref()->value().representation().size();
     if (len1 == len2) { // The values truly are equal.
         // (a)>=(1) starts at end of (a)<=(1)
-        return r1.start()->is_inclusive() && r2.end()->is_inclusive();
+        return r1.start_ref()->is_inclusive() && r2.end_ref()->is_inclusive();
     } else if (len1 < len2) { // r1 start is a prefix of r2 end.
         // a>=(1) starts before (a,b)<=(1,1) ends, but (a)>(1) doesn't.
-        return r1.start()->is_inclusive();
+        return r1.start_ref()->is_inclusive();
     } else { // r2 end is a prefix of r1 start.
         // (a,b)>=(1,1) starts before (a)<=(1) ends but after (a)<(1) ends.
-        return r2.end()->is_inclusive();
+        return r2.end_ref()->is_inclusive();
     }
 }
 
@@ -2047,30 +2047,30 @@ bool ends_before_end(
         const query::clustering_range& r1,
         const query::clustering_range& r2,
         const clustering_key_prefix::prefix_equal_tri_compare& cmp) {
-    if (!r1.end()) {
+    if (!r1.end_ref()) {
         return false; // r1 end is +inf, which is after everything.
     }
-    if (!r2.end()) {
+    if (!r2.end_ref()) {
         return true; // r2 end is +inf, while r1 end is finite.
     }
-    const auto diff = cmp(r1.end()->value(), r2.end()->value());
+    const auto diff = cmp(r1.end_ref()->value(), r2.end_ref()->value());
     if (diff < 0) { // r1 end is strictly before r2 end.
         return true;
     }
     if (diff > 0) { // r1 end is strictly after r2 end.
         return false;
     }
-    const auto len1 = r1.end()->value().representation().size();
-    const auto len2 = r2.end()->value().representation().size();
+    const auto len1 = r1.end_ref()->value().representation().size();
+    const auto len2 = r2.end_ref()->value().representation().size();
     if (len1 == len2) { // The values truly are equal.
         // (a)<(1) ends before (a)<=(1) ends
-        return !r1.end()->is_inclusive() && r2.end()->is_inclusive();
+        return !r1.end_ref()->is_inclusive() && r2.end_ref()->is_inclusive();
     } else if (len1 < len2) { // r1 end is a prefix of r2 end.
         // (a)<(1) ends before (a,b)<=(1,1), but (a)<=(1) doesn't.
-        return !r1.end()->is_inclusive();
+        return !r1.end_ref()->is_inclusive();
     } else { // r2 end is a prefix of r1 end.
         // (a,b)<=(1,1) ends before (a)<=(1) but after (a)<(1).
-        return r2.end()->is_inclusive();
+        return r2.end_ref()->is_inclusive();
     }
 }
 
@@ -2089,8 +2089,8 @@ std::optional<query::clustering_range> intersection(
     if (!starts_before_or_at_end(r2, r1, cmp)) {
         return {};
     }
-    const auto& intersection_start = r2.start();
-    const auto& intersection_end = ends_before_end(r1, r2, cmp) ? r1.end() : r2.end();
+    const auto& intersection_start = r2.start_ref();
+    const auto& intersection_end = ends_before_end(r1, r2, cmp) ? r1.end_ref() : r2.end_ref();
     if (intersection_start == intersection_end && intersection_end.has_value()) {
         return query::clustering_range::make_singular(intersection_end->value());
     }
@@ -2101,16 +2101,16 @@ struct range_less {
     const class schema& s;
     clustering_key_prefix::less_compare cmp = clustering_key_prefix::less_compare(s);
     bool operator()(const query::clustering_range& x, const query::clustering_range& y) const {
-        if (!x.start() && !y.start()) {
+        if (!x.start_ref() && !y.start_ref()) {
             return false;
         }
-        if (!x.start()) {
+        if (!x.start_ref()) {
             return true;
         }
-        if (!y.start()) {
+        if (!y.start_ref()) {
             return false;
         }
-        return cmp(x.start()->value(), y.start()->value());
+        return cmp(x.start_ref()->value(), y.start_ref()->value());
     }
 };
 
@@ -2272,7 +2272,7 @@ std::vector<query::clustering_range> get_multi_column_clustering_bounds(
 
 /// Reverses the range if the type is reversed.  Why don't we have interval::reverse()??
 query::clustering_range reverse_if_reqd(query::clustering_range r, const abstract_type& t) {
-    return t.is_reversed() ? query::clustering_range(r.end(), r.start()) : std::move(r);
+    return t.is_reversed() ? query::clustering_range(r.end_ref(), r.start_ref()) : std::move(r);
 }
 
 /// Calculates clustering bounds for the single-column case.
@@ -2315,7 +2315,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
                 // For example, the expression `c1=1 AND c2=2 AND c3>3` makes lower CK bound (1,2,3) exclusive and
                 // upper CK bound (1,2) inclusive.
                 ck_ranges.reserve(product_size);
-                const auto extra_lb = last_range->start(), extra_ub = last_range->end();
+                const auto extra_lb = last_range->start_copy(), extra_ub = last_range->end_copy();
                 for (auto& b : cartesian_product(prior_column_values)) {
                     auto new_lb = b, new_ub = b;
                     if (extra_lb) {
@@ -2399,8 +2399,8 @@ static std::vector<query::clustering_range> get_index_v1_token_range_clustering_
             int64_t token_high = std::numeric_limits<int64_t>::max();
             bool low_inclusive = true, high_inclusive = true;
 
-            const std::optional<interval_bound<managed_bytes>>& start = range.start();
-            const std::optional<interval_bound<managed_bytes>>& end = range.end();
+            const std::optional<interval_bound<managed_bytes>>& start = range.start_ref();
+            const std::optional<interval_bound<managed_bytes>>& end = range.end_ref();
 
             if (start.has_value()) {
                 token_low = int64_from_be_bytes(start->value());
@@ -2502,8 +2502,8 @@ opt_bound make_prefix_bound(
 /// For more examples of this range translation, please see the statement_restrictions unit tests.
 std::vector<query::clustering_range> get_equivalent_ranges(
         const query::clustering_range& cql_order_range, const schema& schema) {
-    const auto& cql_lb = cql_order_range.start();
-    const auto& cql_ub = cql_order_range.end();
+    const auto& cql_lb = cql_order_range.start_ref();
+    const auto& cql_ub = cql_order_range.end_ref();
     if (cql_lb == cql_ub && (!cql_lb || cql_lb->is_inclusive())) {
         return {cql_order_range};
     }
@@ -2568,11 +2568,11 @@ query::clustering_range range_from_raw_bounds(
 
             const auto r = to_range(
                     b->op, clustering_key_prefix::from_optional_exploded(schema, expr::get_tuple_elements(tup_val, *type_of(b->rhs))));
-            if (r.start()) {
-                lb = r.start();
+            if (r.start_ref()) {
+                lb = r.start_ref();
             }
-            if (r.end()) {
-                ub = r.end();
+            if (r.end_ref()) {
+                ub = r.end_ref();
             }
         }
     }
@@ -2613,7 +2613,7 @@ std::vector<query::clustering_range> statement_restrictions::get_clustering_boun
         }
         if (all_reverse) {
             for (auto& crange : bounds) {
-                crange = query::clustering_range(crange.end(), crange.start());
+                crange = query::clustering_range(crange.end_ref(), crange.start_ref());
             }
         }
         return bounds;

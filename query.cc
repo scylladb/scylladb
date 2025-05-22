@@ -119,7 +119,7 @@ void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& range
             continue;
         } else if (auto start_bound = position_in_partition_view::for_range_start(*it); cmp(start_bound, pos) <= 0) {
             SCYLLA_ASSERT(cmp(pos, end_bound) < 0);
-            *it = clustering_range(clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::after_all_prefixed), it->end());
+            *it = clustering_range(clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::after_all_prefixed), it->end_ref());
         }
         ++it;
     }
@@ -134,7 +134,7 @@ clustering_range reverse(const clustering_range& range) {
     if (range.is_singular()) {
         return range;
     }
-    return clustering_range(range.end(), range.start());
+    return clustering_range(range.end_ref(), range.start_ref());
 }
 
 
