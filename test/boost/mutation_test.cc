@@ -1941,7 +1941,7 @@ SEASTAR_TEST_CASE(test_trim_rows) {
             std::reverse(ranges.begin(), ranges.end());
             for (auto& range : ranges) {
                 if (!range.is_singular()) {
-                    range = query::clustering_range(range.end(), range.start());
+                    range = query::clustering_range(range.end_ref(), range.start_ref());
                 }
             }
             m2 = reverse(m);

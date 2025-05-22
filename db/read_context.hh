@@ -167,7 +167,7 @@ public:
     {
         ++_cache._tracker._stats.reads;
         if (!_range_query) {
-            _key = range.start()->value().as_decorated_key();
+            _key = range.start_ref()->value().as_decorated_key();
         }
     }
     ~read_context() {

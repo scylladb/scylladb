@@ -442,7 +442,7 @@ select_statement::do_execute(query_processor& qp,
     auto&& table = _schema->table();
     if (_may_use_token_aware_routing && table.uses_tablets() && state.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
         if (key_ranges.size() == 1 && query::is_single_partition(key_ranges.front())) {
-            token = key_ranges[0].start()->value().as_decorated_key().token();
+            token = key_ranges[0].start_ref()->value().as_decorated_key().token();
 
             auto erm = table.get_effective_replication_map();
             tablet_info = erm->check_locality(token);
@@ -454,7 +454,7 @@ select_statement::do_execute(query_processor& qp,
              throw exceptions::invalid_request_exception(
                      "SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time");
         }
-        unsigned shard = table.shard_for_reads(key_ranges[0].start()->value().as_decorated_key().token());
+        unsigned shard = table.shard_for_reads(key_ranges[0].start_ref()->value().as_decorated_key().token());
         if (this_shard_id() != shard) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                     qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))

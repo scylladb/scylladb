@@ -2167,7 +2167,7 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_fast_forwarded_with_pe
             }).get();
         }));
 
-        auto end_token = dht::token(pr->end()->value().token());
+        auto end_token = dht::token(pr->end_ref()->value().token());
         ++end_token._data;
 
         auto next_pr = dht::partition_range::make_starting_with(dht::ring_position::starting_at(end_token));

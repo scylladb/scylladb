@@ -146,11 +146,11 @@ static std::vector<sstring> get_keyspaces(const schema& s, const replica::databa
  */
 static dht::partition_range as_ring_position_range(dht::token_range& r) {
     std::optional<wrapping_interval<dht::ring_position>::bound> start_bound, end_bound;
-    if (r.start()) {
-        start_bound = {{ dht::ring_position(r.start()->value(), dht::ring_position::token_bound::start), r.start()->is_inclusive() }};
+    if (r.start_ref()) {
+        start_bound = {{ dht::ring_position(r.start_ref()->value(), dht::ring_position::token_bound::start), r.start_ref()->is_inclusive() }};
     }
-    if (r.end()) {
-        end_bound = {{ dht::ring_position(r.end()->value(), dht::ring_position::token_bound::end), r.end()->is_inclusive() }};
+    if (r.end_ref()) {
+        end_bound = {{ dht::ring_position(r.end_ref()->value(), dht::ring_position::token_bound::end), r.end_ref()->is_inclusive() }};
     }
     return dht::partition_range(std::move(start_bound), std::move(end_bound), r.is_singular());
 }
@@ -194,18 +194,18 @@ static future<std::vector<token_range>> get_local_ranges(replica::database& db, 
         // All queries will be on that table, where all entries are text and there's no notion of
         // token ranges form the CQL point of view.
         auto left_inf = std::ranges::find_if(ranges, [] (auto&& r) {
-            return r.end() && (!r.start() || r.start()->value().is_minimum());
+            return r.end_ref() && (!r.start_ref() || r.start_ref()->value().is_minimum());
         });
         auto right_inf = std::ranges::find_if(ranges, [] (auto&& r) {
-            return r.start() && (!r.end() || r.end()->value().is_maximum());
+            return r.start_ref() && (!r.end_ref() || r.end_ref()->value().is_maximum());
         });
         if (left_inf != right_inf && left_inf != ranges.end() && right_inf != ranges.end()) {
-            local_ranges.push_back(token_range{to_bytes(right_inf->start()), to_bytes(left_inf->end())});
+            local_ranges.push_back(token_range{to_bytes(right_inf->start_ref()), to_bytes(left_inf->end_ref())});
             ranges.erase(left_inf);
             ranges.erase(right_inf);
         }
         for (auto&& r : ranges) {
-            local_ranges.push_back(token_range{to_bytes(r.start()), to_bytes(r.end())});
+            local_ranges.push_back(token_range{to_bytes(r.start_ref()), to_bytes(r.end_ref())});
         }
         std::ranges::sort(local_ranges, [] (auto&& tr1, auto&& tr2) {
             return utf8_type->less(tr1.start, tr2.start);

@@ -115,7 +115,7 @@ void update_statement::execute_operations_for_key(mutation& m, const clustering_
 }
 
 void update_statement::add_update_for_key(mutation& m, const query::clustering_range& range, const update_parameters& params, const json_cache_opt& json_cache) const {
-    auto prefix = range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty();
+    auto prefix = range.start_ref() ? std::move(range.start_ref()->value()) : clustering_key_prefix::make_empty();
     if (s->is_dense()) {
         if (prefix.is_empty(*s) || prefix.components().front().empty()) {
             throw exceptions::invalid_request_exception(format("Missing PRIMARY KEY part {}", s->clustering_key_columns().begin()->name_as_text()));

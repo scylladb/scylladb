@@ -2321,13 +2321,13 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     rlogger.debug("repair[{}]: Got repair_update_system_table_request from node={}, range={}, repair_time={}", req.repair_uuid, from, req.range, req.repair_time);
     auto& db = this->get_db();
     bool is_valid_range = true;
-    if (req.range.start()) {
-        if (req.range.start()->is_inclusive()) {
+    if (req.range.start_ref()) {
+        if (req.range.start_ref()->is_inclusive()) {
             is_valid_range = false;
         }
     }
-    if (req.range.end()) {
-        if (!req.range.end()->is_inclusive()) {
+    if (req.range.end_ref()) {
+        if (!req.range.end_ref()->is_inclusive()) {
             is_valid_range = false;
         }
     }
@@ -2344,9 +2344,9 @@ future<repair_update_system_table_response> repair_service::repair_update_system
     ent.ts = db_clock::from_time_t(gc_clock::to_time_t(req.repair_time));
     ent.ks = req.keyspace_name;
     ent.cf = req.table_name;
-    auto range_start = req.range.start() ? req.range.start()->value() : dht::minimum_token();
+    auto range_start = req.range.start_ref() ? req.range.start_ref()->value() : dht::minimum_token();
     ent.range_start = dht::token::to_int64(range_start);
-    auto range_end = req.range.end() ? req.range.end()->value() : dht::maximum_token();
+    auto range_end = req.range.end_ref() ? req.range.end_ref()->value() : dht::maximum_token();
     ent.range_end = dht::token::to_int64(range_end);
     co_await _sys_ks.local().update_repair_history(std::move(ent));
     co_return repair_update_system_table_response();

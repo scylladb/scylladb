@@ -1218,9 +1218,9 @@ table_config read_config(cql_test_env& env, const sstring& name) {
 }
 
 static unsigned cardinality(int_range r) {
-    SCYLLA_ASSERT(r.start());
-    SCYLLA_ASSERT(r.end());
-    return r.end()->value() - r.start()->value() + r.start()->is_inclusive() + r.end()->is_inclusive() - 1;
+    SCYLLA_ASSERT(r.start_ref());
+    SCYLLA_ASSERT(r.end_ref());
+    return r.end_ref()->value() - r.start_ref()->value() + r.start_ref()->is_inclusive() + r.end_ref()->is_inclusive() - 1;
 }
 
 static unsigned cardinality(std::optional<int_range> ropt) {

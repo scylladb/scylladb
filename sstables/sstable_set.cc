@@ -223,8 +223,8 @@ sstable_set::make_incremental_selector() const {
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const schema& s, const dht::partition_range& range) {
     return interval_type::closed(
-            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.start()->value())),
-            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.end()->value())));
+            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.start_ref()->value())),
+            dht::compatible_ring_position_or_view(s, dht::ring_position_view(range.end_ref()->value())));
 }
 
 partitioned_sstable_set::interval_type partitioned_sstable_set::make_interval(const dht::partition_range& range) const {
@@ -250,14 +250,14 @@ partitioned_sstable_set::interval_type partitioned_sstable_set::singular(const d
 
 std::pair<partitioned_sstable_set::map_iterator, partitioned_sstable_set::map_iterator>
 partitioned_sstable_set::query(const dht::partition_range& range) const {
-    if (range.start() && range.end()) {
+    if (range.start_ref() && range.end_ref()) {
         return _leveled_sstables.equal_range(make_interval(range));
     }
-    else if (range.start() && !range.end()) {
-        auto start = singular(range.start()->value());
+    else if (range.start_ref() && !range.end_ref()) {
+        auto start = singular(range.start_ref()->value());
         return { _leveled_sstables.lower_bound(start), _leveled_sstables.end() };
-    } else if (!range.start() && range.end()) {
-        auto end = singular(range.end()->value());
+    } else if (!range.start_ref() && range.end_ref()) {
+        auto end = singular(range.end_ref()->value());
         return { _leveled_sstables.begin(), _leveled_sstables.upper_bound(end) };
     } else {
         return { _leveled_sstables.begin(), _leveled_sstables.end() };
@@ -819,7 +819,7 @@ public:
             const dht::partition_range& pr,
             tracing::trace_state_ptr trace_state,
             sstable_reader_factory_type fn)
-        : reader_selector(s, pr.start() ? pr.start()->value() : dht::ring_position_view::min(), sstables->size())
+        : reader_selector(s, pr.start_ref() ? pr.start_ref()->value() : dht::ring_position_view::min(), sstables->size())
         , _pr(&pr)
         , _sstables(std::move(sstables))
         , _trace_state(std::move(trace_state))
@@ -989,7 +989,7 @@ sstable_set_impl::create_single_key_sstable_reader(
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate) const
 {
-    const auto& pos = pr.start()->value();
+    const auto& pos = pr.start_ref()->value();
     auto selected_sstables = filter_sstable_for_reader(select(pr), *schema, pos, predicate);
     auto num_sstables = selected_sstables.size();
     if (!num_sstables) {
@@ -1030,7 +1030,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd_sm,
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate) const {
-    const auto& pos = pr.start()->value();
+    const auto& pos = pr.start_ref()->value();
     // First check if the optimized algorithm for TWCS single partition queries can be applied.
     // Multiple conditions must be satisfied:
     // 1. The sstables must be sufficiently modern so they contain the min/max column metadata.
@@ -1309,7 +1309,7 @@ sstable_set::create_single_key_sstable_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         const sstable_predicate& predicate) const {
-    SCYLLA_ASSERT(pr.is_singular() && pr.start()->value().has_key());
+    SCYLLA_ASSERT(pr.is_singular() && pr.start_ref()->value().has_key());
     return _impl->create_single_key_sstable_reader(cf, std::move(schema),
             std::move(permit), sstable_histogram, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
 }

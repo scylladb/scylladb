@@ -391,7 +391,7 @@ mutation_reader evictable_reader::recreate_reader() {
             return make_empty_mutation_reader(_schema, _permit);
         }
 
-        _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end());
+        _range_override = dht::partition_range({dht::partition_range::bound(*_last_pkey, partition_range_is_inclusive)}, _pr->end_ref());
         range = &*_range_override;
 
         _reader_recreated = true;
@@ -876,7 +876,7 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                     // The reader might have been saved from a previous page and
                     // missed some fast-forwarding since the new page started.
                     // Fast forward it to the correct range if that is the case.
-                    if (auto pr = _lifecycle_policy->get_read_range(); pr && _pr->start() && pr->after(_pr->start()->value(), dht::ring_position_comparator(*_schema))) {
+                    if (auto pr = _lifecycle_policy->get_read_range(); pr && _pr->start_ref() && pr->after(_pr->start_ref()->value(), dht::ring_position_comparator(*_schema))) {
                         auto new_pr = _pr.get_owner_shard() == this_shard_id() ? _pr.release() : make_lw_shared<const dht::partition_range>(*_pr);
                         co_await underlying_reader.fast_forward_to(*new_pr);
                         _lifecycle_policy->update_read_range(new_pr);
@@ -1052,7 +1052,7 @@ void multishard_combining_reader::on_partition_range_change(const dht::partition
     _shard_selection_min_heap.clear();
     _shard_selection_min_heap.reserve(_sharder.shard_count());
 
-    auto token = pr.start() ? pr.start()->value().token() : dht::minimum_token();
+    auto token = pr.start_ref() ? pr.start_ref()->value().token() : dht::minimum_token();
     _current_shard = _sharder.shard_for_reads(token);
 
     auto sharder = dht::ring_position_range_sharder(_sharder, pr);
@@ -1063,7 +1063,7 @@ void multishard_combining_reader::on_partition_range_change(const dht::partition
     // We only want to do a full round, until we get back to the shard we started from (`_current_shard`).
     // We stop earlier if the sharder has no ranges for the remaining shards.
     for (next = sharder.next(*_schema); next && next->shard != _current_shard; next = sharder.next(*_schema)) {
-        _shard_selection_min_heap.push_back(shard_and_token{next->shard, next->ring_range.start()->value().token()});
+        _shard_selection_min_heap.push_back(shard_and_token{next->shard, next->ring_range.start_ref()->value().token()});
         std::ranges::push_heap(_shard_selection_min_heap, std::less<shard_and_token>{});
     }
 }
