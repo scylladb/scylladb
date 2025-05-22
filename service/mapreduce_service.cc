@@ -194,7 +194,7 @@ static std::vector<::shared_ptr<db::functions::aggregate_function>> get_function
 
 static const dht::token& end_token(const dht::partition_range& r) {
     static const dht::token max_token = dht::maximum_token();
-    return r.end() ? r.end()->value().token() : max_token;
+    return r.end_ref() ? r.end_ref()->value().token() : max_token;
 }
 
 static void retain_local_endpoints(const locator::topology& topo, host_id_vector_replica_set& eps) {

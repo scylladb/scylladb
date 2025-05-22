@@ -100,8 +100,8 @@ private:
     struct start_bound_ref { const optional<bound>& b; };
     struct end_bound_ref { const optional<bound>& b; };
 
-    start_bound_ref start_bound() const { return { start() }; }
-    end_bound_ref end_bound() const { return { end() }; }
+    start_bound_ref start_bound() const { return { start_ref() }; }
+    end_bound_ref end_bound() const { return { end_ref() }; }
 
     static bool greater_than_or_equal(end_bound_ref end, start_bound_ref start, IntervalComparatorFor<T> auto&& cmp) {
         return !end.b || !start.b || require_ordering_and_on_equal_return(
@@ -139,14 +139,14 @@ public:
     // Comparator must define a total ordering on T.
     bool before(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
         SCYLLA_ASSERT(!is_wrap_around(cmp));
-        if (!start()) {
+        if (!start_ref()) {
             return false; //open start, no points before
         }
-        auto r = cmp(point, start()->value());
+        auto r = cmp(point, start_ref()->value());
         if (r < 0) {
             return true;
         }
-        if (!start()->is_inclusive() && r == 0) {
+        if (!start_ref()->is_inclusive() && r == 0) {
             return true;
         }
         return false;
@@ -156,19 +156,19 @@ public:
     bool other_is_before(const wrapping_interval<T>& o, IntervalComparatorFor<T> auto&& cmp) const {
         SCYLLA_ASSERT(!is_wrap_around(cmp));
         SCYLLA_ASSERT(!o.is_wrap_around(cmp));
-        if (!start() || !o.end()) {
+        if (!start_ref() || !o.end_ref()) {
             return false;
         }
-        auto r = cmp(o.end()->value(), start()->value());
+        auto r = cmp(o.end_ref()->value(), start_ref()->value());
         if (r < 0) {
             return true;
         }
         if (r > 0) {
             return false;
         }
-        // o.end()->value() == start()->value(), we decide based on inclusiveness
-        const auto ei = o.end()->is_inclusive();
-        const auto si = start()->is_inclusive();
+        // o.end_ref()->value() == start_ref()->value(), we decide based on inclusiveness
+        const auto ei = o.end_ref()->is_inclusive();
+        const auto si = start_ref()->is_inclusive();
         if (!ei && !si) {
             return true;
         }
@@ -182,14 +182,14 @@ public:
     // Comparator must define a total ordering on T.
     bool after(const T& point, IntervalComparatorFor<T> auto&& cmp) const {
         SCYLLA_ASSERT(!is_wrap_around(cmp));
-        if (!end()) {
+        if (!end_ref()) {
             return false; //open end, no points after
         }
-        auto r = cmp(end()->value(), point);
+        auto r = cmp(end_ref()->value(), point);
         if (r < 0) {
             return true;
         }
-        if (!end()->is_inclusive() && r == 0) {
+        if (!end_ref()->is_inclusive() && r == 0) {
             return true;
         }
         return false;
@@ -215,7 +215,7 @@ public:
         SCYLLA_ASSERT(!other_wraps);
 
         // if both this and other have an open start, the two intervals will overlap.
-        if (!start() && !other.start()) {
+        if (!start_ref() && !other.start_ref()) {
             return true;
         }
 
@@ -248,10 +248,16 @@ public:
             std::swap(_start, _end);
         }
     }
-    const optional<bound>& start() const {
+    const optional<bound>& start_ref() const {
         return _start;
     }
-    const optional<bound>& end() const {
+    const optional<bound>& end_ref() const {
+        return _singular ? _start : _end;
+    }
+    optional<bound> start_copy() const {
+        return _start;
+    }
+    optional<bound> end_copy() const {
         return _singular ? _start : _end;
     }
     // Range is a wrap around if end value is smaller than the start value
@@ -259,9 +265,9 @@ public:
     // Comparator must define a total ordering on T.
     bool is_wrap_around(IntervalComparatorFor<T> auto&& cmp) const {
         if (_end && _start) {
-            auto r = cmp(end()->value(), start()->value());
+            auto r = cmp(end_ref()->value(), start_ref()->value());
             return r < 0
-                   || (r == 0 && (!start()->is_inclusive() || !end()->is_inclusive()));
+                   || (r == 0 && (!start_ref()->is_inclusive() || !end_ref()->is_inclusive()));
         } else {
             return false; // open ended interval or singular interval don't wrap around
         }
@@ -271,8 +277,8 @@ public:
     // Call only when is_wrap_around().
     std::pair<wrapping_interval, wrapping_interval> unwrap() const {
         return {
-            { {}, end() },
-            { start(), {} }
+            { {}, end_ref() },
+            { start_ref(), {} }
         };
     }
     // the point is inside the interval
@@ -294,13 +300,13 @@ public:
 
         if (this_wraps && other_wraps) {
             return require_ordering_and_on_equal_return(
-                            cmp(start()->value(), other.start()->value()),
+                            cmp(start_ref()->value(), other.start_ref()->value()),
                             std::strong_ordering::less,
-                            start()->is_inclusive() || !other.start()->is_inclusive())
+                            start_ref()->is_inclusive() || !other.start_ref()->is_inclusive())
                 && require_ordering_and_on_equal_return(
-                            cmp(end()->value(), other.end()->value()),
+                            cmp(end_ref()->value(), other.end_ref()->value()),
                             std::strong_ordering::greater,
-                            end()->is_inclusive() || !other.end()->is_inclusive());
+                            end_ref()->is_inclusive() || !other.end_ref()->is_inclusive());
         }
 
         if (!this_wraps && !other_wraps) {
@@ -309,18 +315,18 @@ public:
         }
 
         if (other_wraps) { // && !this_wraps
-            return !start() && !end();
+            return !start_ref() && !end_ref();
         }
 
         // !other_wraps && this_wraps
-        return (other.start() && require_ordering_and_on_equal_return(
-                                    cmp(start()->value(), other.start()->value()),
+        return (other.start_ref() && require_ordering_and_on_equal_return(
+                                    cmp(start_ref()->value(), other.start_ref()->value()),
                                     std::strong_ordering::less,
-                                    start()->is_inclusive() || !other.start()->is_inclusive()))
-                || (other.end() && (require_ordering_and_on_equal_return(
-                                        cmp(end()->value(), other.end()->value()),
+                                    start_ref()->is_inclusive() || !other.start_ref()->is_inclusive()))
+                || (other.end_ref() && (require_ordering_and_on_equal_return(
+                                        cmp(end_ref()->value(), other.end_ref()->value()),
                                         std::strong_ordering::greater,
-                                        end()->is_inclusive() || !other.end()->is_inclusive())));
+                                        end_ref()->is_inclusive() || !other.end_ref()->is_inclusive())));
     }
     // Returns intervals which cover all values covered by this interval but not covered by the other interval.
     // Ranges are not overlapping and ordered.
@@ -360,10 +366,10 @@ public:
                 auto tmp = std::move(r1);
                 left.pop_front();
                 if (!greater_than_or_equal(r2.end_bound(), tmp.end_bound(), cmp)) {
-                    left.push_front({bound(r2.end()->value(), !r2.end()->is_inclusive()), tmp.end()});
+                    left.push_front({bound(r2.end_ref()->value(), !r2.end_ref()->is_inclusive()), tmp.end_ref()});
                 }
                 if (!less_than_or_equal(r2.start_bound(), tmp.start_bound(), cmp)) {
-                    left.push_front({tmp.start(), bound(r2.start()->value(), !r2.start()->is_inclusive())});
+                    left.push_front({tmp.start_ref(), bound(r2.start_ref()->value(), !r2.start_ref()->is_inclusive())});
                 }
             }
         }
@@ -378,8 +384,8 @@ public:
     // Comparator must define a total ordering on T.
     std::pair<wrapping_interval<T>, wrapping_interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
         SCYLLA_ASSERT(contains(split_point, std::forward<decltype(cmp)>(cmp)));
-        wrapping_interval left(start(), bound(split_point));
-        wrapping_interval right(bound(split_point, false), end());
+        wrapping_interval left(start_ref(), bound(split_point));
+        wrapping_interval right(bound(split_point, false), end_ref());
         return std::make_pair(std::move(left), std::move(right));
     }
     // Create a sub-interval including values greater than the split_point. Returns std::nullopt if
@@ -387,9 +393,9 @@ public:
     // Comparator must define a total ordering on T.
     std::optional<wrapping_interval<T>> split_after(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
         if (contains(split_point, std::forward<decltype(cmp)>(cmp))
-                && (!end() || cmp(split_point, end()->value()) != 0)) {
-            return wrapping_interval(bound(split_point, false), end());
-        } else if (end() && cmp(split_point, end()->value()) >= 0) {
+                && (!end_ref() || cmp(split_point, end_ref()->value()) != 0)) {
+            return wrapping_interval(bound(split_point, false), end_ref());
+        } else if (end_ref() && cmp(split_point, end_ref()->value()) >= 0) {
             // whether to return std::nullopt or the full interval is not
             // well-defined for wraparound intervals; we return nullopt
             // if split_point is after the end.
@@ -435,25 +441,25 @@ struct fmt::formatter<wrapping_interval<U>> : fmt::formatter<string_view> {
     auto format(const wrapping_interval<U>& r, fmt::format_context& ctx) const {
         auto out = ctx.out();
         if (r.is_singular()) {
-            return fmt::format_to(out, "{{{}}}", r.start()->value());
+            return fmt::format_to(out, "{{{}}}", r.start_ref()->value());
         }
 
-        if (!r.start()) {
+        if (!r.start_ref()) {
             out = fmt::format_to(out, "(-inf, ");
         } else {
-            if (r.start()->is_inclusive()) {
+            if (r.start_ref()->is_inclusive()) {
                 out = fmt::format_to(out, "[");
             } else {
                 out = fmt::format_to(out, "(");
             }
-            out = fmt::format_to(out, "{},", r.start()->value());
+            out = fmt::format_to(out, "{},", r.start_ref()->value());
         }
 
-        if (!r.end()) {
+        if (!r.end_ref()) {
             out = fmt::format_to(out, "+inf)");
         } else {
-            out = fmt::format_to(out, "{}", r.end()->value());
-            if (r.end()->is_inclusive()) {
+            out = fmt::format_to(out, "{}", r.end_ref()->value());
+            if (r.end_ref()->is_inclusive()) {
                 out = fmt::format_to(out, "]");
             } else {
                 out = fmt::format_to(out, ")");
@@ -526,7 +532,7 @@ public:
     // Comparator must define a total ordering on T.
     bool overlaps(const interval& other, IntervalComparatorFor<T> auto&& cmp) const {
         // if both this and other have an open start, the two intervals will overlap.
-        if (!start() && !other.start()) {
+        if (!start_ref() && !other.start_ref()) {
             return true;
         }
 
@@ -554,11 +560,17 @@ public:
     bool is_full() const {
         return _interval.is_full();
     }
-    const optional<bound>& start() const {
-        return _interval.start();
+    const optional<bound>& start_ref() const {
+        return _interval.start_ref();
     }
-    const optional<bound>& end() const {
-        return _interval.end();
+    const optional<bound>& end_ref() const {
+        return _interval.end_ref();
+    }
+    optional<bound> start_copy() const {
+        return _interval.start_copy();
+    }
+    optional<bound> end_copy() const {
+        return _interval.end_copy();
     }
     // the point is inside the interval
     // Comparator must define a total ordering on T.
@@ -585,19 +597,19 @@ public:
     // Comparator must define a total ordering on T.
     std::pair<interval<T>, interval<T>> split(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
         SCYLLA_ASSERT(contains(split_point, std::forward<decltype(cmp)>(cmp)));
-        interval left(start(), bound(split_point));
-        interval right(bound(split_point, false), end());
+        interval left(start_ref(), bound(split_point));
+        interval right(bound(split_point, false), end_ref());
         return std::make_pair(std::move(left), std::move(right));
     }
     // Create a sub-interval including values greater than the split_point. If split_point is after
     // the end, returns std::nullopt.
     std::optional<interval> split_after(const T& split_point, IntervalComparatorFor<T> auto&& cmp) const {
-        if (end() && cmp(split_point, end()->value()) >= 0) {
+        if (end_ref() && cmp(split_point, end_ref()->value()) >= 0) {
             return std::nullopt;
-        } else if (start() && cmp(split_point, start()->value()) < 0) {
+        } else if (start_ref() && cmp(split_point, start_ref()->value()) < 0) {
             return *this;
         } else {
-            return interval(interval_bound<T>(split_point, false), end());
+            return interval(interval_bound<T>(split_point, false), end_ref());
         }
     }
     // Creates a new sub-interval which is the intersection of this interval and an interval starting with "start".
@@ -652,7 +664,7 @@ public:
             }
             bool includes_start = wrapping_interval<T>::greater_than_or_equal(current._interval.end_bound(), r._interval.start_bound(), cmp);
             if (includes_start) {
-                current = interval(std::move(current.start()), std::move(r.end()));
+                current = interval(std::move(current.start_copy()), std::move(r.end_copy()));
             } else {
                 deoverlapped_intervals.emplace_back(std::move(current));
                 current = std::move(r);
@@ -695,21 +707,21 @@ public:
     // Return the lower bound of the specified sequence according to these bounds.
     template<typename Range, IntervalLessComparatorFor<T> LessComparator>
     typename std::ranges::const_iterator_t<Range> lower_bound(Range&& r, LessComparator&& cmp) const {
-        return start()
-            ? (start()->is_inclusive()
-                ? do_lower_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
-                : do_upper_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
+        return start_ref()
+            ? (start_ref()->is_inclusive()
+                ? do_lower_bound(start_ref()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
+                : do_upper_bound(start_ref()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
             : std::ranges::begin(r);
     }
     // Return the upper bound of the specified sequence according to these bounds.
     template<typename Range, IntervalLessComparatorFor<T> LessComparator>
     typename std::ranges::const_iterator_t<Range> upper_bound(Range&& r, LessComparator&& cmp) const {
-        return end()
-             ? (end()->is_inclusive()
-                ? do_upper_bound(end()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
-                : do_lower_bound(end()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
+        return end_ref()
+             ? (end_ref()->is_inclusive()
+                ? do_upper_bound(end_ref()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
+                : do_lower_bound(end_ref()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_()))
              : (is_singular()
-                ? do_upper_bound(start()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
+                ? do_upper_bound(start_ref()->value(), std::forward<Range>(r), std::forward<LessComparator>(cmp), built_in_())
                 : std::ranges::end(r));
     }
     // Returns a subset of the range that is within these bounds.
@@ -728,7 +740,7 @@ public:
             auto end = std::min(p.first.end_bound(), p.second.end_bound(), [&cmp] (auto&& a, auto&& b) {
                 return !wrapping_interval<T>::greater_than_or_equal(a, b, cmp);
             });
-            return interval(p.second.start(), end.b);
+            return interval(p.second.start_ref(), end.b);
         }
         return {};
     }
@@ -762,8 +774,8 @@ struct hash<wrapping_interval<T>> {
     using result_type = decltype(std::hash<T>()(std::declval<T>()));
     result_type operator()(argument_type const& s) const {
         auto hash = std::hash<T>();
-        auto left = s.start() ? hash(s.start()->value()) : 0;
-        auto right = s.end() ? hash(s.end()->value()) : 0;
+        auto left = s.start_ref() ? hash(s.start_ref()->value()) : 0;
+        auto right = s.end_ref() ? hash(s.end_ref()->value()) : 0;
         return 31 * left + right;
     }
 };

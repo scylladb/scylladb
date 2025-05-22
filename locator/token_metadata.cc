@@ -622,14 +622,14 @@ token_metadata_impl::range_to_interval(wrapping_interval<dht::token> r) {
     token start = dht::minimum_token();
     token end = dht::maximum_token();
 
-    if (r.start()) {
-        start = r.start()->value();
-        start_inclusive = r.start()->is_inclusive();
+    if (r.start_ref()) {
+        start = r.start_ref()->value();
+        start_inclusive = r.start_ref()->is_inclusive();
     }
 
-    if (r.end()) {
-        end = r.end()->value();
-        end_inclusive = r.end()->is_inclusive();
+    if (r.end_ref()) {
+        end = r.end_ref()->value();
+        end_inclusive = r.end_ref()->is_inclusive();
     }
 
     if (start_inclusive == false && end_inclusive == false) {

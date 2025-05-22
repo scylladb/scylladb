@@ -201,7 +201,7 @@ std::vector<mutation> modification_statement::apply_updates(
     mutations.reserve(keys.size());
     for (auto key : keys) {
         // We know key.start() must be defined since we only allow EQ relations on the partition key.
-        mutations.emplace_back(s, std::move(*key.start()->value().key()));
+        mutations.emplace_back(s, std::move(*key.start_ref()->value().key()));
         auto& m = mutations.back();
         for (auto&& r : ranges) {
             this->add_update_for_key(m, r, params, json_cache);
@@ -231,7 +231,7 @@ dht::partition_range_vector
 modification_statement::build_partition_keys(const query_options& options, const json_cache_opt& json_cache) const {
     auto keys = _restrictions->get_partition_key_ranges(options);
     for (auto const& k : keys) {
-        validation::validate_cql_key(*s, *k.start()->value().key());
+        validation::validate_cql_key(*s, *k.start_ref()->value().key());
     }
     return keys;
 }
@@ -278,7 +278,7 @@ modification_statement::do_execute(query_processor& qp, service::query_state& qs
     bool keys_size_one = keys.size() == 1;
     auto token = dht::token();
     if (keys_size_one) {
-        token = keys[0].start()->value().token();
+        token = keys[0].start_ref()->value().token();
     } 
 
     auto res = co_await execute_without_condition(qp, qs, options, json_cache, std::move(keys));
@@ -401,7 +401,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     // modification in the list of CAS commands, since we're handling single-statement execution.
     request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
 
-    auto token = request->key()[0].start()->value().as_decorated_key().token();
+    auto token = request->key()[0].start_ref()->value().as_decorated_key().token();
 
     auto shard = service::storage_proxy::cas_shard(*s, token);
 

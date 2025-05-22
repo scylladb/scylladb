@@ -256,7 +256,7 @@ memtable::contains_partition(const dht::decorated_key& key) const {
 std::ranges::subrange<memtable::partitions_type::const_iterator>
 memtable::slice(const dht::partition_range& range) const {
     if (query::is_single_partition(range)) {
-        const query::ring_position& pos = range.start()->value();
+        const query::ring_position& pos = range.start_ref()->value();
         auto i = partitions.find(pos, dht::ring_position_comparator(*_schema));
         if (i != partitions.end()) {
             return {i, std::next(i)};
@@ -266,16 +266,16 @@ memtable::slice(const dht::partition_range& range) const {
     } else {
         auto cmp = dht::ring_position_comparator(*_schema);
 
-        auto i1 = range.start()
-                  ? (range.start()->is_inclusive()
-                        ? partitions.lower_bound(range.start()->value(), cmp)
-                        : partitions.upper_bound(range.start()->value(), cmp))
+        auto i1 = range.start_ref()
+                  ? (range.start_ref()->is_inclusive()
+                        ? partitions.lower_bound(range.start_ref()->value(), cmp)
+                        : partitions.upper_bound(range.start_ref()->value(), cmp))
                   : partitions.cbegin();
 
-        auto i2 = range.end()
-                  ? (range.end()->is_inclusive()
-                        ? partitions.upper_bound(range.end()->value(), cmp)
-                        : partitions.lower_bound(range.end()->value(), cmp))
+        auto i2 = range.end_ref()
+                  ? (range.end_ref()->is_inclusive()
+                        ? partitions.upper_bound(range.end_ref()->value(), cmp)
+                        : partitions.lower_bound(range.end_ref()->value(), cmp))
                   : partitions.cend();
 
         return {i1, i2};
@@ -299,10 +299,10 @@ class iterator_reader {
 
     memtable::partitions_type::iterator lookup_end() {
         auto cmp = dht::ring_position_comparator(*_memtable->_schema);
-        return _range->end()
-            ? (_range->end()->is_inclusive()
-                ? _memtable->partitions.upper_bound(_range->end()->value(), cmp)
-                : _memtable->partitions.lower_bound(_range->end()->value(), cmp))
+        return _range->end_ref()
+            ? (_range->end_ref()->is_inclusive()
+                ? _memtable->partitions.upper_bound(_range->end_ref()->value(), cmp)
+                : _memtable->partitions.lower_bound(_range->end_ref()->value(), cmp))
             : _memtable->partitions.end();
     }
     void update_iterators() {
@@ -318,10 +318,10 @@ class iterator_reader {
             }
         } else {
             // Initial lookup
-            _i = _range->start()
-                 ? (_range->start()->is_inclusive()
-                    ? _memtable->partitions.lower_bound(_range->start()->value(), cmp)
-                    : _memtable->partitions.upper_bound(_range->start()->value(), cmp))
+            _i = _range->start_ref()
+                 ? (_range->start_ref()->is_inclusive()
+                    ? _memtable->partitions.lower_bound(_range->start_ref()->value(), cmp)
+                    : _memtable->partitions.upper_bound(_range->start_ref()->value(), cmp))
                  : _memtable->partitions.begin();
             _end = lookup_end();
             _last_partition_count = _memtable->partition_count();
@@ -719,7 +719,7 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
                       mutation_reader::forwarding fwd_mr) {
     bool is_reversed = slice.is_reversed();
     if (query::is_single_partition(range) && !fwd_mr) {
-        const query::ring_position& pos = range.start()->value();
+        const query::ring_position& pos = range.start_ref()->value();
         auto snp = _table_shared_data.read_section(*this, [&] () -> partition_snapshot_ptr {
             auto i = partitions.find(pos, dht::ring_position_comparator(*_schema));
             if (i != partitions.end()) {

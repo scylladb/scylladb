@@ -130,7 +130,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
 
                 bool remove = !found
                         || (contains && !inclusive && (i->is_singular()
-                            || (i->end() && cmp(i->end()->value(), lo) == 0)))
+                            || (i->end_ref() && cmp(i->end_ref()->value(), lo) == 0)))
                         ;
 
                 if (remove) {
@@ -139,7 +139,7 @@ future<result<service::storage_proxy::coordinator_query_result>> query_pager::do
                     continue;
                 }
                 if (contains) {
-                    auto r = range_type( bound_type{ lo, inclusive }, i->end(), i->is_singular());
+                    auto r = range_type( bound_type{ lo, inclusive }, i->end_ref(), i->is_singular());
                     qlogger.trace("Modify range {} -> {}", *i, r);
                     *i = std::move(r);
                 }
