@@ -3218,10 +3218,9 @@ public:
     // Allocate tablets for multiple new tables, which may be co-located with each other, or co-located with an existing base table.
     void allocate_tablets_for_new_tables(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
-        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
+        auto tm = _db.get_shared_token_metadata().get();
+        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, tm->get_topology());
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
-            auto tm = _db.get_shared_token_metadata().get();
-
             std::unordered_map<table_id, schema_ptr> new_cfms_map;
             for (auto s : cfms) {
                 new_cfms_map[s->id()] = s;

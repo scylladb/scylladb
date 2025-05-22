@@ -73,7 +73,7 @@ class replication_factor_data {
     std::variant<size_t, rack_list> _data;
 
 public:
-    explicit replication_factor_data(const sstring& rf, const std::unordered_set<sstring>* allowed_racks = nullptr) {
+    explicit replication_factor_data(const sstring& rf, const std::unordered_set<sstring>& allowed_racks) {
         parse(rf, allowed_racks);
     }
 
@@ -93,7 +93,7 @@ public:
     }
 
 private:
-    void parse(const sstring& rf, const std::unordered_set<sstring>* allowed_racks);
+    void parse(const sstring& rf, const std::unordered_set<sstring>& allowed_racks);
 };
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
@@ -144,11 +144,10 @@ public:
     virtual future<host_id_set> calculate_natural_endpoints(const token& search_token, const token_metadata& tm) const  = 0;
 
     virtual ~abstract_replication_strategy() {}
-    static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology* = nullptr);
+    static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology*);
     static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology& topo) {
         return create_replication_strategy(strategy_name, std::move(params), &topo);
     }
-    static replication_factor_data parse_replication_factor(sstring rf);
     static replication_factor_data parse_replication_factor(sstring rf, const std::unordered_set<sstring>& racks);
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);

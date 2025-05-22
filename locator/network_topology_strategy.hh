@@ -12,6 +12,7 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include "seastar/core/on_internal_error.hh"
 
 #include <optional>
 #include <unordered_set>
@@ -44,7 +45,7 @@ public:
         auto dc_rack = _dc_rep_factor.find(dc);
         if (dc_rack == _dc_rep_factor.end()) {
             static rack_list empty_rack_list; // for now
-            rslogger.warn("get_dc_racks: no racks found for dc={}", dc);
+            rslogger.debug("get_dc_racks: no racks found for dc={}", dc);
             return empty_rack_list;
         }
         const replication_factor_data& rf = dc_rack->second;

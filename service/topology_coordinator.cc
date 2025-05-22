@@ -959,7 +959,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table_or_mv->id());
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
-                        auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
+                        auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, old_tablets);
                     } catch (const std::exception& e) {
                         error = e.what();

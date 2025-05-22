@@ -3803,7 +3803,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     locator::replication_strategy_params params(test_config.options, tablet_count);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params);
+        "NetworkTopologyStrategy", params, stm.get()->get_topology());
 
     auto tablet_aware_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tablet_aware_ptr);
@@ -3865,7 +3865,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     try {
         tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id());
         locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count()};
-        auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
+        auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, stm.get()->get_topology());
         auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), old_tablets).get();
 
         auto const& ts = tmap.tablets();

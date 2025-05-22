@@ -87,6 +87,9 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
 
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
 
+            auto tmptr = qp.proxy().get_token_metadata_ptr();
+            const auto& topo = tmptr->get_topology();
+
             if (ks.get_replication_strategy().uses_tablets()) {
                 const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
                 auto new_rf_per_dc = _attrs->get_replication_options();
@@ -97,7 +100,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                     if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
                              new_dc_in_current_mapping != current_rf_per_dc.end()) {
                         old_rf = new_dc_in_current_mapping->second;
-                    } else if (!qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters().contains(new_dc)) {
+                    } else if (!topo.get_datacenters().contains(new_dc)) {
                         // This means that the DC listed in ALTER doesn't exist. This error will be reported later,
                         // during validation in abstract_replication_strategy::validate_replication_strategy.
                         // We can't report this error now, because it'd change the order of errors reported:
@@ -111,7 +114,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             }
 
             locator::replication_strategy_params params(new_ks->strategy_options(), new_ks->initial_tablets());
-            auto new_rs = locator::abstract_replication_strategy::create_replication_strategy(new_ks->strategy_name(), params);
+            auto new_rs = locator::abstract_replication_strategy::create_replication_strategy(new_ks->strategy_name(), params, topo);
             if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
                 throw exceptions::invalid_request_exception(format("Cannot alter replication strategy vnode/tablets flavor"));
             }
@@ -199,6 +202,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto ks = qp.db().find_keyspace(_name);
         auto ks_md = ks.metadata();
         const auto tmptr = qp.proxy().get_token_metadata_ptr();
+        const auto& topo = tmptr->get_topology();
         const auto& feat = qp.proxy().features();
         auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat);
         utils::chunked_vector<mutation> muts;
@@ -282,7 +286,8 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         if (qp.db().get_config().rf_rack_valid_keyspaces()) {
             auto rs = locator::abstract_replication_strategy::create_replication_strategy(
                     ks_md_update->strategy_name(),
-                    locator::replication_strategy_params(ks_md_update->strategy_options(), ks_md_update->initial_tablets()));
+                    locator::replication_strategy_params(ks_md_update->strategy_options(), ks_md_update->initial_tablets()),
+                    topo);
 
             try {
                 // There are two things to note here:

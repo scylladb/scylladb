@@ -24,7 +24,7 @@ simple_strategy::simple_strategy(replication_strategy_params params, const locat
         auto& val = config_pair.second;
 
         if (boost::iequals(key, "replication_factor")) {
-            _replication_factor = parse_replication_factor(val).count();
+            _replication_factor = parse_replication_factor(val, {}).count();
             break;
         }
     }
@@ -69,7 +69,7 @@ void simple_strategy::validate_options(const gms::feature_service&, const locato
     if (it == _config_options.end()) {
         throw exceptions::configuration_exception("SimpleStrategy requires a replication_factor strategy option.");
     }
-    parse_replication_factor(it->second);
+    parse_replication_factor(it->second, {});
     if (_uses_tablets) {
         throw exceptions::configuration_exception("SimpleStrategy doesn't support tablet replication");
     }

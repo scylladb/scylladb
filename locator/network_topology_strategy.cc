@@ -16,6 +16,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
@@ -48,14 +49,13 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
     process_tablet_options(*this, opts, params);
 
     size_t rep_factor = 0;
-    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>* dcs_opt = nullptr;
-    if (topo) {
-        dcs_opt = &topo->get_datacenter_racks();
-    }
+    assert(topo);
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>& dcs
+        = topo->get_datacenter_racks();
 
     logger.info("options={{{}}} dcs={}", fmt::join(opts | std::views::transform([] (auto& x) {
         return fmt::format("{}:{}", x.first, x.second);
-    }), ","), dcs_opt ? fmt::format("{}", fmt::join(*dcs_opt | std::views::keys, ",")) : "<null>");
+    }), ","), fmt::format("{}", fmt::join(dcs | std::views::keys, ",")));
 
     for (auto& config_pair : opts) {
         auto& key = config_pair.first;
@@ -78,24 +78,20 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
             }
         }
 
-        std::optional<replication_factor_data> rf;
-        if (dcs_opt && !dcs_opt->empty()) {
-            auto dc = dcs_opt->find(key);
-            if (dc == dcs_opt->end()) {
-                throw exceptions::configuration_exception(format("Unrecognized datacenter name '{}'", key));
-            }
-            std::unordered_set<sstring> racks;
-            // FIXME: use ranges::to transformation
-            for (auto& i : std::views::keys(dc->second)) {
-                racks.insert(i);
-            }
-
-            rf = parse_replication_factor(val, racks);
-        } else {
-            rf = parse_replication_factor(val);
+        auto dc = dcs.find(key);
+        std::unordered_set<sstring> racks;
+        if (dc != dcs.end()) {
+            racks = dc->second | std::views::keys | std::ranges::to<std::unordered_set<sstring>>();
+        } else if (!dcs.empty()) {
+            throw exceptions::configuration_exception(format("Unrecognized datacenter name '{}'", key));
         }
-        rep_factor += rf->count();
-        _dc_rep_factor.emplace(key, std::move(*rf));
+
+        replication_factor_data rf = parse_replication_factor(val, racks);
+        if (rf.count() && !rf.is_rack_based()) {
+            on_fatal_internal_error(rslogger, format("Invalid replication factor option: {}: must be a comma-separated list of rack names, or 0", val));
+        }
+        rep_factor += rf.count();
+        _dc_rep_factor.emplace(key, std::move(rf));
         _datacenteres.push_back(key);
     }
 

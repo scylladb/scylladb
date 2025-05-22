@@ -64,9 +64,6 @@ static std::map<sstring, sstring> prepare_options(
     }
 
     if (rf.has_value()) {
-        // The code below may end up not using "rf" at all (if all the DCs
-        // already have rf settings), so let's validate it once (#8880).
-        locator::abstract_replication_strategy::parse_replication_factor(*rf);
 
         // We keep previously specified DC factors for safety.
         for (const auto& opt : old_options) {
@@ -75,14 +72,18 @@ static std::map<sstring, sstring> prepare_options(
             }
         }
 
-        size_t nr_racks = std::stol(*rf);
         for (const auto& [dc, dc_racks] : tm.get_topology().get_datacenter_racks()) {
+            auto ordered_racks = dc_racks | std::views::transform([] (const auto& x) { return x.first; }) | std::ranges::to<std::vector<sstring>>();
+            std::ranges::sort(ordered_racks);
+
+            auto allowed_racks = std::ranges::to<std::unordered_set<sstring>>(ordered_racks);
+            locator::abstract_replication_strategy::parse_replication_factor(*rf, allowed_racks);
+
             sstring val;
+            size_t nr_racks = std::stol(*rf);
             if (nr_racks > dc_racks.size()) {
                 val = *rf;
             } else {
-                auto ordered_racks = dc_racks | std::views::transform([] (const auto& x) { return x.first; }) | std::ranges::to<utils::small_vector<sstring, 3>>();
-                std::ranges::sort(ordered_racks);
                 ordered_racks.resize(nr_racks);
                 val = fmt::format("{}", fmt::join(ordered_racks, ","));
             }

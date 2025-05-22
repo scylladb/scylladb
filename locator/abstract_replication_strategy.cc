@@ -191,17 +191,15 @@ static std::pair<std::string_view, std::optional<std::string_view>> next_token(s
     return std::make_pair(std::string_view(begin, end), end == s.end() ? std::nullopt : std::make_optional<std::string_view>(end + 1, s.end()));
 }
 
-void replication_factor_data::parse(const sstring& rf, const std::unordered_set<sstring>* allowed_racks) {
+void replication_factor_data::parse(const sstring& rf, const std::unordered_set<sstring>& allowed_racks) {
     bool is_numeric = std::all_of(rf.begin(), rf.end(), [] (char c) {return isdigit(c);});
-    rslogger.info("replication_factor_data::parse: {}: is_numeric={} allowed_racks={}", rf, is_numeric,
-        allowed_racks ? fmt::format("{}", fmt::join(*allowed_racks, ",")) : "<null>");
-    if (rf.empty() || (!is_numeric && !allowed_racks)) {
-        throw exceptions::configuration_exception(
-                format("Replication factor must be numeric and non-negative, found '{}'", rf));
+    rslogger.info("replication_factor_data::parse: {}: is_numeric={} allowed_racks={}", rf, is_numeric, allowed_racks);
+    if (rf.empty()) {
+        throw exceptions::configuration_exception("Replication factor must be non-empty");
     }
-    if (is_numeric && allowed_racks && allowed_racks->contains(rf)) {
+    if (is_numeric && allowed_racks.contains(rf)) {
         throw exceptions::configuration_exception(
-            fmt::format("Numeric replication factor '{}' is ambiguous. allowed_racks='{}'", rf, fmt::join(*allowed_racks, ",")));
+            fmt::format("Numeric replication factor '{}' is ambiguous. allowed_racks='{}'", rf, fmt::join(allowed_racks, ",")));
     }
     try {
         if (is_numeric) {
@@ -211,9 +209,9 @@ void replication_factor_data::parse(const sstring& rf, const std::unordered_set<
 
             for (std::optional<std::string_view> opt = rf; opt; ) {
                 auto [name, next_opt] = next_token(*opt);
-                if (!allowed_racks->contains(sstring(name))) {
+                if (!allowed_racks.contains(sstring(name)) && !allowed_racks.empty()) {
                     throw exceptions::configuration_exception(
-                        fmt::format("Unrecognized rack name '{}'. allowed_racks={}", name, fmt::join(*allowed_racks, ",")));
+                        fmt::format("Unrecognized rack name '{}'. allowed_racks={}", name, allowed_racks));
                 }
                 racks.emplace_back(name);
                 opt = next_opt;
@@ -223,17 +221,12 @@ void replication_factor_data::parse(const sstring& rf, const std::unordered_set<
         }
     } catch (...) {
         throw exceptions::configuration_exception(
-            format("Replication factor must be numeric{}; found '{}': {}", allowed_racks ? " or a comma-separated list of rack names" : "",  rf, std::current_exception()));
+            format("Replication factor must be numeric or a comma-separated list of rack names; found '{}': {}", rf, std::current_exception()));
     }
 }
 
-replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf)
-{
-    return replication_factor_data(rf);
-}
-
 replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf, const std::unordered_set<sstring>& racks) {
-    return replication_factor_data(rf, &racks);
+    return replication_factor_data(rf, racks);
 }
 
 static
