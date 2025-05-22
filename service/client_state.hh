@@ -37,6 +37,8 @@ namespace service {
  */
 class client_state {
 public:
+    using replica_local = bool_class<class replica_local_tag>;
+
     enum class auth_state : uint8_t {
         UNINITIALIZED, AUTHENTICATION, READY
     };
@@ -69,6 +71,7 @@ private:
             , _user(cs->_user)
             , _auth_state(cs->_auth_state)
             , _is_internal(cs->_is_internal)
+            , _is_replica_local(cs->_is_replica_local)
             , _remote_address(cs->_remote_address)
             , _auth_service(auth_service ? &auth_service->local() : nullptr)
             , _sl_controller(sl_controller ? &sl_controller->local() : nullptr)
@@ -109,6 +112,8 @@ private:
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
     bool _is_internal;
+
+    replica_local _is_replica_local;
 
     // The biggest timestamp that was returned by getTimestamp/assigned to a query
     static thread_local api::timestamp_type _last_timestamp_micros;
@@ -162,6 +167,7 @@ public:
                  timeout_config timeout_config,
                  const socket_address& remote_address = socket_address())
             : _is_internal(false)
+            , _is_replica_local(replica_local::no)
             , _remote_address(remote_address)
             , _auth_service(&auth_service)
             , _sl_controller(sl_controller)
@@ -195,9 +201,10 @@ public:
     client_state(internal_tag) : client_state(internal_tag{}, infinite_timeout_config)
     {}
 
-    client_state(internal_tag, const timeout_config& config)
+    client_state(internal_tag, const timeout_config& config, replica_local is_replica_local = replica_local::no)
             : _keyspace("system")
             , _is_internal(true)
+            , _is_replica_local(is_replica_local)
             , _default_timeout_config(config)
             , _timeout_config(config)
     {}
@@ -206,6 +213,7 @@ public:
         : _user(auth::authenticated_user(username))
         , _auth_state(auth_state::READY)
         , _is_internal(true)
+        , _is_replica_local(replica_local::no)
         , _auth_service(&auth_service)
         , _sl_controller(&sl_controller)
     {}
@@ -222,6 +230,10 @@ public:
 
     bool is_internal() const {
         return _is_internal;
+    }
+
+    replica_local is_replica_local() const {
+        return _is_replica_local;
     }
 
     /**

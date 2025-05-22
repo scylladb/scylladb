@@ -464,7 +464,25 @@ select_statement::do_execute(query_processor& qp,
 
     auto f = make_ready_future<shared_ptr<cql_transport::messages::result_message>>();
 
-    if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
+    if (state.get_client_state().is_replica_local()) {
+        if (key_ranges.size() != 1) {
+             throw exceptions::invalid_request_exception(
+                     "multi-partition queries are not supported in replica_local mode");
+        }
+        const auto timeout_duration = get_timeout(state.get_client_state(), options);
+        const auto timeout = db::timeout_clock::now() + timeout_duration;
+        f = qp.proxy().query_result_local(table.get_effective_replication_map(),
+                _query_schema,
+                command,
+                key_ranges[0],
+                query::result_options::only_result(),
+                state.get_trace_state(),
+                timeout,
+                std::monostate{}
+            ).then([this, &options, now, command] (auto&& qr) {
+                return this->process_results(get<0>(std::move(qr)), command, options, now);
+            });
+    } else if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(*_query_schema, page_size,
                     *command, key_ranges))) {
         f = execute_without_checking_exception_message_non_aggregate_unpaged(qp, command, std::move(key_ranges), state, options, now);

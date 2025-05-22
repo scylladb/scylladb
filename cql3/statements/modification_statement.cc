@@ -310,7 +310,12 @@ modification_statement::execute_without_condition(query_processor& qp, service::
         if (mutations.empty()) {
             return make_ready_future<coordinator_result<>>(bo::success());
         }
-        
+
+        if (qs.get_client_state().is_replica_local()) {
+            return qp.proxy().mutate_locally(std::move(mutations), qs.get_trace_state(), timeout)
+                .then([]() { return make_ready_future<coordinator_result<>>(bo::success()); });
+        }
+
         return qp.proxy().mutate_with_triggers(std::move(mutations), cl, timeout, false, qs.get_trace_state(), qs.get_permit(), db::allow_per_partition_rate_limit::yes, this->is_raw_counter_shard_write());
     });
 }
