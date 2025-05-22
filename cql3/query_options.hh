@@ -75,6 +75,7 @@ public:
         const lw_shared_ptr<service::pager::paging_state> state;
         const std::optional<db::consistency_level> serial_consistency;
         const api::timestamp_type timestamp;
+        const service::node_local_only node_local_only;
     };
 private:
     const cql_config& _cql_config;
