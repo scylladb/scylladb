@@ -268,6 +268,35 @@ public:
         write(bytes_view(reinterpret_cast<const signed char*>(ptr), size));
     }
 
+    // Writes the fragmented view
+    template<FragmentedView View>
+    void write(View& v) {
+        // copy data into currently available space
+        while (current_space_left() > 0 && !v.empty()) {
+            auto this_size = std::min(v.current_fragment().size(), size_t(current_space_left()));
+            memcpy(_current->data + _current->frag_size, v.current_fragment().begin(), this_size);
+            _current->frag_size += this_size;
+            _size += this_size;
+            v.remove_prefix(this_size);
+        }
+
+        // copy rest of the fragments one by one into newly alloc'ed chunks
+        while (!v.empty()) {
+            auto this_size = std::min(v.current_fragment().size(), size_t(max_chunk_size()));
+            std::copy_n(v.current_fragment().begin(), this_size, alloc_new(this_size));
+            v.remove_prefix(this_size);
+        }
+    }
+
+    // Writes n bytes from the given fragmented view
+    template<FragmentedView View>
+    void write(View& v, size_t n) {
+        // write only n bytes from view
+        auto buf_prefix = v.prefix(n);
+        write(buf_prefix);
+        v.remove_prefix(n);
+    }
+
     bool is_linearized() const {
         return !_begin || !_begin->next;
     }
