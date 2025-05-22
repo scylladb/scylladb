@@ -467,7 +467,8 @@ public:
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::vector<data_value_or_unset>& values,
             db::consistency_level,
-            int32_t page_size = -1) const;
+            int32_t page_size = -1,
+            locator::replica_local replica_local = locator::replica_local::no) const;
 
 private:
     // Keep the holder until you stop using the `remote` services.
