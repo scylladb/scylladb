@@ -1187,6 +1187,11 @@ public:
         return {s, rs};
     }
 
+    const tablet_aware_replication_strategy* get_rs(table_id id) {
+        auto [s, rs] = get_schema_and_rs(id);
+        return rs;
+    }
+
     struct table_sizing {
         size_t current_tablet_count; // Tablet count in group0.
         size_t target_tablet_count; // Tablet count wanted by scheduler.
@@ -2107,11 +2112,16 @@ public:
         int max_rack_load;
         std::unordered_map<sstring, int> rack_load;
 
+        auto rs = get_rs(tablet.table);
+
         auto get_viable_targets = [&] () {
             std::unordered_set<host_id> viable_targets;
 
             for (auto&& [id, node] : nodes) {
                 if (node.dc() != src_info.dc() || node.drained) {
+                    continue;
+                }
+                if (rs->is_rack_based() && node.rack() != src_info.rack()) {
                     continue;
                 }
                 viable_targets.emplace(id);
@@ -2126,6 +2136,10 @@ public:
                         rack_load[node.rack()] += 1;
                     }
                 }
+            }
+
+            if (rs->is_rack_based()) {
+                return viable_targets;
             }
 
             // Drop targets which would increase max rack load.
@@ -2150,7 +2164,7 @@ public:
 
         if (dst_info.rack() != src_info.rack()) {
             auto targets = get_viable_targets();
-            if (!targets.contains(dst_info.id)) {
+            if (rs->is_rack_based() || !targets.contains(dst_info.id)) {
                 auto new_rack_load = rack_load[dst_info.rack()] + 1;
                 lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
                                tablet, dst_info.rack(), new_rack_load, max_rack_load);
