@@ -47,7 +47,10 @@ class ScyllaCluster:
         return {node.name: node for node in self.nodelist()}
 
     def nodelist(self) -> list[ScyllaNode]:
-        return [ScyllaNode(cluster=self, server=server) for server in self._sorted_nodes(self.manager.all_servers())]
+        return [
+            ScyllaNode(cluster=self, server=server, name=f"node{n}")
+            for n, server in enumerate(self._sorted_nodes(self.manager.all_servers()), start=1)
+        ]
 
     def populate(self, nodes: int | list[int]) -> ScyllaCluster:
         if self._config_options.get("alternator_enforce_authorization"):
@@ -167,6 +170,12 @@ class ScyllaCluster:
             other_nodes=other_nodes,
             wait_seconds=wait_seconds,
         )
+
+    def nodetool(self, nodetool_cmd: str) -> ScyllaCluster:
+        for node in self.nodelist():
+            if node.is_running():
+                node.nodetool(nodetool_cmd)
+        return self
 
     @staticmethod
     def version() -> str:
