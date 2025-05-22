@@ -24,12 +24,16 @@ run_first:
 skip_in_release:
   - test_raft_cluster_features
   - test_cluster_features
+  - dtest/bypass_cache_test
+skip_in_dev:
+  - dtest/bypass_cache_test
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
   - test_node_shutdown_waits_for_pending_requests
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing
+  - dtest/bypass_cache_test
 run_in_release:
   - test_gossiper
 run_in_dev:
