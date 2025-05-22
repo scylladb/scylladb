@@ -41,6 +41,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/topology_builder.hh"
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
 
@@ -940,6 +941,36 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
                     "= {'class': 'SimpleStrategy', 'replication_factor':'" + incorrect + "'}").get(),
                     exceptions::configuration_exception);
         };
+    });
+}
+
+SEASTAR_TEST_CASE(test_rack_aware_rf) {
+    return do_with_cql_env_thread([] (auto& e) {
+        //size_t num_dcs = 1;
+        //size_t racks_per_dc = 1;
+        //size_t num_nodes = num_dcs * racks_per_dc;
+
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.add_node(service::node_state::normal, shard_count);
+        auto s = "CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1'} AND tablets = {'enabled':true}";
+        testlog.info("{}", s);
+        e.execute_cql(s).get();
+
+        topo.start_new_rack();
+        topo.add_node(service::node_state::normal, shard_count);
+        s = "CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1,rack2'} AND tablets = {'enabled':true}";
+        testlog.info("{}", s);
+        e.execute_cql(s).get();
+
+        topo.start_new_dc();
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack();
+        topo.add_node(service::node_state::normal, shard_count);
+        s = "CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1,rack2', 'dc2':'rack1,rack2'} AND tablets = {'enabled':true}";
+        testlog.info("{}", s);
+        e.execute_cql(s).get();
     });
 }
 
