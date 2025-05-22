@@ -190,6 +190,18 @@ then every rack in every datacenter receives a replica, except for racks compris
 of only :doc:`zero-token nodes </architecture/zero-token-nodes>`. Racks added after
 the keyspace creation do not receive replicas.
 
+When ``rf_rack_valid_keyspaces``` is enabled in the config and the keyspace is tablet-based,
+the numeric replication factor is automatically expanded into a rack list when the statement is
+executed, which can be observed in the DESCRIBE output afterwards. If the numeric RF is smaller than
+the number of racks in a DC, a subset of racks is chosen arbitrarily.
+
+Altering from a rack list to a numeric replication factor is not supported, except
+for two cases. One is setting replication factor to 0, in which case the number of replicas is reduced to 0 in that DC.
+The other is when the numeric replication factor is equal to the current number of replicas
+for a given datacanter, in which case the current rack list is preserved.
+
+Altering from a numeric replication factor to a rack list is not supported yet.
+
 Note that when ``ALTER`` ing keyspaces and supplying ``replication_factor``,
 auto-expansion will only *add* new datacenters for safety, it will not alter
 existing datacenters or remove any even if they are no longer in the cluster.

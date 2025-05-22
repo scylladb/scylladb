@@ -16,6 +16,7 @@
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token-sharding.hh"
 #include "dht/ring_position.hh"
+#include "locator/topology.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
@@ -854,6 +855,9 @@ class abstract_replication_strategy;
 /// Non-requirements:
 /// * The keyspace need not exist. We use its name purely for informational reasons (in error messages).
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr, const abstract_replication_strategy&);
+
+/// Returns the list of racks that can be used for placing replicas in a given DC.
+rack_list get_allowed_racks(const locator::token_metadata&, const sstring& dc);
 
 }
 

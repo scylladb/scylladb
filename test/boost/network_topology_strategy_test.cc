@@ -992,18 +992,18 @@ SEASTAR_TEST_CASE(test_rack_list_rf) {
             BOOST_REQUIRE(describe(e, "ks22").contains("'dc2': ['rack2a', 'rack2b']"));
         }
 
-        // Two DCs, one using rack list, one using numeric RF
-        // No auto-expansion to rack list.
+        // Two DCs, one using rack list, one using numeric RF (auto-expanded)
         {
             e.execute_cql("CREATE KEYSPACE ks2n2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2, "
                 "'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}").get();
             auto& opts = e.local_db().find_keyspace("ks2n2").get_replication_strategy().get_config_options();
-            BOOST_REQUIRE(replication_factor_data(opts.at("dc1")).is_numeric());
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).get_rack_list(),
+                                std::vector<sstring>({"rack1a", "rack1b"}));
             BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).get_rack_list(),
                                 std::vector<sstring>({"rack2a", "rack2b"}));
             BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).count(), 2);
             BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).count(), 2);
-            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc1': '2'"));
+            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc1': ['rack1a', 'rack1b']"));
             BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc2': ['rack2a', 'rack2b']"));
         }
 
@@ -1063,6 +1063,29 @@ SEASTAR_TEST_CASE(test_rack_list_rejected_when_feature_not_enabled) {
         BOOST_REQUIRE_THROW(e.execute_cql(fmt::format("ALTER KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
                                                       " '{}': ['{}']}}", loc.dc, loc.rack)).get(),
                             exceptions::configuration_exception);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_altering_to_numeric_forbidden) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.disabled_features.insert("RACK_LIST_RF");
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        topo.start_new_dc({"dc1", "rack1a"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack1b");
+        topo.add_node(service::node_state::normal, shard_count);
+
+        e.execute_cql("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1}").get();
+        e.get_feature_service().local().rack_list_rf.enable();
+
+        // Only altering to rack list should be allowed once rf_rack_valid is enabled.
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "ALTER KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2}").get(),
+            exceptions::configuration_exception);
     }, cfg);
 }
 
