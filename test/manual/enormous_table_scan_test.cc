@@ -63,8 +63,8 @@ public:
                 auto ck = int_to_ck(_clustering_row_idx);
                 for (const auto& range : _slice.row_ranges(*_schema, dk.key())) {
                     if (range.before(ck, cmp)) {
-                        _clustering_row_idx = ck_to_int(range.start_ref()->value());
-                        if (!range.start_ref()->is_inclusive()) {
+                        _clustering_row_idx = ck_to_int(range.start()->value());
+                        if (!range.start()->is_inclusive()) {
                             ++_clustering_row_idx;
                         }
                         ck = int_to_ck(_clustering_row_idx);

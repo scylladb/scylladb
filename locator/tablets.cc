@@ -745,7 +745,7 @@ std::optional<tablet_range_splitter::range_split_result> tablet_range_splitter::
         // Generate intersections with all tablet-ranges that overlap with the current range.
         if (auto intersection = _ranges_it->intersection(_tablet_ranges_it->range, cmp)) {
             const auto shard = _tablet_ranges_it->shard;
-            if (_ranges_it->end_ref() && cmp(_ranges_it->end_ref()->value(), _tablet_ranges_it->range.end_ref()->value()) < 0) {
+            if (_ranges_it->end() && cmp(_ranges_it->end()->value(), _tablet_ranges_it->range.end()->value()) < 0) {
                 // The current tablet range extends beyond the current range,
                 // move to the next range.
                 ++_ranges_it;

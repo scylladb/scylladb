@@ -66,10 +66,10 @@ void print_natural_endpoints(double point, const host_id_vector_replica_set v) {
 
 static void verify_sorted(const dht::token_range_vector& trv) {
     auto not_strictly_before = [] (const dht::token_range a, const dht::token_range b) {
-        return !b.start_ref()
-                || !a.end_ref()
-                || a.end_ref()->value() > b.start_ref()->value()
-                || (a.end_ref()->value() == b.start_ref()->value() && a.end_ref()->is_inclusive() && b.start_ref()->is_inclusive());
+        return !b.start()
+                || !a.end()
+                || a.end()->value() > b.start()->value()
+                || (a.end()->value() == b.start()->value() && a.end()->is_inclusive() && b.start()->is_inclusive());
     };
     BOOST_CHECK(std::ranges::adjacent_find(trv, not_strictly_before) == trv.end());
 }

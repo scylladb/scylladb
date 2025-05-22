@@ -60,11 +60,11 @@ template <typename T>
 std::vector<wrapping_interval<T>>
 wrap(const std::vector<interval<T>>& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
-    if (v.size() >= 2 && !v.front().start_ref() && !v.back().end_ref()) {
+    if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_interval<T>>();
         ret.reserve(v.size() - 1);
         std::copy(v.begin() + 1, v.end() - 1, std::back_inserter(ret));
-        ret.emplace_back(v.back().start_ref(), v.front().end_ref());
+        ret.emplace_back(v.back().start(), v.front().end());
         return ret;
     }
     return v | std::ranges::to<std::vector<wrapping_interval<T>>>();

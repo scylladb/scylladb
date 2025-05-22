@@ -181,7 +181,7 @@ ring_position_range_sharder::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto token = _range.start_ref() ? _range.start_ref()->value().token() : dht::minimum_token();
+    auto token = _range.start() ? _range.start()->value().token() : dht::minimum_token();
     auto shard = _sharder.shard_for_reads(token);
     auto next_shard_and_token = _sharder.next_shard_for_reads(token);
     if (!next_shard_and_token) {
@@ -190,14 +190,14 @@ ring_position_range_sharder::next(const schema& s) {
     }
     auto shard_boundary_token = next_shard_and_token->token;
     auto shard_boundary = ring_position::starting_at(shard_boundary_token);
-    if ((!_range.end_ref() || shard_boundary.less_compare(s, _range.end_ref()->value()))
+    if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
             && !shard_boundary_token.is_maximum()) {
         // split the range at end_of_shard
         auto start = _range.start_copy();
         auto end = interval_bound<ring_position>(shard_boundary, false);
         _range = dht::partition_range(
                 interval_bound<ring_position>(std::move(shard_boundary), true),
-                _range.end_ref());
+                _range.end());
         return ring_position_range_and_shard{dht::partition_range(std::move(start), std::move(end)), shard};
     }
     _done = true;
@@ -230,9 +230,9 @@ ring_position_range_vector_sharder::next(const schema& s) {
 
 future<utils::chunked_vector<partition_range>>
 split_range_to_single_shard(const schema& s, const static_sharder& sharder, const partition_range& pr, shard_id shard) {
-    auto start_token = pr.start_ref() ? pr.start_ref()->value().token() : minimum_token();
+    auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = sharder.shard_of(start_token);
-    auto start_boundary = start_shard == shard ? pr.start_ref() : interval_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));
+    auto start_boundary = start_shard == shard ? pr.start_copy() : interval_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));
     start_token = start_shard == shard ? start_token : sharder.token_for_next_shard(start_token, shard);
     return repeat_until_value([&sharder,
             &pr,
@@ -323,20 +323,20 @@ dht::partition_range
 to_partition_range(dht::token_range r) {
     using bound = dht::partition_range::bound;
     using bound_opt = std::optional<dht::partition_range::bound>;
-    auto start = r.start_ref()
-                 ? bound_opt(bound(dht::ring_position(r.start_ref()->value(),
-                                                r.start_ref()->is_inclusive()
+    auto start = r.start()
+                 ? bound_opt(bound(dht::ring_position(r.start()->value(),
+                                                r.start()->is_inclusive()
                                                 ? dht::ring_position::token_bound::start
                                                 : dht::ring_position::token_bound::end),
-                         r.start_ref()->is_inclusive()))
+                         r.start()->is_inclusive()))
                  : bound_opt();
 
-    auto end = r.end_ref()
-               ? bound_opt(bound(dht::ring_position(r.end_ref()->value(),
-                                              r.end_ref()->is_inclusive()
+    auto end = r.end()
+               ? bound_opt(bound(dht::ring_position(r.end()->value(),
+                                              r.end()->is_inclusive()
                                               ? dht::ring_position::token_bound::end
                                               : dht::ring_position::token_bound::start),
-                         r.end_ref()->is_inclusive()))
+                         r.end()->is_inclusive()))
                : bound_opt();
 
     return { std::move(start), std::move(end) };
@@ -401,7 +401,7 @@ future<dht::partition_range_vector> subtract_ranges(const schema& schema, const 
             // c. range_to_subtrace.start < range.start, so it removes the range prefix
 
             // Does range_to_subtract sort after range?
-            if (range_to_subtract->start_ref() && (!range->start_ref() || cmp(range_to_subtract->start_ref()->value(), range->start_ref()->value()) > 0)) {
+            if (range_to_subtract->start() && (!range->start() || cmp(range_to_subtract->start()->value(), range->start()->value()) > 0)) {
                 // save range prefix in the result
                 // (note that diff[0] == range in the disjoint case)
                 res.emplace_back(std::move(diff[0]));
@@ -553,7 +553,7 @@ double overlap_ratio(const dht::token_range& base, const dht::token_range& other
     }
     auto size_of_bounded_range = [] (const token_range& tr) {
         // uses unbiased token (uint64_t) to avoid overflow when calculating size
-        return tr.end_ref()->value().unbias() - tr.start_ref()->value().unbias();
+        return tr.end()->value().unbias() - tr.start()->value().unbias();
     };
 
     return double(size_of_bounded_range(*intersection)) / size_of_bounded_range(*bounded_base);

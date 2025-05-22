@@ -573,10 +573,10 @@ private:
     }
 
     future<> advance_lower_to_start(const dht::partition_range &range) {
-        if (range.start_ref()) {
+        if (range.start()) {
             return advance_to(_lower_bound,
-                dht::ring_position_view(range.start_ref()->value(),
-                    dht::ring_position_view::after_key(!range.start_ref()->is_inclusive())));
+                dht::ring_position_view(range.start()->value(),
+                    dht::ring_position_view::after_key(!range.start()->is_inclusive())));
         }
         return make_ready_future<>();
     }
@@ -585,10 +585,10 @@ private:
         if (!_upper_bound) {
             _upper_bound.emplace();
         }
-        if (range.end_ref()) {
+        if (range.end()) {
             return advance_to(*_upper_bound,
-                dht::ring_position_view(range.end_ref()->value(),
-                    dht::ring_position_view::after_key(range.end_ref()->is_inclusive())));
+                dht::ring_position_view(range.end()->value(),
+                    dht::ring_position_view::after_key(range.end()->is_inclusive())));
         }
         return advance_to_end(*_upper_bound);
     }

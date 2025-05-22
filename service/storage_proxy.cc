@@ -1141,7 +1141,7 @@ query::digest_algorithm digest_algorithm(service::storage_proxy& proxy) {
 static inline
 const dht::token& end_token(const dht::partition_range& r) {
     static const dht::token max_token = dht::maximum_token();
-    return r.end_ref() ? r.end_ref()->value().token() : max_token;
+    return r.end() ? r.end()->value().token() : max_token;
 }
 
 unsigned storage_proxy::cas_shard(const schema& s, dht::token token) {
@@ -5706,7 +5706,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         const host_id_vector_replica_set& preferred_endpoints,
         bool& is_read_non_local,
         service_permit permit) {
-    const dht::token& token = partition_range.start_ref()->value().token();
+    const dht::token& token = partition_range.start()->value().token();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     std::optional<locator::host_id> extra_replica;
 
@@ -5882,7 +5882,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
             co_await coroutine::return_exception(std::runtime_error("mixed singular and non singular range are not supported"));
         }
 
-        auto token_range = dht::token_range::make_singular(pr.start_ref()->value().token());
+        auto token_range = dht::token_range::make_singular(pr.start()->value().token());
         auto it = query_options.preferred_replicas.find(token_range);
         const auto replicas = it == query_options.preferred_replicas.end()
             ? host_id_vector_replica_set{} : (it->second | std::ranges::to<host_id_vector_replica_set>());
@@ -6070,9 +6070,9 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     // It's fine, that we don't detect contiguity of some other possibly contiguous
                     // ranges (like [a, b] [b+1, c]), because not merging contiguous ranges (as opposed
                     // to merging discontiguous ones) is not a correctness problem.
-                    bool maybe_discontiguous = !next_range.start_ref() || !(
-                        range.end_ref()->value().equal(*schema, next_range.start_ref()->value()) ?
-                        (range.end_ref()->is_inclusive() || next_range.start_ref()->is_inclusive()) : false
+                    bool maybe_discontiguous = !next_range.start() || !(
+                        range.end()->value().equal(*schema, next_range.start()->value()) ?
+                        (range.end()->is_inclusive() || next_range.start()->is_inclusive()) : false
                     );
                     // Do not merge ranges that may be discontiguous with each other
                     if (maybe_discontiguous) {
@@ -6129,7 +6129,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     }
 
                     // If we get there, merge this range and the next one
-                    range = dht::partition_range(range.start_ref(), next_range.end_ref());  
+                    range = dht::partition_range(range.start(), next_range.end());  
                     live_endpoints = std::move(merged);
                     merged_preferred_replicas = std::move(current_merged_preferred_replicas);
                     filtered_endpoints = std::move(filtered_merged);
@@ -6365,7 +6365,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
 
-    if (cas_shard(*s, partition_ranges[0].start_ref()->value().as_decorated_key().token()) != this_shard_id()) {
+    if (cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
         return make_exception_future<storage_proxy::coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
     }
     // All cas networking operations run with query provided timeout
@@ -6468,7 +6468,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     db::validate_for_cas(cl_for_paxos);
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
-    if (cas_shard(*schema, partition_ranges[0].start_ref()->value().as_decorated_key().token()) != this_shard_id()) {
+    if (cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
         co_await coroutine::return_exception(std::logic_error("storage_proxy::cas called on a wrong shard"));
     }
 
@@ -6484,7 +6484,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     try {
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
                 query_options.trace_state, query_options.permit,
-                partition_ranges[0].start_ref()->value().as_decorated_key(),
+                partition_ranges[0].start()->value().as_decorated_key(),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
         write ?  get_stats().cas_write_unavailables.mark() : get_stats().cas_read_unavailables.mark();
@@ -6496,7 +6496,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
     unsigned contentions = 0;
 
-    dht::token token = partition_ranges[0].start_ref()->value().as_decorated_key().token();
+    dht::token token = partition_ranges[0].start()->value().as_decorated_key().token();
     utils::latency_counter lc;
     lc.start();
 
