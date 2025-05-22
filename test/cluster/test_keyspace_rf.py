@@ -11,7 +11,8 @@ from cassandra.protocol import ConfigurationException
 
 from test.pylib.manager_client import ManagerClient
 from test.cluster.conftest import cluster_con
-from test.cluster.util import create_new_test_keyspace
+from test.cluster.util import create_new_test_keyspace, parse_replication_options
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tablets_enabled", [True, False])
@@ -65,11 +66,15 @@ async def test_create_keyspace_with_default_replication_factor(manager: ManagerC
     rows = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks_name}'")
     assert len(rows) == 1
     assert rows[0].keyspace_name == ks_name
-    rep = rows[0].replication
+    rep = parse_replication_options(rows[0].replication)
     assert len(rep) == 3
     assert rep['class'] == 'org.apache.cassandra.locator.NetworkTopologyStrategy'
-    assert rep['dc1'] == '2'
-    assert rep['dc2'] == '2'
+    if rf_rack_valid_keyspaces and tablets_enabled:
+        assert len(rep['dc1']) == 2
+        assert len(rep['dc2']) == 2
+    else:
+        assert rep['dc1'] == '2'
+        assert rep['dc2'] == '2'
 
     logging.info("Try to create SimpleStrategy keyspace with default replication factor")
     with pytest.raises(ConfigurationException, match="SimpleStrategy requires a replication_factor strategy option."):
@@ -84,8 +89,12 @@ async def test_create_keyspace_with_default_replication_factor(manager: ManagerC
     rows = await cql.run_async(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name = '{ks_name}'")
     assert len(rows) == 1
     assert rows[0].keyspace_name == ks_name
-    rep = rows[0].replication
+    rep = parse_replication_options(rows[0].replication)
     assert len(rep) == 3
     assert rep['class'] == 'org.apache.cassandra.locator.NetworkTopologyStrategy'
-    assert rep['dc1'] == '2'
-    assert rep['dc2'] == '2'
+    if rf_rack_valid_keyspaces and tablets_enabled:
+        assert len(rep['dc1']) == 2
+        assert len(rep['dc2']) == 2
+    else:
+        assert rep['dc1'] == '2'
+        assert rep['dc2'] == '2'
