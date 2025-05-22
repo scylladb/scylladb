@@ -171,6 +171,12 @@ class ScyllaCluster:
             wait_seconds=wait_seconds,
         )
 
+    def nodetool(self, nodetool_cmd: str) -> ScyllaCluster:
+        for node in self.nodelist():
+            if node.is_running():
+                node.nodetool(nodetool_cmd)
+        return self
+
     @staticmethod
     def version() -> str:
         return SCYLLA_VERSION_FILE.read_text().strip()
