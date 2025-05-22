@@ -14,17 +14,13 @@ import pytest
 
 from dtest_class import Tester, create_cf, create_ks, get_ip_from_node
 from tools.data import create_c1c2_table, insert_c1c2
-from tools.marks import issue_open
 from tools.metrics import get_node_metrics
-from tools.session import get_supported_features
 
 logger = logging.getLogger(__file__)
 NUM_OF_QUERY_EXECUTIONS = 100
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
-@pytest.mark.next_gating
 class TestBypassCache(Tester):
     """
     Test that will verify if the select statement will skip cache during its read
@@ -175,7 +171,7 @@ class TestBypassCache(Tester):
             session.execute(query.format(idx, varchar_c, varchar_v))
         return session
 
-    @pytest.mark.skip_if(issue_open("#6045"))
+    @pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/6045")
     def test_range_scan_bypass_cache(self):
         session = self.insert_data_for_scan_range()
         node = self.cluster.nodelist()[0]
