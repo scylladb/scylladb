@@ -593,7 +593,7 @@ public:
     }
 
     future<> fast_forward_to(dht::partition_range&& pr) {
-        if (!pr.start()) {
+        if (!pr.start()) {  
             _last_key = row_cache::previous_entry_pointer();
         } else if (!pr.start()->is_inclusive() && pr.start()->value().has_key()) {
             _last_key = row_cache::previous_entry_pointer(pr.start()->value().as_decorated_key());

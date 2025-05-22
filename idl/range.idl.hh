@@ -14,14 +14,14 @@ class interval_bound {
 
 template<typename T>
 class wrapping_interval {
-    std::optional<interval_bound<T>> start();
-    std::optional<interval_bound<T>> end();
+    std::optional<interval_bound<T>> start_copy();
+    std::optional<interval_bound<T>> end_copy();
     bool is_singular();
 };
 
 template<typename T>
 class interval {
-    std::optional<interval_bound<T>> start();
-    std::optional<interval_bound<T>> end();
+    std::optional<interval_bound<T>> start_copy();
+    std::optional<interval_bound<T>> end_copy();
     bool is_singular();
 };
