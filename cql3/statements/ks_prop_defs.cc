@@ -75,9 +75,18 @@ static std::map<sstring, sstring> prepare_options(
             }
         }
 
-        // FIXME: expand rack names
-        for (const auto& dc : tm.get_topology().get_datacenters()) {
-            options.emplace(dc, *rf);
+        size_t nr_racks = std::stol(*rf);
+        for (const auto& [dc, dc_racks] : tm.get_topology().get_datacenter_racks()) {
+            sstring val;
+            if (nr_racks > dc_racks.size()) {
+                val = *rf;
+            } else {
+                auto ordered_racks = dc_racks | std::views::transform([] (const auto& x) { return x.first; }) | std::ranges::to<utils::small_vector<sstring, 3>>();
+                std::ranges::sort(ordered_racks);
+                ordered_racks.resize(nr_racks);
+                val = fmt::format("{}", fmt::join(ordered_racks, ","));
+            }
+            options.emplace(dc, val);
         }
     }
 
