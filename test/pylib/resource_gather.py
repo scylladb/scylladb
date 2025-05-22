@@ -11,11 +11,13 @@ import getpass
 import logging
 import os
 import platform
+import shlex
 import subprocess
 from abc import ABC
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import psutil
@@ -69,13 +71,40 @@ class ResourceGather(ABC):
         self.db_path = self.test.suite.log_dir / DEFAULT_DB_NAME
         standardized_name = self.test.shortname.replace("/", "_")
         self.cgroup_path = Path(
-            f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.suite.mode}.{self.test.id}"
+            f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.mode}.{self.test.id}"
         )
         self.logger = logging.getLogger(__name__)
 
     def __del__(self):
         if self.own_loop:
             self.loop.close()
+
+    def  run_process(self, args: list[str], timeout: float, env: dict = None) -> tuple[subprocess.Popen[str], str]:
+
+        args = shlex.split(' '.join(args))
+        if env:
+            env.update(os.environ)
+        else:
+            env = os.environ.copy()
+        p = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            env=env,
+            preexec_fn = self.put_process_to_cgroup
+        )
+        try:
+            stdout, stderr = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            logger.critical(f"Process {args} timed out")
+            stdout = p.stdout.read()
+            p.kill()
+        except KeyboardInterrupt:
+            p.kill()
+            raise
+        return p, stdout
 
     def make_cgroup(self) -> None:
         pass
@@ -185,7 +214,7 @@ class ResourceGatherOn(ResourceGather):
                 setattr(metrics, stats[stat], float(value) / 1_000_000)
 
 
-def get_resource_gather(is_switched_on: bool, test: TestPyTest) -> ResourceGather:
+def get_resource_gather(is_switched_on: bool, test: TestPyTest | SimpleNamespace) -> ResourceGather:
     if is_switched_on:
         return ResourceGatherOn(test)
     else:

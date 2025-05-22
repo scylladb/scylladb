@@ -9,9 +9,9 @@ import os
 from pathlib import Path
 from typing import Sequence
 
-from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
+import allure
 
-TIMEOUT = 60 * 10 # seconds
+from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
 
 class UnitTestFacade(CppTestFacade):
 
@@ -34,16 +34,15 @@ class UnitTestFacade(CppTestFacade):
         env: dict = None,
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         args = [str(executable), *test_args]
-        os.chdir(self.temp_dir.parent)
-        p, stderr, stdout = run_process(args, TIMEOUT)
+        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
 
-        if p.returncode != 0:
+        if not test_passed:
+            allure.attach(stdout_file_path.read_bytes(), name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
                 'for test {test_id} failed (returncode={returncode}):\n'
                 'output:{stdout}\n'
-                'std error:{stderr}\n'
                 'command to repeat:{command}'
             )
             failure = CppTestFailure(
@@ -53,11 +52,11 @@ class UnitTestFacade(CppTestFacade):
                     working_dir=os.getcwd(),
                     executable=executable,
                     test_id=test_name,
-                    stdout=stdout,
-                    stderr=stderr,
-                    command=' '.join(p.args),
-                    returncode=p.returncode,
+                    stdout=stdout_file_path.absolute(),
+                    command=' '.join(args),
+                    returncode=return_code,
                 ),
             )
-            return [failure], stdout
-        return None, stdout
+            return [failure], ''
+        stdout_file_path.unlink(missing_ok=True)
+        return None, ''

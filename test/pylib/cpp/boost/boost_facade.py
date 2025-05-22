@@ -34,13 +34,11 @@ from functools import cache
 from pathlib import Path
 from xml.etree import ElementTree
 
+import allure
 from pytest import Config
 from test import BUILD_DIR, COMBINED_TESTS
 from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
-from test.pylib.cpp.facade import CppTestFacade, CppTestFailure, run_process
-
-TIMEOUT_DEBUG = 60 * 30 # seconds
-TIMEOUT = 60 * 15 # seconds
+from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
 
 class BoostTestFacade(CppTestFacade):
     """
@@ -76,9 +74,10 @@ class BoostTestFacade(CppTestFacade):
             #     _0*
             #     _1*
             #     _2*
-            # however, it's only possible to run test_singular_tree_ptr_sz that executes all test cases
-            # this line catches only test function name ignoring unrelated lines like '_0'
+            # this line catches only test function name ignoring lines like '_0', so it will count test with dataprovider
+            # as one test case.
             # Note: this ignores any test case starting with a '_' symbol
+            # TODO: add support for test cases with dataprovider
             return False, [case[:-1] for case in output.splitlines() if
                          case.endswith('*') and not case.strip().startswith('_')]
 
@@ -98,16 +97,11 @@ class BoostTestFacade(CppTestFacade):
                     return f.read()
             except IOError:
                 return ''
-
-        timeout = TIMEOUT_DEBUG if mode=='debug' else TIMEOUT
-        root_log_dir = self.temp_dir / mode / 'pytest'
+        root_log_dir = self.temp_dir / mode
         log_xml = root_log_dir / f"{test_name}.log"
-        stdout_file_path = root_log_dir/ f"{test_name}_stdout.log"
-        stderr_file_path = root_log_dir / f"{test_name}_stderr.log"
-        report_xml = root_log_dir / f"{test_name}.xml"
         args = [ str(executable),
+                 '--report_level=no',
                  '--output_format=XML',
-                 f"--report_sink={report_xml}",
                  f"--log_sink={log_xml}",
                  '--catch_system_errors=no',
                  '--color_output=false',
@@ -120,27 +114,20 @@ class BoostTestFacade(CppTestFacade):
         # Tests are written in the way that everything after '--' passes to the test itself rather than to the test framework
         args.append('--')
         args.extend(test_args)
-        os.chdir(self.temp_dir.parent)
-        p, stderr, stdout = run_process(args, timeout)
+        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
 
-        with open(stdout_file_path, 'w') as fd:
-            fd.write(stdout)
-        with open(stderr_file_path, 'w') as fd:
-            fd.write(stderr)
         log = read_file(log_xml)
-        report = read_file(report_xml)
 
         results = self._parse_log(log=log)
 
-        if p.returncode != 0:
+        if not test_passed:
+            allure.attach(stdout_file_path.read_bytes(), name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
                 'working_dir: {working_dir}\n'
                 'Internal Error: calling {executable} '
                 'for test {test_id} failed (return_code={return_code}):\n'
                 'output file:{stdout}\n'
-                'std error file:{stderr}\n'
                 'log:{log}\n'
-                'report:{report}\n'
                 'command to repeat:{command}'
             )
             failure = CppTestFailure(
@@ -151,19 +138,20 @@ class BoostTestFacade(CppTestFacade):
                     executable=executable,
                     test_id=test_name,
                     stdout=stdout_file_path.absolute(),
-                    stderr=stderr_file_path.absolute(),
                     log=log,
-                    report=report,
-                    command=' '.join(p.args),
-                    return_code=p.returncode,
+                    command=' '.join(args),
+                    return_code=return_code,
                 ),
             )
-            return [failure], stdout
+            return [failure], ''
+
+        log_xml.unlink(missing_ok=True)
+        stdout_file_path.unlink(missing_ok=True)
 
         if results:
-            return results, stdout
+            return results, ''
 
-        return None, stdout
+        return None, ''
 
     def _parse_log(self, log: str) -> list[CppTestFailure]:
         """
@@ -212,6 +200,19 @@ def get_combined_tests(config: Config):
                 current_suite = line.strip().rstrip('*')
                 suites[mode][current_suite] = []
             else:
-                case_name = line.strip().rstrip('*')
-                suites[mode][current_suite].append(case_name)
+                # --list_content produces the list of all test cases in the file. When BOOST_DATA_TEST_CASE is used it
+                # additionally produce the lines with numbers for each case preserving the function name like this:
+                # group0_voter_calculator_test *
+                #     existing_voters_are_kept_across_racks *
+                #     leader_is_retained_as_voter *
+                #         _0 *
+                #         _1 *
+                #         _2 *
+                # this line catches only test function name ignoring lines like '_0', so it will count test with dataprovider
+                # as one test case.
+                # Note: this ignores any test case starting with a '_' symbol
+                # TODO: add support for test cases with dataprovider
+                case_name = line.strip()
+                if not case_name.startswith('_'):
+                    suites[mode][current_suite].append(case_name.rstrip('*'))
     return suites
