@@ -587,11 +587,13 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
 
     retrying_dispatcher dispatcher(*this, tr_state);
     query::mapreduce_result result;
+    shared_mutex result_mutex;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
         locator::host_id addr = vnodes_with_addr.first;
         query::mapreduce_result& result_ = result;
+        shared_mutex& result_mutex_ = result_mutex;
         tracing::trace_state_ptr& tr_state_ = tr_state;
         retrying_dispatcher& dispatcher_ = dispatcher;
 
@@ -612,8 +614,10 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
         flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
 
         auto aggrs = mapreduce_aggregates(req);
-        co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-            aggrs.merge(result_, std::move(partial_result));
+        co_return co_await with_lock(result_mutex_, [&] -> future<> {
+            co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+                aggrs.merge(result_, std::move(partial_result));
+            });
         });
     });
 
