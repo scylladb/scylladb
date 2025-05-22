@@ -1202,6 +1202,11 @@ public:
         return {s, rs};
     }
 
+    const tablet_aware_replication_strategy* get_rs(table_id id) {
+        auto [s, rs] = get_schema_and_rs(id);
+        return rs;
+    }
+
     struct table_sizing {
         size_t current_tablet_count; // Tablet count in group0.
         size_t target_tablet_count; // Tablet count wanted by scheduler.
@@ -2140,11 +2145,16 @@ public:
         int max_rack_load;
         std::unordered_map<sstring, int> rack_load;
 
+        auto rs = get_rs(tablet.table);
+
         auto get_viable_targets = [&] () {
             std::unordered_set<host_id> viable_targets;
 
             for (auto&& [id, node] : nodes) {
                 if (node.dc() != src_info.dc() || node.drained) {
+                    continue;
+                }
+                if (rs->is_rack_based(_dc) && node.rack() != src_info.rack()) {
                     continue;
                 }
                 viable_targets.emplace(id);
@@ -2154,9 +2164,11 @@ public:
                 viable_targets.erase(r.host);
             }
 
-            if (_rack) {
-                // "nodes" contains only nodes from a single rack, and so does viable_targets.
+            if (_rack || rs->is_rack_based(_dc)) {
+                // If _rack is set, "nodes" contains only nodes from a single rack, and so does viable_targets.
                 // Therefore, rack overload constraints cannot possibly exclude any target.
+                // Also, if replication factor is rack based, we only move tablets within the rack, and
+                // viable targets belong to the same rack as source, and overload also cannot happen.
                 return viable_targets;
             }
 
@@ -2192,6 +2204,11 @@ public:
 
         if (!_rack && dst_info.rack() != src_info.rack()) {
             auto targets = get_viable_targets();
+            if (rs->is_rack_based(_dc)) {
+                lblogger.debug("candidate tablet {} skipped because RF is rack-based and it's in a different rack", tablet);
+                _stats.for_dc(src_info.dc()).tablets_skipped_rack++;
+                return skip_info{std::move(targets)};
+            }
             if (!targets.contains(dst_info.id)) {
                 auto new_rack_load = rack_load[dst_info.rack()] + 1;
                 lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
