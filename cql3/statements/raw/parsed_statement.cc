@@ -14,6 +14,7 @@
 #include "cql3/column_specification.hh"
 
 #include "cql3/cql_statement.hh"
+#include "cql3/result_set.hh"
 
 namespace cql3 {
 
@@ -47,6 +48,7 @@ prepared_statement::prepared_statement(
     , bound_names(std::move(bound_names_))
     , partition_key_bind_indices(std::move(partition_key_bind_indices))
     , warnings(std::move(warnings))
+    , _metadata_id(bytes{})
 {
     statement->set_audit_info(std::move(audit_info));
 }
@@ -65,6 +67,14 @@ prepared_statement::prepared_statement(audit::audit_info_ptr&& audit_info, ::sha
 prepared_statement::prepared_statement(audit::audit_info_ptr&& audit_info, ::shared_ptr<cql_statement>&& statement_, std::vector<sstring> warnings)
     : prepared_statement(std::move(audit_info), statement_, std::vector<lw_shared_ptr<column_specification>>(), std::vector<uint16_t>(), std::move(warnings))
 { }
+
+void prepared_statement::calculate_metadata_id() {
+    _metadata_id = statement->get_result_metadata()->calculate_metadata_id();
+}
+
+cql_metadata_id_type prepared_statement::get_metadata_id() const {
+    return _metadata_id;
+}
 
 }
 
