@@ -386,9 +386,9 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
 
     // FIXME: Handle RF++ for old keyspaces by using the old method.
 
-    // #22688 - take all dcs in topology into account when determining migration.
+    // take only dcs wiht replicas into account when determining migration.
     // Any change should still have been pre-checked to never exceed rf factor one.
-    for (const auto& dc : tm->get_topology().get_datacenters()) {
+    for (const auto& dc : _dc_rep_factor | std::views::keys) {
         auto new_racks = get_dc_racks(dc);
         auto diff = diff_racks(old_racks_per_dc[dc], new_racks);
 
