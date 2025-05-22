@@ -10,7 +10,6 @@ import enum
 import itertools
 import logging
 import os.path
-import signal
 import socketserver
 import tempfile
 import threading
@@ -25,15 +24,12 @@ import requests
 from cassandra import AlreadyExists, AuthenticationFailed, ConsistencyLevel, InvalidRequest, Unauthorized, Unavailable, WriteFailure
 from cassandra.cluster import NoHostAvailable, Session
 from cassandra.query import SimpleStatement, named_tuple_factory
-from ccmlib.node import NodeError
-from ccmlib.scylla_node import ScyllaNode
+from ccmlib.scylla_node import ScyllaNode, NodeError
 
 from dtest_class import Tester, create_ks
 from tools.assertions import assert_invalid
 from tools.cluster import run_rest_api
-from tools.cluster_topology import generate_cluster_topology
 from tools.data import rows_to_list, run_in_parallel
-from tools.marks import issue_open
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +250,6 @@ class AuditBackendSyslog(AuditBackend):
         self.socket_path = new_socket_path
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestCQLAudit(AuditTester):
     """
@@ -1016,6 +1011,11 @@ class TestCQLAudit(AuditTester):
 
         audit_paritition_nodes, insert_node, node_to_stop, query_to_fail = self._test_insert_failure_doesnt_report_success_assign_nodes(session=session)
 
+        # TODO: remove the loop when scylladb#24473 is fixed
+        # We call get_host_id only to cache host_id
+        for node in audit_paritition_nodes + [insert_node] + [node_to_stop]:
+            node.cluster.manager.get_host_id(node.server_id) 
+
         if len(audit_paritition_nodes) != 3 or node_to_stop is None or insert_node is None:
             raise pytest.skip(f"Failed to assign nodes for insert failure test")
 
@@ -1225,14 +1225,16 @@ class TestCQLAudit(AuditTester):
 
     class AuditSighupConfigChanger(AuditConfigChanger):
         def change_config(self, test, settings, expected_result):
-            test.cluster.set_configuration_options(settings)
             for node in test.cluster.nodelist():
+                logger.info(f"Changing config via manager.server_update_config: Node={node.address()} settings={settings}")
                 mark = node.mark_log()
-                # send SIGHUP to re-read configuration
-                node.kill(signal.SIGHUP)
-                for param in settings:
-                    node.watch_log_for(r"completed re-reading configuration file", from_mark=mark, timeout=60)
-                    self.verify_change(node, param, settings[param], mark, expected_result)
+                for param, value in settings.items():
+                    mark_per_param = node.mark_log()
+                    logger.info(f"server_update_config: param={param} value={value}")
+                    node.cluster.manager.server_update_config(node.server_id, param, value)
+                    node.watch_log_for(r"completed re-reading configuration file", from_mark=mark_per_param, timeout=60)
+                for param, value in settings.items():
+                    self.verify_change(node, param, value, mark, expected_result)
 
     class AuditCqlConfigChanger(AuditConfigChanger):
         def change_config(self, test, settings, expected_result):
@@ -1250,7 +1252,7 @@ class TestCQLAudit(AuditTester):
 
     @pytest.mark.require("scylladb/scylla-enterprise#1789")
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(issue_open("scylladb/scylla-enterprise#3861"), reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_config_liveupdate(self, helper_class, audit_config_changer):
         """
         Test liveupdate config changes in audit.
@@ -1310,8 +1312,8 @@ class TestCQLAudit(AuditTester):
             with self.assert_no_audit_entries_were_added(session):
                 session.execute(auditted_query)
 
-    @pytest.mark.parametrize("audit_config_changer", [pytest.param(AuditSighupConfigChanger, marks=pytest.mark.xfail(issue_open("#5382"), reason="unfixed #5382")), AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(issue_open("scylladb/scylla-enterprise#3861"), reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.

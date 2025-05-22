@@ -24,16 +24,12 @@ run_first:
 skip_in_release:
   - test_raft_cluster_features
   - test_cluster_features
-  - dtest/audit_test
 skip_in_debug:
   - test_shutdown_hang
   - test_replace
   - test_node_shutdown_waits_for_pending_requests
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing
-  - dtest/audit_test
-skip_in_dev:
-  - dtest/audit_test
 run_in_release:
   - test_gossiper
 run_in_dev:
@@ -48,5 +44,6 @@ run_in_dev:
   - dtest/alternator_tests
   - dtest/bypass_cache_test
   - dtest/auth_roles_test
+  - dtest/audit_test
 run_in_debug:
   - random_failures/test_random_failures
