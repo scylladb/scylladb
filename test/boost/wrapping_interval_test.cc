@@ -620,13 +620,13 @@ BOOST_AUTO_TEST_CASE(test_transorm_rvalue_exploding) {
         auto xformed = std::move(i1).transform([] (maybe_throwing_interval_payload p) {
             return maybe_throwing_interval_payload(p.value() + 1);
         });
-        BOOST_REQUIRE_EQUAL(bool(copy.start_ref()), bool(xformed.start_ref()));
-        if (copy.start_ref()) {
-            BOOST_REQUIRE_EQUAL(copy.start_ref().value().value().value() + 1, xformed.start_ref().value().value().value());
+        BOOST_REQUIRE_EQUAL(bool(copy.start()), bool(xformed.start()));
+        if (copy.start()) {
+            BOOST_REQUIRE_EQUAL(copy.start().value().value().value() + 1, xformed.start().value().value().value());
         }
-        BOOST_REQUIRE_EQUAL(bool(copy.end_ref()), bool(xformed.end_ref()));
-        if (copy.end_ref()) {
-            BOOST_REQUIRE_EQUAL(copy.end_ref().value().value().value() + 1, xformed.end_ref().value().value().value());
+        BOOST_REQUIRE_EQUAL(bool(copy.end()), bool(xformed.end()));
+        if (copy.end()) {
+            BOOST_REQUIRE_EQUAL(copy.end().value().value().value() + 1, xformed.end().value().value().value());
         }
     });
 }

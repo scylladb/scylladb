@@ -77,12 +77,12 @@ extern const clustering_range full_clustering_range;
 
 inline
 bool is_single_partition(const dht::partition_range& range) {
-    return range.is_singular() && range.start_ref()->value().has_key();
+    return range.is_singular() && range.start()->value().has_key();
 }
 
 inline
 bool is_single_row(const schema& s, const query::clustering_range& range) {
-    return range.is_singular() && range.start_ref()->value().is_full(s);
+    return range.is_singular() && range.start()->value().is_full(s);
 }
 
 typedef std::vector<clustering_range> clustering_row_ranges;

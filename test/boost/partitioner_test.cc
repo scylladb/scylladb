@@ -587,16 +587,16 @@ do_test_selective_token_range_sharder(const dht::sharder& input_sharder, const s
         auto sharder = dht::selective_token_range_sharder(input_sharder, range, shard);
         auto range_shard = sharder.next();
         while (range_shard) {
-            if (range_shard->start_ref() && range_shard->start_ref()->is_inclusive()) {
-                auto start_shard = input_sharder.shard_for_reads(range_shard->start_ref()->value());
+            if (range_shard->start() && range_shard->start()->is_inclusive()) {
+                auto start_shard = input_sharder.shard_for_reads(range_shard->start()->value());
                 if (debug) {
                     fmt::print(" start_shard {} shard {} range {}\n",
                                start_shard, shard, range_shard);
                 }
                 BOOST_REQUIRE(start_shard == shard);
             }
-            if (range_shard->end_ref() && range_shard->end_ref()->is_inclusive()) {
-                auto end_shard = input_sharder.shard_for_reads(range_shard->end_ref()->value());
+            if (range_shard->end() && range_shard->end()->is_inclusive()) {
+                auto end_shard = input_sharder.shard_for_reads(range_shard->end()->value());
                 if (debug) {
                     fmt::print(" end_shard {} shard range {}\n",
                                end_shard, shard, range_shard);
@@ -604,8 +604,8 @@ do_test_selective_token_range_sharder(const dht::sharder& input_sharder, const s
                 BOOST_REQUIRE(end_shard == shard);
             }
             auto midpoint = dht::token::midpoint(
-                    range_shard->start_ref() ? range_shard->start_ref()->value() : dht::minimum_token(),
-                    range_shard->end_ref() ? range_shard->end_ref()->value() : dht::minimum_token());
+                    range_shard->start() ? range_shard->start()->value() : dht::minimum_token(),
+                    range_shard->end() ? range_shard->end()->value() : dht::minimum_token());
             auto mid_shard = input_sharder.shard_for_reads(midpoint);
             if (debug) {
                 fmt::print(" mid {} shard {} range {}\n",

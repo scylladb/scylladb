@@ -40,7 +40,7 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
         if (s->clustering_key_size() == 0 || range.is_full()) {
             m.partition().apply(params.make_tombstone());
         } else if (range.is_singular()) {
-            m.partition().apply_delete(*s, range.start_ref()->value(), params.make_tombstone());
+            m.partition().apply_delete(*s, range.start()->value(), params.make_tombstone());
         } else {
             auto bvs = bound_view::from_range(range);
             m.partition().apply_delete(*s, range_tombstone(bvs.first, bvs.second, params.make_tombstone()));
@@ -52,7 +52,7 @@ void delete_statement::add_update_for_key(mutation& m, const query::clustering_r
         if (op->should_skip_operation(params._options)) {
             continue;
         }
-        op->execute(m, range.start_ref() ? std::move(range.start_ref()->value()) : clustering_key_prefix::make_empty(), params);
+        op->execute(m, range.start() ? std::move(range.start()->value()) : clustering_key_prefix::make_empty(), params);
     }
 }
 

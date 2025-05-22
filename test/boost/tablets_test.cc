@@ -3048,8 +3048,8 @@ SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
         };
 
         auto test_range = [&] (dht::token_range& tr, tablet_range_side expected_side) {
-            auto lower_token = tr.start_ref()->value() == dht::minimum_token() ? dht::first_token() : tr.start_ref()->value();
-            auto upper_token = tr.end_ref()->value();
+            auto lower_token = tr.start()->value() == dht::minimum_token() ? dht::first_token() : tr.start()->value();
+            auto upper_token = tr.end()->value();
             test(next_token(lower_token), expected_side);
             test(upper_token, expected_side);
         };
@@ -3534,7 +3534,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
             std::move(res.begin(), res.end(), std::back_inserter(expected_ranges));
         }
         std::sort(expected_ranges.begin(), expected_ranges.end(), [&] (const auto& a, const auto& b) {
-            return !a.range.start_ref() || b.range.before(a.range.start_ref()->value(), cmp);
+            return !a.range.start() || b.range.before(a.range.start()->value(), cmp);
         });
         check(ranges, expected_ranges, sl);
     };

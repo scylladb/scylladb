@@ -20,7 +20,7 @@ construct_range_to_endpoint_map(
     res.reserve(ranges.size());
     for (auto r : ranges) {
         res[r] = erm->get_natural_replicas(
-                r.end_ref() ? r.end_ref()->value() : dht::maximum_token());
+                r.end() ? r.end()->value() : dht::maximum_token());
         co_await coroutine::maybe_yield();
     }
     co_return res;
@@ -111,11 +111,11 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
         auto range = entry.first;
         auto addresses = entry.second;
         dht::token_range_endpoints tr;
-        if (range.start_ref()) {
-            tr._start_token = range.start_ref()->value().to_sstring();
+        if (range.start()) {
+            tr._start_token = range.start()->value().to_sstring();
         }
-        if (range.end_ref()) {
-            tr._end_token = range.end_ref()->value().to_sstring();
+        if (range.end()) {
+            tr._end_token = range.end()->value().to_sstring();
         }
         for (auto endpoint : addresses) {
             dht::endpoint_details details;

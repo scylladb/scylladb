@@ -980,8 +980,8 @@ generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const
 
     do {
         auto clustering_index_range = generate_range(rnd_engine, start, end, start == 0);
-        if (clustering_index_range.end_ref()) {
-            start = clustering_index_range.end_ref()->value() + clustering_index_range.end_ref()->is_inclusive();
+        if (clustering_index_range.end()) {
+            start = clustering_index_range.end()->value() + clustering_index_range.end()->is_inclusive();
         } else {
             start = end;
         }
@@ -997,8 +997,8 @@ generate_clustering_ranges(RandomEngine& rnd_engine, const schema& schema, const
 static std::vector<mutation>
 slice_partitions(const schema& schema, const std::vector<mutation>& partitions,
         const interval<int>& partition_index_range, const query::partition_slice& slice) {
-    const auto& sb = partition_index_range.start_ref();
-    const auto& eb = partition_index_range.end_ref();
+    const auto& sb = partition_index_range.start();
+    const auto& eb = partition_index_range.end();
     auto it = sb ? partitions.cbegin() + sb->value() + !sb->is_inclusive() : partitions.cbegin();
     const auto end = eb ? partitions.cbegin() + eb->value() + eb->is_inclusive() : partitions.cend();
 

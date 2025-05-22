@@ -1820,12 +1820,12 @@ std::pair<int64_t, int64_t> system_keyspace::canonical_token_range(dht::token_ra
         return {std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::min()};
     }
     // After getting rid of possible infinities, we only have to adjust the openness of bounds.
-    int64_t start_token_exclusive = dht::token::to_int64(finite_tr->start_ref().value().value());
-    if (finite_tr->start_ref()->is_inclusive()) {
+    int64_t start_token_exclusive = dht::token::to_int64(finite_tr->start().value().value());
+    if (finite_tr->start()->is_inclusive()) {
         start_token_exclusive -= 1;
     }
-    int64_t end_token_inclusive = dht::token::to_int64(finite_tr->end_ref().value().value());
-    if (!finite_tr->end_ref()->is_inclusive()) {
+    int64_t end_token_inclusive = dht::token::to_int64(finite_tr->end().value().value());
+    if (!finite_tr->end()->is_inclusive()) {
         end_token_inclusive -= 1;
     }
     return {start_token_exclusive, end_token_inclusive};

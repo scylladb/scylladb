@@ -125,15 +125,15 @@ public:
     template<template<typename> typename R>
     requires Interval<R, clustering_key_prefix_view>
     static bound_view from_range_start(const R<clustering_key_prefix>& range) {
-        return range.start_ref()
-               ? bound_view(range.start_ref()->value(), range.start_ref()->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start)
+        return range.start()
+               ? bound_view(range.start()->value(), range.start()->is_inclusive() ? bound_kind::incl_start : bound_kind::excl_start)
                : bottom();
     }
     template<template<typename> typename R>
     requires Interval<R, clustering_key_prefix>
     static bound_view from_range_end(const R<clustering_key_prefix>& range) {
-        return range.end_ref()
-               ? bound_view(range.end_ref()->value(), range.end_ref()->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end)
+        return range.end()
+               ? bound_view(range.end()->value(), range.end()->is_inclusive() ? bound_kind::incl_end : bound_kind::excl_end)
                : top();
     }
     template<template<typename> typename R>

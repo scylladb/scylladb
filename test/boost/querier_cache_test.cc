@@ -129,7 +129,7 @@ private:
 
         const auto begin = _mutations.begin();
         const auto end = _mutations.end();
-        const auto start_position = range.start_ref() ?
+        const auto start_position = range.start() ?
             dht::ring_position_view::for_range_start(range) :
             dht::ring_position_view(_mutations.begin()->decorated_key());
 
@@ -247,7 +247,7 @@ public:
                 return range;
             }
 
-            return dht::partition_range(dht::partition_range::bound(*dk, true), range.end_ref());
+            return dht::partition_range(dht::partition_range::bound(*dk, true), range.end());
         }();
 
         auto expected_slice = [&] {

@@ -658,13 +658,13 @@ rest_get_range_to_endpoint_map(http_context& ctx, sharded<service::storage_servi
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(erm),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
-            if (entry.first.start_ref()) {
-                m.key.push(entry.first.start_ref().value().value().to_sstring());
+            if (entry.first.start()) {
+                m.key.push(entry.first.start().value().value().to_sstring());
             } else {
                 m.key.push("");
             }
-            if (entry.first.end_ref()) {
-                m.key.push(entry.first.end_ref().value().value().to_sstring());
+            if (entry.first.end()) {
+                m.key.push(entry.first.end().value().value().to_sstring());
             } else {
                 m.key.push("");
             }

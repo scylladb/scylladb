@@ -207,8 +207,8 @@ mutation mutation_description::build(schema_ptr s) const {
             return clustering_key::from_exploded(s, k);
         });
         if (!clustering_range.is_singular()) {
-            auto start = clustering_range.start_ref();
-            auto end = clustering_range.end_ref();
+            auto start = clustering_range.start();
+            auto end = clustering_range.end();
             if (start && end && cmp(end->value(), start->value())) {
                 clustering_range = interval<clustering_key>(std::move(end), std::move(start));
             }

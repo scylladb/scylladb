@@ -3571,10 +3571,10 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                         // as (min,t0] and (t3,max]. Skippping the range (t3,max]
                         // we will get the correct ownership number as if the first
                         // range were not split.
-                        if (!r.end_ref()) {
+                        if (!r.end()) {
                             continue;
                         }
-                        auto end_token = r.end_ref()->value();
+                        auto end_token = r.end()->value();
                         auto loc = token_ownership.find(end_token);
                         if (loc != token_ownership.end()) {
                             ownership += loc->second;
@@ -5088,7 +5088,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
 
     // Find (for each range) all nodes that store replicas for these ranges as well
     for (auto& r : ranges) {
-        auto end_token = r.end_ref() ? r.end_ref()->value() : dht::maximum_token();
+        auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto eps = erm->get_natural_replicas(end_token);
         current_replica_endpoints.emplace(r, std::move(eps));
         co_await coroutine::maybe_yield();
@@ -5111,7 +5111,7 @@ storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replica
     // range.
     const auto& rs = erm->get_replication_strategy();
     for (auto& r : ranges) {
-        auto end_token = r.end_ref() ? r.end_ref()->value() : dht::maximum_token();
+        auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
         auto new_replica_endpoints = co_await rs.calculate_natural_endpoints(end_token, temp);
 
         auto rg = current_replica_endpoints.equal_range(r);
@@ -5398,11 +5398,11 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
         auto range = tmap.get_token_range(id);
         auto& replicas = info.replicas;
         dht::token_range_endpoints tr;
-        if (range.start_ref()) {
-            tr._start_token = range.start_ref()->value().to_sstring();
+        if (range.start()) {
+            tr._start_token = range.start()->value().to_sstring();
         }
-        if (range.end_ref()) {
-            tr._end_token = range.end_ref()->value().to_sstring();
+        if (range.end()) {
+            tr._end_token = range.end()->value().to_sstring();
         }
         for (auto& r : replicas) {
             dht::endpoint_details details;
@@ -7511,7 +7511,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
     } else {
         unwrapped.emplace_back(std::move(range));
     }
-    tokens.push_back(std::move(unwrapped[0].start_ref().value_or(range_type::bound(dht::minimum_token()))).value());
+    tokens.push_back(std::move(unwrapped[0].start().value_or(range_type::bound(dht::minimum_token()))).value());
     for (auto&& r : unwrapped) {
         std::vector<dht::token> range_tokens;
         for (auto &&sst : *sstables) {
@@ -7522,7 +7522,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
         std::sort(range_tokens.begin(), range_tokens.end());
         std::move(range_tokens.begin(), range_tokens.end(), std::back_inserter(tokens));
     }
-    tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end_ref().value_or(range_type::bound(dht::maximum_token()))).value());
+    tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end().value_or(range_type::bound(dht::maximum_token()))).value());
 
     // split_count should be much smaller than number of key samples, to avoid huge sampling error
     constexpr uint32_t min_samples_per_split = 4;

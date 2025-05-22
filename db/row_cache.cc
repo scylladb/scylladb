@@ -418,13 +418,13 @@ class single_partition_populating_reader final : public mutation_reader::impl {
     mutation_reader_opt _reader;
 private:
     future<> create_reader() {
-        auto src_and_phase = _cache.snapshot_of(_read_context->range().start_ref()->value());
+        auto src_and_phase = _cache.snapshot_of(_read_context->range().start()->value());
         auto phase = src_and_phase.phase;
-        _read_context->enter_partition(_read_context->range().start_ref()->value().as_decorated_key(), src_and_phase.snapshot, phase);
+        _read_context->enter_partition(_read_context->range().start()->value().as_decorated_key(), src_and_phase.snapshot, phase);
         return _read_context->create_underlying().then([this, phase] {
           return _read_context->underlying().underlying()().then([this, phase] (auto&& mfopt) {
             if (!mfopt) {
-                if (phase == _cache.phase_of(_read_context->range().start_ref()->value())) {
+                if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                     _cache._read_section(_cache._tracker.region(), [this] {
                         _cache.find_or_create_missing(_read_context->key());
                     });
@@ -432,7 +432,7 @@ private:
                     _cache._tracker.on_mispopulate();
                 }
                 _end_of_stream = true;
-            } else if (phase == _cache.phase_of(_read_context->range().start_ref()->value())) {
+            } else if (phase == _cache.phase_of(_read_context->range().start()->value())) {
                 _reader = _cache._read_section(_cache._tracker.region(), [&] {
                     cache_entry& e = _cache.find_or_create_incomplete(mfopt->as_partition_start(), phase);
                     return e.read(_cache, *_read_context, phase);
@@ -535,9 +535,9 @@ private:
             _cache.on_mispopulate();
             return;
         }
-        if (!_reader.range().end_ref() || !_reader.range().end_ref()->is_inclusive()) {
+        if (!_reader.range().end() || !_reader.range().end()->is_inclusive()) {
             dht::ring_position_comparator cmp(*_cache._schema);
-            auto it = _reader.range().end_ref() ? _cache._partitions.find(_reader.range().end_ref()->value(), cmp)
+            auto it = _reader.range().end() ? _cache._partitions.find(_reader.range().end()->value(), cmp)
                                            : std::prev(_cache._partitions.end());
             if (it != _cache._partitions.end()) {
                 if (it == _cache._partitions.begin()) {
@@ -593,10 +593,10 @@ public:
     }
 
     future<> fast_forward_to(dht::partition_range&& pr) {
-        if (!pr.start_ref()) {  
+        if (!pr.start()) {  
             _last_key = row_cache::previous_entry_pointer();
-        } else if (!pr.start_ref()->is_inclusive() && pr.start_ref()->value().has_key()) {
-            _last_key = row_cache::previous_entry_pointer(pr.start_ref()->value().as_decorated_key());
+        } else if (!pr.start()->is_inclusive() && pr.start()->value().has_key()) {
+            _last_key = row_cache::previous_entry_pointer(pr.start()->value().as_decorated_key());
         } else {
             // Inclusive start bound, cannot set continuity flag.
             _last_key = {};
@@ -722,7 +722,7 @@ public:
         , _read_context(std::move(context))
         , _primary(cache, range)
         , _secondary_reader(cache, *_read_context)
-        , _lower_bound(range.start_ref())
+        , _lower_bound(range.start())
     { }
     virtual future<> fill_buffer() override {
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
@@ -751,7 +751,7 @@ public:
         _advance_primary = false;
         _pr = &pr;
         _primary = partition_range_cursor{_cache, pr};
-        _lower_bound = pr.start_ref();
+        _lower_bound = pr.start();
         return _reader->close();
     }
     virtual future<> fast_forward_to(position_range cr) override {
@@ -790,7 +790,7 @@ row_cache::make_reader_opt(schema_ptr s,
                 range, seastar::value_of([&slice] { return slice.get_all_ranges(); }));
         auto mr = _read_section(_tracker.region(), [&] () -> mutation_reader_opt {
             dht::ring_position_comparator cmp(*_schema);
-            auto&& pos = range.start_ref()->value();
+            auto&& pos = range.start()->value();
             partitions_type::bound_hint hint;
             auto i = _partitions.lower_bound(pos, cmp, hint);
             if (hint.match) {
@@ -838,7 +838,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
     };
     return _read_section(_tracker.region(), [&] () -> mutation_reader {
         dht::ring_position_comparator cmp(*_schema);
-        auto&& pos = range.start_ref()->value();
+        auto&& pos = range.start()->value();
         partitions_type::bound_hint hint;
         auto i = _partitions.lower_bound(pos, cmp, hint);
         if (hint.match) {

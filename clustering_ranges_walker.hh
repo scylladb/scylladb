@@ -65,7 +65,7 @@ private:
             }
         } else {
              // If the first range is contiguous with the static row, then advance _current_end as much as we can
-             if (_current_range && !_current_range.front().start_ref()) {
+             if (_current_range && !_current_range.front().start()) {
                  _current_end = position_in_partition_view::for_range_end(_current_range.front());
                  _using_clustering_range = true;
              }

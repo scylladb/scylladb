@@ -233,7 +233,7 @@ static std::vector<locator::host_id> get_neighbors(
         const std::vector<sstring>& data_centers,
         const std::vector<sstring>& hosts,
         const std::unordered_set<locator::host_id>& ignore_nodes, bool small_table_optimization = false) {
-    dht::token tok = range.end_ref() ? range.end_ref()->value() : dht::maximum_token();
+    dht::token tok = range.end() ? range.end()->value() : dht::maximum_token();
     auto ret = erm.get_natural_replicas(tok);
     if (small_table_optimization) {
         auto token_owners = erm.get_token_metadata().get_normal_token_owners();
@@ -1853,7 +1853,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             std::unordered_map<dht::token_range, locator::host_id_set> current_replica_endpoints;
             // Find (for each range) all nodes that store replicas for these ranges as well
             for (auto& r : ranges) {
-                auto end_token = r.end_ref() ? r.end_ref()->value() : dht::maximum_token();
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto eps = strat.calculate_natural_endpoints(end_token, *tmptr).get();
                 current_replica_endpoints.emplace(r, std::move(eps));
                 seastar::thread::maybe_yield();
@@ -1872,7 +1872,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 if (ops) {
                     ops->check_abort();
                 }
-                auto end_token = r.end_ref() ? r.end_ref()->value() : dht::maximum_token();
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 const auto new_eps = strat.calculate_natural_endpoints(end_token, temp).get();
                 const auto& current_eps = current_replica_endpoints[r];
                 std::unordered_set<locator::host_id> neighbors_set = new_eps.get_set();
@@ -2179,7 +2179,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
             for (auto it = ranges.begin(); it != ranges.end();) {
                 auto& r = *it;
                 seastar::thread::maybe_yield();
-                auto end_token = r.end_ref() ? r.end_ref()->value() : dht::maximum_token();
+                auto end_token = r.end() ? r.end()->value() : dht::maximum_token();
                 auto natural_eps = strat.calculate_natural_endpoints(end_token, *tmptr).get();
                 auto neighbors = natural_eps |
                     std::views::filter([&] (const auto& node) {
