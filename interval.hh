@@ -16,6 +16,7 @@
 #include <iosfwd>
 #include <compare>
 #include <ranges>
+#include <type_traits>
 #include <fmt/format.h>
 
 template <typename Comparator, typename T>
@@ -88,22 +89,181 @@ public:
     template <typename Transformer>
     using transformed_type = typename std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Transformer, T>>>;
 private:
-    optional<bound> _start;
-    optional<bound> _end;
-    bool _singular;
+    bool _start_exists = false;
+    bool _start_inclusive = false;
+    bool _end_exists = false;
+    bool _end_inclusive = false;
+    bool _singular = false;
+    union {
+        T _start_value;
+#ifdef DEBUG
+        // _start_point (and _end_poison below) are used to detect use-after-free bugs in debug builds.
+        // They are initialized to a known value, and if a destroyed object is used or double-destroyed,
+        // it will blow up.
+        uint64_t _start_poison;
+#endif
+    };
+    union {
+        T _end_value;
+#ifdef DEBUG
+        uint64_t _end_poison;
+#endif
+    };
 public:
-    wrapping_interval(optional<bound> start, optional<bound> end, bool singular = false)
-        : _start(std::move(start))
-        , _singular(singular) {
+    wrapping_interval(optional<bound> start, optional<bound> end, bool singular = false) {
+#ifdef DEBUG
+        _start_poison = 0xDEADBEEFDEADBEEF;
+        _end_poison = 0xDEADBEEFDEADBEEF;
+#endif
+        _singular = singular;
+        if (start) {
+            _start_exists = true;
+            _start_inclusive = start->is_inclusive();
+            std::construct_at(&_start_value, std::move(start->value()));
+        }
         if (!_singular) {
-            _end = std::move(end);
+            if (end) {
+                _end_exists = true;
+                _end_inclusive = end->is_inclusive();
+                try {
+                    std::construct_at(&_end_value, std::move(end->value()));
+                } catch (...) {
+                    if (_start_exists) {
+                        std::destroy_at(&_start_value);
+                    }
+                    throw;
+                }
+            }
         }
     }
-    wrapping_interval(T value)
-        : _start(bound(std::move(value), true))
-        , _end()
-        , _singular(true)
-    { }
+    wrapping_interval(T value) {
+#ifdef DEBUG
+        _start_poison = 0xDEADBEEFDEADBEEF;
+        _end_poison = 0xDEADBEEFDEADBEEF;
+#endif
+        _start_exists = true;
+        _start_inclusive = true;
+        _singular = true;
+        std::construct_at(&_start_value, std::move(value));
+    }
+    wrapping_interval(const wrapping_interval& o)
+            : _start_exists(o._start_exists)
+            , _start_inclusive(o._start_inclusive)
+            , _end_exists(o._end_exists)
+            , _end_inclusive(o._end_inclusive)
+            , _singular(o._singular) {
+#ifdef DEBUG
+        _start_poison = 0xDEADBEEFDEADBEEF;
+        _end_poison = 0xDEADBEEFDEADBEEF;
+#endif
+        if (_start_exists) {
+            std::construct_at(&_start_value, o._start_value);
+        }
+        if (_end_exists) {
+            try {
+                std::construct_at(&_end_value, o._end_value);
+            } catch (...) {
+                if (_start_exists) {
+                    std::destroy_at(&_start_value);
+                }
+                throw;
+            }
+        }
+    }
+    wrapping_interval(wrapping_interval&& o) noexcept(std::is_nothrow_move_constructible_v<T>)
+            : _start_exists(o._start_exists)
+            , _start_inclusive(o._start_inclusive)
+            , _end_exists(o._end_exists)
+            , _end_inclusive(o._end_inclusive)
+            , _singular(o._singular) {
+#ifdef DEBUG
+        _start_poison = 0xDEADBEEFDEADBEEF;
+        _end_poison = 0xDEADBEEFDEADBEEF;
+#endif
+        if (_start_exists) {
+            std::construct_at(&_start_value, std::move(o._start_value));
+        }
+        if (_end_exists) {
+            try {
+                std::construct_at(&_end_value, std::move(o._end_value));
+            } catch (...) {
+                if (_start_exists) {
+                    std::destroy_at(&_start_value);
+                }
+                throw;
+            }
+        }
+    }
+    wrapping_interval& operator=(const wrapping_interval& o) {
+        if (this != &o) {
+            if (_start_exists) {
+                std::destroy_at(&_start_value);
+#ifdef DEBUG
+                _start_poison = 0xDEADBEEFDEADBEEF;
+#endif
+            }
+            _start_exists = false;
+            if (_end_exists) {
+                std::destroy_at(&_end_value);
+#ifdef DEBUG
+                _end_poison = 0xDEADBEEFDEADBEEF;
+#endif
+            }
+            _end_exists = false;
+
+            _start_inclusive = o._start_inclusive;
+            _end_inclusive = o._end_inclusive;
+            _singular = o._singular;
+
+            if (o._start_exists) {
+                std::construct_at(&_start_value, o._start_value);
+            }
+            _start_exists = o._start_exists;
+            if (o._end_exists) {
+                std::construct_at(&_end_value, o._end_value);
+            }
+            _end_exists = o._end_exists;
+        }
+        return *this;
+    }
+    wrapping_interval& operator=(wrapping_interval&& o) noexcept(std::is_nothrow_move_constructible_v<T>) {
+        if (this != &o) {
+            if (_start_exists) {
+                std::destroy_at(&_start_value);
+#ifdef DEBUG
+                _start_poison = 0xDEADBEEFDEADBEEF;
+#endif
+            }
+            _start_exists = false;
+            if (_end_exists) {
+                std::destroy_at(&_end_value);
+#ifdef DEBUG
+                _end_poison = 0xDEADBEEFDEADBEEF;
+#endif
+            }
+            _end_exists = false;
+            if (o._start_exists) {
+                std::construct_at(&_start_value, std::move(o._start_value));
+            }
+            _start_exists = o._start_exists;
+            _start_inclusive = o._start_inclusive;
+            if (o._end_exists) {
+                std::construct_at(&_end_value, std::move(o._end_value));
+            }
+            _end_exists = o._end_exists;
+            _end_inclusive = o._end_inclusive;
+            _singular = o._singular;
+        }
+        return *this;
+    }
+    ~wrapping_interval() {
+        if (_start_exists) {
+            std::destroy_at(&_start_value);
+        }
+        if (_end_exists) {
+            std::destroy_at(&_end_value);
+        }
+    }
     constexpr wrapping_interval() : wrapping_interval({}, {}) { }
 private:
     // Bound wrappers for compile-time dispatch and safety.
@@ -251,38 +411,56 @@ public:
         return _singular;
     }
     bool is_full() const {
-        return !_start && !_end;
+        return !_start_exists && !_end_exists;
     }
     void reverse() {
         if (!_singular) {
-            std::swap(_start, _end);
+            // Use a native algorithm to avoid trouble with exception safety.
+            // reverse() isn't on any hot path.
+            *this = wrapping_interval(end(), start());
         }
     }
     /// Returns the start bound of the interval, as a view into the interval object.
     /// Copying the bound still points into the original interval object.
     optional<bound_const_ref> start() const {
-        return _start;
+        optional<bound_const_ref> ret;
+        if (_start_exists) {
+            ret.emplace(_start_value, _start_inclusive);
+        }
+        return ret;
     }
     /// Returns the end bound of the interval, as a view into the interval object.
     /// Copying the bound still points into the original interval object.
     optional<bound_const_ref> end() const {
-        return _singular ? _start : _end;
+        optional<bound_const_ref> ret;
+        if (_singular) {
+            if (_start_exists) {
+                ret.emplace(_start_value, _start_inclusive);
+            }
+        } else if (_end_exists) {
+            ret.emplace(_end_value, _end_inclusive);
+        }
+        return ret;
     }
+
+    // Variants of start() and end() that materialize the bounds
+
     /// Returns the start bound of the interval, as a materialized object
     /// independent of the original interval.
     optional<bound> start_copy() const {
-        return _start;
+        return start();
     }
     /// Returns the end bound of the interval, as a materialized object
     /// independent of the original interval.
     optional<bound> end_copy() const {
-        return _singular ? _start : _end;
+        return end();
     }
+
     // Range is a wrap around if end value is smaller than the start value
     // or they're equal and at least one bound is not inclusive.
     // Comparator must define a total ordering on T.
     bool is_wrap_around(IntervalComparatorFor<T> auto&& cmp) const {
-        if (_end && _start) {
+        if (_end_exists && _start_exists) {
             auto r = cmp(end()->value(), start()->value());
             return r < 0
                    || (r == 0 && (!start()->is_inclusive() || !end()->is_inclusive()));
@@ -433,21 +611,21 @@ public:
     // Supplied transformer should transform value of type T (the old type) into value of type U (the new type).
     template<typename Transformer, typename U = transformed_type<Transformer>>
     wrapping_interval<U> transform(Transformer&& transformer) && {
-        return wrapping_interval<U>(transform_bound(std::move(_start), transformer), transform_bound(std::move(_end), transformer), _singular);
+        return wrapping_interval<U>(transform_bound(std::move(*this).start(), transformer), transform_bound(std::move(*this).end(), transformer), _singular);
     }
     template<typename Transformer, typename U = transformed_type<Transformer>>
     wrapping_interval<U> transform(Transformer&& transformer) const & {
-        return wrapping_interval<U>(transform_bound(_start, transformer), transform_bound(_end, transformer), _singular);
+        return wrapping_interval<U>(transform_bound(start(), transformer), transform_bound(end(), transformer), _singular);
     }
     bool equal(const wrapping_interval& other, IntervalComparatorFor<T> auto&& cmp) const {
-        return bool(_start) == bool(other._start)
-               && bool(_end) == bool(other._end)
-               && (!_start || _start->equal(*other._start, cmp))
-               && (!_end || _end->equal(*other._end, cmp))
+        return bool(start()) == bool(other.start())
+               && bool(end()) == bool(other.end())
+               && (!start() || start()->equal(*other.start(), cmp))
+               && (!end() || end()->equal(*other.end(), cmp))
                && _singular == other._singular;
     }
     bool operator==(const wrapping_interval& other) const {
-        return (_start == other._start) && (_end == other._end) && (_singular == other._singular);
+        return start() == other.start() && end() == other.end() && _singular == other._singular;
     }
 
 private:
