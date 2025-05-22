@@ -78,6 +78,27 @@ def test_create_keyspace_if_not_exists(cql, this_dc):
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
+# We treat ALTER to numeric RF of same count as no-op.
+def test_alter_rack_list_to_same_count_numeric_rf(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 1 }}")
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
+
+def test_empty_rack_list_is_accepted(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': [] }}")
+        assert this_dc not in get_replication(cql, keyspace)
+
+def test_can_alter_rack_list_to_0(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}")
+
+def test_can_alter_to_rack_list_from_0(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
+
 # The documentation states that "Keyspace names can have alpha-
 # numeric characters and contain underscores; only letters and numbers are
 # supported as the first character.". This is not accurate. Test what is actually
