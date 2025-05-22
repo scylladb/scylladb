@@ -954,13 +954,13 @@ SEASTAR_TEST_CASE(test_rack_aware_rf) {
 
         unsigned shard_count = 2;
         topo.add_node(service::node_state::normal, shard_count);
-        auto s = "CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1'} AND tablets = {'enabled':true}";
+        auto s = "CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1a'} AND tablets = {'enabled':true}";
         testlog.info("{}", s);
         e.execute_cql(s).get();
 
         topo.start_new_rack();
         topo.add_node(service::node_state::normal, shard_count);
-        s = "CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1,rack2'} AND tablets = {'enabled':true}";
+        s = "CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1a,rack1b'} AND tablets = {'enabled':true}";
         testlog.info("{}", s);
         e.execute_cql(s).get();
 
@@ -968,7 +968,7 @@ SEASTAR_TEST_CASE(test_rack_aware_rf) {
         topo.add_node(service::node_state::normal, shard_count);
         topo.start_new_rack();
         topo.add_node(service::node_state::normal, shard_count);
-        s = "CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1,rack2', 'dc2':'rack1,rack2'} AND tablets = {'enabled':true}";
+        s = "CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1a,rack1b', 'dc2':'rack2a,rack2b'} AND tablets = {'enabled':true}";
         testlog.info("{}", s);
         e.execute_cql(s).get();
     });

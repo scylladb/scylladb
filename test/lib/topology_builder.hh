@@ -71,6 +71,7 @@ public:
 private:
     cql_test_env& _env;
     int _nr_nodes = 0;
+    int _dc_id;
     int _rack_id;
     sstring _dc;
     sstring _rack;
@@ -150,8 +151,7 @@ public:
     // Starts building a new rack in the current DC.
     // Returns location of the new rack.
     endpoint_dc_rack start_new_rack() {
-        _rack_id++;
-        _rack = fmt::format("rack{}", _rack_id);
+        _rack = fmt::format("rack{}{:c}", _dc_id, 'a' + _rack_id++);
         return rack();
     }
 
@@ -159,7 +159,8 @@ public:
     // DC is named uniquely in the scope of the process, not just this object.
     endpoint_dc_rack start_new_dc() {
         static std::atomic<int> next_id = 1;
-        _dc = fmt::format("dc{}", next_id.fetch_add(1));
+        _dc_id = next_id.fetch_add(1);
+        _dc = fmt::format("dc{}", _dc_id);
         _rack_id = 0;
         return start_new_rack();
     }
