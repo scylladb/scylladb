@@ -27,8 +27,6 @@ Options:
   --sysconfdir /etc/sysconfig   specify sysconfig directory name
   --packaging               use install.sh for packaging
   --upgrade                 upgrade existing scylla installation (don't overwrite config files)
-  --supervisor             enable supervisor to manage scylla processes
-  --supervisor-log-to-stdout logging to stdout on supervisor
   --without-systemd         skip installing systemd units
   --p11-trust-paths         specify trust path for p11-kit
   --help                   this helpful message
@@ -68,8 +66,6 @@ housekeeping=false
 nonroot=false
 packaging=false
 upgrade=false
-supervisor=false
-supervisor_log_to_stdout=false
 without_systemd=false
 skip_systemd_check=false
 p11_trust_paths=
@@ -107,15 +103,6 @@ while [ $# -gt 0 ]; do
             ;;
         "--upgrade")
             upgrade=true
-            shift 1
-            ;;
-        "--supervisor")
-            supervisor=true
-            skip_systemd_check=true
-            shift 1
-            ;;
-        "--supervisor-log-to-stdout")
-            supervisor_log_to_stdout=true
             shift 1
             ;;
         "--without-systemd")
@@ -241,27 +228,6 @@ is_debian_variant() {
 
 is_alpine() {
     [ "$ID" = "alpine" ]
-}
-
-supervisor_dir() {
-    local etcdir="$1"
-    if is_debian_variant; then
-        echo "$etcdir"/supervisor/conf.d
-    elif is_alpine; then
-        echo "$etcdir"/supervisor.d
-    else
-        echo "$etcdir"/supervisord.d
-    fi
-}
-
-supervisor_conf() {
-    local etcdir="$1"
-    local service="$2"
-    if is_debian_variant; then
-        echo `supervisor_dir "$etcdir"`/"$service".conf
-    else
-        echo `supervisor_dir "$etcdir"`/"$service".ini
-    fi
 }
 
 if ! $skip_systemd_check && [ ! -d /run/systemd/system/ ]; then
@@ -504,10 +470,6 @@ cp -pr tools/scyllatop/* "$rprefix"/scyllatop
 install -d -m755 -d "$rprefix"/scripts
 cp -pr dist/common/scripts/* "$rprefix"/scripts
 ln -srf "$rprefix/scyllatop/scyllatop.py" "$rprefix/bin/scyllatop"
-if $supervisor; then
-    install -d -m755 "$rprefix"/supervisor
-    install -m755 dist/common/supervisor/* -Dt "$rprefix"/supervisor
-fi
 
 # scylla tools
 install -d -m755 "$retc"/bash_completion.d
@@ -648,43 +610,11 @@ done
 relocate_python3 "$rprefix"/scyllatop tools/scyllatop/scyllatop.py
 relocate_python3 "$rprefix"/scripts fix_system_distributed_tables.py
 
-if $supervisor; then
-    install -d -m755 `supervisor_dir $retc`
-    for service in scylla-server scylla-jmx scylla-node-exporter; do
-        if [ "$service" = "scylla-server" ]; then
-            program="scylla"
-        else
-            program=$service
-        fi
-        cat << EOS > `supervisor_conf $retc $service`
-[program:$program]
-directory=$rprefix
-command=/bin/bash -c './supervisor/$service.sh'
-EOS
-        chmod 644 `supervisor_conf $retc $service`
-        if [ "$service" != "scylla-server" ]; then
-            cat << EOS >> `supervisor_conf $retc $service`
-user=scylla
-EOS
-            chmod 644 `supervisor_conf $retc $service`
-        fi
-        if $supervisor_log_to_stdout; then
-            cat << EOS >> `supervisor_conf $retc $service`
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
-stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0
-EOS
-            chmod 644 `supervisor_conf $retc $service`
-        fi
-    done
-fi
-
 if $nonroot; then
     sed -i -e "s#/var/lib/scylla#$rprefix#g" $rsysconfdir/scylla-server
     sed -i -e "s#/etc/scylla#$retc/scylla#g" $rsysconfdir/scylla-server
     sed -i -e "s#^SCYLLA_ARGS=\"#SCYLLA_ARGS=\"--workdir $rprefix #g" $rsysconfdir/scylla-server
-    if [ ! -d /var/log/journal ] || $supervisor_log_to_stdout; then
+    if [ ! -d /var/log/journal ]; then
         sed -i -e "s#--log-to-stdout 0#--log-to-stdout 1#g" $rsysconfdir/scylla-server
     fi
     # nonroot install is also 'offline install'
@@ -697,9 +627,6 @@ if $nonroot; then
     fi
     echo "Scylla non-root install completed."
 elif ! $packaging; then
-    if $supervisor_log_to_stdout; then
-        sed -i -e "s#--log-to-stdout 0#--log-to-stdout 1#g" $rsysconfdir/scylla-server
-    fi
     # run install.sh without --packaging is 'offline install'
     touch $rprefix/SCYLLA-OFFLINE-FILE
     chmod 644 $rprefix/SCYLLA-OFFLINE-FILE
@@ -724,9 +651,7 @@ elif ! $packaging; then
         # ignore error since some kernel may not have specified parameter
         sysctl -p "$rusr"/lib/sysctl.d/"$bn" || :
     done
-    if ! $supervisor; then
-        $rprefix/scripts/scylla_post_install.sh
-        $rprefix/kernel_conf/post_install.sh
-    fi
+    $rprefix/scripts/scylla_post_install.sh
+    $rprefix/kernel_conf/post_install.sh
     echo "Scylla offline install completed."
 fi
