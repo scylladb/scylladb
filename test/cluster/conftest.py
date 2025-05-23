@@ -14,6 +14,7 @@ import tempfile
 import platform
 import urllib.parse
 from multiprocessing import Event, Process
+from opensearchpy import OpenSearch
 from pathlib import Path
 from typing import TYPE_CHECKING
 from test.pylib.random_tables import RandomTables
@@ -329,3 +330,20 @@ async def prepare_3_nodes_cluster(request, manager):
 async def prepare_3_racks_cluster(request, manager):
     if request.node.get_closest_marker("prepare_3_racks_cluster"):
         await manager.servers_add(3, auto_rack_dc="dc1")
+
+
+@pytest.fixture(scope="function")
+async def opensearch():
+    client = OpenSearch(
+        hosts = [{'host': '127.0.0.1', 'port': '9200'}],
+        http_compress = True,
+        use_ssl = False,
+        verify_certs = False,
+        ssl_assert_hostname = False,
+        ssl_show_warn = False
+    )
+
+    try:
+        yield client
+    finally:
+        client.close()
