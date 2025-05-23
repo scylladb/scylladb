@@ -66,6 +66,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                            "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
                            "lcov file per suite, lcov file per mode, and an lcov file for the entire run, "
                            "The lcov files can eventually be used for generating coverage reports")
+    parser.addoption("--coverage-mode", action='append', type=str, dest="coverage_modes",
+                        help="Collect and process coverage only for the modes specified. implies: --coverage, default: All built modes")
     parser.addoption("--cluster-pool-size", type=int,
                      help="Set the pool_size for PythonTest and its descendants.  Alternatively environment variable "
                           "CLUSTER_POOL_SIZE can be used to achieve the same")

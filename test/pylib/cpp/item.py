@@ -25,6 +25,9 @@
 #
 from __future__ import annotations
 
+from collections import namedtuple
+
+from scripts import coverage as coverage_script
 from pathlib import Path
 from typing import Sequence, Any, Iterator
 
@@ -34,6 +37,8 @@ from _pytest._io import TerminalWriter
 
 from test import COMBINED_TESTS, BUILD_DIR
 from test.pylib.cpp.facade import CppTestFailure, CppTestFailureList, CppTestFacade
+
+coverage = namedtuple('coverage', ['global_coverage_flag', 'suite_coverage_flag', 'coverage_modes'])
 
 
 class CppFailureRepr(object):
@@ -122,8 +127,8 @@ class CppFile(pytest.File):
     Represents the C++ test file with all necessary information for test execution
     """
     def __init__(self, *, no_parallel_run: bool = False, modes: list[str], disabled_tests: dict[str, set[str]],
-                 run_id=None, facade: CppTestFacade, arguments: Sequence[str], parameters: list[str] = None,
-                 env: dict = None, **kwargs: Any) -> None:
+                 run_id=None, facade: CppTestFacade, arguments: Sequence[str], coverage_config: coverage,
+                 parameters: list[str] = None, env: dict = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.facade = facade
         self.modes = modes
@@ -133,17 +138,20 @@ class CppFile(pytest.File):
         self.parameters = parameters
         self.env = env
         self._arguments = arguments
+        self.coverage_config = coverage_config
 
     def collect(self) -> Iterator[CppTestFunction]:
         for mode in self.modes:
             test_name = self.path.stem
-            self.env['TMPDIR'] = Path(self.parent.config.getoption('tmpdir'), mode).absolute()
+            self.env['TMPDIR'] = (self.facade.temp_dir / mode).absolute()
             if test_name in self.disabled_tests[mode]:
                 continue
             executable = Path(f'{BUILD_DIR}/{mode}/test/{self.path.parent.name}/{test_name}')
             combined, tests = self.facade.list_tests(executable, self.no_parallel_run, mode)
             if combined:
                 executable = executable.parent / COMBINED_TESTS.stem
+            if mode == "coverage":
+                self.env.update(coverage_script.env(executable))
             for test_name in tests:
                 if '/' in test_name:
                     test_name = test_name.replace('/', '_')
