@@ -37,6 +37,17 @@ class metadata final {
     using container_t = std::map<api::timestamp_type, std::optional<topology_description>>;
     container_t _gens;
 
+    using table_streams = std::map<api::timestamp_type, committed_stream_set>;
+    using tablet_streams_map = std::unordered_map<table_id, table_streams>;
+    tablet_streams_map _tablet_streams;
+
+    struct pending_stream_entry {
+        std::vector<cdc::stream_id> stream_set;
+        std::optional<utils::UUID> committed_time;
+    };
+    using pending_streams_map = std::unordered_map<table_id, pending_stream_entry>;
+    pending_streams_map _pending_streams;
+
     /* The timestamp used in the last successful `get_stream` call. */
     api::timestamp_type _last_stream_timestamp = api::missing_timestamp;
 
@@ -62,6 +73,11 @@ public:
      */
     stream_id get_stream(api::timestamp_type ts, dht::token tok);
 
+    const std::vector<stream_id>& get_current_tablet_stream_set(table_id tid) const;
+    const std::vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
+
+    std::pair<stream_id, std::optional<stream_id>> get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
+
     /* Insert the generation given by `gen` with timestamp `ts` to be used by the `get_stream` function,
      * if the generation is not already known or older than the currently known ones.
      *
@@ -82,6 +98,18 @@ public:
      * Returns true iff this generation is not obsolete and wasn't previously prepared nor inserted.
      */
     bool prepare(db_clock::time_point ts);
+
+    void load_streams_state(const base_streams_state& base_data, const pending_streams& pending_data, const streams_history& history_data, const std::vector<table_id>& removed_tables);
+
+    const tablet_streams_map& get_all_tablet_streams() const {
+        return _tablet_streams;
+    }
+
+    const pending_streams_map& get_pending_streams() const {
+        return _pending_streams;
+    }
+
+    static cdc_stream_diff generate_stream_diff(const std::vector<stream_id>& current, const std::vector<stream_id>& pending);
 };
 
 } // namespace cdc
