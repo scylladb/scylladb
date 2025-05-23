@@ -386,7 +386,10 @@ future<::shared_ptr<cql3::untyped_result_set>> paxos_store::execute_cql_with_tim
         std::unique_ptr<service::client_state> client_state;
         service::query_state query_state;
         timeout_context(db::timeout_clock::duration d)
-                : client_state(std::make_unique<service::client_state>(service::client_state::internal_tag{}, timeout_config{d, d, d, d, d, d, d}))
+                : client_state(std::make_unique<service::client_state>(service::client_state::internal_tag{}, 
+                    timeout_config{d, d, d, d, d, d, d}, 
+                    client_state::replica_local::yes
+                ))
                 , query_state(*client_state, empty_service_permit())
         {}
     };
