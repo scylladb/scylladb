@@ -2983,14 +2983,14 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
         const auto schema_description = schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
 
         sst_log.debug("\noriginal schema:\n{}\nreplacement schema:\n{}\n\nNote: original keyspace name of {} was replaced with {}, original id of {} was replaced with {} and all properties were dropped!\n",
-                original_schema_description.create_statement.value(),
-                schema_description.create_statement.value(),
+                original_schema_description.deserialize_create_statement(),
+                schema_description.deserialize_create_statement(),
                 sstable_schema->ks_name(),
                 keyspace_name,
                 sstable_schema->id(),
                 schema->id());
 
-        co_await env.execute_cql(schema_description.create_statement.value());
+        co_await env.execute_cql(schema_description.deserialize_create_statement());
 
         auto& table = db.find_column_family(keyspace_name, table_name);
 

@@ -11,7 +11,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
-#include "bytes_fwd.hh"
+#include "utils/managed_bytes.hh"
 
 #include <optional>
 #include <vector>
@@ -69,8 +69,18 @@ struct description {
     sstring type;
     /// The name of the entity itself, e.g. a keyspace of name `ks` will be of name: ks
     sstring name;
-    /// CQL statement that can be used to restore the entity.
-    std::optional<sstring> create_statement;
+    /// Encoded CQL statement that can be used to restore the entity.
+    ///
+    /// Technical note:
+    /// ---------------
+    /// This field could (and used to) be an optional of `sstring`.
+    /// The reason why we use `manage_bytes` instead is that some create statements
+    /// may be quite large and lead to oversized allocations if we use a contiguous
+    /// memory buffer. That's a rare occurrence (in my own experience), but it has
+    /// happened: see issue scylladb/scylladb#24018. That's why we need to use
+    /// `managed_bytes` right away: it's less convenient to handle, but this struct
+    /// is pretty much only used for serialization purposes, so it's a good trade-off.
+    std::optional<managed_bytes> create_statement;
 
     /// Serialize the description to represent multiple UTF-8 columns.
     /// The number of columns will be equal to 4 unless `serialize_create_statement`
@@ -80,7 +90,14 @@ struct description {
     ///
     /// Precondition: if `serialize_create_statement` is true, then `create_statement.has_value()`
     ///               is also true.
-    std::vector<bytes_opt> serialize(bool serialize_create_statement = true) const;
+    std::vector<managed_bytes_opt> serialize(bool serialize_create_statement = true) const;
+    /// The same description applies to this overload as to the (const description) one.
+    std::vector<managed_bytes_opt> serialize(bool serialize_create_statement = true) &&;
+
+    /// Deserialize the create statement.
+    ///
+    /// Precondition: `create_statement.has_value() == true`.
+    sstring deserialize_create_statement() const;
 };
 
 } // namespace cql3

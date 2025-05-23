@@ -268,6 +268,17 @@ public:
         write(bytes_view(reinterpret_cast<const signed char*>(ptr), size));
     }
 
+    [[gnu::always_inline]]
+    void write(std::string_view sv) {
+        write(sv.data(), sv.size());
+    }
+
+    template <typename Bytes>
+    bytes_ostream& operator<<(Bytes&& bytes) {
+        write(std::forward<Bytes>(bytes));
+        return *this;
+    }
+
     bool is_linearized() const {
         return !_begin || !_begin->next;
     }
