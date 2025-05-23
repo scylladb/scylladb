@@ -430,7 +430,8 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
             on_internal_error(paxos_state::logger, "prepared statement is null");
         }
     }
-    const auto qo = qp.make_internal_options(ps_ptr, values, db::consistency_level::ONE);
+    const auto qo = qp.make_internal_options(ps_ptr, values, db::consistency_level::ONE,
+        -1, service::node_local_only::yes);
     const auto st = ps_ptr->statement;
 
     const auto msg_ptr = co_await st->execute(qp, qs, qo, std::nullopt);
