@@ -544,7 +544,7 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
         load_and_stream_desc = "auto-enabled-for-tablets";
     }
 
-    if (!load_and_stream && skip_cleanup) {
+    if (load_and_stream && skip_cleanup) {
         throw std::runtime_error("Skipping cleanup is not possible when doing load-and-stream");
     }
 
