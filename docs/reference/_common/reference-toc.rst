@@ -8,5 +8,5 @@
    Configuration Parameters </reference/configuration-parameters>
    Glossary </reference/glossary>
    Limits </reference/limits>
-   API Reference </reference/api-reference>
+   API Reference </reference/api/index>
    Metrics </reference/metrics>
