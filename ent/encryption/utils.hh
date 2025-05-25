@@ -11,6 +11,8 @@
 #include <seastar/http/request.hh>
 #include <seastar/http/reply.hh>
 
+#include "utils/s3/retry_strategy.hh"
+
 namespace seastar {
 namespace tls { class certificate_credentials; }
 }
@@ -64,6 +66,7 @@ public:
     static inline constexpr const char* CONTENT_TYPE_HEADER = "content-type";
 
 private:
+    const aws::default_retry_strategy _retry_strategy;
     std::string _host;
     uint16_t _port;
     seastar::shared_ptr<seastar::tls::certificate_credentials> _creds;
