@@ -8,18 +8,11 @@
  */
 
 #include <seastar/core/future.hh>
-#include <seastar/http/url.hh>
-#include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/reply.hh>
 
 namespace seastar {
 namespace tls { class certificate_credentials; }
-namespace http {
-namespace experimental { class client; }
-struct request;
-struct reply;
-}
 }
 
 namespace encryption {

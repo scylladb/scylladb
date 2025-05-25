@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <seastar/http/client.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/util/short_streams.hh>
