@@ -38,7 +38,11 @@ class MetricsProcessor:
             except SystemExit:
                 LOGGER.info(f'Skipping file: {file_path}')
             except Exception as error:
-                LOGGER.info(error)
+                # Remove [Errno X] prefix from error message
+                error_msg = str(error)
+                if '[Errno' in error_msg:
+                    error_msg = error_msg.split('] ', 1)[1]
+                LOGGER.info(error_msg)
 
     def _process_metrics_files(self, repo_dir, output_directory, metrics_config_path):
         for root, _, files in os.walk(repo_dir):
