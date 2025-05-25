@@ -55,7 +55,7 @@ class PythonTestSuite(TestSuite):
                which would delete the log file and directory - we might want to preserve
                these if it came from a failed test.
             """
-            for srv in cluster.running.values():
+            for srv in cluster.servers.values():
                 srv.log_file.close()
                 srv.maintenance_socket_dir.cleanup()
             await cluster.stop()
