@@ -223,6 +223,7 @@ Schema:
 CREATE TABLE system.tablets (
     table_id uuid,
     last_token bigint,
+    base_table uuid STATIC,
     keyspace_name text STATIC,
     repair_scheduler_config frozen<repair_scheduler_config> STATIC,
     resize_seq_number bigint STATIC,
@@ -263,6 +264,9 @@ Only tables which use tablet-based replication strategy have an entry here.
 
 `tablet_count` is the number of tablets in the map.
 `table_name` is the name of the table, provided for convenience.
+
+`base_table` is optionally set with the table_id of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together as a group.
+ When base_table is set then the rest of the tablet map is empty, and the tablet map of base_table should be read instead.
 
 `resize_type` is the resize decision type that spans all tablets of a given table, which can be one of: `merge`, `split` or `none`.
 

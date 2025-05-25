@@ -77,6 +77,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
+            .with_column("base_table", uuid_type, column_kind::static_column)
             .with_hash_version()
             .build();
 }
@@ -291,6 +292,12 @@ tablet_mutation_builder::del_resize_task_info(const gms::feature_service& featur
         auto col = _s->get_column_definition("resize_task_info");
         _m.set_static_cell(*col, atomic_cell::make_dead(_ts, gc_clock::now()));
     }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_base_table(table_id base_table) {
+    _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
     return *this;
 }
 
