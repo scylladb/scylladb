@@ -12,7 +12,7 @@ from pytest import Collector
 
 from test import ALL_MODES, DEBUG_MODES
 from test.pylib.cpp.facade import CppTestFacade
-from test.pylib.cpp.item import CppFile
+from test.pylib.cpp.item import CppFile, coverage
 from test.pylib.util import get_modes_to_run
 
 
@@ -90,7 +90,8 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
         ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
         SCYLLA_TEST_ENV='yes',
     )
-    run_id = parent.config.getoption('run_id')
+    pytest_config = parent.config
+    run_id = pytest_config.getoption('run_id')
     modes = get_modes_to_run(parent.session.config)
     suite_config = read_suite_config(file_path.parent)
     no_parallel_cases = suite_config.get('no_parallel_cases', [])
@@ -100,14 +101,17 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     extra_scylla_cmdline_options = suite_config.get('extra_scylla_cmdline_options', [])
     test_name = file_path.stem
     no_parallel_run = True if test_name in no_parallel_cases else False
+    coverage_config = coverage(pytest_config.getoption('coverage'), suite_config.get('coverage', True),
+                               pytest_config.getoption('coverage_modes'))
 
     custom_args = custom_args_config.get(file_path.stem, ['-c2 -m2G'])
     args.extend(extra_scylla_cmdline_options)
     if len(custom_args) > 1:
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, parameters=custom_args,
                                    no_parallel_run=no_parallel_run, modes=modes, disabled_tests=disabled_tests,
-                                   run_id=run_id, facade=facade,  env=test_env)
+                                   run_id=run_id, facade=facade, env=test_env, coverage_config=coverage_config)
     else:
         args.extend(custom_args)
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, no_parallel_run=no_parallel_run,
-                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade, env=test_env)
+                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade,
+                                   env=test_env, coverage_config=coverage_config)
