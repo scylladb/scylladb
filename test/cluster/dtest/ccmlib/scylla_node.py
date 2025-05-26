@@ -84,9 +84,10 @@ NodetoolError = ToolError
 
 
 class ScyllaNode:
-    def __init__(self, cluster: ScyllaCluster, server: ServerInfo):
+    def __init__(self, cluster: ScyllaCluster, server: ServerInfo, name: str):
         self.cluster = cluster
         self.server_id = server.server_id
+        self.name = name
         self.pid = None
         self.all_pids = []
         self.network_interfaces = {
@@ -134,10 +135,6 @@ class ScyllaNode:
 
     def set_mem_mb_per_cpu(self, mem: int) -> None:  # not used in scylla-dtest
         raise NotImplementedError("setting memory per CPU during a test is not supported")
-
-    @property
-    def name(self) -> str:
-        return f"node{self.server_id}"
 
     def address(self) -> str:
         """Return the IP use by this node for internal communication."""
@@ -303,6 +300,8 @@ class ScyllaNode:
                            wait_seconds: int | None = None,
                            marks: list[tuple[ScyllaNode, int]] | None = None,
                            dump_core: bool = True) -> None:  # not implemented
+        if wait_seconds is None:
+            wait_seconds = 127 if self.scylla_mode() != "debug" else 600
         if not wait_for(func=lambda: not self.is_running(), timeout=wait_seconds):
             raise NodeError(f"Problem stopping node {self.name}")
 

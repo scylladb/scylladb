@@ -47,7 +47,13 @@ class ScyllaCluster:
         return {node.name: node for node in self.nodelist()}
 
     def nodelist(self) -> list[ScyllaNode]:
-        return [ScyllaNode(cluster=self, server=server) for server in self._sorted_nodes(self.manager.all_servers())]
+        return [
+            ScyllaNode(cluster=self, server=server, name=f"node{n}")
+            for n, server in enumerate(self._sorted_nodes(self.manager.all_servers()), start=1)
+        ]
+
+    def get_node_ip(self, nodeid: int) -> str:
+        return self.nodelist()[nodeid-1].address()
 
     def populate(self, nodes: int | list[int]) -> ScyllaCluster:
         if self._config_options.get("alternator_enforce_authorization"):
@@ -56,6 +62,7 @@ class ScyllaCluster:
             case int():
                 self.manager.servers_add(servers_num=nodes, config=self._config_options, start=False, auto_rack_dc="dc1")
             case list():
+                # Supported spec: [3, 2, 2]
                 for dc, n_nodes in enumerate(nodes, start=1):
                     self.manager.servers_add(
                         servers_num=n_nodes,
@@ -66,6 +73,23 @@ class ScyllaCluster:
                         },
                         start=False,
                     )
+            case dict():
+                # Supported spec: {"dc1": {"rack1": 3, "rack2": 2}, "dc2": {"rack1": 2}}
+                for dc, dc_nodes in nodes.items():
+                    if not isinstance(dc_nodes, dict):
+                        raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                    for rack, rack_nodes in dc_nodes.items():
+                        if not isinstance(rack_nodes, int):
+                            raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                        self.manager.servers_add(
+                            servers_num=rack_nodes,
+                            config=self._config_options,
+                            property_file={
+                                "dc": dc,
+                                "rack": rack,
+                            },
+                            start=False,
+                        )
             case _:
                 raise RuntimeError(f"Unsupported topology specification: {nodes}")
 
