@@ -1640,13 +1640,15 @@ compact_and_expire_result row::compact_and_expire(
                     collector->collect(id, atomic_cell::make_dead(cell.timestamp(), cell.deletion_time()));
                 }
                 res.dead_cells++;
+            } else if (def.is_internal()) {
+                res.live_internal_cells++;
             } else {
                 res.live_cells++;
             }
         } else {
             c.as_collection_mutation().with_deserialized(*def.type, [&] (collection_mutation_view_description m_view) {
                 auto m = m_view.materialize(*def.type);
-                res += m.compact_and_expire(id, tomb, query_time, can_gc, gc_before, collector);
+                res += m.compact_and_expire(def, tomb, query_time, can_gc, gc_before, collector);
                 if (m.cells.empty() && m.tomb <= tomb.tomb()) {
                     erase = true;
                 } else {

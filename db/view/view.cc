@@ -704,7 +704,8 @@ static const column_definition* view_column(const schema& base, const schema& vi
     // FIXME: Map base column_ids to view_column_ids, which can be something like
     // a boost::small_vector where the position is the base column_id, and the
     // value is either empty or the view's column_id.
-    return view.get_column_definition(base.column_at(kind, base_id).name());
+    const auto& col = base.column_at(kind, base_id);
+    return col.is_internal() ? nullptr : view.get_column_definition(col.name());
 }
 
 // Utility function for taking an existing cell, and creating a copy with an

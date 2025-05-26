@@ -131,12 +131,14 @@ static constexpr auto AGGREGATES = "aggregates";
 static constexpr auto SCYLLA_AGGREGATES = "scylla_aggregates";
 static constexpr auto INDEXES = "indexes";
 static constexpr auto VIEW_VIRTUAL_COLUMNS = "view_virtual_columns"; // Scylla specific
+static constexpr auto INTERNAL_COLUMNS = "internal_columns"; // Scylla specific
 static constexpr auto COMPUTED_COLUMNS = "computed_columns"; // Scylla specific
 static constexpr auto SCYLLA_TABLE_SCHEMA_HISTORY = "scylla_table_schema_history"; // Scylla specific;
 
 schema_ptr keyspaces();
 schema_ptr columns();
 schema_ptr view_virtual_columns();
+schema_ptr internal_columns();
 schema_ptr dropped_columns();
 schema_ptr indexes();
 schema_ptr tables();
