@@ -51,7 +51,7 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
             return len(set(base_replicas) & set(view_replicas)) == 0 or None
         # There's 4 nodes and 4 tablets, so even if the initial placement is not balanced,
         # each node should get 1 replica after some time.
-        wait_for(replicas_balanced, time.time() + 60)
+        await wait_for(replicas_balanced, time.time() + 60)
 
         # Disable migrations concurrent with replace since we don't handle nodes going down during migration yet.
         # See https://github.com/scylladb/scylladb/issues/16527
