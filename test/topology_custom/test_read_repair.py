@@ -22,9 +22,10 @@ from cassandra.query import SimpleStatement  # type: ignore
 from cassandra.pool import Host  # type: ignore
 from cassandra.murmur3 import murmur3  # type: ignore
 
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, execute_with_tracing
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.topology.conftest import skip_mode
 from test.topology.util import new_test_keyspace
 
 
@@ -378,13 +379,13 @@ async def test_incremental_read_repair(data_class: DataClass, workdir: str, mana
 
 
 @pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_read_repair_with_trace_logging(request, manager):
     logger.info("Creating a new cluster")
-    cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace"]
+    cmdline = ["--hinted-handoff-enabled", "0", "--logger-log-level", "mutation_data=trace:debug_error_injection=trace"]
     config = {"read_request_timeout_in_ms": 60000}
 
-    for i in range(2):
-        await manager.server_add(cmdline=cmdline, config=config)
+    [node1, node2] = await manager.servers_add(2, cmdline=cmdline, config=config)
 
     cql = manager.get_cql()
     srvs = await manager.running_servers()
@@ -395,13 +396,15 @@ async def test_read_repair_with_trace_logging(request, manager):
 
         await cql.run_async(f"INSERT INTO {ks}.t (pk, c) VALUES (0, 0)")
 
-        await manager.server_stop(srvs[0].server_id)
-        prepared = cql.prepare(f"INSERT INTO {ks}.t (pk, c) VALUES (0, 1)")
-        prepared.consistency_level = ConsistencyLevel.ONE
-        await cql.run_async(prepared)
+        await manager.api.enable_injection(node1.ip_addr, "database_apply", one_shot=True)
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, c) VALUES (0, 1)", consistency_level = ConsistencyLevel.ONE))
 
-        await manager.server_start(srvs[0].server_id)
+        tracing = execute_with_tracing(cql, SimpleStatement(f"SELECT * FROM {ks}.t WHERE pk = 0", consistency_level = ConsistencyLevel.ALL), log = True)
 
-        prepared = cql.prepare(f"SELECT * FROM {ks}.t WHERE pk = 0")
-        prepared.consistency_level = ConsistencyLevel.ALL
-        await cql.run_async(prepared)
+        assert len(tracing) == 1 # 1 page
+
+        found_read_repair = False
+        for event in tracing[0]:
+            found_read_repair |= "digest mismatch, starting read repair" == event.description
+
+        assert found_read_repair
