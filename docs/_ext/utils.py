@@ -22,6 +22,8 @@ def readable_desc_rst(description):
 
         cleaned_line = line.replace('\\n', '\n')
 
+        cleaned_line = cleaned_line.replace('\\t', '\n' + indent * 2)
+        
         if line.endswith('"'):
             cleaned_line = cleaned_line[:-1] + ' '
 
