@@ -297,8 +297,6 @@ static auto check_run_test_decorator(const char* var, bool def = false) {
     return boost::unit_test::precondition(std::bind(&check_run_test, var, def));
 }
 
-#ifdef HAVE_KMIP
-
 struct kmip_test_info {
     std::string host;
     std::string cert;
@@ -448,8 +446,6 @@ SEASTAR_TEST_CASE(test_kmip_provider, *check_run_test_decorator("ENABLE_KMIP_TES
     });
 }
 
-#endif // HAVE_KMIP
-
 class fake_proxy {
     seastar::server_socket _socket;
     socket_address _address;
@@ -542,8 +538,6 @@ public:
     }
 };
 
-#ifdef HAVE_KMIP
-
 SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
     /**
      * Tests for #3251. KMIP connector ends up in endless loop if using more than one
@@ -584,8 +578,6 @@ SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("
         }
     });
 }
-
-#endif // HAVE_KMIP
 
 /*
 Simple test of KMS provider. Still has some caveats:
@@ -838,8 +830,6 @@ SEASTAR_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, *check_ru
     });
 }
 
-#ifdef HAVE_KMIP
-
 SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
     co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
         auto yaml = fmt::format(R"foo(
@@ -856,8 +846,6 @@ SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_r
         co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmipKeyProviderFactory" }, { "kmip_host", "kmip_test" } }, yaml);
     });
 }
-
-#endif // HAVE_KMIP
 
 SEASTAR_TEST_CASE(test_user_info_encryption_dont_allow_per_table_encryption) {
     tmpdir tmp;
@@ -1113,8 +1101,6 @@ SEASTAR_TEST_CASE(test_kms_network_error, *check_run_test_decorator("ENABLE_KMS_
     });
 }
 
-#ifdef HAVE_KMIP
-
 SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
     co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
         co_await network_error_test_helper(tmp, info.host, [&](const auto& proxy) {
@@ -1241,7 +1227,6 @@ SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test
         BOOST_REQUIRE(!past_second_start);
     });
 }
-#endif // HAVE_KMIP
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
 // but there is no infrastructure for that atm.
