@@ -10,6 +10,8 @@ from cassandra.protocol import InvalidRequest, ReadFailure                      
 from cassandra.query import SimpleStatement                                        # type: ignore
 from test.topology.util import wait_for_token_ring_and_group0_consistency
 
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
 
 # Simple test of schema helper
 @pytest.mark.asyncio

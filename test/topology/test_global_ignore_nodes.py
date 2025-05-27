@@ -10,6 +10,8 @@ import uuid
 import logging
 
 logger = logging.getLogger(__name__)
+pytestmark = pytest.mark.prepare_3_nodes_cluster
+
 
 @pytest.mark.asyncio
 async def test_global_ignored_nodes_list(manager: ManagerClient, random_tables) -> None:

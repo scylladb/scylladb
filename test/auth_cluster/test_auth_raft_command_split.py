@@ -16,7 +16,7 @@ Tests case when bigger auth operation is split into multiple raft commands.
 """
 @pytest.mark.asyncio
 async def test_auth_raft_command_split(manager: ManagerClient) -> None:
-    servers = await manager.servers_add(3)
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
     cql, hosts = await manager.get_ready_cql(servers)
 
     initial_perms = await cql.run_async("SELECT * FROM system.role_permissions")

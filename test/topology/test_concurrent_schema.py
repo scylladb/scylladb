@@ -10,6 +10,8 @@ from test.pylib.random_tables import Column, UUIDType, IntType
 
 
 logger = logging.getLogger('schema-test')
+pytestmark = pytest.mark.prepare_3_racks_cluster
+
 
 
 # #1207 Schema changes are not linearizable, so concurrent updates may lead to
