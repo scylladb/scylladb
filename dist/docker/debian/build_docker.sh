@@ -83,6 +83,7 @@ fi
 packages=(
     "build/dist/$config/debian/${product}_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-server_$version-$release-1_$arch.deb"
+    "build/dist/$config/debian/$product-server-dbg_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-conf_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-kernel-conf_$version-$release-1_$arch.deb"
     "build/dist/$config/debian/$product-node-exporter_$version-$release-1_$arch.deb"
