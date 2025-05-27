@@ -68,6 +68,7 @@ You can find the third-party driver documentation on the GitHub pages for each d
 * `He4rt PHP Driver (Supported versions: 8.1 and 8.2)  <https://github.com/he4rt/scylladb-php-driver/>`_
 * `Scala Phantom Project <https://github.com/outworkers/phantom>`_
 * `Xandra Elixir Driver <https://github.com/lexhide/xandra>`_
+* `Exandra Elixir Driver <https://github.com/vinniefranco/exandra>`_
 
 Learn about ScyllaDB Drivers on ScyllaDB University
 ----------------------------------------------------
