@@ -1698,3 +1698,12 @@ def test_reverse_read_from_view(cql, test_keyspace):
             assert {(1,),(2,)} == set(cql.execute(f'select a from {mv} where b=1'))
             assert [(1,),(2,)] == list(cql.execute(f'select a from {mv} where b=1 order by a asc'))
             assert [(2,),(1,)] == list(cql.execute(f'select a from {mv} where b=1 order by a desc'))
+
+# Test that we can rename multiple columns in the base table at the same time
+# without causing any issues for view updates.
+# Reproduces issue https://github.com/scylladb/scylladb/issues/22194
+def test_rename_multiple_columns(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, PRIMARY KEY (pk, ck)') as table:
+        with new_materialized_view(cql, table, '*', 'ck, pk', 'pk IS NOT NULL AND ck IS NOT NULL'):
+            cql.execute(f'ALTER TABLE {table} RENAME pk TO pk2 AND ck TO ck2')
+            cql.execute(f'INSERT INTO {table} (pk2, ck2) VALUES (0,0)')
