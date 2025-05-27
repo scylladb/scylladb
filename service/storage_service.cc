@@ -1254,7 +1254,7 @@ public:
             },
             [] (const join_node_request_result::rejected& rej) {
                 throw std::runtime_error(
-                        format("the topology coordinator rejected request to join the cluster: {}", rej.reason));
+                        format("the topology coordinator rejected request to join the cluster: {}, at {}", rej.reason, current_backtrace()));
             },
         }, result.result);
 
@@ -7317,7 +7317,7 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
             },
             [&] (const join_node_response_params::rejected& rej) -> future<join_node_response_result> {
                 auto eptr = std::make_exception_ptr(std::runtime_error(
-                        format("the topology coordinator rejected request to join the cluster: {}", rej.reason)));
+                        format("the topology coordinator rejected request to join the cluster: {}, at {}", rej.reason, current_backtrace())));
                 _join_node_response_done.set_exception(std::move(eptr));
 
                 co_return join_node_response_result{};
