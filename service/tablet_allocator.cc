@@ -3261,11 +3261,11 @@ public:
         }
     }
 
-    void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_families(const replica::database& db, const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         allocate_tablets_for_new_tables(ksm, cfms, muts, ts);
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_family(const replica::database& db, const keyspace_metadata& ksm, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         allocate_tablets_for_new_tables(ksm, {s.shared_from_this()}, muts, ts);
     }
 

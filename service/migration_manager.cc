@@ -572,19 +572,19 @@ future<> migration_notifier::drop_aggregate(const db::functions::function_name& 
     });
 }
 
-void migration_notifier::before_create_column_family(const keyspace_metadata& ksm,
+void migration_notifier::before_create_column_family(const replica::database& db, const keyspace_metadata& ksm,
         const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
-    _listeners.thread_for_each([&ksm, &schema, &mutations, timestamp] (migration_listener* listener) {
+    _listeners.thread_for_each([&db, &ksm, &schema, &mutations, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
-        listener->on_before_create_column_family(ksm, schema, mutations, timestamp);
+        listener->on_before_create_column_family(db, ksm, schema, mutations, timestamp);
     });
 }
 
-void migration_notifier::before_create_column_families(const keyspace_metadata& ksm,
+void migration_notifier::before_create_column_families(const replica::database& db, const keyspace_metadata& ksm,
         const std::vector<schema_ptr>& schemas, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
-    _listeners.thread_for_each([&ksm, &schemas, &mutations, timestamp] (migration_listener* listener) {
+    _listeners.thread_for_each([&db, &ksm, &schemas, &mutations, timestamp] (migration_listener* listener) {
         // allow exceptions. so a listener can effectively kill a create-table
-        listener->on_before_create_column_families(ksm, schemas, mutations, timestamp);
+        listener->on_before_create_column_families(db, ksm, schemas, mutations, timestamp);
     });
 }
 
@@ -660,7 +660,7 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
             auto table_muts = db::schema_tables::make_create_table_mutations(cfm, timestamp);
             mutations.insert(mutations.end(), std::make_move_iterator(table_muts.begin()), std::make_move_iterator(table_muts.end()));
         }
-        db.get_notifier().before_create_column_families(ksm, cfms, mutations, timestamp);
+        db.get_notifier().before_create_column_families(db, ksm, cfms, mutations, timestamp);
         return mutations;
     }).then([&sp, &ksm](utils::chunked_vector<mutation> mutations) {
         return include_keyspace(sp, ksm, std::move(mutations));
@@ -865,7 +865,7 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
             // call. But a view is also a column family, and we need to call
             // the on_before_create_column_family listener - notably, to
             // create tablets for the new view table.
-            db.get_notifier().before_create_column_family(*keyspace, *view, mutations, ts);
+            db.get_notifier().before_create_column_family(db, *keyspace, *view, mutations, ts);
             return include_keyspace(sp, *keyspace, std::move(mutations)).get();
         });
     } catch (const replica::no_such_keyspace& e) {
@@ -1200,9 +1200,9 @@ void migration_manager::set_concurrent_ddl_retries(size_t n) {
     _concurrent_ddl_retries = n;
 }
 
-void migration_listener::on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
+void migration_listener::on_before_create_column_families(const replica::database& db, const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
     for (auto cfm : cfms) {
-        on_before_create_column_family(ksm, *cfm, mutations, timestamp);
+        on_before_create_column_family(db, ksm, *cfm, mutations, timestamp);
     }
 }
 
