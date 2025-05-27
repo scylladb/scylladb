@@ -1474,8 +1474,7 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
     if (changed) {
         // Need to reload on each resize because table object expects tablet count to change by a factor of 2.
         co_await save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp());
-        co_await e.get_storage_service().local().update_tablet_metadata({},
-                service::storage_service::wake_up_load_balancer::no);
+        co_await e.get_storage_service().local().update_tablet_metadata({});
 
         // Need a new guard to make sure later changes use later timestamp.
         release_guard(std::move(guard));
@@ -1600,8 +1599,7 @@ void rebalance_tablets(cql_test_env& e,
     // causing test flakiness.
     auto& stm = e.shared_token_metadata().local();
     save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
-    e.get_storage_service().local().update_tablet_metadata({},
-            service::storage_service::wake_up_load_balancer::no).get();
+    e.get_storage_service().local().update_tablet_metadata({}).get();
 
     testlog.debug("rebalance_tablets(): done");
 }
