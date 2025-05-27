@@ -1082,10 +1082,7 @@ future<> schema_applier::destroy() {
     co_await _functions_batch.stop();
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy,  distributed<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
-{
-    slogger.trace("do_merge_schema: {}", mutations);
-    schema_applier ap(proxy, ss, sys_ks, reload);
+static future<> execute_do_merge_schema(distributed<service::storage_proxy>& proxy, schema_applier& ap, std::vector<mutation> mutations) {
     co_await ap.prepare(mutations);
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
     co_await ap.update();
@@ -1097,7 +1094,22 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy,  dis
         on_fatal_internal_error(slogger, format("schema commit failed: {}", std::current_exception()));
     }
     co_await ap.post_commit();
+}
+
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy,  distributed<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
+{
+    slogger.trace("do_merge_schema: {}", mutations);
+    schema_applier ap(proxy, ss, sys_ks, reload);
+    std::exception_ptr ex;
+    try {
+        co_await execute_do_merge_schema(proxy, ap, std::move(mutations));
+    } catch (...) {
+        ex = std::current_exception();
+    }
     co_await ap.destroy();
+    if (ex) {
+        throw ex;
+    }
 }
 
 /**
