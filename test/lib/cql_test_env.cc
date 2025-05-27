@@ -663,6 +663,10 @@ private:
                 _scf.stop().get();
             });
 
+            auto stop_proxy = defer_verbose_shutdown("storage proxy", [this] { _proxy.stop().get(); });
+
+            auto stop_qp = defer_verbose_shutdown("query processor", [this] { _qp.stop().get(); });
+
             _db_config = &*cfg;
             _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(_scf), std::ref(abort_sources), utils::cross_shard_barrier()).get();
             auto stop_db = defer_verbose_shutdown("database", [this] {
@@ -683,7 +687,6 @@ private:
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory)).get();
-            auto stop_proxy = defer_verbose_shutdown("storage proxy", [this] { _proxy.stop().get(); });
 
             _cql_config.start(cql3::cql_config::default_tag{}).get();
             auto stop_cql_config = defer_verbose_shutdown("cql config", [this] { _cql_config.stop().get(); });
@@ -703,7 +706,8 @@ private:
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
             _qp.start(std::ref(_proxy), std::move(local_data_dict), std::ref(_mnotifier), qp_mcfg, std::ref(_cql_config), auth_prep_cache_config, std::ref(_lang_manager)).get();
-            auto stop_qp = defer_verbose_shutdown("query processor", [this] { _qp.stop().get(); });
+            // Stop query processor only after the database is stopped
+            // Due to circular dependency (e.g. for updating compaction history)
 
             _elc_notif.start().get();
             auto stop_elc_notif = defer_verbose_shutdown("lifecycle notifier", [this] { _elc_notif.stop().get(); });

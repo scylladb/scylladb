@@ -32,7 +32,6 @@ private:
 
     seastar::named_gate _pending_writes;
     int64_t _slow_query_last_nanos = 0;
-    service::query_state _dummy_query_state;
 
     cql3::query_processor* _qp_anchor;
     service::migration_manager* _mm_anchor;
@@ -72,6 +71,8 @@ public:
     virtual std::unique_ptr<backend_session_state_base> allocate_session_state() const override;
 
 private:
+    service::query_state make_query_state() const;
+
     // Valid only after start() sets _qp_anchor
     gms::inet_address my_address() const noexcept;
 

@@ -507,12 +507,17 @@ struct scan_ranges_context {
     std::unique_ptr<service::query_state> query_state_ptr;
     std::unique_ptr<cql3::query_options> query_options;
     ::lw_shared_ptr<query::read_command> command;
+    // TTL service has fixed parallelism,
+    // but the permit still starts an operation on the storage proxy
+    // to keep it alive throughout the operation
+    service_permit permit;
 
     scan_ranges_context(schema_ptr s, service::storage_proxy& proxy, bytes column_name, std::optional<std::string> member)
         : s(s)
         , column_name(column_name)
         , member(member)
         , internal_client_state(service::client_state::internal_tag())
+        , permit(make_service_permit(proxy.start_write()))
     {
         // FIXME: don't read the entire items - read only parts of it.
         // We must read the key columns (to be able to delete) and also
@@ -533,8 +538,7 @@ struct scan_ranges_context {
         auto partition_slice = query::partition_slice(std::move(ck_bounds), {}, std::move(regular_columns), opts);
         command = ::make_lw_shared<query::read_command>(s->id(), s->version(), partition_slice, proxy.get_max_result_size(partition_slice), query::tombstone_limit(proxy.get_tombstone_limit()));
         tracing::trace_state_ptr trace_state;
-        // NOTICE: empty_service_permit is used because the TTL service has fixed parallelism
-        query_state_ptr = std::make_unique<service::query_state>(internal_client_state, trace_state, empty_service_permit());
+        query_state_ptr = std::make_unique<service::query_state>(internal_client_state, trace_state, permit);
         // FIXME: What should we do on multi-DC? Will we run the expiration on the same ranges on all
         // DCs or only once for each range? If the latter, we need to change the CLs in the
         // scanner and deleter.

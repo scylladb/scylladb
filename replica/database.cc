@@ -355,7 +355,7 @@ database::view_update_read_concurrency_sem() {
 }
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
-        compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
+        compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, abort_source& abort, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
@@ -417,6 +417,7 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
               _cfg.compaction_rows_count_warning_threshold,
               _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
+    , _abort_source(abort)
     , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, dbcfg.streaming_scheduling_group, &sstm))
     , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, scf, abort, dbcfg.streaming_scheduling_group))
     , _result_memory_limiter(dbcfg.available_memory / 10)
@@ -973,7 +974,7 @@ future<> database::add_column_family(keyspace& ks, schema_ptr schema, column_fam
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), _abort_source, ks.metadata()->get_storage_options_ptr(), _compaction_manager, sst_manager, *_cl_stats, _row_cache_tracker, erm);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
     if (is_new) {
