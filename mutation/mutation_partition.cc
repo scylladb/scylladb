@@ -2526,7 +2526,7 @@ future<> mutation_cleaner_impl::drain() {
 can_gc_fn always_gc = [] (tombstone, is_shadowable) { return true; };
 can_gc_fn never_gc = [] (tombstone, is_shadowable) { return false; };
 
-max_purgeable_fn can_always_purge = [] (const dht::decorated_key&, is_shadowable) { return api::max_timestamp; };
-max_purgeable_fn can_never_purge = [] (const dht::decorated_key&, is_shadowable) { return api::min_timestamp; };
+max_purgeable_fn can_always_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return { .timestamp = api::max_timestamp }; };
+max_purgeable_fn can_never_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return { .timestamp = api::min_timestamp }; };
 
 logging::logger compound_logger("compound");

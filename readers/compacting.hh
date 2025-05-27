@@ -17,6 +17,7 @@ class decorated_key;
 }
 
 class tombstone_gc_state;
+struct tombstone_purge_stats;
 
 /// Creates a compacting reader.
 ///
@@ -36,4 +37,5 @@ class tombstone_gc_state;
 mutation_reader make_compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
         max_purgeable_fn get_max_purgeable,
         const tombstone_gc_state& gc_state,
-        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
+        streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
+        tombstone_purge_stats* tombstone_stats = nullptr);

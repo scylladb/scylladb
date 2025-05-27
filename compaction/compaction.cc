@@ -135,20 +135,21 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
     return "(invalid)";
 }
 
-static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
+static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sstable_set::incremental_selector& selector,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
         const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
-        return api::min_timestamp;
+        return { .timestamp = api::min_timestamp };
     }
 
     auto timestamp = api::max_timestamp;
     if (gc_check_only_compacting_sstables) {
         // If gc_check_only_compacting_sstables is enabled, do not
         // check memtables and other sstables not being compacted.
-        return timestamp;
+        return { .timestamp = timestamp };
     }
 
+    auto source = max_purgeable::timestamp_source::none;
     api::timestamp_type memtable_min_timestamp;
     if (is_shadowable) {
         // For shadowable tombstones, check the minimum live row_marker timestamp
@@ -174,6 +175,7 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
     // newer data.
     if (memtable_min_timestamp <= compacting_max_timestamp && table_s.memtable_has_key(dk)) {
         timestamp = memtable_min_timestamp;
+        source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
     }
     std::optional<utils::hashed_key> hk;
     for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
@@ -217,9 +219,10 @@ static api::timestamp_type get_max_purgeable_timestamp(const table_state& table_
         if (sst->filter_has_key(*hk)) {
             bloom_filter_checks++;
             timestamp = min_timestamp;
+            source = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
         }
     }
-    return timestamp;
+    return { .timestamp = timestamp, .source = source };
 }
 
 static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& table_s, std::vector<shared_sstable> sstables) {
@@ -233,6 +236,12 @@ static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& 
     std::ranges::set_difference(all_sstables, sstables, std::back_inserter(not_compacted_sstables),
             std::ranges::less(), std::mem_fn(&sstable::generation), std::mem_fn(&sstable::generation));
     return not_compacted_sstables;
+}
+
+static std::vector<basic_info> extract_basic_info_from_sstables(const std::vector<shared_sstable>& sstables) {
+    return sstables | std::views::transform([] (auto&& sst) {
+        return sstables::basic_info{.generation = sst->generation(), .origin = sst->get_origin(), .size = sst->bytes_on_disk()};
+    }) | std::ranges::to<std::vector<basic_info>>();
 }
 
 class compaction;
@@ -483,6 +492,7 @@ protected:
     const reader_permit _permit;
     std::vector<shared_sstable> _sstables;
     std::vector<generation_type> _input_sstable_generations;
+    std::vector<basic_info> _input_sstables_basic_info;
     // Unused sstables are tracked because if compaction is interrupted we can only delete them.
     // Deleting used sstables could potentially result in data loss.
     std::unordered_set<shared_sstable> _new_partial_sstables;
@@ -501,6 +511,7 @@ protected:
     double _estimated_droppable_tombstone_ratio = 0;
     uint64_t _bloom_filter_checks = 0;
     combined_reader_statistics _reader_statistics;
+    tombstone_purge_stats _tombstone_purge_stats;
     db::replay_position _rp;
     encoding_stats_collector _stats_collector;
     const bool _can_split_large_partition = false;
@@ -783,11 +794,14 @@ private:
 
         double sum_of_estimated_droppable_tombstone_ratio = 0;
         _input_sstable_generations.reserve(_sstables.size());
+        _input_sstables_basic_info.reserve(_sstables.size());
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
             timestamp_tracker.update(sst_stats.min_timestamp);
             timestamp_tracker.update(sst_stats.max_timestamp);
+
+            _input_sstables_basic_info.emplace_back(sst->generation(), sst->get_origin(), sst->bytes_on_disk());
 
             // Compacted sstable keeps track of its ancestors.
             _input_sstable_generations.push_back(sst->generation());
@@ -842,7 +856,8 @@ private:
             });
         });
         const auto& gc_state = get_tombstone_gc_state();
-        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state));
+        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state,
+                                               streamed_mutation::forwarding::no, &_tombstone_purge_stats));
     }
 
     future<> consume() {
@@ -864,7 +879,8 @@ private:
                         max_purgeable_func(),
                         get_tombstone_gc_state(),
                         get_compacted_fragments_writer(),
-                        get_gc_compacted_fragments_writer());
+                        get_gc_compacted_fragments_writer(),
+                        &_tombstone_purge_stats);
 
                     reader.consume_in_thread(std::move(cfc));
                     return;
@@ -874,7 +890,8 @@ private:
                     max_purgeable_func(),
                     get_tombstone_gc_state(),
                     get_compacted_fragments_writer(),
-                    noop_compacted_fragments_consumer());
+                    noop_compacted_fragments_consumer(),
+                    &_tombstone_purge_stats);
                 reader.consume_in_thread(std::move(cfc));
             });
         });
@@ -907,13 +924,19 @@ private:
 protected:
     virtual compaction_result finish(std::chrono::time_point<db_clock> started_at, std::chrono::time_point<db_clock> ended_at) {
         compaction_result ret {
+            .shard_id = this_shard_id(),
+            .type = _type,
+            .sstables_in = std::move(_input_sstables_basic_info),
+            .sstables_out = extract_basic_info_from_sstables(_all_new_sstables),
             .new_sstables = std::move(_all_new_sstables),
             .stats {
+                .started_at = started_at,
                 .ended_at = ended_at,
                 .start_size = _start_size,
                 .end_size = _end_size,
                 .bloom_filter_checks = _bloom_filter_checks,
                 .reader_statistics = std::move(_reader_statistics),
+                .tombstone_purge_stats = std::move(_tombstone_purge_stats),
             },
         };
 

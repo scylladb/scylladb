@@ -22,7 +22,20 @@ using can_gc_fn = std::function<bool(tombstone, is_shadowable)>;
 extern can_gc_fn always_gc;
 extern can_gc_fn never_gc;
 
-using max_purgeable_fn = std::function<api::timestamp_type(const dht::decorated_key&, is_shadowable)>;
+struct max_purgeable {
+    enum class timestamp_source {
+        none,
+        memtable_possibly_shadowing_data,
+        other_sstables_possibly_shadowing_data
+    };
+
+    operator bool() const { return timestamp != api::missing_timestamp; }
+
+    api::timestamp_type timestamp { api::missing_timestamp };
+    timestamp_source source { timestamp_source::none };
+};
+
+using max_purgeable_fn = std::function<max_purgeable(const dht::decorated_key&, is_shadowable)>;
 
 extern max_purgeable_fn can_always_purge;
 extern max_purgeable_fn can_never_purge;
