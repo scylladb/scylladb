@@ -1072,19 +1072,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
     });
 
     cf::force_major_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto params = req_params({
-            std::pair("name", mandatory::yes),
-            std::pair("flush_memtables", mandatory::no),
-            std::pair("consider_only_existing_data", mandatory::no),
-            std::pair("split_output", mandatory::no),
-        });
-        params.process(*req);
-        if (params.get("split_output")) {
+        if (req->query_parameters.contains("split_output")) {
             fail(unimplemented::cause::API);
         }
-        auto [ks, cf] = parse_fully_qualified_cf_name(*params.get("name"));
-        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+        auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
+        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
         apilog.info("column_family/force_major_compaction: name={} flush={} consider_only_existing_data={}", req->get_path_param("name"), flush, consider_only_existing_data);
 
         auto keyspace = validate_keyspace(ctx, ks);

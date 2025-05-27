@@ -127,6 +127,21 @@ bool validate_bool(const sstring& param) {
     }
 }
 
+bool validate_bool_x(const sstring& param, bool default_value) {
+    if (param.empty()) {
+        return default_value;
+    }
+
+    if (strcasecmp(param.c_str(), "true") == 0 || strcasecmp(param.c_str(), "yes") == 0 || param == "1") {
+        return true;
+    }
+    if (strcasecmp(param.c_str(), "false") == 0 || strcasecmp(param.c_str(), "no") == 0 || param == "0") {
+        return false;
+    }
+
+    throw std::runtime_error("Invalid boolean parameter value");
+}
+
 static
 int64_t validate_int(const sstring& param) {
     return std::atoll(param.c_str());
@@ -215,28 +230,19 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
 
 future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req) {
     scrub_info info;
-    auto rp = req_params({
-        {"keyspace", {mandatory::yes}},
-        {"cf", {""}},
-        {"scrub_mode", {}},
-        {"skip_corrupted", {}},
-        {"disable_snapshot", {}},
-        {"quarantine_mode", {}},
-    });
-    rp.process(*req);
-    info.keyspace = validate_keyspace(ctx, *rp.get("keyspace"));
-    info.column_families = parse_table_infos(info.keyspace, ctx, *rp.get("cf")) | std::views::transform([] (auto ti) { return ti.name; }) | std::ranges::to<std::vector>();
-    auto scrub_mode_opt = rp.get("scrub_mode");
+    auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+    info.keyspace = std::move(keyspace);
+    info.column_families = table_infos | std::views::transform([] (auto ti) { return ti.name; }) | std::ranges::to<std::vector>();
+    auto scrub_mode_str = req->get_query_param("scrub_mode");
     auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
 
-    if (!scrub_mode_opt) {
-        const auto skip_corrupted = rp.get_as<bool>("skip_corrupted").value_or(false);
+    if (scrub_mode_str.empty()) {
+        const auto skip_corrupted = validate_bool_x(req->get_query_param("skip_corrupted"), false);
 
         if (skip_corrupted) {
             scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
         }
     } else {
-        auto scrub_mode_str = *scrub_mode_opt;
         if (scrub_mode_str == "ABORT") {
             scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
         } else if (scrub_mode_str == "SKIP") {
@@ -725,13 +731,8 @@ static
 future<json::json_return_type>
 rest_force_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
-        auto params = req_params({
-            std::pair("flush_memtables", mandatory::no),
-            std::pair("consider_only_existing_data", mandatory::no),
-        });
-        params.process(*req);
-        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
+        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
         apilog.info("force_compaction: flush={} consider_only_existing_data={}", flush, consider_only_existing_data);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
@@ -754,17 +755,9 @@ static
 future<json::json_return_type>
 rest_force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
-        auto params = req_params({
-            std::pair("keyspace", mandatory::yes),
-            std::pair("cf", mandatory::no),
-            std::pair("flush_memtables", mandatory::no),
-            std::pair("consider_only_existing_data", mandatory::no),
-        });
-        params.process(*req);
-        auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
-        auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
-        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+        auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
+        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
         apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
