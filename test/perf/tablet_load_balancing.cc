@@ -179,8 +179,7 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
             // as that may violate invariants and cause failures in later operations
             // causing test flakiness.
             save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
-            e.get_storage_service().local().update_tablet_metadata({},
-                    service::storage_service::wake_up_load_balancer::no).get();
+            e.get_storage_service().local().update_tablet_metadata({}).get();
 
             testlog.info("Rebalance took {:.3f} [s] after {} iteration(s)", stats.elapsed_time.count(), i + 1);
             return stats;

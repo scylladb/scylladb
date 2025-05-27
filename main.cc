@@ -1869,8 +1869,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "loading tablet metadata");
             try {
-                ss.local().update_tablet_metadata({},
-                        service::storage_service::wake_up_load_balancer::no).get();
+                ss.local().update_tablet_metadata({}).get();
             } catch (...) {
                 if (!cfg->maintenance_mode()) {
                     throw;

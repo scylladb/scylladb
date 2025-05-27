@@ -5536,16 +5536,14 @@ future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_meta
     co_return tmptr;
 }
 
-future<> storage_service::commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr, const wake_up_load_balancer wake_up) {
+future<> storage_service::commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr) {
     co_await replicate_to_all_cores(std::move(tmptr));
-    if (wake_up) {
-        _topology_state_machine.event.broadcast();
-    }
+    _topology_state_machine.event.broadcast();
 }
 
-future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_change_hint& hint, const wake_up_load_balancer wake_up) {
+future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     co_await commit_tablet_metadata(
-            co_await prepare_tablet_metadata(hint), wake_up);
+            co_await prepare_tablet_metadata(hint));
 }
 
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {
