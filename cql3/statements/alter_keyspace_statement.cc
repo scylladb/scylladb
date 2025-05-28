@@ -234,7 +234,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         //       and we'll unnecessarily trigger the processing path for ALTER tablets KS,
         //       when in reality nothing or only schema is being changed
         if (changes_tablets(qp)) {
-            if (!qp.topology_global_queue_empty()) {
+            if (!qp.proxy().features().topology_global_request_queue && !qp.topology_global_queue_empty()) {
                 return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, cql3::cql_warnings_vec>>(
                         exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
             }

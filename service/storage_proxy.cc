@@ -1071,6 +1071,7 @@ private:
 
             const table_id table_id = _sp.local_db().find_uuid(ks_name, cf_name);
 
+            if (!_sp._features.topology_global_request_queue) {
             // Check if we already have a truncate queued for the same table. This can happen when a truncate has timed out
             // and the client retried by issuing the same truncate again. In this case, instead of failing the request with
             // an "Another global topology request is ongoing" error, we can wait for the already queued request to complete.
@@ -1100,6 +1101,7 @@ private:
                                 global_request, ks_name, cf_name);
                 throw exceptions::invalid_request_exception(::format("Another global topology request is ongoing during attempt to TRUNCATE table {}.{}, please retry.",
                                                                         ks_name, cf_name));
+            }
             }
 
             global_request_id = guard.new_group0_state_id();

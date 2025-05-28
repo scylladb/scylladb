@@ -4722,8 +4722,7 @@ future<> storage_service::do_cluster_cleanup() {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
         auto curr_req = _topology_state_machine._topology.global_request;
-        if (curr_req && *curr_req != global_topology_request::cleanup) {
-            // FIXME: replace this with a queue
+        if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::cleanup) {
             throw std::runtime_error{
                 "topology coordinator: cluster cleanup: a different topology request is already pending, try again later"};
         }
@@ -4997,7 +4996,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         rtlogger.info("request check_and_repair_cdc_streams, refreshing topology");
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         auto curr_req = _topology_state_machine._topology.global_request;
-        if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
+        if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::new_cdc_generation) {
             // FIXME: replace this with a queue
             throw std::runtime_error{
                 "check_and_repair_cdc_streams: a different topology request is already pending, try again later"};
