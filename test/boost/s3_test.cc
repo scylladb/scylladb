@@ -651,7 +651,7 @@ void test_download_data_source(const client_maker_function& client_maker, bool i
     }
 
     testlog.info("Download object");
-    auto in = is_chunked ? input_stream<char>(cln->make_chunked_download_source(name, {})) : input_stream<char>(cln->make_download_source(name, {}));
+    auto in = is_chunked ? input_stream<char>(cln->make_chunked_download_source(name, s3::full_range)) : input_stream<char>(cln->make_download_source(name, s3::full_range));
     auto close = seastar::deferred_close(in);
     for (unsigned ch = 0; ch < chunks; ch++) {
         auto buf = in.read_exactly(chunk_size).get();
