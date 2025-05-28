@@ -933,7 +933,7 @@ public:
 
             // Sibling tablets cannot be considered co-located if their tablet info is temporarily unmergeable.
             // It can happen either has active repair task for example.
-            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info));
+            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info, t1.tid, t2.tid));
             return make_ready_future<>();
         });
         if (all_colocated) {
@@ -3234,7 +3234,7 @@ private:
                 throw std::runtime_error(format("Sibling tablets {} (r: {}) and {} (r: {}) are not colocated.",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
             }
-            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info);
+            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info, old_left_tid, old_right_tid);
             if (!merged_tablet_info) {
                 throw std::runtime_error(format("Unable to merge tablet info of sibling tablets {} (r: {}) and {} (r: {}).",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
