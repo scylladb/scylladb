@@ -290,6 +290,11 @@ struct tablet_repair_task_meta {
     locator::effective_replication_map_ptr erm;
 };
 
+struct tablet_repair_sched_info {
+    bool sched_by_scheduler = false;
+    bool for_tablet_rebuild = false;
+};
+
 namespace std {
 
 template<>

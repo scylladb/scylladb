@@ -655,7 +655,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         std::optional<int> ranges_parallelism,
         gc_clock::time_point flush_time,
         service::frozen_topology_guard topo_guard,
-        bool sched_by_scheduler)
+        tablet_repair_sched_info sched_info)
     : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
     , rs(repair)
     , db(repair.get_db())
@@ -675,7 +675,7 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
     , _flush_time(flush_time)
     , _frozen_topology_guard(topo_guard)
-    , sched_by_scheduler(sched_by_scheduler)
+    , sched_info(sched_info)
 {
     rlogger.debug("repair[{}]: Setting user_ranges_parallelism to {}", global_repair_id.uuid(),
             _user_ranges_parallelism ? std::to_string(_user_ranges_parallelism->available_units()) : "unlimited");
@@ -2228,7 +2228,7 @@ future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
-future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas) {
+future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage) {
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
     auto& db = get_db().local();
@@ -2288,7 +2288,8 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto start = std::chrono::steady_clock::now();
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
     auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, rebuild_replicas.has_value());
-    task_impl_ptr->sched_by_scheduler = true;
+    bool sched_by_scheduler = true;
+    task_impl_ptr->sched_info = tablet_repair_sched_info(sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair);
     auto task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
     task->start();
     co_await task->done();
@@ -2379,7 +2380,7 @@ future<> repair::tablet_repair_task_impl::run() {
 
         auto parent_shard = this_shard_id();
         std::vector<gc_clock::time_point> flush_times(smp::count);
-        rs.container().invoke_on_all([&idx, &flush_times, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<> {
+        rs.container().invoke_on_all([&idx, &flush_times, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_info = sched_info, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<> {
             std::exception_ptr error;
             for (auto& m : metas) {
                 if (m.master_shard_id != this_shard_id()) {
@@ -2416,7 +2417,7 @@ future<> repair::tablet_repair_task_impl::run() {
 
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
                         m.keyspace_name, rs, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
-                        std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, topo_guard, sched_by_scheduler);
+                        std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, topo_guard, sched_info);
                 task_impl_ptr->neighbors = std::move(neighbors);
                 auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
                 task->start();
