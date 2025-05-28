@@ -73,6 +73,10 @@ public:
     // Advances lower bound to the first PK no smaller than pos.
     // Precondition: pos >= lower bound
     virtual future<> advance_to(dht::ring_position_view pos) = 0;
+    // Advances lower bound to dk.
+    //
+    // Preconditions: dk >= lower bound, dk is present in the sstable
+    virtual future<> advance_to_definitely_present_partition(const dht::decorated_key& dk) = 0;
     // Advances lower bound to the first PK which lies inside or after the range.
     // Advances upper bound to the first PK which lies after the range.
     // Preconditions:
@@ -1105,6 +1109,10 @@ public:
 
     future<> advance_past_definitely_present_partition(const dht::decorated_key& dk) override {
         return advance_to(_lower_bound, dht::ring_position_view::for_after_key(dk));
+    }
+
+    future<> advance_to_definitely_present_partition(const dht::decorated_key& dk) override {
+        return advance_to(_lower_bound, dht::ring_position_view(dk, dht::ring_position_view::after_key::no));
     }
 
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found

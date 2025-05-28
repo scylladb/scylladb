@@ -1299,7 +1299,7 @@ private:
         return [this] {
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
-                return get_index_reader().advance_to(*_current_partition_key);
+                return get_index_reader().advance_to_definitely_present_partition(*_current_partition_key);
             }
             return make_ready_future();
         }().then([this, pos] {
