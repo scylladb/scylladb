@@ -124,6 +124,15 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_sstable_set() const 
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
 }
 
+void compaction_group::set_sstables_repair_at(int64_t sstables_repaired_at) {
+    if (_sstables_repaired_at != sstables_repaired_at) {
+        tlogger.debug("Set sstables_repaired_at old={} new={} table={}.{} group_id={} range={}",
+                _sstables_repaired_at, sstables_repaired_at,
+                _t.schema()->ks_name(), _t.schema()->cf_name(), group_id(), _token_range);
+    }
+    _sstables_repaired_at = sstables_repaired_at;
+}
+
 lw_shared_ptr<const sstables::sstable_set> table::make_compound_sstable_set() const {
     return _sg_manager->make_sstable_set();
 }
