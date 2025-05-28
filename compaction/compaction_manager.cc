@@ -36,6 +36,21 @@ static logging::logger cmlog("compaction_manager");
 using namespace std::chrono_literals;
 using namespace compaction;
 
+
+static compaction_manager::compaction_stats_opt add_compaction_stats_opt(
+        const compaction_manager::compaction_stats_opt& stats1,
+        const compaction_manager::compaction_stats_opt& stats2) {
+    if (stats1 && stats2) {
+        return *stats1 + *stats2;
+    } else if (stats1) {
+        return stats1;
+    } else if (stats2) {
+        return stats2;
+    } else {
+        return std::nullopt;
+    }
+}
+
 class compacting_sstable_registration {
     compaction_manager& _cm;
     compaction::compaction_state& _cs;
