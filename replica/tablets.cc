@@ -154,6 +154,11 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
                 m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
             }
         }
+
+        if (features.tablet_incremental_repair) {
+            m.set_clustered_cell(ck, "sstables_repaired_at", data_value(tablet.sstables_repaired_at), ts);
+        }
+
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
             m.set_clustered_cell(ck, "transition", tablet_transition_kind_to_string(tr_info->transition), ts);
@@ -555,7 +560,8 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
                 std::move(new_tablet_replicas), pending_replica, session_id});
     }
 
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info});
+    tablet_logger.info("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
 
     if (update_repair_time && db) {
         auto myid = db->get_token_metadata().get_my_id();
@@ -563,10 +569,12 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         auto& info = map.get_tablet_info(tid);
         for (auto r : info.replicas) {
             if (r.host == myid) {
-                auto& gc_state = db->get_compaction_manager().get_tombstone_gc_state();
-                gc_state.insert_pending_repair_time_update(table, range, to_gc_clock(repair_time), r.shard);
-                tablet_logger.debug("Insert pending repair time for tombstone gc: table={} tablet={} range={} repair_time={}",
-                        table, tid, range, repair_time);
+                if (update_repair_time) {
+                    auto& gc_state = db->get_compaction_manager().get_tombstone_gc_state();
+                    gc_state.insert_pending_repair_time_update(table, range, to_gc_clock(repair_time), r.shard);
+                    tablet_logger.debug("Insert pending repair time for tombstone gc: table={} tablet={} range={} repair_time={}",
+                            table, tid, range, repair_time);
+                }
                 break;
             }
         }

@@ -73,6 +73,10 @@ void sstable_writer::consume_end_of_stream() {
     return _impl->consume_end_of_stream();
 }
 
+void sstable_writer::set_repaired_at(int64_t repaired_at) {
+    _impl->set_repaired_at(repaired_at);
+}
+
 sstable_writer::sstable_writer(sstable_writer&& o) = default;
 sstable_writer& sstable_writer::operator=(sstable_writer&& o) = default;
 sstable_writer::~sstable_writer() {
