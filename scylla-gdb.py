@@ -3618,8 +3618,15 @@ class chunked_vector(object):
 
 def get_local_task_queues():
     """ Return a list of task pointers for the local reactor. """
-    for tq_ptr in static_vector(gdb.parse_and_eval('\'seastar\'::local_engine._task_queues')):
-        yield std_unique_ptr(tq_ptr).dereference()
+    tq = gdb.parse_and_eval('\'seastar\'::local_engine._task_queues')
+    try:
+        task_queues = std_array(tq)
+    except gdb.error:
+        task_queues = static_vector(tq)
+    for tq_ptr in task_queues:
+        tq_uptr = std_unique_ptr(tq_ptr)
+        if (tq_uptr):
+            yield tq_uptr.dereference()
 
 def get_local_io_queues():
     """ Return a list of io queues for the local reactor. """
