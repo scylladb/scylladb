@@ -6221,7 +6221,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
 
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
-        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, trinfo->session_id, std::move(replicas));
+        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, trinfo->session_id, std::move(replicas), trinfo->stage);
         co_return service::tablet_operation_repair_result{time};
     });
     if (std::holds_alternative<service::tablet_operation_repair_result>(result)) {

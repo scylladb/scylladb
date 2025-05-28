@@ -116,7 +116,7 @@ private:
     service::frozen_topology_guard _topo_guard;
     bool _skip_flush;
 public:
-    bool sched_by_scheduler = false;
+    tablet_repair_sched_info sched_info;
 public:
     tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, bool skip_flush = false)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", parent_id, reason)
@@ -181,7 +181,7 @@ private:
     service::frozen_topology_guard _frozen_topology_guard;
     service::topology_guard _topology_guard = {service::null_topology_guard};
 public:
-    bool sched_by_scheduler = false;
+    tablet_repair_sched_info sched_info;
 public:
     shard_repair_task_impl(tasks::task_manager::module_ptr module,
             tasks::task_id id,
@@ -200,7 +200,7 @@ public:
             std::optional<int> ranges_parallelism,
             gc_clock::time_point flush_time,
             service::frozen_topology_guard topo_guard,
-            bool sched_by_scheduler = false);
+            tablet_repair_sched_info sched_info = tablet_repair_sched_info());
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
