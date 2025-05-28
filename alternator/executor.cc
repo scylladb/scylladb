@@ -1006,6 +1006,17 @@ void rmw_operation::set_default_write_isolation(std::string_view value) {
     default_write_isolation = parse_write_isolation(value);
 }
 
+// Alternator uses tags whose keys start with the "system:" prefix for
+// internal purposes. Those should not be readable by ListTagsOfResource,
+// nor writable with TagResource or UntagResource (see #24098).
+// Only a few specific system tags, currently only system:write_isolation,
+// are deliberately intended to be set and read by the user, so are not
+// considered "internal".
+static bool tag_key_is_internal(std::string_view tag_key) {
+    return tag_key.starts_with("system:") &&
+        tag_key != rmw_operation::WRITE_ISOLATION_TAG_KEY;
+}
+
 enum class update_tags_action { add_tags, delete_tags };
 static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>& tags_map, update_tags_action action) {
     if (action == update_tags_action::add_tags) {
@@ -1030,6 +1041,9 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
             if (!validate_legal_tag_chars(tag_key)) {
                 throw api_error::validation("A tag Key can only contain letters, spaces, and [+-=._:/]");
             }
+            if (tag_key_is_internal(tag_key)) {
+                throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
+            }
             // Note tag values are limited similarly to tag keys, but have a
             // longer length limit, and *can* be empty.
             if (tag_value.size() > 256) {
@@ -1042,7 +1056,11 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
         }
     } else if (action == update_tags_action::delete_tags) {
         for (auto it = tags.Begin(); it != tags.End(); ++it) {
-            tags_map.erase(sstring(it->GetString(), it->GetStringLength()));
+            auto tag_key = rjson::to_string_view(*it);
+            if (tag_key_is_internal(tag_key)) {
+                throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
+            }
+            tags_map.erase(sstring(tag_key));
         }
     }
 
@@ -1117,6 +1135,9 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
 
     rjson::value& tags = ret["Tags"];
     for (auto& tag_entry : tags_map) {
+        if (tag_key_is_internal(tag_entry.first)) {
+            continue;
+        }
         rjson::value new_entry = rjson::empty_object();
         rjson::add(new_entry, "Key", rjson::from_string(tag_entry.first));
         rjson::add(new_entry, "Value", rjson::from_string(tag_entry.second));

@@ -144,6 +144,13 @@ def test_tag_resource_write_isolation_values(scylla_only, test_table):
         test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':'system:write_isolation', 'Value':i}])
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':'system:write_isolation', 'Value':'bah'}])
+    # Verify that reading system:write_isolation is possible (we didn't
+    # accidentally prevent it while fixing #24098)
+    keys = [tag['Key'] for tag in test_table.meta.client.list_tags_of_resource(ResourceArn=arn)['Tags']]
+    assert 'system:write_isolation' in keys
+    # Finally remove the system:write_isolation tag so to not modify the
+    # default behavior of test_table.
+    test_table.meta.client.untag_resource(ResourceArn=arn, TagKeys=['system:write_isolation'])
 
 # Test that if trying to create a table with forbidden tags (in this test,
 # a list of tags longer than the maximum allowed of 50 tags), the table
@@ -168,9 +175,9 @@ def test_too_long_tags_from_creation(dynamodb):
         dynamodb.meta.client.describe_table(TableName=name)
 
 # This test is similar to the above, but uses another case of forbidden tags -
-# here an illegal value for the system::write_isolation tag. This is a
+# here an illegal value for the system:write_isolation tag. This is a
 # scylla_only test because only Alternator checks the validity of the
-# system::write_isolation tag.
+# system:write_isolation tag.
 # Reproduces issue #6809, where the table creation appeared to fail, but it
 # was actually created (without the tag).
 def test_forbidden_tags_from_creation(scylla_only, dynamodb):
