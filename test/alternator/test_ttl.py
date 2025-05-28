@@ -14,7 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from test.alternator.util import new_test_table, random_string, full_query, unique_table_name, is_aws, \
-    client_no_transform
+    client_no_transform, scylla_config_read
 
 # All tests in this file are expected to fail with tablets due to #16567.
 # To ensure that Alternator TTL is still being tested, instead of
@@ -64,12 +64,9 @@ def waits_for_expiration(dynamodb, request):
             return
         else:
             pytest.skip('need --runveryslow option to run')
-    config_table = dynamodb.Table('.scylla.alternator.system.config')
-    resp = config_table.query(
-            KeyConditionExpression='#key=:val',
-            ExpressionAttributeNames={'#key': 'name'},
-            ExpressionAttributeValues={':val': 'alternator_ttl_period_in_seconds'})
-    period = float(resp['Items'][0]['value'])
+    period = scylla_config_read(dynamodb, 'alternator_ttl_period_in_seconds')
+    assert period is not None
+    period = float(period)
     if period > 1 and not request.config.getoption('runveryslow'):
         pytest.skip('need --runveryslow option to run')
 
