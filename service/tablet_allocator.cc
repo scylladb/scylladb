@@ -1331,6 +1331,13 @@ public:
                 maybe_apply({table_plan.current_tablet_count, "current count"});
             }
 
+            if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {
+                target_tablet_count = {tablet_count * 2, "force_tablet_count_increase"};
+            } else if (utils::get_local_injector().enter("tablet_force_tablet_count_decrease")) {
+                auto size = std::max(size_t(1), tablet_count / 2);
+                target_tablet_count = {size, "force_tablet_count_decrease"};
+            }
+
             table_plan.target_tablet_count = target_tablet_count.tablet_count;
             table_plan.target_tablet_count_reason = target_tablet_count.reason;
 
