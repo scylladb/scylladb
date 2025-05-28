@@ -10,7 +10,6 @@ import collections
 import logging
 import os
 import pathlib
-import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from functools import cache
 from typing import TYPE_CHECKING
@@ -256,12 +255,6 @@ class PythonTest(Test):
         async with self.run_ctx(options=options):
             self.success = await run_test(test=self, options=options, env=self.suite.scylla_env)
         return self
-
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        super().write_junit_failure_report(xml_res)
-        if self.server_log_filename is not None:
-            system_err = ET.SubElement(xml_res, 'system-err')
-            system_err.text = read_log(self.server_log_filename)
 
 
 # Use cache to execute this function once per pytest session.

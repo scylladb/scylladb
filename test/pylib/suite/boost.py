@@ -246,10 +246,6 @@ class BoostTest(Test):
         logging.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
         return self
 
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        """Does not write junit report for Jenkins legacy reasons"""
-        assert False
-
     def print_summary(self) -> None:
         print("Output of {} {}:".format(self.path, " ".join(self.args)))
         print(read_log(self.log_filename))
