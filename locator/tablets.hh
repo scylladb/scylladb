@@ -158,6 +158,8 @@ enum class tablet_task_type {
     merge
 };
 
+static constexpr int64_t initial_sstables_repaired_at_after_merge = 1;
+
 sstring tablet_task_type_to_string(tablet_task_type);
 tablet_task_type tablet_task_type_from_string(const sstring&);
 
