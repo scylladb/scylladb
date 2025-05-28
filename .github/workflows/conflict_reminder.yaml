@@ -89,6 +89,37 @@ jobs:
               if (prDetails.mergeable === false) {
                 const hasConflictLabel = pr.labels.some(label => label.name === conflictLabel);
                 console.log(`PR #${pr.number} has conflict label: ${hasConflictLabel}`);
+
+                if (
+                  isPushEvent &&
+                  pr.draft === true &&
+                  hasConflictLabel
+                ) {
+                  // Fetch comments to find last bot notification
+                  const comments = await github.paginate(github.rest.issues.listComments, {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    per_page: 100,
+                  });
+                  // Find last notification comment from the bot (by body and user)
+                  const botLogin = context.actor;
+                  const notificationPrefix = `@${pr.assignee.login}, this PR has merge conflicts with the base branch.`;
+                  const lastNotification = comments
+                    .filter(c =>
+                      c.user.type === "Bot" &&
+                      c.body.startsWith(notificationPrefix)
+                    )
+                    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+                  if (lastNotification) {
+                    const lastNotified = new Date(lastNotification.created_at);
+                    if (lastNotified >= threeDaysAgo) {
+                      console.log(`PR #${pr.number} skipped: last notification was less than 3 days ago`);
+                      continue;
+                    }
+                  }
+                }
+
                 if (!hasConflictLabel) {
                   await github.rest.issues.addLabels({
                     owner: context.repo.owner,
