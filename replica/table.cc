@@ -705,12 +705,15 @@ public:
         return *_single_sg;
     }
 
-    locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)>) const noexcept override {
-        return locator::table_load_stats{
-            .size_in_bytes = _single_sg->live_disk_space_used(),
-            .split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min()
+    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)>) const noexcept override {
+        return locator::combined_load_stats{
+            .table_ls = locator::table_load_stats{
+                            .size_in_bytes = _single_sg->live_disk_space_used(),
+                            .split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min()},
+            .tablet_ls = locator::tablet_load_stats{}
         };
     }
+
     bool all_storage_groups_split() override { return true; }
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
@@ -868,7 +871,7 @@ public:
         return storage_group_for_id(storage_group_of(token).first);
     }
 
-    locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept override;
+    locator::combined_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept override;
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
@@ -2797,20 +2800,28 @@ void table::on_flush_timer() {
     });
 }
 
-locator::table_load_stats tablet_storage_group_manager::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept {
-    locator::table_load_stats stats;
-    stats.split_ready_seq_number = _split_ready_seq_number;
+locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept {
+    locator::table_load_stats table_stats;
+    table_stats.split_ready_seq_number = _split_ready_seq_number;
+
+    locator::tablet_load_stats tablet_stats;
 
     for_each_storage_group([&] (size_t id, storage_group& sg) {
         locator::global_tablet_id gid { _t.schema()->id(), locator::tablet_id(id) };
         if (tablet_filter(*_tablet_map, gid)) {
-            stats.size_in_bytes += sg.live_disk_space_used();
+            const uint64_t tablet_size = sg.live_disk_space_used();
+            table_stats.size_in_bytes += tablet_size;
+            const locator::range_based_tablet_id rb_tid {gid.table, _tablet_map->get_token_range(gid.tablet)};
+            tablet_stats.tablet_sizes[rb_tid] = tablet_size;
         }
     });
-    return stats;
+    return locator::combined_load_stats{
+        .table_ls = std::move(table_stats),
+        .tablet_ls = std::move(tablet_stats)
+    };
 }
 
-locator::table_load_stats table::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept {
+locator::combined_load_stats table::table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept {
     return _sg_manager->table_load_stats(std::move(tablet_filter));
 }
 

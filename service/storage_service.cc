@@ -6984,9 +6984,13 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     // double accounting (anomaly) in the reported size.
     auto tmlock = co_await get_token_metadata_lock();
 
+    const locator::host_id this_host = _db.local().get_token_metadata().get_my_id();
+
+    uint64_t sum_tablet_sizes = 0;
+
     // Each node combines a per-table load map from all of its shards and returns it to the coordinator.
     // So if there are 1k nodes, there will be 1k RPCs in total.
-    auto load_stats = co_await _db.map_reduce0([&table_ids] (replica::database& db) -> future<locator::load_stats> {
+    auto load_stats = co_await _db.map_reduce0([&table_ids, &this_host, &sum_tablet_sizes] (replica::database& db) -> future<locator::load_stats> {
         locator::load_stats load_stats{};
         auto& tables_metadata = db.get_tables_metadata();
 
@@ -7022,16 +7026,29 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
                        || (is_pending && s == locator::read_replica_set_selector::next);
             };
 
-            load_stats.tables.emplace(id, table->table_load_stats(tablet_filter));
+            locator::combined_load_stats combined_ls { table->table_load_stats(tablet_filter) };
+            load_stats.tables.emplace(id, std::move(combined_ls.table_ls));
+            sum_tablet_sizes += load_stats.tablet_stats[this_host].add_tablet_sizes(combined_ls.tablet_ls);
+
             co_await coroutine::maybe_yield();
         }
 
         co_return std::move(load_stats);
     }, locator::load_stats{}, std::plus<locator::load_stats>());
 
-    auto this_host = _db.local().get_token_metadata().get_my_id();
     load_stats.capacity[this_host] = _disk_space_monitor->space().capacity;
     load_stats.critical_disk_utilization[this_host] = _disk_space_monitor->disk_utilization() > _db.local().get_config().critical_disk_utilization_level();
+
+    const std::filesystem::space_info si = _disk_space_monitor->space();
+    load_stats.capacity[this_host] = si.capacity;
+
+    locator::tablet_load_stats& tls = load_stats.tablet_stats[this_host];
+    const uint64_t config_capacity = _db.local().get_config().data_file_capacity();
+    if (config_capacity != 0) {
+        tls.effective_capacity = config_capacity;
+    } else {
+        tls.effective_capacity = si.available + sum_tablet_sizes;
+    }
 
     co_return std::move(load_stats);
 }

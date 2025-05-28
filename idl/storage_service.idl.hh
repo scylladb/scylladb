@@ -24,14 +24,27 @@ struct table_load_stats final {
     int64_t split_ready_seq_number;
 };
 
+struct range_based_tablet_id final {
+    ::table_id table;
+    dht::token_range range;
+};
+
 struct load_stats_v1 final {
     std::unordered_map<::table_id, locator::table_load_stats> tables;
+};
+
+struct tablet_load_stats final {
+    // Sum of all tablet sizes on a node and available disk space.
+    uint64_t effective_capacity;
+
+    std::unordered_map<locator::range_based_tablet_id, uint64_t> tablet_sizes;
 };
 
 struct load_stats {
     std::unordered_map<::table_id, locator::table_load_stats> tables;
     std::unordered_map<locator::host_id, uint64_t> capacity;
     std::unordered_map<locator::host_id, bool> critical_disk_utilization [[version 2025.3]];
+    std::unordered_map<locator::host_id, locator::tablet_load_stats> tablet_stats [[version 2026.1]];
 };
 
 }

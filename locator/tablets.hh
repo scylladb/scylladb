@@ -63,6 +63,13 @@ struct global_tablet_id {
     auto operator<=>(const global_tablet_id&) const = default;
 };
 
+struct range_based_tablet_id {
+    table_id table;
+    dht::token_range range;
+
+    bool operator==(const range_based_tablet_id&) const = default;
+};
+
 struct tablet_replica {
     host_id host;
     shard_id shard;
@@ -98,6 +105,15 @@ struct hash<locator::global_tablet_id> {
         return utils::hash_combine(
                 std::hash<table_id>()(id.table),
                 std::hash<locator::tablet_id>()(id.tablet));
+    }
+};
+
+template<>
+struct hash<locator::range_based_tablet_id> {
+    size_t operator()(const locator::range_based_tablet_id& id) const {
+        return utils::hash_combine(
+                std::hash<table_id>()(id.table),
+                std::hash<dht::token_range>()(id.range));
     }
 };
 
@@ -420,6 +436,25 @@ struct load_stats_v1 {
     std::unordered_map<table_id, table_load_stats> tables;
 };
 
+// This is defined as final in the idl layer to limit the amount of encoded data sent via the RPC
+struct tablet_load_stats {
+    // Sum of all tablet sizes on a node and available disk space.
+    uint64_t effective_capacity = 0;
+
+    std::unordered_map<range_based_tablet_id, uint64_t> tablet_sizes;
+
+    // returns the aggregated size of all the tablets added
+    uint64_t add_tablet_sizes(const tablet_load_stats& tls);
+};
+
+// Used as a return value for functions returning both table and tablet stats
+struct combined_load_stats {
+    locator::table_load_stats table_ls;
+    locator::tablet_load_stats tablet_ls;
+};
+
+using tablet_load_stats_map = std::unordered_map<host_id, tablet_load_stats>;
+
 struct load_stats {
     std::unordered_map<table_id, table_load_stats> tables;
 
@@ -429,12 +464,17 @@ struct load_stats {
     // Critical disk utilization check for each host.
     std::unordered_map<locator::host_id, bool> critical_disk_utilization;
 
+    // Size-based load balancing data
+    tablet_load_stats_map tablet_stats;
+
     static load_stats from_v1(load_stats_v1&&);
 
     load_stats& operator+=(const load_stats& s);
     friend load_stats operator+(load_stats a, const load_stats& b) {
         return a += b;
     }
+
+    std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
 };
 
 using load_stats_v2 = load_stats;
@@ -845,6 +885,13 @@ template <>
 struct fmt::formatter<locator::tablet_replica> : fmt::formatter<string_view> {
     auto format(const locator::tablet_replica& r, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}:{}", r.host, r.shard);
+    }
+};
+
+template <>
+struct fmt::formatter<locator::range_based_tablet_id> : fmt::formatter<string_view> {
+    auto format(const locator::range_based_tablet_id& rb_tid, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}:{}", rb_tid.table, rb_tid.range);
     }
 };
 
