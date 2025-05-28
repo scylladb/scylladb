@@ -904,18 +904,6 @@ public:
         const stats_metadata& s = *static_cast<stats_metadata *>(p.get());
         return s;
     }
-     stats_metadata& get_stats_metadata_for_write() {
-        auto entry = _components->statistics.contents.find(metadata_type::Stats);
-        if (entry == _components->statistics.contents.end()) {
-            throw std::runtime_error("Stats metadata not available");
-        }
-        auto& p = entry->second;
-        if (!p) {
-            throw std::runtime_error("Statistics is malformed");
-        }
-        stats_metadata& s = *static_cast<stats_metadata *>(p.get());
-        return s;
-    }
     const compaction_metadata& get_compaction_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Compaction);
         if (entry == _components->statistics.contents.end()) {
@@ -1078,6 +1066,7 @@ public:
 
 public:
     service::session_id being_repaired;
+    int64_t update_repaired_at(int64_t repaired_at);
 };
 
 // Validate checksums

@@ -168,6 +168,13 @@ private:
 
     per_table_history_maps _reconcile_history_maps;
     tombstone_gc_state _tombstone_gc_state;
+
+    std::unordered_map<table_id, utils::chunked_vector<range_and_repaired_at>> _pending_repaired_at;
+    seastar::named_semaphore _pending_repaired_at_sem = {1, named_semaphore_exception_factory{"The pending repaired_at flush semaphore"}};
+public:
+    void insert_pending_repaired_at(table_id id, const dht::token_range& range, int64_t sstables_repaired_at);
+    future<> flush_pending_repaired_at(replica::database& db);
+
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
@@ -183,7 +190,8 @@ private:
     }
     future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
 
-    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason) noexcept;
+    void stop_tasks(const std::vector<shared_ptr<compaction::compaction_task_executor>>& tasks, sstring reason) noexcept;
+    future<> await_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>>) const noexcept;
     future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
@@ -311,7 +319,7 @@ public:
     future<> get_compaction_history(compaction_history_consumer&& f);
 
     // Submit a table to be compacted.
-    void submit(compaction::table_state& t);
+    void submit(compaction::table_state& t, std::optional<repair::sstables_repair_state> repair_state = std::nullopt);
 
     // Can regular compaction be performed in the given table
     bool can_perform_regular_compaction(compaction::table_state& t);
@@ -319,6 +327,9 @@ public:
     // Maybe wait before adding more sstables
     // if there are too many sstables.
     future<> maybe_wait_for_sstable_count_reduction(compaction::table_state& t);
+private:
+    future<> do_maybe_wait_for_sstable_count_reduction(compaction::table_state& t, repair::sstables_repair_state repair_state);
+public:
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
@@ -394,6 +405,11 @@ public:
     // Caller should call the compaction_reenabler::reenable
     future<compaction_reenabler> stop_and_disable_compaction(compaction::table_state& t);
 
+    future<compaction_reenabler> await_unrepaired_and_disable_compaction(compaction::table_state& t);
+
+    future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::table_state& t);
+    future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::table_state& t);
+
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
 
@@ -423,8 +439,19 @@ public:
     // Stops ongoing compaction of a given type.
     future<> stop_compaction(sstring type, compaction::table_state* table = nullptr);
 
+private:
+    std::vector<shared_ptr<compaction_task_executor>>
+    do_stop_ongoing_compactions(sstring reason, table_state* t, std::optional<sstables::compaction_type> type_opt) noexcept;
+
+public:
     // Stops ongoing compaction of a given table and/or compaction_type.
     future<> stop_ongoing_compactions(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
+    void stop_ongoing_compactions_no_wait(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
+
+    future<> await_ongoing_unrepaired_compactions(table_state* t);
+
+    compaction_manager::compaction_reenabler
+    stop_and_disable_compaction_no_wait(table_state& t, sstring reason);
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -509,9 +536,10 @@ private:
     sstables::run_id _output_run_identifier;
     sstring _description;
     compaction_manager::compaction_stats_opt _stats = std::nullopt;
+    std::optional<repair::sstables_repair_state> _repair_state;
 
 public:
-    explicit compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, ::compaction::table_state* t, sstables::compaction_type type, sstring desc);
+    explicit compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, ::compaction::table_state* t, sstables::compaction_type type, sstring desc, std::optional<repair::sstables_repair_state> repair_state = std::nullopt);
 
     compaction_task_executor(compaction_task_executor&&) = delete;
     compaction_task_executor(const compaction_task_executor&) = delete;
@@ -528,6 +556,10 @@ public:
         // @param sstables the new sstables to be added to the table's sstable set
         virtual void on_addition(const std::vector<sstables::shared_sstable>& sstables) = 0;
     };
+
+    bool is_unrepaired_compaction() const;
+
+    future<std::optional<seastar::rwlock::holder>> get_incremental_repair_lock();
 
 protected:
     future<> perform();
@@ -623,7 +655,8 @@ public:
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
-    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) noexcept;
+    friend void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept;
+    friend future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_executor>>) const noexcept;
     friend sstables::test_env_compaction_manager;
 };
 

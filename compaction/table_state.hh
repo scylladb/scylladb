@@ -61,6 +61,8 @@ public:
     virtual const std::string get_group_id() const noexcept = 0;
     virtual seastar::condition_variable& get_staging_done_condition() noexcept = 0;
     virtual dht::token_range get_token_range_after_split(const dht::token& t) const noexcept = 0;
+    virtual int64_t get_sstables_repaired_at() const noexcept = 0;
+    virtual bool is_local_replication_strategy() const noexcept = 0;
 };
 
 } // namespace compaction
