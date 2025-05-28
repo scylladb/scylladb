@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
 
+    test_file_ext = ".py"
+
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
         self.scylla_exe = path_to(self.mode, "scylla")
@@ -182,7 +184,7 @@ class PythonTest(Test):
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
 
-        arg = str(self.suite.suite_path / (self.shortname + ".py"))
+        arg = str(self.suite.suite_path / f"{self.shortname}{self.suite.test_file_ext}")
         if self.casename is not None:
             arg += '::' + self.casename
         self.args.append(arg)
