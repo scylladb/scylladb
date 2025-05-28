@@ -333,10 +333,10 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control, repair::sstables_repair_state repair_state) {
     auto& state = get_state(table_s);
     auto compaction_time = gc_clock::now();
-    auto candidates = control.candidates(table_s);
+    auto candidates = repair::filter_sstables(control.candidates(table_s), repair_state, table_s.get_sstables_repaired_at());
 
     if (candidates.empty()) {
         return compaction_descriptor();

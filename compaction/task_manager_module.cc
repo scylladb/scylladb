@@ -159,6 +159,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     // parallel_for_each so the statistics about pending jobs are updated to reflect all
     // jobs. But only one will run in parallel at a time
     auto& t = table.try_get_table_state_with_static_sharding();
+    // FIXME: Consider repaired / unrepaired for reshard compaction?
     co_await coroutine::parallel_for_each(buckets, [&] (std::vector<sstables::shared_sstable>& sstlist) mutable {
         return table.get_compaction_manager().run_custom_job(t, sstables::compaction_type::Reshard, "Reshard compaction", [&] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) -> future<> {
             auto erm = table.get_effective_replication_map(); // keep alive around compaction.
@@ -692,6 +693,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
         desc.creator = _creator;
 
         try {
+            // FIXME: Consider repaired / unrepaired for reshape?
             co_await table.get_compaction_manager().run_custom_job(t, sstables::compaction_type::Reshape, "Reshape compaction", [&dir = _dir, sstlist = std::move(sstlist), desc = std::move(desc), &sstables_in_cg, &t] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) mutable -> future<> {
                 sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, t, progress_monitor);
                 // update the sstables_in_cg set with new sstables and remove the reshaped ones
