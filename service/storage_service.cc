@@ -4722,8 +4722,7 @@ future<> storage_service::do_cluster_cleanup() {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
         auto curr_req = _topology_state_machine._topology.global_request;
-        if (curr_req && *curr_req != global_topology_request::cleanup) {
-            // FIXME: replace this with a queue
+        if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::cleanup) {
             throw std::runtime_error{
                 "topology coordinator: cluster cleanup: a different topology request is already pending, try again later"};
         }
@@ -5009,9 +5008,12 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         }
 
         if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
-            // FIXME: replace this with a queue
-            throw std::runtime_error{
-                "check_and_repair_cdc_streams: a different topology request is already pending, try again later"};
+            if (!_feature_service.topology_global_request_queue) {
+                throw std::runtime_error{
+                    "check_and_repair_cdc_streams: a different topology request is already pending, try again later"};
+            } else {
+                request_id = utils::UUID{};
+            }
         }
 
         if (_topology_state_machine._topology.committed_cdc_generations.empty()) {
@@ -5026,6 +5028,8 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             cdc_log.info("CDC generation {} needs repair, requesting a new one", last_committed_gen);
         }
 
+        // With global request queue coalescing requests should not be needed, but test_cdc_generation_publishing assumes that multiple new_cdc_generation
+        // commands will be coalesced here, so do that until the test is fixed.
         if (!request_id) {
             topology_mutation_builder builder(guard.write_timestamp());
             std::vector<canonical_mutation> muts;
