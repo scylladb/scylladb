@@ -4,7 +4,8 @@ add_library(index STATIC)
 target_sources(index
   PRIVATE
     secondary_index.cc
-    secondary_index_manager.cc)
+    secondary_index_manager.cc
+    vector_index.cc)
 target_include_directories(index
   PUBLIC
     ${CMAKE_SOURCE_DIR})

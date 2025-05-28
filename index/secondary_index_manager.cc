@@ -8,13 +8,15 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <functional>
 #include <optional>
 #include <ranges>
 #include <seastar/core/shared_ptr.hh>
 #include <string_view>
-#include <unordered_set>
+#include <unordered_map>
 
 #include "index/secondary_index_manager.hh"
+#include "index/vector_index.hh"
 
 #include "cql3/statements/index_target.hh"
 #include "cql3/expr/expression.hh"
@@ -357,16 +359,19 @@ std::optional<sstring> secondary_index_manager::custom_index_class(const schema&
     }
 }
 
-// We pass the feature_service as the supported custom classes will depend on the features
-bool secondary_index_manager::is_custom_class_supported(const gms::feature_service& fs, const sstring& class_name) {
+// This function returns a factory, as the custom index class should be lightweight, preferably not holding any state.
+// We prefer this over a static custom index class instance, as it allows us to avoid any issues with thread safety.
+std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_manager::get_custom_class_factory(const sstring& class_name) {
 
-    // TODO: Change this set to a map to implementation 
-    // when https://github.com/scylladb/vector-store/issues/115 is done
-
-    const static std::unordered_set<std::string_view> classes = {
-        "vector_index",
+    const static std::unordered_map<std::string_view, std::function<std::unique_ptr<custom_index>()>> classes = {
+        {"vector_index", vector_index_factory},
     };
-    return classes.contains(class_name);
+
+    if (auto class_it = classes.find(class_name); class_it != classes.end()) {
+        return class_it->second;
+    } else {
+        return std::nullopt;
+    }
 }
 
 }

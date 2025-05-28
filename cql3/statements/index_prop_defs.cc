@@ -23,7 +23,7 @@ void cql3::statements::index_prop_defs::validate() {
         throw exceptions::invalid_request_exception("CUSTOM index requires specifying the index class");
     }
     
-    if (!is_custom && !_properties.empty()) {
+    if (!custom_class && !_properties.empty()) {
         throw exceptions::invalid_request_exception("Cannot specify options for a non-CUSTOM index");
     }
     if (get_raw_options().count(
