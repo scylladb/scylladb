@@ -13,6 +13,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/queue.hh>
+#include <seastar/core/units.hh>
 #include <seastar/http/client.hh>
 #include <filesystem>
 #include "utils/lister.hh"
@@ -30,10 +31,43 @@ namespace s3 {
 
 using s3_clock = std::chrono::steady_clock;
 
-struct range {
-    uint64_t off;
-    size_t len;
+class range {
+    friend struct fmt::formatter<range>;
+
+public:
+    range() noexcept = delete;
+    constexpr range(uint64_t offset, uint64_t len) noexcept : _offset(offset), _length(len) {
+        uint64_t t;
+        SCYLLA_ASSERT(!__builtin_add_overflow(_offset, len, &t));
+        SCYLLA_ASSERT(_offset + len <= _max_object_size);
+    }
+    explicit constexpr range(uint64_t offset) noexcept : _offset(offset), _length(std::nullopt) {}
+    constexpr range& operator+=(uint64_t offset) noexcept {
+        uint64_t t;
+        SCYLLA_ASSERT(!__builtin_add_overflow(_offset, offset, &t));
+        SCYLLA_ASSERT(_offset + offset <= _max_object_size);
+
+        _offset += offset;
+        if (_length) {
+            SCYLLA_ASSERT(!__builtin_sub_overflow(_length.value(), offset, &t));
+            _length.value() -= offset;
+        }
+        return *this;
+    }
+    bool operator==(const range& other) const noexcept { return std::tie(_offset, _length) == std::tie(other._offset, other._length); }
+    [[nodiscard]] sstring to_header_string() const noexcept {
+        return fmt::format("bytes={}-{}", _offset, _length ? fmt::format("{}", _offset + *_length - 1) : "");
+    }
+    [[nodiscard]] uint64_t offset() const noexcept { return _offset; }
+    [[nodiscard]] std::optional<uint64_t> length() const noexcept { return _length; }
+
+private:
+    // 5TiB is the largest object size supported by S3
+    static constexpr uint64_t _max_object_size{5_TiB};
+    uint64_t _offset;
+    std::optional<uint64_t> _length;
 };
+static constexpr range full_range{0};
 
 struct tag {
     std::string key;
@@ -113,7 +147,7 @@ public:
     future<tag_set> get_object_tagging(sstring object_name, seastar::abort_source* = nullptr);
     future<> put_object_tagging(sstring object_name, tag_set tagging, seastar::abort_source* = nullptr);
     future<> delete_object_tagging(sstring object_name, seastar::abort_source* = nullptr);
-    future<temporary_buffer<char>> get_object_contiguous(sstring object_name, std::optional<range> range = {}, seastar::abort_source* = nullptr);
+    future<temporary_buffer<char>> get_object_contiguous(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
     future<> put_object(sstring object_name, temporary_buffer<char> buf, seastar::abort_source* = nullptr);
     future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs, seastar::abort_source* = nullptr);
     future<> copy_object(sstring source_object, sstring target_object, std::optional<size_t> part_size = {}, std::optional<tag> tag = {}, seastar::abort_source* = nullptr);
@@ -122,7 +156,7 @@ public:
     file make_readable_file(sstring object_name, seastar::abort_source* = nullptr);
     data_sink make_upload_sink(sstring object_name, seastar::abort_source* = nullptr);
     data_sink make_upload_jumbo_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
-    data_source make_download_source(sstring object_name, std::optional<range> range = {}, seastar::abort_source* = nullptr);
+    data_source make_download_source(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
     /// upload a file with specified path to s3
     ///
     /// @param path the path to the file
@@ -178,4 +212,12 @@ public:
     future<> close();
 };
 
-} // s3 namespace
+} // namespace s3
+
+template <>
+struct fmt::formatter<s3::range> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const s3::range& range, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "{}-{}", range._offset, range._length ? fmt::format("{}", *range._length) : "∞");
+    }
+};
