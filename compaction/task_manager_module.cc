@@ -582,7 +582,9 @@ future<> table_upgrade_sstables_compaction_task_impl::run() {
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
         return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
-            return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
+            auto lock_holder = co_await t.get_compaction_manager().get_incremental_repair_read_lock(ts, "upgrade_sstables_compaction");
+            co_await t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, make_unrepaired_table_state_view(&ts), _exclude_current_version, info);
+            co_await t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, make_repaired_table_state_view(&ts), _exclude_current_version, info);
         });
     });
 }
@@ -621,7 +623,10 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
     auto& cf = _db.find_column_family(_status.keyspace, _status.table);
     tasks::task_info info{_status.id, _status.shard};
     co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
-        auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
+        auto lock_holder = co_await cm.get_incremental_repair_read_lock(ts, "scrub_sstables_compaction");
+        auto r = co_await cm.perform_sstable_scrub(make_unrepaired_table_state_view(&ts), _opts, info);
+        _stats += r.value_or(sstables::compaction_stats{});
+        r = co_await cm.perform_sstable_scrub(make_repaired_table_state_view(&ts), _opts, info);
         _stats += r.value_or(sstables::compaction_stats{});
     });
 }
@@ -656,17 +661,20 @@ future<> shard_reshaping_compaction_task_impl::run() {
 
     // reshape sstables individually within the compaction groups
     for (auto& sstables_in_cg : sstables_grouped_by_compaction_group) {
-        co_await reshape_compaction_group(*sstables_in_cg.first, sstables_in_cg.second, table, info);
+        auto lock_holder = co_await table.get_compaction_manager().get_incremental_repair_read_lock(*sstables_in_cg.first, "reshaping_compaction");
+        co_await reshape_compaction_group(make_unrepaired_table_state_view(sstables_in_cg.first), sstables_in_cg.second, table, info);
+        co_await reshape_compaction_group(make_repaired_table_state_view(sstables_in_cg.first), sstables_in_cg.second, table, info);
     }
 }
 
-future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compaction::table_state& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
+future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(table_state_view tsv, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
 
     while (true) {
-        auto reshape_candidates = sstables_in_cg
+        auto reshape_candidates = tsv.filter_sstables(sstables_in_cg
                 | std::views::filter([&filter = _filter] (const auto& sst) {
             return filter(sst);
-        }) | std::ranges::to<std::vector>();
+        }) | std::ranges::to<std::vector>());
+
         if (reshape_candidates.empty()) {
             break;
         }
@@ -690,6 +698,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
         }
 
         desc.creator = _creator;
+        auto& t = tsv.as_table_state();
 
         try {
             co_await table.get_compaction_manager().run_custom_job(t, sstables::compaction_type::Reshape, "Reshape compaction", [&dir = _dir, sstlist = std::move(sstlist), desc = std::move(desc), &sstables_in_cg, &t] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) mutable -> future<> {

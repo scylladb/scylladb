@@ -194,7 +194,7 @@ tablet_info::tablet_info(tablet_replica_set replicas)
     : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{}, int64_t(0))
 {}
 
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b, tablet_id left, tablet_id right) {
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
     if (a.repair_task_info.is_valid() || b.repair_task_info.is_valid()) {
         return {};
     }
@@ -208,13 +208,8 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b, table
     }
 
     auto repair_time = std::max(a.repair_time, b.repair_time);
-
-    int64_t sstables_repaired_at = initial_sstables_repaired_at_after_merge;
+    int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
     auto info = tablet_info(std::move(a.replicas), repair_time, a.repair_task_info, a.migration_task_info, sstables_repaired_at);
-    // Record the sstables_repaired_at before merge, so we can use it later to
-    // rewrite sstable.repaired_at for the merged tablets.
-    info.sstables_repaired_at_before_merge.emplace(left, a.sstables_repaired_at);
-    info.sstables_repaired_at_before_merge.emplace(right, b.sstables_repaired_at);
     return info;
 }
 

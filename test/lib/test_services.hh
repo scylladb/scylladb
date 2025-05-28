@@ -33,6 +33,7 @@
 #include "compaction/compaction_manager.hh"
 #include "compaction/table_state.hh"
 #include "sstables/sstables_manager.hh"
+#include "repair/incremental.hh"
 
 struct table_for_tests {
     class table_state;
