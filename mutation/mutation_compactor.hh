@@ -128,6 +128,13 @@ struct compaction_stats {
         uint64_t total() const {
             return live + dead;
         }
+
+        row_stats& operator+=(const row_stats& other) {
+            live += other.live;
+            dead += other.dead;
+            cell_stats += other.cell_stats;
+            return *this;
+        }
     };
 
     uint64_t live_cells() const {
@@ -142,6 +149,14 @@ struct compaction_stats {
     row_stats static_rows;
     row_stats clustering_rows;
     uint64_t range_tombstones = 0;
+
+    compaction_stats& operator+=(const compaction_stats& other) {
+        partitions += other.partitions;
+        static_rows += other.static_rows;
+        clustering_rows += other.clustering_rows;
+        range_tombstones += other.range_tombstones;
+        return *this;
+    }
 };
 
 template<compact_for_sstables SSTableCompaction>
