@@ -8,6 +8,7 @@
 #include "streaming/stream_reason.hh"
 #include "repair/decorated_key_with_hash.hh"
 #include "readers/upgrading_consumer.hh"
+#include "./sstables/shared_sstable.hh"
 
 using namespace seastar;
 
@@ -87,6 +88,8 @@ class repair_writer : public enable_lw_shared_from_this<repair_writer> {
     named_semaphore _sem{1, named_semaphore_exception_factory{"repair_writer"}};
     bool _created_writer = false;
     uint64_t _estimated_partitions = 0;
+    // Holds the sstables produced by repair
+    lw_shared_ptr<sstables::sstable_list> _sstables;
 public:
     class impl {
     public:
@@ -105,6 +108,7 @@ public:
             std::unique_ptr<impl> impl)
             : _schema(std::move(schema))
             , _permit(std::move(permit))
+            , _sstables(make_lw_shared<sstables::sstable_list>())
             , _impl(std::move(impl))
             , _mq(&_impl->queue())
     {}
@@ -137,6 +141,10 @@ public:
 
     mutation_fragment_queue& queue() {
         return _impl->queue();
+    }
+
+    lw_shared_ptr<sstables::sstable_list>& get_sstable_list_to_mark_as_repaired() {
+        return _sstables;
     }
 
 private:
