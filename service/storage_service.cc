@@ -3271,6 +3271,8 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
             auto& gc_state = db.get_compaction_manager().get_tombstone_gc_state();
             co_await gc_state.flush_pending_repair_time_update(db);
+
+            co_await db.get_compaction_manager().flush_pending_repaired_at(db);
         });
     } catch (...) {
         // applying the changes on all shards should never fail

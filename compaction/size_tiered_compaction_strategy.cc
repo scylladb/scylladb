@@ -208,13 +208,13 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 }
 
 compaction_descriptor
-size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+size_tiered_compaction_strategy::get_sstables_for_compaction(table_state_view tsv, strategy_control& control) {
+    auto& table_s = tsv.as_table_state();
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = table_s.min_compaction_threshold();
     int max_threshold = table_s.schema()->max_compaction_threshold();
     auto compaction_time = gc_clock::now();
-    auto candidates = control.candidates(table_s);
-
+    auto candidates = tsv.filter_sstables(control.candidates(table_s));
     // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
 
     auto buckets = get_buckets(candidates);

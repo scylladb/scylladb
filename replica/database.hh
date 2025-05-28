@@ -667,7 +667,9 @@ private:
     // on compaction groups. Iterating on storage groups instead, allows the caller to see all the
     // data at any point in time. In short, writes can operate on compaction group level, but reads
     // must operate on storage group level.
+public:
     utils::chunked_vector<storage_group_ptr> storage_groups_for_token_range(dht::token_range tr) const;
+private:
     storage_group& storage_group_for_id(size_t i) const;
 
     std::unique_ptr<storage_group_manager> make_storage_group_manager();

@@ -139,12 +139,14 @@ static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has
 }
 
 template <typename CompactionStrategy>
-requires requires(CompactionStrategy cs, table_state& t, strategy_control& c) {
-    { cs.get_sstables_for_compaction(t, c) } -> std::same_as<sstables::compaction_descriptor>;
+requires requires(CompactionStrategy cs, table_state& t, table_state_view tsv, strategy_control& c) {
+    { cs.get_sstables_for_compaction(tsv, c) } -> std::same_as<sstables::compaction_descriptor>;
 }
+//template <typename CompactionStrategy>
 static compaction_descriptor get_sstables_for_compaction(CompactionStrategy& cs, table_state& t, std::vector<shared_sstable> candidates) {
+    auto tsv = make_unrepaired_table_state_view(&t);
     auto control = make_strategy_control_for_test(false, std::move(candidates));
-    return cs.get_sstables_for_compaction(t, *control);
+    return cs.get_sstables_for_compaction(tsv, *control);
 }
 
 static void assert_table_sstable_count(table_for_tests& t, size_t expected_count) {
@@ -1953,9 +1955,12 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     std::vector<sstables::shared_sstable> candidates;
     int max_threshold = cf->schema()->max_compaction_threshold();
     candidates.reserve(max_threshold+1);
+    const auto keys = tests::generate_partition_keys(2, cf->schema());
     for (auto i = 0; i < (max_threshold+1); i++) { // (max_threshold+1) sstables of similar size
         auto sst = env.make_sstable(cf->schema());
         sstables::test(sst).set_data_file_size(1);
+        // So that the stats_metadata of the sst is written which is checked by incremental repair code
+        sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{});
         candidates.push_back(std::move(sst));
     }
     auto desc = get_sstables_for_compaction(cs, cf.as_table_state(), std::move(candidates));
@@ -2462,7 +2467,8 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
@@ -2498,7 +2504,8 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
@@ -2536,7 +2543,8 @@ void scrub_validate_corrupted_digest(compress_sstable compress) {
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
@@ -2563,7 +2571,8 @@ void scrub_validate_no_digest(compress_sstable compress) {
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
@@ -2581,7 +2590,7 @@ void scrub_validate_no_digest(compress_sstable compress) {
         std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
         f.dma_write(0, wbuf.get(), wbuf_len).get();
 
-        stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        stats = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
@@ -2604,7 +2613,8 @@ void scrub_validate_valid(compress_sstable compress) {
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
         };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
@@ -2670,14 +2680,15 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
 
         utils::get_local_injector().enable("sstable_validate/pause");
 
-        auto scrub1 = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{});
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        auto scrub1 = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{});
         BOOST_REQUIRE(eventually_true([sst] {
             auto checksum = sst->get_checksum();
             return checksum != nullptr;
         }));
         auto checksum1 = sst->get_checksum();
 
-        auto scrub2 = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{});
+        auto scrub2 = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{});
         BOOST_REQUIRE(eventually_true([sst] {
             auto checksum = sst->get_checksum();
             return checksum != nullptr;
@@ -2767,7 +2778,8 @@ void scrub_validate_cassandra_compat(const compression_parameters& cp, sstring s
             .operation_mode = scrub::mode::validate,
             .quarantine_sstables = scrub::quarantine_invalid_sstables::no,
         };
-        auto stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        auto stats = table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(stats.has_value());
         if (valid) {
@@ -2986,7 +2998,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
         // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
         sstables::compaction_type_options::scrub opts = {};
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
-        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
 
         BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
         BOOST_REQUIRE(in_strategy_sstables(ts).front() == sst);
@@ -3032,7 +3045,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
         // We expect the scrub with mode=srub::mode::skip to get rid of all invalid data.
         sstables::compaction_type_options::scrub opts = {};
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
         BOOST_REQUIRE(in_strategy_sstables(ts).front() != sst);
@@ -3073,7 +3087,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
         // We expect the scrub with mode=srub::mode::segregate to fix all out-of-order data.
         sstables::compaction_type_options::scrub opts = {};
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
-        table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+        auto tsv = make_unrepaired_table_state_view(&ts);
+        table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
         testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
         BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
@@ -3115,7 +3130,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             // We expect the scrub with mode=scrub::mode::validate to quarantine the sstable.
             sstables::compaction_type_options::scrub opts = {};
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
-            table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+            auto tsv = make_unrepaired_table_state_view(&ts);
+            table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
             BOOST_REQUIRE(in_strategy_sstables(ts).empty());
             BOOST_REQUIRE(sst->is_quarantined());
@@ -3126,7 +3142,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             // We expect the scrub with mode=scrub::mode::segregate to fix all out-of-order data.
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
             opts.quarantine_operation_mode = qmode;
-            table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
+            table->get_compaction_manager().perform_sstable_scrub(tsv, opts, tasks::task_info{}).get();
 
             switch (qmode) {
             case sstables::compaction_type_options::scrub::quarantine_mode::include:
@@ -3404,6 +3420,7 @@ SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
         // add the sstable to cf's maintenance set
         cf->add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
         auto& cf_ts = cf.as_table_state();
+        auto tsv = make_unrepaired_table_state_view(&cf_ts);
         auto maintenance_sst_set = cf_ts.maintenance_sstable_set();
         BOOST_REQUIRE_EQUAL(maintenance_sst_set.size(), 1);
         BOOST_REQUIRE_EQUAL(*maintenance_sst_set.all()->begin(), sst);
@@ -3411,7 +3428,7 @@ SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
         BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 0);
 
         // Perform scrub on the table
-        cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
+        cf->get_compaction_manager().perform_sstable_scrub(tsv, {}, {}).get();
 
         // main set should have the resultant sst and the maintenance set should be empty now
         BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
@@ -3419,7 +3436,7 @@ SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
 
         // Now that there is an sstable in main set, perform scrub on the table
         // again to verify that the result ends up again in main sstable_set
-        cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
+        cf->get_compaction_manager().perform_sstable_scrub(tsv, {}, {}).get();
         BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
         BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
     });
@@ -4037,7 +4054,8 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cf->start();
         auto stop_cf = deferred_stop(*cf);
         cf->trigger_compaction();
-        cm.submit(cf.as_table_state());
+        auto tsv = make_unrepaired_table_state_view(&cf.as_table_state());
+        cm.submit(tsv);
         BOOST_REQUIRE(cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0 && ss.completed_tasks == 0);
         // enable auto compaction
         cf->enable_auto_compaction();
