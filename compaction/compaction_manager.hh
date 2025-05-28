@@ -60,6 +60,12 @@ inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) 
 }
 
 }
+
+struct range_and_repaired_at {
+    dht::token_range range;
+    int64_t repaired_at;
+};
+
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
 class compaction_manager {
