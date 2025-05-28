@@ -13,8 +13,7 @@ from decimal import Decimal
 import pytest
 from botocore.exceptions import ClientError
 
-from test.alternator.util import new_test_table, random_string, full_query, unique_table_name, is_aws, \
-    client_no_transform
+from .util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform, multiset
 
 # All tests in this file are expected to fail with tablets due to #16567.
 # To ensure that Alternator TTL is still being tested, instead of
@@ -809,3 +808,42 @@ def test_ttl_expiration_long(dynamodb, waits_for_expiration):
                 break
             time.sleep(max_duration/100.0)
         assert count == 99*N
+
+# Alternator uses a tag "system:ttl_attribute" to store the TTL attribute
+# chosen by UpdateTimeToLive. However, this tag is not supposed to be
+# readable or writable by the user directly - it should be read or written
+# only with the usual UpdateTimeToLive and DescribeTimeToLive operations.
+# The following two test confirms that this is the case. The first test
+# checks that the internal tag is invisible, i.e., not returned by
+# ListTagsOfResource. Basically we check that enabling TTL does not add
+# any tags to the list of tags.
+# Reproduces issue #24098.
+def test_ttl_tag_is_invisible(dynamodb):
+    with new_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }]
+        ) as table:
+            client = table.meta.client
+            client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': 'x', 'Enabled': True})
+            # Verify that TTL is set for this table, but no extra tags
+            # like "system:ttl_attribute" (or anything else) are visible
+            # in ListTagsOfResource:
+            assert client.describe_time_to_live(TableName=table.name)['TimeToLiveDescription'] == {'TimeToLiveStatus': 'ENABLED', 'AttributeName': 'x'}
+            arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+            assert multiset(TAGS) == multiset(client.list_tags_of_resource(ResourceArn=arn)['Tags'])
+
+# Now check that the internal tag system:ttl_attribute cannot be written with
+# TagResource or UntagResource (it can only be modified by UpdateTimeToLive).
+# This is an Scylla-only test because in DynamoDB, there is nothing
+# special about the tag name "system:ttl_attribute", and it can be written.
+# Reproduces issue #24098.
+def test_ttl_tag_is_unwritable(test_table, scylla_only):
+    tag_name = 'system:ttl_attribute'
+    client = test_table.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    with pytest.raises(ClientError, match='ValidationException.*internal'):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': tag_name, 'Value': 'x'}])
+    with pytest.raises(ClientError, match='ValidationException.*internal'):
+        client.untag_resource(ResourceArn=arn, TagKeys=[tag_name])
