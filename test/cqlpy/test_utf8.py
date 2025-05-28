@@ -84,7 +84,7 @@ def test_unicode_equivalence_like(scylla_only, cql, table1):
 # ambiguous - are various Unicode letters (e.g., Hebrew letters) allowed, or
 # not, in table names? The Apache Cassandra and Scylla DDL documentation is
 # more explicit  - table names must match the regular expression
-# [a-zA-Z_0-9]{1, 48} - so must use the Latin alphabet and nothing else.
+# [a-zA-Z_0-9]{1, 218} - so must use the Latin alphabet and nothing else.
 # Let's confirm this in a test.
 def test_unicode_in_table_names(cql, test_keyspace):
     n = unique_name()

@@ -295,8 +295,9 @@ def testKeyspace(cql):
 
     execute(cql, n, "CREATE KEYSPACE %s WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
     execute(cql, n, "DROP KEYSPACE %s")
+    too_long_keyspace_name = "k" * 219
     assertInvalid(cql, "", 
-         "CREATE KEYSPACE My_much_much_too_long_identifier_that_should_not_work WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+         "CREATE KEYSPACE " + too_long_keyspace_name + " WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
 
     # FIXME: Cassandra throws InvalidRequest here, but Scylla uses
     # ConfigurationException. We shouldn't have done that... But I consider

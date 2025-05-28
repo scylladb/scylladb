@@ -60,11 +60,11 @@ Keyspace and table names are defined by the following grammar:
    keyspace_name: `name`
    table_name: [ `keyspace_name` '.' ] `name`
    name: `unquoted_name` | `quoted_name`
-   unquoted_name: re('[a-zA-Z_0-9]{1, 48}')
+   unquoted_name: re('[a-zA-Z_0-9]{1, 218}')
    quoted_name: '"' `unquoted_name` '"'
 
 Both keyspace and table names consist of only alphanumeric characters, cannot be empty, and are limited in
-size to 48 characters (that limit exists mostly to avoid filenames, which may include the keyspace and table name, to go
+size to 218 characters (that limit exists mostly to avoid filenames, which may include the keyspace and table name, to go
 over the limits of certain file systems). By default, keyspace and table names are case insensitive (``myTable`` is
 equivalent to ``mytable``), but case sensitivity can be forced by using double-quotes (``"myTable"`` is different from
 ``mytable``).
