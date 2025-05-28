@@ -66,6 +66,10 @@ public:
     // Note: this is the most important and performance-sensitive method of the reader.
     // This is what's used by sstable readers to find positions for single-partition reads.
     virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key) = 0;
+    // Advances lower bound to the first PK greater than dk.
+    //
+    // Preconditions: dk >= lower bound, dk is present in the sstable
+    virtual future<> advance_past_definitely_present_partition(const dht::decorated_key& dk) = 0;
     // Advances lower bound to the first PK no smaller than pos.
     // Precondition: pos >= lower bound
     virtual future<> advance_to(dht::ring_position_view pos) = 0;
@@ -1097,6 +1101,10 @@ public:
             _lower_bound.element = indexable_element::cell;
             sstlog.trace("index {}: skipped to cell, _data_file_position={}", fmt::ptr(this), _lower_bound.data_file_position);
         });
+    }
+
+    future<> advance_past_definitely_present_partition(const dht::decorated_key& dk) override {
+        return advance_to(_lower_bound, dht::ring_position_view::for_after_key(dk));
     }
 
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found
