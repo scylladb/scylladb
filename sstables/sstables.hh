@@ -44,6 +44,7 @@
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
+#include "service/session.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -1074,6 +1075,9 @@ public:
     future<lw_shared_ptr<checksum>> read_checksum();
 
     friend in_memory_config_type;
+
+public:
+    service::session_id being_repaired;
 };
 
 // Validate checksums
