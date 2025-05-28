@@ -83,7 +83,7 @@ SEASTAR_TEST_CASE(test_promoted_index_parsing_page_crossing_and_retries) {
         auto index = std::make_unique<index_reader>(sst, permit, trace, use_caching::yes, true);
         auto close_index = deferred_close(*index);
 
-        index->advance_to(dht::ring_position_view(pk)).get();
+        index->advance_to_definitely_present_partition(pk).get();
         index->read_partition_data().get();
 
         auto cur = dynamic_cast<mc::bsearch_clustered_cursor*>(index->current_clustered_cursor());
@@ -196,12 +196,12 @@ SEASTAR_TEST_CASE(test_no_data_file_read_on_missing_clustering_keys_with_dense_i
         auto index = std::make_unique<index_reader>(sst, permit, trace, use_caching::yes, true);
         auto close_index = deferred_close(*index);
 
-        index->advance_to(dht::ring_position_view(pk)).get();
+        index->advance_to_definitely_present_partition(pk).get();
         index->read_partition_data().get();
 
         auto index2 = std::make_unique<index_reader>(sst, permit, trace, use_caching::yes, true);
         auto close_index2 = deferred_close(*index2);
-        index2->advance_to(dht::ring_position_view(pk)).get();
+        index2->advance_to_definitely_present_partition(pk).get();
         index2->advance_to_next_partition().get();
         auto next_partition_offset = index2->data_file_positions().start;
 

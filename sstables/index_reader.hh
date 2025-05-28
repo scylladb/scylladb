@@ -70,9 +70,6 @@ public:
     //
     // Preconditions: dk >= lower bound, dk is present in the sstable
     virtual future<> advance_past_definitely_present_partition(const dht::decorated_key& dk) = 0;
-    // Advances lower bound to the first PK no smaller than pos.
-    // Precondition: pos >= lower bound
-    virtual future<> advance_to(dht::ring_position_view pos) = 0;
     // Advances lower bound to dk.
     //
     // Preconditions: dk >= lower bound, dk is present in the sstable
@@ -1233,12 +1230,6 @@ public:
     // Can be called only when !eof().
     future<> advance_to_next_partition() override {
         return advance_to_next_partition(_lower_bound);
-    }
-
-    // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
-    // Must be called for non-decreasing positions.
-    future<> advance_to(dht::ring_position_view pos) override {
-        return advance_to(_lower_bound, pos);
     }
 
     // Returns positions in the data file of the cursor.
