@@ -17,7 +17,6 @@ import re
 import shutil
 import sys
 import time
-import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from importlib import import_module
 from typing import TYPE_CHECKING
@@ -363,17 +362,6 @@ class Test:
         if trim:
             self.log_filename.unlink()
         pass
-
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        assert not self.success
-        xml_fail = ET.SubElement(xml_res, 'failure')
-        xml_fail.text = "Test {} {} failed, check the log at {}".format(
-            self.path,
-            " ".join(self.args),
-            self.log_filename)
-        if self.log_filename.exists():
-            system_out = ET.SubElement(xml_res, 'system-out')
-            system_out.text = read_log(self.log_filename)
 
 
 def init_testsuite_globals() -> None:

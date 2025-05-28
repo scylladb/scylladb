@@ -13,7 +13,6 @@ import os
 import pathlib
 import shutil
 import time
-import xml.etree.ElementTree as ET
 from io import StringIO
 from typing import TYPE_CHECKING
 
@@ -181,21 +180,6 @@ Check test log at {}.""".format(self.log_filename))
                 print(self.server_log)
         elif not self.is_equal_result and self.unidiff:
             print(self.unidiff)
-
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        assert not self.success
-        xml_fail = ET.SubElement(xml_res, 'failure')
-        xml_fail.text = self.summary
-        if not self.is_executed_ok:
-            if self.log_filename.exists():
-                system_out = ET.SubElement(xml_res, 'system-out')
-                system_out.text = read_log(self.log_filename)
-            if self.server_log_filename:
-                system_err = ET.SubElement(xml_res, 'system-err')
-                system_err.text = read_log(self.server_log_filename)
-        elif self.unidiff:
-            system_out = ET.SubElement(xml_res, 'system-out')
-            system_out.text = palette.nocolor(self.unidiff)
 
 
 def format_unidiff(fromfile: str, tofile: str) -> str:
