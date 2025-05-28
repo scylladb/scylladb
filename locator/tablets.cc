@@ -842,6 +842,15 @@ table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexce
     return *this;
 }
 
+uint64_t tablet_load_stats::add_tablet_sizes(const tablet_load_stats& tls) {
+    uint64_t table_sizes_sum = 0;
+    for (auto& [rb_tid, tablet_size] : tls.tablet_sizes) {
+        tablet_sizes[rb_tid] = tablet_size;
+        table_sizes_sum += tablet_size;
+    }
+    return table_sizes_sum;
+}
+
 load_stats load_stats::from_v1(load_stats_v1&& stats) {
     return { .tables = std::move(stats.tables) };
 }
@@ -856,8 +865,22 @@ load_stats& load_stats::operator+=(const load_stats& s) {
     for (auto& [host, cdu] : s.critical_disk_utilization) {
         critical_disk_utilization[host] = cdu;
     }
-
+    for (auto& [host, tablet_ls] : s.tablet_stats) {
+        tablet_stats[host].effective_capacity = tablet_ls.effective_capacity;
+        tablet_stats[host].add_tablet_sizes(tablet_ls);
+    }
     return *this;
+}
+
+std::optional<uint64_t> load_stats::get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const {
+    if (auto node_i = tablet_stats.find(host); node_i != tablet_stats.end()) {
+        const tablet_load_stats& tls = node_i->second;
+        if (auto ts_i = tls.tablet_sizes.find(rb_tid); ts_i != tls.tablet_sizes.end()) {
+            return ts_i->second;
+        }
+    }
+    tablet_logger.debug("Unable to find tablet size on host: {} for tablet: {}", host, rb_tid);
+    return std::nullopt;
 }
 
 tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
