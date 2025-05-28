@@ -74,12 +74,32 @@ def test_table_name_length_48(cql, test_keyspace):
         pass
 
 # The second test tries a 100-character name - this one passes on Cassandra 4
-# and 5, fails on Cassandra 3, and on Scylla reproduces issue #4480.
-@pytest.mark.xfail(reason="#4480")
+# and 5, fails on Cassandra 3.
 def test_table_name_length_100(cql, test_keyspace):
     schema = 'p int, c int, PRIMARY KEY (p, c)'
     with new_named_table(cql, test_keyspace, padded_name(100), schema) as table:
         pass
+
+# In Scylla we limit the table name to 222 characters. This is because when the existing
+# code creates a directory to store the new table, this directory's name is
+# created by sstables::init_table_storage(), which takes the table's full name,
+# a dash (-), and a 32-byte UUID string. Because most Linux filesystems limit filename
+# components to 255 bytes, this means that any table name longer than 222 bytes will attempt
+# to mkdir() a directory name longer than the allowed 255 bytes, and fail.
+# Having table names longer than 48 characters is compatible with the current implementation
+# of Cassandra 4 and 5 as well.
+def test_table_name_length_222(cql, test_keyspace):
+    schema = 'p int, c int, PRIMARY KEY (p, c)'
+    with new_named_table(cql, test_keyspace, padded_name(222), schema) as table:
+        pass
+
+# On the other hand it should fail with the table name exceeding the limit even by 1.
+def test_table_name_length_223(cql, test_keyspace):
+    schema = 'p int, c int, PRIMARY KEY (p, c)'
+    n = padded_name(223)
+    with passes_or_raises(InvalidRequest, match=n):
+        with new_named_table(cql, test_keyspace, n, schema) as table:
+            pass
 
 # If we try an even longer table name length, e.g., 500 characters, we run
 # into the problem that an attempt to create a file or directory name based
@@ -87,7 +107,7 @@ def test_table_name_length_100(cql, test_keyspace):
 # introduced in Cassandra 3, creating a 500-character name should either
 # succeed, or fail gracefully. We mark this test cassandra_bug because
 # Cassandra 5 hangs on this test (CASSANDRA-20425 and CASSANDRA-20389).
-def test_table_name_length_500(cql, test_keyspace, cassandra_bug):
+def test_table_name_length_500(cql, test_keyspace):
     schema = 'p int, c int, PRIMARY KEY (p, c)'
     n = padded_name(500)
     with passes_or_raises(InvalidRequest, match=n):

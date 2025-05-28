@@ -167,8 +167,8 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
     if (!boost::regex_match(std::string(cf_name), name_regex)) {
         throw exceptions::invalid_request_exception(format("\"{}\" is not a valid table name (must be alphanumeric character only: [0-9A-Za-z]+)", cf_name.c_str()));
     }
-    if (cf_name.size() > size_t(schema::NAME_LENGTH)) {
-        throw exceptions::invalid_request_exception(format("Table names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, cf_name.c_str()));
+    if (cf_name.size() > size_t(schema::TABLE_NAME_LENGTH)) {
+        throw exceptions::invalid_request_exception(format("Table names shouldn't be more than {:d} characters long (got \"{}\")", schema::TABLE_NAME_LENGTH, cf_name.c_str()));
     }
 
     // Check for duplicate column names
