@@ -191,9 +191,12 @@ struct tablet_info {
     db_clock::time_point repair_time;
     locator::tablet_task_info repair_task_info;
     locator::tablet_task_info migration_task_info;
+    int64_t sstables_repaired_at;
+    // This stores the sstables_repaired_at of the tablets before they were mereged
+    std::unordered_map<tablet_id, int64_t> sstables_repaired_at_before_merge;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info);
+    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info, int64_t sstables_repaired_at);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
@@ -203,7 +206,7 @@ struct tablet_info {
 //  - they cannot have active repair task, since each task has a different id
 //  - their replicas must be all co-located.
 // If tablet infos are mergeable, merged info is returned. Otherwise, nullopt.
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b);
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b, tablet_id left, tablet_id right);
 
 /// Represents states of the tablet migration state machine.
 ///
