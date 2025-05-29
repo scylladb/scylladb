@@ -10,7 +10,8 @@ target_sources(replica
     exceptions.cc
     dirty_memory_manager.cc
     mutation_dump.cc
-    schema_describe_helper.cc)
+    schema_describe_helper.cc
+    out_of_space_controller.cc)
 target_include_directories(replica
   PUBLIC
     ${CMAKE_SOURCE_DIR})
