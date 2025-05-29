@@ -28,13 +28,15 @@ namespace cql_transport {
 enum class cql_protocol_extension {
     LWT_ADD_METADATA_MARK,
     RATE_LIMIT_ERROR,
-    TABLETS_ROUTING_V1
+    TABLETS_ROUTING_V1,
+    USE_METADATA_ID
 };
 
 using cql_protocol_extension_enum = super_enum<cql_protocol_extension,
     cql_protocol_extension::LWT_ADD_METADATA_MARK,
     cql_protocol_extension::RATE_LIMIT_ERROR,
-    cql_protocol_extension::TABLETS_ROUTING_V1>;
+    cql_protocol_extension::TABLETS_ROUTING_V1,
+    cql_protocol_extension::USE_METADATA_ID>;
 
 using cql_protocol_extension_enum_set = enum_set<cql_protocol_extension_enum>;
 

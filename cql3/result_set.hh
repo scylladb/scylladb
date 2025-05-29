@@ -11,6 +11,7 @@
 #pragma once
 
 #include <vector>
+#include "cql3/statements/prepared_statement.hh"
 #include "utils/chunked_vector.hh"
 #include "enum_set.hh"
 #include "service/pager/paging_state.hh"
@@ -26,12 +27,14 @@ public:
         GLOBAL_TABLES_SPEC = 0,
         HAS_MORE_PAGES = 1,
         NO_METADATA = 2,
+        METADATA_CHANGED = 3,
     };
 
     using flag_enum = super_enum<flag,
         flag::GLOBAL_TABLES_SPEC,
         flag::HAS_MORE_PAGES,
-        flag::NO_METADATA>;
+        flag::NO_METADATA,
+        flag::METADATA_CHANGED>;
 
     using flag_enum_set = enum_set<flag_enum>;
 
@@ -89,6 +92,8 @@ public:
     const std::vector<lw_shared_ptr<column_specification>>& get_names() const {
         return _column_info->_names;
     }
+
+    cql3::cql_metadata_id_type calculate_metadata_id() const;
 };
 
 ::shared_ptr<const cql3::metadata> make_empty_metadata();

@@ -48,6 +48,10 @@ public:
         return _result_metadata;
     }
 
+    cql3::cql_metadata_id_type get_metadata_id() const {
+        return _prepared->get_metadata_id();
+    }
+
     class cql;
 private:
     static ::shared_ptr<const cql3::metadata> extract_result_metadata(::shared_ptr<cql3::cql_statement> statement);

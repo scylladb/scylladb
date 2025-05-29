@@ -544,6 +544,7 @@ private:
                 [this, &client_state, &id_getter, d](const prepared_cache_key_type& key, const sstring& query_string) {
             return _prepared_cache.get(key, [this, &query_string, &client_state, d] {
                 auto prepared = get_statement(query_string, client_state, d);
+                prepared->calculate_metadata_id();
                 auto bound_terms = prepared->statement->get_bound_terms();
                 if (bound_terms > std::numeric_limits<uint16_t>::max()) {
                     throw exceptions::invalid_request_exception(
