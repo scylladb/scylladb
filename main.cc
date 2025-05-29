@@ -1258,6 +1258,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
                     std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), std::ref(sstable_compressor_factory),
+                    only_on_shard0(&*out_of_space_controller_shard0),
                     std::ref(stop_signal.as_sharded_abort_source()), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
