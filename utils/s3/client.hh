@@ -19,8 +19,6 @@
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
-#include "s3_retry_strategy.hh"
-#include "utils/exceptions.hh"
 #include "retryable_http_client.hh"
 #include "utils/s3/client_fwd.hh"
 
