@@ -75,6 +75,45 @@ private:
     request_type _req;
 };
 
+// Interface for redacting sensitive data from HTTP requests and responses before logging.
+class http_log_filter {
+public:
+    static constexpr char REDACTED_VALUE[] = "[REDACTED]";
+    enum class body_type {
+        request,
+        response,
+    };
+    using string_opt = std::optional<std::string>;
+    // Filter a request/response header.
+    // Returns an optional containing the filtered value. If no filtering is required, the optional is not engaged.
+    virtual string_opt filter_header(std::string_view name, std::string_view value) const = 0;
+    // Filter the request/response body.
+    // Returns an optional containing the filtered value. If no filtering is required, the optional is not engaged.
+    virtual string_opt filter_body(body_type type, const std::string_view body) const = 0;
+};
+
+class nop_log_filter: public http_log_filter {
+public:
+    virtual string_opt filter_header(std::string_view name, std::string_view value) const { return std::nullopt; }
+    virtual string_opt filter_body(body_type type, std::string_view body) const { return std::nullopt; }
+};
+
+template<typename T, http_log_filter::body_type type>
+struct redacted {
+    const T& original;
+    const http_log_filter& filter;
+
+    std::optional<std::string> filter_header(std::string_view name, std::string_view value) const {
+        return filter.filter_header(name, value);
+    }
+    std::optional<std::string> filter_body(std::string_view value) const {
+        return filter.filter_body(type, value);
+    }
+};
+
+using redacted_request_type = redacted<httpclient::request_type, http_log_filter::body_type::request>;
+using redacted_result_type  = redacted<httpclient::result_type,  http_log_filter::body_type::response>;
+
 }
 
 template <>
@@ -85,4 +124,14 @@ struct fmt::formatter<rest::httpclient::request_type> : fmt::formatter<std::stri
 template <>
 struct fmt::formatter<rest::httpclient::result_type> : fmt::formatter<std::string_view> {
     auto format(const rest::httpclient::result_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<rest::redacted_request_type> : fmt::formatter<std::string_view> {
+    auto format(const rest::redacted_request_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<rest::redacted_result_type> : fmt::formatter<std::string_view> {
+    auto format(const rest::redacted_result_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
