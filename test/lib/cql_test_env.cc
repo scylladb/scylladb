@@ -672,7 +672,7 @@ private:
             });
 
             _db_config = &*cfg;
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(_scf), std::ref(abort_sources), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(_scf), only_on_shard0(&*_disk_space_monitor_shard0), std::ref(abort_sources), utils::cross_shard_barrier()).get();
             auto stop_db = defer_verbose_shutdown("database", [this] {
                 _db.stop().get();
             });
@@ -1103,8 +1103,8 @@ private:
             auto deinit_storage_service_server = defer_verbose_shutdown("auth service", [this] {
                 // #21159 don't shutdown gossip here - we don't in main.cc, and we should
                 // strive to keep the two paths aligned. Doing a gossip::shutdown here
-                // can, if we've provoked a storage_manager::isolate, cause parallel 
-                // double execution of the shutdown method, which causes waiting for 
+                // can, if we've provoked a storage_manager::isolate, cause parallel
+                // double execution of the shutdown method, which causes waiting for
                 // an invalid future if we're unlucky.
                 _auth_service.stop().get();
             });
