@@ -20,8 +20,6 @@ CQL Reference
    wasm
    json
    mv
-   non-reserved-keywords
-   reserved-keywords
    describe-schema
    service-levels
    cql-extensions.md
@@ -39,7 +37,7 @@ CQL - Apache Cassandra Query Language
 The Apache Cassandra Query Language (CQL) is the primary language for communicating with the ScyllaDB database. 
 It allows you to create keyspaces and tables, insert and query tables, and more.
 
-  * :doc:`Appendices </cql/appendices>`
+  * :doc:`Reserved CQL Keywords and Types (Appendices) </cql/appendices>`
   * :doc:`Compaction </cql/compaction>`
   * :doc:`Consistency Levels </cql/consistency>`
   * :doc:`Consistency Levels Calculator</cql/consistency-calculator>`
@@ -52,8 +50,6 @@ It allows you to create keyspaces and tables, insert and query tables, and more.
   * :doc:`Functions </cql/functions>`
   * :doc:`JSON Support </cql/json>`
   * :doc:`Materialized Views </cql/mv>`
-  * :doc:`Non-Reserved CQL Keywords </cql/non-reserved-keywords>`
-  * :doc:`Reserved CQL Keywords </cql/reserved-keywords>`
 
 ScyllaDB CQL Extensions - CQL Extensions Provided by ScyllaDB
 --------------------------------------------------------------

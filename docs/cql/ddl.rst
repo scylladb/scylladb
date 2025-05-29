@@ -88,7 +88,7 @@ We also define the notion of statement options for use in the following section:
 
 .. _create-keyspace-statement:
 
-In all cases, for creating keyspaces and tables, if you are using :doc:`Reserved Keywords </cql/reserved-keywords>`, enclose them in single or double-quotes.
+In all cases, for creating keyspaces and tables, if you are using :ref:`reserved keywords <appendix-A>`, enclose them in single or double-quotes.
 
 CREATE KEYSPACE
 ^^^^^^^^^^^^^^^

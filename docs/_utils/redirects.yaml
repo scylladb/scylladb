@@ -6,6 +6,11 @@
 /master/upgrade/upgrade-guides/upgrade-guide-from-2024.x-to-2025.1/upgrade-guide-from-2024.x-to-2025.1.html: https://docs.scylladb.com/manual/stable/upgrade/index.html
 /master/upgrade/upgrade-guides/upgrade-guide-from-6.2-to-2025.1/index.html: https://docs.scylladb.com/manual/stable/upgrade/index.html
 
+# Remove duplicate pages
+
+/stable/cql/non-reserved-keywords.html: /stable/cql/appendices.html
+/stable/cql/reserved-keywords.html: /stable/cql/appendices.html
+
 # Remove reduntant pages
 
 /stable/getting-started/tutorials: https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html
