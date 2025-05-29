@@ -1146,6 +1146,10 @@ future<> repair::shard_repair_task_impl::run() {
 // itself does very little (mainly tell other nodes and CPUs what to do).
 future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     get_repair_module().check_in_shutdown();
+    if (_state != state::enabled) {
+        co_return co_await make_exception_future<int>(std::runtime_error("Repair service is disabled. No repairs will be started until it's re-enabled"));
+    }
+
     auto& sharded_db = get_db();
     auto& db = sharded_db.local();
 

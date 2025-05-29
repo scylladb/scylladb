@@ -63,6 +63,15 @@ public:
     virtual const char* what() const noexcept override { return _message.c_str(); }
 };
 
+class critical_disk_utilization_exception final: public replica_exception {
+public:
+    critical_disk_utilization_exception() noexcept
+        : replica_exception()
+    { }
+
+    virtual const char* what() const noexcept override { return "Write rejected due to critical disk utilization"; }
+};
+
 using abort_requested_exception = seastar::abort_requested_exception;
 
 struct exception_variant {
@@ -70,7 +79,8 @@ struct exception_variant {
             no_exception,
             rate_limit_exception,
             stale_topology_exception,
-            abort_requested_exception
+            abort_requested_exception,
+            critical_disk_utilization_exception
     > reason;
 
     exception_variant()
