@@ -6452,6 +6452,11 @@ future<bool> storage_service::exec_tablet_update(service::group0_guard guard, st
     co_return false;
 }
 
+replica::tablet_mutation_builder storage_service::tablet_mutation_builder_for_base_table(api::timestamp_type ts, table_id table) {
+    auto base_table = get_token_metadata_ptr()->tablets().get_base_table(table);
+    return replica::tablet_mutation_builder(ts, base_table);
+}
+
 // Repair the tablets contain the tokens and wait for the repair to finish
 // This is used to run a manual repair requested by user from the restful API.
 future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant,
@@ -6507,7 +6512,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             }
             auto last_token = tmap.get_last_token(tid);
             updates.emplace_back(
-                replica::tablet_mutation_builder(guard.write_timestamp(), table)
+                tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
                     .set_repair_task_info(last_token, repair_task_info)
                     .build());
         }
@@ -6571,7 +6576,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             }
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
-            auto update = replica::tablet_mutation_builder(guard.write_timestamp(), table)
+            auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
                             .del_repair_task_info(last_token);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
@@ -6644,7 +6649,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             : locator::tablet_task_info::make_migration_request();
         migration_task_info.sched_nr++;
         migration_task_info.sched_time = db_clock::now();
-        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
+        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
@@ -6690,7 +6695,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         locator::tablet_replica_set new_replicas(tinfo.replicas);
         new_replicas.push_back(dst);
 
-        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
+        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
@@ -6735,7 +6740,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         new_replicas.reserve(tinfo.replicas.size() - 1);
         std::copy_if(tinfo.replicas.begin(), tinfo.replicas.end(), std::back_inserter(new_replicas), [&dst] (auto r) { return r != dst; });
 
-        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
+        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
