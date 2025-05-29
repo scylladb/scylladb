@@ -24,6 +24,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/backtrace.hh>
 #include <seastar/util/later.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
@@ -647,14 +648,9 @@ struct alignas(segment_size) segment {
     static void operator delete(void* ptr) = delete;
 };
 
-static constexpr size_t max_managed_object_size = segment_size * 0.1;
 static constexpr auto max_used_space_ratio_for_compaction = 0.85;
 static constexpr size_t max_used_space_for_compaction = segment_size * max_used_space_ratio_for_compaction;
 static constexpr size_t min_free_space_for_compaction = segment_size - max_used_space_for_compaction;
-
-struct [[gnu::packed]] non_lsa_object_cookie {
-    uint64_t value = 0xbadcaffe;
-};
 
 static_assert(min_free_space_for_compaction >= max_managed_object_size,
     "Segments which cannot fit max_managed_object_size must not be considered compactible for the sake of forward progress of compaction");
@@ -1036,7 +1032,6 @@ class segment_pool {
         }
     };
 
-    size_t _non_lsa_memory_in_use = 0;
     // Invariants - a segment is in one of the following states:
     //   In use by some region
     //     - set in _lsa_owned_segments_bitmap
@@ -1099,18 +1094,8 @@ public:
     bool allocation_failure_flag() const noexcept { return _allocation_failure_flag; }
     void refill_emergency_reserve();
     void ensure_free_segments(size_t n_segments);
-    void add_non_lsa_memory_in_use(size_t n) noexcept {
-        _non_lsa_memory_in_use += n;
-    }
-    void subtract_non_lsa_memory_in_use(size_t n) noexcept {
-        SCYLLA_ASSERT(_non_lsa_memory_in_use >= n);
-        _non_lsa_memory_in_use -= n;
-    }
-    size_t non_lsa_memory_in_use() const noexcept {
-        return _non_lsa_memory_in_use;
-    }
     size_t total_memory_in_use() const noexcept {
-        return _non_lsa_memory_in_use + _segments_in_use * segment::size;
+        return _segments_in_use * segment::size;
     }
     size_t total_free_memory() const noexcept {
         return _free_segments * segment::size;
@@ -1713,7 +1698,6 @@ private:
     size_t _active_offset;
     segment_descriptor_hist _segment_descs; // Contains only closed segments
     occupancy_stats _closed_occupancy;
-    occupancy_stats _non_lsa_occupancy;
     // This helps us updating out region_listener*. That's because we call update before
     // we have a chance to update the occupancy stats - mainly because at this point we don't know
     // what will we do with the new segment. Also, because we are not ever interested in the
@@ -2057,8 +2041,7 @@ public:
     // since we don't instantiate reclaiming_lock
     // while traversing _regions
     occupancy_stats occupancy() const noexcept {
-        occupancy_stats total = _non_lsa_occupancy;
-        total += _closed_occupancy;
+        occupancy_stats total = _closed_occupancy;
         if (_active) {
             total += segment_pool().descriptor(_active).occupancy();
         }
@@ -2107,19 +2090,7 @@ public:
         auto& pool = segment_pool();
         pool.on_memory_allocation(size);
         if (size > max_managed_object_size) {
-            auto ptr = standard_allocator().alloc(migrator, size + sizeof(non_lsa_object_cookie), alignment);
-            // This isn't very acurrate, the correct free_space value would be
-            // malloc_usable_size(ptr) - size, but there is no way to get
-            // the exact object size at free.
-            auto allocated_size = malloc_usable_size(ptr);
-            new ((char*)ptr + allocated_size - sizeof(non_lsa_object_cookie)) non_lsa_object_cookie();
-            _non_lsa_occupancy += occupancy_stats(0, allocated_size);
-            if (_listener) {
-                 _evictable_space += allocated_size;
-                _listener->increase_usage(_region, allocated_size);
-            }
-            pool.add_non_lsa_memory_in_use(allocated_size);
-            return ptr;
+            on_internal_error(llogger, fmt::format("Contiguous allocation of size {} exceeds logalloc's limit of {}", size, max_managed_object_size));
         } else {
             auto ptr = alloc_small(object_descriptor(migrator), (segment::size_type) size, alignment);
             _sanitizer.on_allocation(ptr, size);
@@ -2127,27 +2098,11 @@ public:
         }
     }
 
-private:
-    void on_non_lsa_free(void* obj) noexcept {
-        auto allocated_size = malloc_usable_size(obj);
-        auto cookie = (non_lsa_object_cookie*)((char*)obj + allocated_size) - 1;
-        SCYLLA_ASSERT(cookie->value == non_lsa_object_cookie().value);
-        _non_lsa_occupancy -= occupancy_stats(0, allocated_size);
-        if (_listener) {
-            _evictable_space -= allocated_size;
-            _listener->decrease_usage(_region, allocated_size);
-        }
-        segment_pool().subtract_non_lsa_memory_in_use(allocated_size);
-    }
 public:
     virtual void free(void* obj) noexcept override {
         compaction_lock _(*this);
         segment* seg = segment_pool().containing_segment(obj);
-        if (!seg) {
-            on_non_lsa_free(obj);
-            standard_allocator().free(obj);
-            return;
-        }
+        SCYLLA_ASSERT(seg);
 
         auto pos = reinterpret_cast<const char*>(obj);
         auto desc = object_descriptor::decode_backwards(pos);
@@ -2158,12 +2113,7 @@ public:
         compaction_lock _(*this);
         auto& pool = segment_pool();
         segment* seg = pool.containing_segment(obj);
-
-        if (!seg) {
-            on_non_lsa_free(obj);
-            standard_allocator().free(obj, size);
-            return;
-        }
+        SCYLLA_ASSERT(seg);
 
         _sanitizer.on_free(obj, size);
 
@@ -2246,9 +2196,7 @@ public:
         _segment_descs.merge(other._segment_descs);
 
         _closed_occupancy += other._closed_occupancy;
-        _non_lsa_occupancy += other._non_lsa_occupancy;
         other._closed_occupancy = {};
-        other._non_lsa_occupancy = {};
 
         // Make sure both regions will notice a future increment
         // to the reclaim counter
@@ -2881,15 +2829,6 @@ tracker::impl::impl() : _segment_pool(std::make_unique<logalloc::segment_pool>(*
 
         sm::make_gauge("used_space_bytes", [this] { return region_occupancy().used_space(); },
                        sm::description("Holds a current amount of used memory in bytes.")),
-
-        sm::make_gauge("small_objects_total_space_bytes", [this] { return region_occupancy().total_space() - _segment_pool->non_lsa_memory_in_use(); },
-                       sm::description("Holds a current size of \"small objects\" memory region in bytes.")),
-
-        sm::make_gauge("small_objects_used_space_bytes", [this] { return region_occupancy().used_space() - _segment_pool->non_lsa_memory_in_use(); },
-                       sm::description("Holds a current amount of used \"small objects\" memory in bytes.")),
-
-        sm::make_gauge("large_objects_total_space_bytes", [this] { return _segment_pool->non_lsa_memory_in_use(); },
-                       sm::description("Holds a current size of allocated non-LSA memory.")),
 
         sm::make_gauge("non_lsa_used_space_bytes", [this] { return non_lsa_used_space(); },
                        sm::description("Holds a current amount of used non-LSA memory."))(basic_level),

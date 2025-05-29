@@ -122,6 +122,15 @@ public:
 
     virtual ~allocation_strategy() {}
 
+    // Allocates space.
+    //
+    // Throws std::bad_alloc on allocation failure.
+    //
+    // Allocations bigger than `preferred_max_contiguous_allocation()` are unsupported
+    // and are very likely to fail.
+    //
+    // (But not *guaranteed* to fail because implementations are allowed tolerate bigger
+    // allocations for legacy reasons. New code shouldn't rely on that).
     virtual void* alloc(migrate_fn, size_t size, size_t alignment) = 0;
     //
     // Allocates space for a new ManagedObject. The caller must construct the
@@ -132,6 +141,11 @@ public:
     //
     // Doesn't invalidate references to objects allocated with this strategy.
     //
+    // Allocations bigger than `preferred_max_contiguous_allocation()` are unsupported
+    // and are very likely to fail.
+    //
+    // (But not *guaranteed* to fail because implementations are allowed to tolerate bigger
+    // allocations for legacy reasons. New code shouldn't rely on that).
     template <typename T>
     requires DynamicObject<T>
     void* alloc(size_t size) {
@@ -174,6 +188,14 @@ public:
         free(obj, size);
     }
 
+    // Returns the preferred maximum contiguous allocation size
+    // supported by this allocator.
+    //
+    // Allocations bigger than `preferred_max_contiguous_allocation()` are unsupported
+    // and are very likely to fail.
+    //
+    // (But not *guaranteed* to fail because implementations are allowed to tolerate bigger
+    // allocations for legacy reasons. New code shouldn't rely on that).
     size_t preferred_max_contiguous_allocation() const noexcept {
         return _preferred_max_contiguous_allocation;
     }
