@@ -36,6 +36,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/assert.hh"
+#include "utils/log.hh"
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
 #include "db/operation_type.hh"
@@ -332,31 +333,7 @@ cql_server::~cql_server() = default;
 
 shared_ptr<generic_server::connection>
 cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
-    auto conn = make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr),sem, std::move(initial_sem_units));
-    ++_stats.connects;
-    ++_stats.connections;
-    return conn;
-}
-
-future<>
-cql_server::advertise_new_connection(shared_ptr<generic_server::connection> raw_conn) {
-    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
-        const auto ip = conn->get_client_state().get_client_address().addr();
-        const auto port = conn->get_client_state().get_client_port();
-        clogger.trace("Advertising new connection from CQL client {}:{}", ip, port);
-    }
-    return make_ready_future<>();
-}
-
-future<>
-cql_server::unadvertise_connection(shared_ptr<generic_server::connection> raw_conn) {
-    --_stats.connections;
-    if (auto conn = dynamic_pointer_cast<connection>(raw_conn)) {
-        const auto ip = conn->get_client_state().get_client_address().addr();
-        const auto port = conn->get_client_state().get_client_port();
-        clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
-    }
-    return make_ready_future<>();
+    return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
 }
 
 unsigned
@@ -655,10 +632,23 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
         clogger.debug("Shedding all incoming requests due to overload");
         _shed_incoming_requests = true;
     });
+    ++_server._stats.connects;
+    ++_server._stats.connections;
+    if (clogger.is_enabled(logging::log_level::trace)) {
+        const auto ip = get_client_state().get_client_address().addr();
+        const auto port = get_client_state().get_client_port();
+        clogger.trace("Advertising new connection from CQL client {}:{}", ip, port);
+    }
 }
 
 cql_server::connection::~connection() {
     _server._notifier->unregister_connection(this);
+    --_server._stats.connections;
+    if (clogger.is_enabled(logging::log_level::trace)) {
+        const auto ip = get_client_state().get_client_address().addr();
+        const auto port = get_client_state().get_client_port();
+        clogger.trace("Advertising disconnection of CQL client {}:{}", ip, port);
+    }
 }
 
 client_data cql_server::connection::make_client_data() const {
