@@ -18,8 +18,8 @@
 
 .. highlight:: cql
 
-Appendices
-----------
+Reserved CQL Keywords and Types (Appendices)
+------------------------------------------------
 
 .. _appendix-A:
 
