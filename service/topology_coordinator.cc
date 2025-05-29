@@ -1423,8 +1423,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
 
                     if (action_failed(tablet_state.streaming)) {
-                        bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
-                        if (cleanup || check_excluded_replicas()) {
+                        const bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
+                        const bool critical_disk_utilization = _tablet_allocator.get_load_stats()->critical_disk_utilization.contains(trinfo.pending_replica->host);
+                        if (cleanup || check_excluded_replicas() || critical_disk_utilization) {
                             if (do_barrier()) {
                                 rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
                                 updates.emplace_back(get_mutation_builder()
