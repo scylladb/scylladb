@@ -1272,7 +1272,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             // not include reserve segments created by active commitlogs.
             db.local().init_commitlog().get();
             checkpoint(stop_signal, "starting per-shard database core");
-            db.invoke_on_all(&replica::database::start, std::ref(sl_controller)).get();
+            db.invoke_on_all(&replica::database::start, std::ref(sl_controller), only_on_shard0(&*disk_space_monitor_shard0)).get();
 
             ::sigquit_handler sigquit_handler(db);
 

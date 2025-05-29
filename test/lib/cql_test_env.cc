@@ -681,7 +681,7 @@ private:
                 _db.stop().get();
             });
 
-            _db.invoke_on_all(&replica::database::start, std::ref(_sl_controller)).get();
+            _db.invoke_on_all(&replica::database::start, std::ref(_sl_controller), only_on_shard0(&*_disk_space_monitor_shard0)).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);
