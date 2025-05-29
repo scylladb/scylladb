@@ -62,6 +62,8 @@ Table keys are used for encrypting SSTables. Depending on your key provider, thi
 * Replicated Key Provider - encrypted_keys table
 * KMIP Key Provider - KMIP server
 * KMS Key Provider - AWS
+* GCP Key Provider - GCP
+* Azure Key Provider - Azure
 * Local Key Provider - in a local file with multiple keys. You can provide your own key or ScyllaDB can make one for you.
 
 .. _ear-key-providers:
@@ -98,6 +100,9 @@ When encrypting the system tables or SSTables, you need to state which provider 
    * - GCP Key Provider
      - GcpKeyProviderFactory
      - Used key(s) provided by the GCP KMS service.
+   * - Azure Key Provider
+     - AzureKeyProviderFactory
+     - Used key(s) provided by the Azure Key Vault service.
 
 
 About Local Key Storage
@@ -403,6 +408,112 @@ If you are using Google GCP KMS to encrypt tables or system information, add the
 
 .. include:: /rst_include/scylla-commands-restart-index.rst
 
+.. _encryption-at-rest-set-azure:
+
+Set the Azure Host
+----------------------
+
+If you are using Azure Key Vault to encrypt tables or system information, you need to add the Azure information to the ``scylla.yaml`` configuration file.
+
+What You'll Need
+================
+
+Before configuring Azure Key Vault integration, ensure you have:
+
+* A Vault key.
+
+* An Azure identity to authenticate ScyllaDB against the Vault key. Choose one of:
+
+  * **Managed Identity** (recommended for production) - No credentials are needed. ScyllaDB will automatically detect and use the default managed identity of the Azure VM.
+  * **Service Principal** - Requires providing a tenant ID, client ID, and a secret or certificate.
+
+* Sufficient permissions to perform the ``wrapkey`` and ``unwrapkey`` operations on the key.
+  If you are using RBAC, you can assign the "Key Vault Crypto User" role to your identity.
+
+.. note::
+   ScyllaDB can also authenticate indirectly through a preconfigured Azure CLI, but this is offered only for testing purposes.
+
+Procedure
+=========
+
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add a new host in the Azure host(s) section:
+
+   .. code-block:: yaml
+
+      azure_hosts:
+        <name>:
+            azure_tenant_id: <tenant ID> (optional)
+            azure_client_id: <ID of your service principal> (optional)
+            azure_client_secret: <secret of the service principal> (optional)
+            azure_client_certificate_path: <path to PEM-encoded certificate and private key of the service principal> (optional)
+            master_key: <vaultname>/<keyname> - named Vault key for encrypting data keys (optional)
+            truststore: <PEM file with CA certificates for TLS> (optional)
+            priority_string: <TLS priority string> (optional)
+            key_cache_expiry: <key cache expiry period> (optional)
+            key_cache_refresh: <key cache refresh/prune period> (optional)
+      #   <name>:
+
+   Where:
+
+   * ``<name>`` - The name to identify the Azure host. You have to provide this name to encrypt a :ref:`new <ear-create-table>` or :ref:`existing <ear-alter-table>` table.
+   * ``azure_tenant_id`` - The ID of the Azure tenant. Required only for authentication with a service principal.
+   * ``azure_client_id`` - The client ID of your service principal. Required only for authentication with a service principal.
+   * ``azure_client_secret`` - The secret of your service principal. Required only for authentication with a service principal.
+   * ``azure_client_certificate_path`` - The path to the PEM-encoded certificate and private key file of your service principal. Can be used instead of a secret.
+   * ``master_key`` - The <vaultname>/<keyname> of your key. This parameter can be omitted if you specify it through the :ref:`encryption options <ear-create-table-master-key-override>` of the table schema.
+   * ``truststore`` - Path to a PEM file with CA certificates to validate the server's TLS certificate.
+   * ``priority_string`` - The TLS priority string for TLS handshakes.
+   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from Azure Key Vault. Default is 600s.
+   * ``key_cache_refresh`` - Key cache refresh period - the frequency at which the cache is checked for expired entries. Default is 1200s.
+
+   Example:
+
+   .. tabs::
+
+      .. group-tab:: Managed Identity (Recommended for Production)
+
+         .. code-block:: yaml
+
+            azure_hosts:
+              my-azure1:
+                  master_key: mykeyvault/mykey
+
+      .. group-tab:: Service Principal with Secret
+
+         .. code-block:: yaml
+
+            azure_hosts:
+              my-azure1:
+                  azure_tenant_id: 00000000-1111-2222-3333-444444444444
+                  azure_client_id: 55555555-6666-7777-8888-999999999999
+                  azure_client_secret: mysecret
+                  master_key: mykeyvault/mykey
+
+         .. note::
+            Alternatively, ScyllaDB can obtain these credentials from the following environment variables:
+            ``AZURE_TENANT_ID``, ``AZURE_CLIENT_ID``, and ``AZURE_CLIENT_SECRET``.
+
+      .. group-tab:: Service Principal with Certificate
+
+         .. code-block:: yaml
+
+            azure_hosts:
+              my-azure1:
+                  azure_tenant_id: 00000000-1111-2222-3333-444444444444
+                  azure_client_id: 55555555-6666-7777-8888-999999999999
+                  azure_client_certificate_path: /path/to/certificate.pem
+                  master_key: mykeyvault/mykey
+
+         .. note::
+            Alternatively, ScyllaDB can obtain these credentials from the following environment variables:
+            ``AZURE_TENANT_ID``, ``AZURE_CLIENT_ID``, and ``AZURE_CLIENT_CERTIFICATE_PATH``.
+
+#. Save the file.
+#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`
+#. Restart the scylla-server service.
+
+.. include:: /rst_include/scylla-commands-restart-index.rst
+
 Encrypt Tables
 -----------------------------
 
@@ -421,6 +532,7 @@ Ensure you have an encryption key available:
 * If you are using AWS KMS, :ref:`set the KMS Host <encryption-at-rest-set-kms>`.
 * If you are using KMIP, :ref:`set the KMIP Host <encryption-at-rest-set-kmip>`.
 * If you are using Google GCP KMS, :ref:`set the GCP Host <encryption-at-rest-set-gcp>`.
+* If you are using Azure Key Vault, :ref:`set the Azure Host <encryption-at-rest-set-azure>`.
 * If you want to create your own key, follow the procedure in :ref:`Create Encryption Keys <ear-create-encryption-key>`.
 * If you do not create your own key, use the following procedure for ScyllaDB 
   to create a key for you (the default location ``/etc/scylla/data_encryption_keys`` may cause 
@@ -448,6 +560,7 @@ the ``user_info_encryption`` option:
     kmip_host: <your kmip_host>
     kms_host: <your kms_host>
     gcp_host: <your gcp_host>
+    azure_host: <your azure_host>
 
 Where:
 
@@ -467,6 +580,8 @@ Where:
   Required if you use KMS.
 * ``gcp_host`` - The name of your :ref:`gcp_host <encryption-at-rest-set-gcp>` group.
   Required if you use GCP.
+* ``azure_host`` - The name of your :ref:`azure_host <encryption-at-rest-set-azure>` group.
+  Required if you use Azure.
 
 **Example**
 
@@ -586,6 +701,8 @@ This procedure demonstrates how to encrypt a new table.
           'kms_host': 'my-kms1'
         }
       ;
+
+.. _ear-create-table-master-key-override:
 
    You can specify a different master key than the one configured for ``kms_host`` in the ``scylla.yaml`` file:
 
@@ -797,6 +914,18 @@ Once this encryption is enabled, it is used for all system data.
 
    Where ``gcp_host`` is the unique name of the GCP host specified in the scylla.yaml file.
 
+   Example for Azure:
+
+   .. code-block:: none
+
+      system_info_encryption:
+         enabled: True
+         cipher_algorithm: AES/CBC/PKCS5Padding
+         secret_key_strength: 128
+         key_provider: AzureKeyProviderFactory
+         azure_host: myScylla
+
+   Where ``azure_host`` is the unique name of the Azure host specified in the scylla.yaml file.
 
 #. Do not close the yaml file. Change the system key directory location according to your settings. 
 
