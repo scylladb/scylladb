@@ -80,6 +80,7 @@
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 #include "utils/labels.hh"
+#include "service/paxos/paxos_state.hh"
 
 #include <algorithm>
 
@@ -975,6 +976,10 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
 
     if (is_colocated_view) {
         return s.view_info()->base_id();
+    }
+
+    if (const auto t = service::paxos::paxos_store::try_get_base_table(s.cf_name()); t) {
+        return find_uuid(s.ks_name(), *t);
     }
 
     return std::nullopt;

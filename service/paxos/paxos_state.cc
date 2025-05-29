@@ -371,6 +371,13 @@ future<> paxos_store::ensure_initialized(const schema& s) {
     });
 }
 
+std::optional<std::string_view> paxos_store::try_get_base_table(std::string_view cf_name) {
+    if (!cf_name.ends_with(paxos_state_table_suffix)) {
+        return std::nullopt;
+    }
+    return cf_name.substr(0, cf_name.size() - paxos_state_table_suffix.size());
+}
+
 template <typename... Args>
 future<::shared_ptr<cql3::untyped_result_set>> paxos_store::execute_cql_with_timeout(sstring req,
         db::timeout_clock::time_point timeout,
