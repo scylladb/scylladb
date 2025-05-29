@@ -15,6 +15,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from test.alternator.util import list_tables, unique_table_name, create_test_table, random_string, new_test_table, is_aws
+from test.conftest import testpy_test_fixture_scope
 
 
 # Utility function for create a table with a given name and some valid
@@ -457,7 +458,7 @@ def test_update_table_non_existent(dynamodb, test_table):
 # option enabled, and pass with it enabled (and also pass on Cassandra).
 # These tests should use the "fails_without_consistent_cluster_management"
 # fixture. When consistent mode becomes the default, this fixture can be removed.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def check_pre_consistent_cluster_management(dynamodb):
     # If not running on Scylla, return false.
     if is_aws(dynamodb):

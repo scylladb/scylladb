@@ -10,7 +10,8 @@ import collections
 import logging
 import os
 import pathlib
-import xml.etree.ElementTree as ET
+from contextlib import asynccontextmanager
+from functools import cache
 from typing import TYPE_CHECKING
 
 from scripts import coverage
@@ -22,12 +23,16 @@ from test.pylib.util import LogPrefixAdapter
 
 if TYPE_CHECKING:
     import argparse
-    from collections.abc import Callable, Awaitable
+    from collections.abc import Callable, Awaitable, AsyncGenerator
     from typing import Optional, Union
+
+    from pytest import Parser
 
 
 class PythonTestSuite(TestSuite):
     """A collection of Python pytests against a single Scylla instance"""
+
+    test_file_ext = ".py"
 
     def __init__(self, path, cfg: dict, options: argparse.Namespace, mode: str) -> None:
         super().__init__(path, cfg, options, mode)
@@ -146,6 +151,7 @@ class PythonTest(Test):
         self.core_args = ["-m", "pytest"]
         self.casename = casename
         self.xmlout = self.suite.log_dir / "xml" / f"{self.uname}.xunit.xml"
+        self.server_address: str | None = None
         self.server_log: Optional[str] = None
         self.server_log_filename: Optional[pathlib.Path] = None
         self.is_before_test_ok = False
@@ -177,7 +183,7 @@ class PythonTest(Test):
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
 
-        arg = str(self.suite.suite_path / (self.shortname + ".py"))
+        arg = str(self.suite.suite_path / f"{self.shortname}{self.suite.test_file_ext}")
         if self.casename is not None:
             arg += '::' + self.casename
         self.args.append(arg)
@@ -197,8 +203,14 @@ class PythonTest(Test):
             print("Server log of the first server:")
             print(self.server_log)
 
-    async def run(self, options: argparse.Namespace) -> Test:
+    @asynccontextmanager
+    async def run_ctx(self, options: argparse.Namespace) -> AsyncGenerator[None]:
+        """A test's setup/teardown context manager.
 
+        Important part of this code is getting a ScyllaDB node from the pool and providing an address to the host
+        as a `--host` argument.  This node returned to the pool after test is finished.  If the test was failed then
+        the node will be marked as dirty.
+        """
         self._prepare_pytest_params(options)
 
         loggerPrefix = self.mode + '/' + self.uname
@@ -215,20 +227,21 @@ class PythonTest(Test):
                     cc.execute(stmt)
                 cluster.prepare_cql_executed = True
             logger.info("Leasing Scylla cluster %s for test %s", cluster, self.uname)
-            self.args.insert(0, f"--host={cluster.endpoint()}")
-            log_filename = next(server.log_filename for server in cluster.running.values())
-            self.args.insert(0, f"--scylla-log-filename={log_filename}")
+            self.server_address = cluster.endpoint()
+            self.args.insert(0, f"--host={self.server_address}")
+            self.server_log_filename = cluster.server_log_filename()
+            self.args.insert(0, f"--scylla-log-filename={self.server_log_filename}")
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
-            status = await run_test(self, options, env=self.suite.scylla_env)
+
+            yield
+
             if self.shortname in self.suite.dirties_cluster:
                 cluster.is_dirty = True
-            cluster.after_test(self.uname, status)
+            cluster.after_test(self.uname, self.success)
             self.is_after_test_ok = True
-            self.success = status
         except Exception as e:
             self.server_log = cluster.read_server_log()
-            self.server_log_filename = cluster.server_log_filename()
             if not self.is_before_test_ok:
                 print("Test {} pre-check failed: {}".format(self.name, str(e)))
                 print("Server log of the first server:\n{}".format(self.server_log))
@@ -239,10 +252,45 @@ class PythonTest(Test):
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
         await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
+
+    async def run(self, options: argparse.Namespace) -> Test:
+        async with self.run_ctx(options=options):
+            self.success = await run_test(test=self, options=options, env=self.suite.scylla_env)
         return self
 
-    def write_junit_failure_report(self, xml_res: ET.Element) -> None:
-        super().write_junit_failure_report(xml_res)
-        if self.server_log_filename is not None:
-            system_err = ET.SubElement(xml_res, 'system-err')
-            system_err.text = read_log(self.server_log_filename)
+
+# Use cache to execute this function once per pytest session.
+@cache
+def add_host_option(parser: Parser) -> None:
+    parser.addoption("--host", default="localhost",
+                     help="a DB server host to connect to")
+
+
+# Use cache to execute this function once per pytest session.
+@cache
+def add_cql_connection_options(parser: Parser) -> None:
+    """Add pytest options for a CQL connection."""
+
+    cql_options = parser.getgroup("CQL connection options")
+    cql_options.addoption("--port", default="9042",
+                          help="CQL port to connect to")
+    cql_options.addoption("--ssl", action="store_true",
+                          help="Connect to CQL via an encrypted TLSv1.2 connection")
+    cql_options.addoption("--auth_username",
+                          help="username for authentication")
+    cql_options.addoption("--auth_password",
+                          help="password for authentication")
+
+
+# Use cache to execute this function once per pytest session.
+@cache
+def add_s3_options(parser: Parser) -> None:
+    """Options for tests which use S3 server (i.e., cluster/object_store and cqlpy/test_tools.py)"""
+
+    s3_options = parser.getgroup("S3 server settings")
+    s3_options.addoption('--s3-server-address')
+    s3_options.addoption('--s3-server-port', type=int)
+    s3_options.addoption('--aws-access-key')
+    s3_options.addoption('--aws-secret-key')
+    s3_options.addoption('--aws-region')
+    s3_options.addoption('--s3-server-bucket')

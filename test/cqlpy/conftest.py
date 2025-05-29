@@ -23,9 +23,10 @@ import tempfile
 import time
 import random
 
+from test.conftest import testpy_test_fixture_scope
+from test.pylib.suite.python import PythonTest, add_host_option, add_cql_connection_options, add_s3_options
 from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
 from .nodetool import scylla_log
-from test.pylib.minio_server import MinioServer
 
 print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 
@@ -34,46 +35,42 @@ print(f"Driver name {DRIVER_NAME}, version {DRIVER_VERSION}")
 # on localhost:9042. Add the --host and --port options to allow overriding
 # these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-        help='CQL server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-        help='CQL server port to connect to')
-    parser.addoption('--ssl', action='store_true',
-        help='Connect to CQL via an encrypted TLSv1.2 connection')
-    # Used by the wrapper script only, not by pytest, added here so it appears
-    # in --help output and so that pytest's argparser won't protest against its
-    # presence.
-    parser.addoption('--omit-scylla-output', action='store_true',
-        help='Omit scylla\'s output from the test output')
+    add_host_option(parser)
+    add_cql_connection_options(parser)
     parser.addoption('--no-minio', action="store_true", help="Signal to not run S3 related tests")
-    s3_options = parser.getgroup("s3-server", description="S3 Server settings")
-    s3_options.addoption('--s3-server-address')
-    s3_options.addoption('--s3-server-port', type=int)
-    s3_options.addoption('--aws-access-key')
-    s3_options.addoption('--aws-secret-key')
-    s3_options.addoption('--aws-region')
-    s3_options.addoption('--s3-server-bucket')
+    add_s3_options(parser)
+
+
+@pytest.fixture(scope=testpy_test_fixture_scope)
+async def host(request, testpy_test: PythonTest | None):
+    if testpy_test is None:
+        yield request.config.getoption("--host")
+    else:
+        async with testpy_test.run_ctx(options=testpy_test.suite.options):
+            yield testpy_test.server_address
+
 
 # "cql" fixture: set up client object for communicating with the CQL API.
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 9042, respectively.
-# We use scope="session" so that all tests will reuse the same client object.
-@pytest.fixture(scope="session")
-def cql(request):
+@pytest.fixture(scope=testpy_test_fixture_scope)
+def cql(request, host):
+    port = request.config.getoption("--port")
     try:
         # Use the default superuser credentials, which work for both Scylla and Cassandra
-        with cql_session(request.config.getoption('host'),
-            request.config.getoption('port'),
-            request.config.getoption('ssl'),
-            username="cassandra",
-            password="cassandra"
+        with cql_session(
+                host=host,
+                port=port,
+                is_ssl=request.config.getoption("--ssl"),
+                username=request.config.getoption("--auth_username") or "cassandra",
+                password=request.config.getoption("--auth_password") or "cassandra",
         ) as session:
             yield session
             session.shutdown()
     except NoHostAvailable:
         # We couldn't create a cql connection. Instead of reporting that
         # each individual test failed, let's just exit immediately.
-        pytest.exit(f"Cannot connect to Scylla at --host={request.config.getoption('host')} --port={request.config.getoption('port')}", returncode=pytest.ExitCode.INTERNAL_ERROR)
+        pytest.exit(f"Cannot connect to Scylla at --host={host} --port={port}", returncode=pytest.ExitCode.INTERNAL_ERROR)
 
 # A function-scoped autouse=True fixture allows us to test after every test
 # that the CQL connection is still alive - and if not report the test which
@@ -102,11 +99,11 @@ cql_test_connection.scylla_crashed = False
 # syntax that needs to specify a DC name explicitly. For this, will have
 # a "this_dc" fixture to figure out the name of the current DC, so it can be
 # used in NetworkTopologyStrategy.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def this_dc(cql):
     yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_keyspace_tablets(cql, this_dc, has_tablets):
     if not is_scylla(cql) or not has_tablets:
         yield None
@@ -117,7 +114,7 @@ def test_keyspace_tablets(cql, this_dc, has_tablets):
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_keyspace_vnodes(cql, this_dc, has_tablets):
     name = unique_name()
     if has_tablets:
@@ -130,9 +127,8 @@ def test_keyspace_vnodes(cql, this_dc, has_tablets):
 
 # "test_keyspace" fixture: Creates and returns a temporary keyspace to be
 # used in tests that need a keyspace. The keyspace is created with RF=1,
-# and automatically deleted at the end. We use scope="session" so that all
-# tests will reuse the same keyspace.
-@pytest.fixture(scope="session")
+# and automatically deleted at the end.
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_keyspace(request, test_keyspace_vnodes, test_keyspace_tablets, cql, this_dc):
     if hasattr(request, "param"):
         if request.param == "vnodes":
@@ -152,7 +148,7 @@ def test_keyspace(request, test_keyspace_vnodes, test_keyspace_tablets, cql, thi
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on Apache Cassandra. A test using this fixture will be
 # skipped if running with "run-cassandra".
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def scylla_only(cql):
     # We recognize Scylla by checking if there is any system table whose name
     # contains the word "scylla":
@@ -163,7 +159,7 @@ def scylla_only(cql):
 # the test, it is expected to fail (xfail) on Cassandra. It should be used
 # in rare cases where we consider Scylla's behavior to be the correct one,
 # and Cassandra's to be the bug.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def cassandra_bug(cql):
     # We recognize Scylla by checking if there is any system table whose name
     # contains the word "scylla":
@@ -233,7 +229,7 @@ def random_seed():
 # If such a process exists, we verify that it is Scylla, and return the
 # executable's path. If we can't find the Scylla executable we use
 # pytest.skip() to skip tests relying on this executable.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def scylla_path(cql):
     pid = local_process_id(cql)
     if not pid:
@@ -271,7 +267,7 @@ def temp_workdir():
     with tempfile.TemporaryDirectory() as workdir:
         yield workdir
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def has_tablets(cql, this_dc):
     with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "': 1}") as keyspace:
         return keyspace_has_tablets(cql, keyspace)
