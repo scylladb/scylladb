@@ -33,6 +33,7 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
+#include "s3_retry_strategy.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
@@ -438,24 +439,15 @@ future<> client::delete_object_tagging(sstring object_name, seastar::abort_sourc
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
 
-static sstring format_range_header(const range& range) {
-    auto end_bytes = range.off + range.len - 1;
-    if (end_bytes < range.off) {
-        throw std::overflow_error("End of the range exceeds 64-bits");
-    }
-    return format("bytes={}-{}", range.off, end_bytes);
-}
-
-future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
+future<temporary_buffer<char>> client::get_object_contiguous(sstring object_name, range download_range, seastar::abort_source* as) {
     auto req = http::request::make("GET", _host, object_name);
     http::reply::status_type expected = http::reply::status_type::ok;
-    if (range) {
-        if (range->len == 0) {
+    if (download_range != s3::full_range) {
+        if (download_range.length() && *download_range.length() == 0) {
             co_return temporary_buffer<char>();
         }
-        auto range_header = format_range_header(*range);
-        s3l.trace("GET {} contiguous range='{}'", object_name, range_header);
-        req._headers["Range"] = std::move(range_header);
+        s3l.trace("GET {} contiguous range='{}'", object_name, download_range);
+        req._headers["Range"] = download_range.to_header_string();
         expected = http::reply::status_type::partial_content;
     } else {
         s3l.trace("GET {} contiguous", object_name);
@@ -1110,11 +1102,11 @@ class client::download_source final : public seastar::data_source_impl {
     future<external_body> request_body();
 
 public:
-    download_source(shared_ptr<client> cln, sstring object_name, std::optional<range> range, seastar::abort_source* as)
+    download_source(shared_ptr<client> cln, sstring object_name, range download_range, seastar::abort_source* as)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
         , _as(as)
-        , _range(range.value_or(s3::range{0, std::numeric_limits<uint64_t>::max()}))
+        , _range(std::move(download_range))
         , _bg("s3::client::download_source")
     {
     }
@@ -1129,15 +1121,14 @@ public:
     }
 };
 
-data_source client::make_download_source(sstring object_name, std::optional<range> range, seastar::abort_source* as) {
-    return data_source(std::make_unique<download_source>(shared_from_this(), std::move(object_name), range, as));
+data_source client::make_download_source(sstring object_name, range download_range, seastar::abort_source* as) {
+    return data_source(std::make_unique<download_source>(shared_from_this(), std::move(object_name), download_range, as));
 }
 
 auto client::download_source::request_body() -> future<external_body> {
     auto req = http::request::make("GET", _client->_host, _object_name);
-    auto range_header = format_range_header(_range);
-    s3l.trace("GET {} download range {}:{}", _object_name, _range.off, _range.len);
-    req._headers["Range"] = std::move(range_header);
+    s3l.trace("GET {} download range {}", _object_name, _range);
+    req._headers["Range"] = _range.to_header_string();
 
     auto bp = std::make_unique<std::optional<promise<external_body>>>(std::in_place);
     auto& p = *bp;
@@ -1168,9 +1159,13 @@ future<temporary_buffer<char>> client::download_source::get() {
     while (true) {
         if (_body.has_value()) {
             try {
-                auto buf = co_await _body->b.read_up_to(_range.len);
-                _range.off += buf.size();
-                _range.len -= buf.size();
+                temporary_buffer<char> buf;
+                if (auto len = _range.length()) {
+                    buf = co_await _body->b.read_up_to(*len);
+                } else {
+                    buf = co_await _body->b.read();
+                }
+                _range += buf.size();
                 s3l.trace("GET {} got the {}-bytes buffer", _object_name, buf.size());
                 if (buf.empty()) {
                     _body->done.set_value();
