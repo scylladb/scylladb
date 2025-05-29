@@ -72,6 +72,7 @@
 #include "init.hh"
 #include "lang/manager.hh"
 #include "utils/disk_space_monitor.hh"
+#include "replica/out_of_space_controller.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -159,6 +160,7 @@ private:
     sharded<locator::effective_replication_map_factory> _erm_factory;
     sharded<sstables::directory_semaphore> _sst_dir_semaphore;
     std::optional<utils::disk_space_monitor> _disk_space_monitor_shard0;
+    std::optional<replica::out_of_space_controller> _out_of_space_controller_shard0;
     sharded<lang::manager> _lang_manager;
     sharded<cql3::cql_config> _cql_config;
     sharded<service::endpoint_lifecycle_notifier> _elc_notif;
