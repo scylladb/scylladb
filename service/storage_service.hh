@@ -102,6 +102,10 @@ namespace tasks {
 class task_manager;
 }
 
+namespace replica {
+class tablet_mutation_builder;
+}
+
 namespace utils {
 class disk_space_monitor;
 }
@@ -355,6 +359,14 @@ private:
     bool is_me(locator::host_id id) const noexcept {
         return get_token_metadata_ptr()->get_topology().is_me(id);
     }
+
+    // When we create a tablet mutation, usually we want to write it to the base table.
+    // In a group of co-located tables, the tablet info is stored on the base table partition only.
+    // Other tables which are co-located with the base table have only a static row that points to the base table.
+    // So if for example a tablet migration is requested for a co-located table, we need to write the
+    // tablet mutation with the transition stage to the base table, and then the entire co-location group
+    // will be migrated.
+    replica::tablet_mutation_builder tablet_mutation_builder_for_base_table(api::timestamp_type ts, table_id table);
 
     /* This abstraction maintains the token/endpoint metadata information */
     shared_token_metadata& _shared_token_metadata;
