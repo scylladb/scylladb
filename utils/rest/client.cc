@@ -145,4 +145,28 @@ fmt::formatter<rest::httpclient::result_type>::format(const rest::httpclient::re
     return os;
 }
 
+auto
+fmt::formatter<rest::redacted_request_type>::format(const rest::redacted_request_type& rr, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    const auto& r = rr.original;
+    auto os = fmt::format_to(ctx.out(), "{} {} HTTP/{}{}", r._method, r._url, r._version, linesep);
+    for (auto& [k, v] : r._headers) {
+        os = fmt::format_to(os, "{}: {}{}", k, rr.filter_header(k, v).value_or(v), linesep);
+    }
+    os = fmt::format_to(os, "{}{}", linesep, rr.filter_body(r.content).value_or(r.content));
+    return os;
+}
 
+auto
+fmt::formatter<rest::redacted_result_type>::format(const rest::redacted_result_type& rr, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    const auto& r = rr.original;
+    auto s = r.reply.response_line();
+    // remove the trailing \r\n from response_line string. we want our own linebreak, hence substr.
+    auto os = fmt::format_to(ctx.out(), "{}{}", std::string_view(s).substr(0, s.size()-2), linesep);
+    for (auto& [k, v] : r.reply._headers) {
+        os = fmt::format_to(os, "{}: {}{}", k, rr.filter_header(k, v).value_or(v), linesep);
+    }
+    auto redacted_body_opt = rr.filter_body(r.body());
+    auto redacted_body_view = redacted_body_opt.has_value() ? *redacted_body_opt : r.body();
+    os = fmt::format_to(os, "{}{}", linesep, redacted_body_view);
+    return os;
+}
