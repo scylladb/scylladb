@@ -40,6 +40,26 @@ async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE c IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (c, pk) WITH SYNCHRONOUS_UPDATES = TRUE")
 
+<<<<<<< HEAD:test/topology_custom/test_mv_tablets_replace.py
+||||||| parent of 5074daf1b7 (test: actually wait for tablets to distribute across nodes):test/cluster/mv/tablets/test_mv_tablets_replace.py
+        async def replicas_balanced():
+            base_replicas = [replica[0] for replica in await get_tablet_replicas(manager, servers[0], ks, "test", 0)]
+            view_replicas = [replica[0] for replica in await get_tablet_replicas(manager, servers[0], ks, "tv", 0)]
+            return len(set(base_replicas) & set(view_replicas)) == 0 or None
+        # There's 4 nodes and 4 tablets, so even if the initial placement is not balanced,
+        # each node should get 1 replica after some time.
+        wait_for(replicas_balanced, time.time() + 60)
+
+=======
+        async def replicas_balanced():
+            base_replicas = [replica[0] for replica in await get_tablet_replicas(manager, servers[0], ks, "test", 0)]
+            view_replicas = [replica[0] for replica in await get_tablet_replicas(manager, servers[0], ks, "tv", 0)]
+            return len(set(base_replicas) & set(view_replicas)) == 0 or None
+        # There's 4 nodes and 4 tablets, so even if the initial placement is not balanced,
+        # each node should get 1 replica after some time.
+        await wait_for(replicas_balanced, time.time() + 60)
+
+>>>>>>> 5074daf1b7 (test: actually wait for tablets to distribute across nodes):test/cluster/mv/tablets/test_mv_tablets_replace.py
         # Disable migrations concurrent with replace since we don't handle nodes going down during migration yet.
         # See https://github.com/scylladb/scylladb/issues/16527
         await manager.api.disable_tablet_balancing(servers[0].ip_addr)
