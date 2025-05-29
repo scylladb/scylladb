@@ -11,6 +11,7 @@
 #include <seastar/net/dns.hh>
 #include <seastar/util/short_streams.hh>
 
+#include "utils/s3/retryable_http_client.hh"
 #include "utils.hh"
 
 using namespace seastar;
@@ -89,7 +90,12 @@ seastar::future<> encryption::httpclient::send(const handler_func& f) {
         _req._headers[CONTENT_TYPE_HEADER] = "application/x-www-form-urlencoded";
     }
 
-    http::experimental::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _host));
+    static auto rethrowing_handler = [](std::exception_ptr ex) { std::rethrow_exception(std::move(ex)); };
+    aws::retryable_http_client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _host),
+                                      1,
+                                      rethrowing_handler,
+                                      http::experimental::client::retry_requests::yes,
+                                      _retry_strategy);
 
     std::exception_ptr p;
     try {
