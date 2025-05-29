@@ -112,3 +112,151 @@ Currently only snapshot backup is possible, so first one needs to take [snapshot
 
 All tables in a keyspace are uploaded, the destination object names will look like
 `s3://bucket/some/prefix/to/store/data/.../sstable`
+
+# Manipulating S3 data
+
+This section intends to give an overview of where, when and how we store data in S3 and provide a quick set of commands  
+which help gain local access to the data in case there is a need for manual intervention.
+
+Most of the time it won't be necessary to touch the data on S3 directly, there are transparent REST APIs and Scylla Manager  
+commands for backup and restore and Scylla can operate normally with S3 storage configured in the  
+`CREATE KEYSPACE` cql documented at [ScyllaDB CQL Extensions | ScyllaDB Docs](https://opensource.docs.scylladb.com/stable/cql/cql-extensions.html#keyspace-storage-options).  
+
+However, if for some reason the SSTables become corrupted and need an offline scrub before re-uploading  
+or if a bug investigation leads to the need to analyze the backup data, follow the information below to access  
+that data.  
+
+Issue tracking the document [here](https://github.com/scylladb/scylladb/issues/22438).
+
+## Object Storage Layout
+
+There are currently three mechanisms in Scylla which write data to S3:
+
+1. Scylla Manager backup
+
+When performing a backup with `sctool`, a `backup` prefix is created within the bucket passed as argument and  
+under that prefix, Scylla Manager stores all the backup data of all the backup tasks organized by cluster name,  
+datacenter, keyspace, etc.
+
+Follow [Specification | ScyllaDB Docs](https://manager.docs.scylladb.com/branch-3.3/backup/specification) in the Scylla Manager documentation for the exact layout  
+under the `backup` prefix.
+
+2. `/storage_service/backup` REST API
+
+When using the `/storage_service/backup` REST API, the data is stored under the prefix passed as argument to the API.  
+The structure under this prefix is identical to what you’d find in the typical Scylla snapshot.  
+There is a manifest file which contains the list of Data files for each SSTable, the schema file and all the SSTables  
+components stored flat under the prefix.
+```perl
+scylla-bucket/prefix/
+│
+├── manifest.json
+├── schema.cql
+|
+├── me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Data.db
+├── me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Index.db
+├── me-3gqe_1lnj_4sbpc2ezoscu9hhtor-big-Summary.db
+├── ...
+│
+├── ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Data.db
+├── ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Index.db
+├── ma-1abx_k29m_9fyug3sdtjwj8krpqh-big-Summary.db
+├── ...
+│
+└── ... (more SSTable components)
+```
+See the API [documentation](#copying-sstables-on-s3-backup) for more details about the actual backup request.
+
+3. `CREATE KEYSPACE` with S3 storage
+
+When creating a keyspace with S3 storage, the data is stored under the bucket passed as argument to the `CREATE KEYSPACE` statement.  
+Once the statement is issued, Scylla will use transparently the S3 bucket as the location of the SSTables for that keyspace.  
+Like in the case above, there is no hierarchy for the data, *all SSTables components are stored flat within the bucket*.
+```perl
+scylla-sstables-bucket/
+│
+├── 3gqe_1lnj_4sbpc2ezoscu9hhtor/
+│   ├── Data.db
+│   ├── Index.db
+│   ├── Summary.db
+│   └── ...
+│
+├── 1abx_k29m_9fyug3sdtjwj8krpqh/
+│   ├── Data.db
+│   ├── Index.db
+│   ├── Summary.db
+│   └── ...
+│
+└── ... (other SSTable folders)
+```
+
+## Downloading, deleting, uploading SSTables
+
+To manually manage sstables on S3, AWS CLI commands can be used, but first it's mandatory to have awscli  
+installed ([installation guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)) and have the proper credentials set up in order to be able to access ScyllaDB S3 buckets.
+
+Please make sure your `~/.aws/credentials` file points to a valid set of S3 credentials.  
+Either refresh credentials if you use an OKTA-based fetching tool or make sure they point to a valid IAM user with S3 access.
+
+Provided all the prerequisites above are fulfilled and you're able to run
+```sh
+aws s3 ls s3://your-bucket/
+```
+and see something (or at least not see an error if the bucket is empty), you're all set for the next commands.
+> **NOTE:**
+> Please refer to the sections above for the prefix layout of each S3 use case.
+
+### Downloading SSTables
+
+Fetching the SSTables of your backup can be easily done by  
+e.g. copying each individual component
+```sh
+aws s3 cp s3://your-bucket/path/to/sstable/me-3gqb_1izi_0pxn421yzymfw5c8zf-big-Data.db  /local/path/to/sstable/component
+```
+or downloading an entire sstable using globs
+```sh
+aws s3 cp s3://your-bucket/path-to-sstables/ /local/path/for/sstables --exclude "*" --include 'some-sstable-generation-big-*' --recursive
+```
+### Deleting SSTables
+
+components individually
+```sh
+aws s3 rm s3://your-bucket/path/to/sstable/me-3gqb_1izi_0pxn421yzymfw5c8zf-big-Data.db
+```
+or the entire SSTable using globs
+```sh
+aws s3 rm s3://your-bucket/path-to-sstables/ --exclude "*" --include 'some-sstable-generation-big-*' --recursive
+```
+### Uploading SSTables
+components individually
+```sh
+ aws s3 cp /local/path/to/sstable/me-3gqb_1izi_0pxn421yzymfw5c8zf-big-Data.db s3://your-bucket/path/to/sstable/component
+ ```
+or the entire SSTable using globs
+```sh
+aws s3 cp /local/path/for/sstables s3://your-bucket/path-to-sstables/ --exclude "*" --include 'some-sstable-generation-big-*' --recursive
+```
+
+## Metadata touchups
+
+In case of Scylla Manager backups, if manual scrubbing is needed and SSTables will be re-uploaded,  
+multiple things would need to be changed, same thing if you need to drop some SSTables altogether.  
+As you might’ve seen in the Scylla Manager [Specification Docs](https://manager.docs.scylladb.com/branch-3.3/backup/specification), we keep a JSON manifest per node  
+and that manifest file contains lots of SSTable-dependent information:
+
+* list of SSTables per table owned by node
+* total size of SSTables in the chunk of table owned
+* total size of all chunks of tables owned
+* the list of tokens owned by the node
+
+As the name of the fields suggests, all the information in the list above depends on the SSTables content, so any attempt  
+to fix locally a corrupt SSTable and re-upload, most probably will force you to update them in the manifest file of the node.  
+There is high likelihood that a scrubbed SSTable results in different values for all the fields specified above.
+
+For the `storage_service/backup` REST API, in theory only removing an entire SSTable from the backup would require changing  
+the manifest file and remove the corresponding entry for the SSTable, in all other cases, no metadata changes needed.
+
+For the `CREATE KEYSPACE` on S3, there is no need to update any metadata as we currently don’t have any.
+
+> **NOTE:**
+> It’s obvious to say that re-uploading a scrubbed SSTable means re-uploading all its components as it’s likely most of them were changed.
