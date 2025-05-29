@@ -676,7 +676,7 @@ private:
             });
 
             _db_config = &*cfg;
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(_scf), std::ref(abort_sources), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(_scf), only_on_shard0(&*_disk_space_monitor_shard0), std::ref(abort_sources), utils::cross_shard_barrier()).get();
             auto stop_db = defer_verbose_shutdown("database", [this] {
                 _db.stop().get();
             });
