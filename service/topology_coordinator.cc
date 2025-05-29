@@ -1399,17 +1399,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
 
                     if (action_failed(tablet_state.streaming)) {
-                        bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
-                        if (cleanup || check_excluded_replicas()) {
-                            if (do_barrier()) {
-                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
-                                updates.emplace_back(get_mutation_builder()
-                                        .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
-                                        .del_session(last_token)
-                                        .build());
-                            }
-                            break;
+                        if (do_barrier()) {
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::cleanup_target);
+                            updates.emplace_back(get_mutation_builder()
+                                    .set_stage(last_token, locator::tablet_transition_stage::cleanup_target)
+                                    .del_session(last_token)
+                                    .build());
                         }
+                        break;
                     }
 
                     bool wait = utils::get_local_injector().enter("stream_tablet_wait");
