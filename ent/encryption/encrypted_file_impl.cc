@@ -701,5 +701,97 @@ std::unique_ptr<data_sink_impl> make_encrypted_sink(data_sink sink, shared_ptr<s
     return std::make_unique<encrypted_data_sink>(std::move(sink), std::move(k));
 }
 
+class encrypted_data_source : public data_source_impl, public block_encryption_base {
+    input_stream<char> _input;
+    temporary_buffer<char> _next;
+    size_t _current_position = 0;
+    size_t _skip = 0;
+
+public:
+    encrypted_data_source(data_source source, shared_ptr<symmetric_key> k) 
+        : block_encryption_base(std::move(k))
+        , _input(std::move(source)) 
+    {}
+
+    future<temporary_buffer<char>> get() override {
+        // First, get as much as we can get now (or the remainder of previous call)
+        auto buf1 = _next.empty()
+            ? co_await _input.read()
+            : std::exchange(_next, {})
+            ;
+
+        // eof?
+        if (buf1.empty()) {
+            co_return buf1;
+        }
+
+        // now we need one page more to be able to save one for next lap
+        auto fill_size = align_up(buf1.size(), block_size) + block_size - buf1.size();
+        auto buf2 = co_await _input.read_exactly(fill_size);
+
+        temporary_buffer<char> output(buf1.size() + buf2.size());
+
+        // we copy data even for the part we will cache. this to
+        // fix block alignment of the resulting shared buffer.
+        std::copy(buf1.begin(), buf1.end(), output.get_write());
+        std::copy(buf2.begin(), buf2.end(), output.get_write() + buf1.size());
+
+        // we need to keep one page buffered (beyond the input stream buffer - would be neat 
+        // to share it), to be able to detect actual eof stream size. We always need
+        // at least _two_ pages of data to process, to be able to handle the case where
+        // actual size is <aligned block size> - <less than key block size>.
+        // I.e. stream size = 8180, encrypted data size will be 8192, and data stream
+        // will be 8196. So we need to make sure buf1 == [4096-8192], and buf2 == [8192-8196].
+        if (is_aligned(output.size(), block_size) && output.size() >= 2*block_size) {
+            _next = output.share(output.size() - block_size, block_size);
+            output.trim(output.size() - block_size);
+        }
+
+        const size_t key_block_size = _key->block_size();
+
+        // decrypt all blocks we have to return. might include the last, partial block
+        for (size_t offset = 0; offset < output.size(); offset += block_size, _current_position += block_size) {
+            auto iv = iv_for(_current_position);
+            auto rem = std::min(block_size, output.size() - offset);
+            _key->transform_unpadded(mode::decrypt, output.get() + offset, align_down(rem, key_block_size), output.get_write() + offset, iv.data());
+        }
+
+        // now, if the output buffer is not aligned, we are at eof, and
+        // also need to trim result.
+        if (!is_aligned(output.size(), key_block_size)) {
+            output.trim(output.size() - std::min(output.size(), key_block_size));
+        }
+
+        assert(is_aligned(_current_position, block_size));
+        // finally trim front to handle any skip remainders
+        output.trim_front(std::min(std::exchange(_skip, 0), output.size()));
+
+        co_return output;
+    }
+
+    future<temporary_buffer<char>> skip(uint64_t n) override {
+        if (n >= block_size) {
+            // since we only give back data aligned to block_size chunks,
+            // a client would only ever skip from a block boundary.
+            auto to_skip = align_down(n, block_size);
+            assert(is_aligned(_next.size(), block_size));
+            co_await _input.skip(to_skip - _next.size());
+            n -= to_skip;
+            _current_position += to_skip;
+            _next = {};
+        }
+        _skip = n;
+        co_return temporary_buffer<char>{};
+    }
+
+    future<> close() override { 
+        return _input.close(); 
+    }
+};
+
+
+std::unique_ptr<data_source_impl> make_encrypted_source(data_source source, shared_ptr<symmetric_key> k) {
+    return std::make_unique<encrypted_data_source>(std::move(source), std::move(k));
+}
 }
 
