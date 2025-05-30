@@ -605,7 +605,7 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> dump_mutations(
     auto accounter = co_await db.local().get_result_memory_limiter().new_data_read(permit.max_result_size(), short_read_allowed);
     query_state qs(output_schema, cmd, opts, prs, std::move(accounter));
 
-    auto compaction_state = make_lw_shared<compact_for_query_state>(*output_schema, qs.cmd.timestamp, qs.cmd.slice, qs.remaining_rows(), qs.remaining_partitions());
+    auto compaction_state = make_lw_shared<compact_for_query_state>(*output_schema, qs.cmd.timestamp, qs.cmd.slice, qs.remaining_rows(), qs.remaining_partitions(), tombstone_gc_state(nullptr));
     auto partition_key_generator = make_partition_key_generator(db, underlying_schema, prs, ts, timeout);
 
     auto dk_opt = co_await partition_key_generator();
