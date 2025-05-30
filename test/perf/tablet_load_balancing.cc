@@ -117,6 +117,39 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, locator::loa
             tmap.set_tablet(mig.tablet.tablet, tinfo);
             return make_ready_future();
         });
+        // Update load_stats
+        if (mig.src.host != mig.dst.host) {
+            if (!load_stats.tablet_stats.contains(mig.src.host)) {
+                throw std::runtime_error(format("Source host not found in load_stats for migration {}", mig));
+            }
+            if (!load_stats.tablet_stats.contains(mig.dst.host)) {
+                throw std::runtime_error(format("Destination host not found in load_stats for migration {}", mig));
+            }
+
+            auto& src_stats = load_stats.tablet_stats.at(mig.src.host);
+            auto& dst_stats = load_stats.tablet_stats.at(mig.dst.host);
+
+            auto& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
+            const range_based_tablet_id rb_tid{mig.tablet.table, tmap.get_token_range(mig.tablet.tablet)};
+
+            if (!src_stats.tablet_sizes.contains(rb_tid)) {
+                throw std::runtime_error(format("Tablet not found on source load_stats for migration: {}", mig));
+            }
+            if (dst_stats.tablet_sizes.contains(rb_tid)) {
+                throw std::runtime_error(format("Tablet already on destination load_stats for migration: {}", mig));
+            }
+
+            uint64_t used_disk_space = 0;
+            for (auto size : std::views::values(dst_stats.tablet_sizes)) {
+                used_disk_space += size;
+            }
+            const uint64_t tablet_size = src_stats.tablet_sizes.at(rb_tid);
+            if (dst_stats.effective_capacity < used_disk_space + tablet_size) {
+                throw std::runtime_error(format("Attempting to move tablet to host with insufficient disk capacity for migration: {}", mig));
+            }
+            dst_stats.tablet_sizes[rb_tid] = tablet_size;
+            src_stats.tablet_sizes.erase(rb_tid);
+        }
     }
     co_await apply_resize_plan(tm, plan);
 }
@@ -203,6 +236,9 @@ struct params {
     int shards;
     int scale1 = 1;
     int scale2 = 1;
+    unsigned int seed;
+    std::vector<unsigned> capacities = {650};
+    bool high_tablet_size_variability = false;
 };
 
 struct table_balance {
@@ -247,11 +283,43 @@ struct fmt::formatter<params> : fmt::formatter<string_view> {
     auto format(const params& p, FormatContext& ctx) const {
         auto tablets1_per_shard = double(p.tablets1.value_or(0)) * p.rf1 / (p.nodes * p.shards);
         auto tablets2_per_shard = double(p.tablets2.value_or(0)) * p.rf2 / (p.nodes * p.shards);
-        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}}}",
+        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}, seed={}, capacities={}, high_tablet_size_variability={}}}",
                          p.iterations, p.nodes,
                          p.tablets1.value_or(0), tablets1_per_shard,
                          p.tablets2.value_or(0), tablets2_per_shard,
-                         p.rf1, p.rf2, p.shards);
+                         p.rf1, p.rf2, p.shards,
+                         p.seed, p.capacities, p.high_tablet_size_variability);
+    }
+};
+
+struct tablet_size_generator {
+    static constexpr uint64_t huge_tablet_size_threshold = default_target_tablet_size * 10;
+
+    size_t tablet_count = 0;
+    bool use_high_variability = false;
+
+    tests::random::stepped_int_distribution<size_t> moderate_variability {{
+        {97.9, {1,                                  default_target_tablet_size * 2}},
+        { 2.0, {default_target_tablet_size * 2 + 1, huge_tablet_size_threshold}},
+        { 0.1, {huge_tablet_size_threshold + 1,     huge_tablet_size_threshold * 5}},
+    }};
+
+    tests::random::stepped_int_distribution<size_t> high_variability {{
+        {90.0, {1,                                  default_target_tablet_size * 2}},
+        { 9.0, {default_target_tablet_size * 2 + 1, huge_tablet_size_threshold}},
+        { 1.0, {huge_tablet_size_threshold + 1,     huge_tablet_size_threshold * 5}},
+    }};
+
+    explicit tablet_size_generator(const params& p)
+        : use_high_variability(p.high_tablet_size_variability) {
+    }
+
+    uint64_t generate() {
+        if (use_high_variability) {
+            return high_variability(tests::random::gen());
+        }
+
+        return moderate_variability(tests::random::gen());
     }
 };
 
@@ -266,12 +334,17 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         topology_builder topo(e);
         std::vector<host_id> hosts;
         lw_shared_ptr<locator::load_stats> stats = make_lw_shared<locator::load_stats>();
+        stats->tablet_stats = tablet_load_stats_map{};
 
         auto add_host = [&] {
+            static int added_hosts = 0;
             auto host = topo.add_node(service::node_state::normal, shard_count);
             hosts.push_back(host);
-            stats->capacity[host] = default_target_tablet_size * shard_count;
+            const uint64_t capacity = p.capacities[added_hosts % p.capacities.size()] * 1024L * 1024L * 1024L * shard_count;
+            stats->capacity[host] = capacity;
+            stats->tablet_stats[host].effective_capacity = capacity;
             testlog.info("Added new node: {}", host);
+            added_hosts++;
         };
 
         for (int i = 0; i < n_hosts; ++i) {
@@ -298,6 +371,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             topo.set_node_state(host, service::node_state::left);
             testlog.info("Node decommissioned: {}", host);
             hosts.erase(hosts.begin() + i);
+            stats->tablet_stats.erase(host);
         };
 
         auto ks1 = add_keyspace(e, {{topo.dc(), p.rf1}}, p.tablets1.value_or(1));
@@ -306,6 +380,26 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         auto id2 = add_table(e, ks2).get();
         schema_ptr s1 = e.local_db().find_schema(id1);
         schema_ptr s2 = e.local_db().find_schema(id2);
+
+        // generate tablet sizes
+        std::unordered_map<host_id, uint64_t> used_disk_space;
+        tablet_size_generator tsg(p);
+        for (auto&& [table, tmap] : stm.get()->tablets().all_tables_ungrouped()) {
+            tmap->for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+                for (const auto& replica : ti.replicas) {
+                    const uint64_t tablet_size = tsg.generate();
+                    used_disk_space[replica.host] += tablet_size;
+                    locator::tablet_load_stats& tls = stats->tablet_stats[replica.host];
+                    if (used_disk_space[replica.host] > tls.effective_capacity) {
+                        throw std::runtime_error("Not enough disk capacity to allocate tablets for the selected topology.");
+                    }
+                    locator::range_based_tablet_id rb_tid {table, tmap->get_token_range(tid)};
+                    tls.tablet_sizes[rb_tid] = tablet_size;
+                    testlog.info("generated tablet size {} for {}:{}", tablet_size, table, tid);
+                }
+                return make_ready_future<>();
+            }).get();
+        }
 
         auto check_balance = [&] () -> cluster_balance {
             cluster_balance res;
@@ -420,7 +514,7 @@ future<> run_simulation(const params& p, const sstring& name = "") {
     }
 }
 
-future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
+future<> run_simulations(const boost::program_options::variables_map& app_cfg, unsigned seed) {
     for (auto i = 0; i < app_cfg["runs"].as<int>(); i++) {
         auto shards = 1 << tests::random::get_int(0, 8);
         auto rf1 = tests::random::get_int(1, 3);
@@ -438,6 +532,7 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
             .shards = shards,
             .scale1 = scale1,
             .scale2 = scale2,
+            .seed = seed,
         };
 
         auto name = format("#{}", i);
@@ -459,6 +554,9 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
             ("rf1", bpo::value<int>(), "Replication factor for the first table.")
             ("rf2", bpo::value<int>(), "Replication factor for the second table.")
             ("shards", bpo::value<int>(), "Number of shards per node.")
+            ("seed", bpo::value<unsigned>(), "Tablet size random generator seed.")
+            ("capacities", bpo::value<std::vector<unsigned>>()->multitoken(), "Disk capacity per shard in GB; can have muiltiple values.")
+            ("high_tablet_size_variability", bpo::value<bool>(), "Enable higher tablet size variability.")
             ("verbose", "Enables standard logging")
             ;
     return app.run(argc, argv, [&] {
@@ -471,10 +569,19 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
             auto stop_test = defer([] {
                 aborted.request_abort();
             });
+
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             try {
+                unsigned seed = 0;
+                if (app.configuration().contains("seed")) {
+                    seed = app.configuration()["seed"].as<unsigned>();
+                } else {
+                    seed = std::random_device{}();
+                }
+                testing::local_random_engine.seed(seed);
+
                 if (app.configuration().contains("runs")) {
-                    run_simulations(app.configuration()).get();
+                    run_simulations(app.configuration(), seed).get();
                 } else {
                     params p {
                         .iterations = app.configuration()["iterations"].as<int>(),
@@ -484,7 +591,15 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
                         .rf1 = app.configuration()["rf1"].as<int>(),
                         .rf2 = app.configuration()["rf2"].as<int>(),
                         .shards = app.configuration()["shards"].as<int>(),
+                        .seed = seed,
                     };
+
+                    if (app.configuration().contains("capacities")) {
+                        p.capacities = app.configuration()["capacities"].as<std::vector<unsigned>>();
+                    }
+                    if (app.configuration().contains("high_tablet_size_variability")) {
+                        p.high_tablet_size_variability = app.configuration()["high_tablet_size_variability"].as<bool>();
+                    }
                     run_simulation(p).get();
                 }
             } catch (seastar::abort_requested_exception&) {
