@@ -14,6 +14,7 @@
 #include "sstables/sstable_set.hh"
 #include "compaction/compaction.hh"
 #include "replica/database.hh"
+#include "repair/incremental.hh"
 
 namespace sstables {
 
@@ -24,7 +25,7 @@ class sstable_run_based_compaction_strategy_for_tests : public compaction_strate
 public:
     sstable_run_based_compaction_strategy_for_tests();
 
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override;
+    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, repair::sstables_repair_state repair_state) override;
 
     virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
 

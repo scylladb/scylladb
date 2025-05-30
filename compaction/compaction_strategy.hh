@@ -14,6 +14,7 @@
 #include "compaction_strategy_type.hh"
 #include "table_state.hh"
 #include "strategy_control.hh"
+#include "repair/incremental.hh"
 
 struct mutation_source_metadata;
 class compaction_backlog_tracker;
@@ -41,7 +42,7 @@ public:
     compaction_strategy& operator=(compaction_strategy&&);
 
     // Return a list of sstables to be compacted after applying the strategy.
-    compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control);
+    compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control, repair::sstables_repair_state repair_state);
 
     compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<shared_sstable> candidates);
 

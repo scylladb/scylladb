@@ -182,18 +182,19 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
     return false;
 }
 
-tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info)
+tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info, int64_t sstables_repaired_at)
     : replicas(std::move(replicas))
     , repair_time(repair_time)
     , repair_task_info(std::move(repair_task_info))
     , migration_task_info(std::move(migration_task_info))
+    , sstables_repaired_at(sstables_repaired_at)
 {}
 
 tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{})
+    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{}, int64_t(0))
 {}
 
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
+std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b, tablet_id left, tablet_id right) {
     if (a.repair_task_info.is_valid() || b.repair_task_info.is_valid()) {
         return {};
     }
@@ -207,7 +208,14 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
     }
 
     auto repair_time = std::max(a.repair_time, b.repair_time);
-    return tablet_info(std::move(a.replicas), repair_time, a.repair_task_info, a.migration_task_info);
+
+    int64_t sstables_repaired_at = initial_sstables_repaired_at_after_merge;
+    auto info = tablet_info(std::move(a.replicas), repair_time, a.repair_task_info, a.migration_task_info, sstables_repaired_at);
+    // Record the sstables_repaired_at before merge, so we can use it later to
+    // rewrite sstable.repaired_at for the merged tablets.
+    info.sstables_repaired_at_before_merge.emplace(left, a.sstables_repaired_at);
+    info.sstables_repaired_at_before_merge.emplace(right, b.sstables_repaired_at);
+    return info;
 }
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {

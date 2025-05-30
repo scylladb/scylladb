@@ -3371,9 +3371,10 @@ future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir) {
 }
 
 std::string to_string(const shared_sstable& sst, bool include_origin) {
+    auto repaired_at = sst->get_stats_metadata().repaired_at;
     return include_origin ?
-        fmt::format("{}:level={:d}:origin={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin()) :
-        fmt::format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level());
+        fmt::format("{}:level={:d}:origin={}:repaired_at={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin(), repaired_at) :
+        fmt::format("{}:level={:d}:repaired_at={}", sst->get_filename(), sst->get_sstable_level(), repaired_at);
 }
 
 std::string sstable_stream_source::component_basename() const {

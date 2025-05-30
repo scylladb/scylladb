@@ -44,6 +44,7 @@
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
+#include "service/session.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -681,7 +682,9 @@ private:
     void write_statistics();
     // Rewrite statistics component by creating a temporary Statistics and
     // renaming it into place of existing one.
+public:
     void rewrite_statistics();
+private:
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -901,6 +904,18 @@ public:
         const stats_metadata& s = *static_cast<stats_metadata *>(p.get());
         return s;
     }
+     stats_metadata& get_stats_metadata_for_write() {
+        auto entry = _components->statistics.contents.find(metadata_type::Stats);
+        if (entry == _components->statistics.contents.end()) {
+            throw std::runtime_error("Stats metadata not available");
+        }
+        auto& p = entry->second;
+        if (!p) {
+            throw std::runtime_error("Statistics is malformed");
+        }
+        stats_metadata& s = *static_cast<stats_metadata *>(p.get());
+        return s;
+    }
     const compaction_metadata& get_compaction_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Compaction);
         if (entry == _components->statistics.contents.end()) {
@@ -1060,6 +1075,9 @@ public:
     future<lw_shared_ptr<checksum>> read_checksum();
 
     friend in_memory_config_type;
+
+public:
+    service::session_id being_repaired;
 };
 
 // Validate checksums

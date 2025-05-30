@@ -60,6 +60,7 @@
 #include "readers/combined.hh"
 #include "readers/compacting.hh"
 #include "replica/schema_describe_helper.hh"
+#include "repair/incremental.hh"
 
 namespace replica {
 
@@ -122,6 +123,15 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_sstable_set() const 
         return _main_sstables;
     }
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
+}
+
+void compaction_group::set_sstables_repair_at(int64_t sstables_repaired_at) {
+    if (_sstables_repaired_at != sstables_repaired_at) {
+        tlogger.debug("Set sstables_repaired_at old={} new={} table={}.{} group_id={} range={}",
+                _sstables_repaired_at, sstables_repaired_at,
+                _t.schema()->ks_name(), _t.schema()->cf_name(), group_id(), _token_range);
+    }
+    _sstables_repaired_at = sstables_repaired_at;
 }
 
 lw_shared_ptr<const sstables::sstable_set> table::make_compound_sstable_set() const {
@@ -755,6 +765,8 @@ class tablet_storage_group_manager final : public storage_group_manager {
     locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
     future<> _merge_completion_fiber;
     condition_variable _merge_completion_event;
+    // Holds compaction reenabler which disables compaction temporarily during tablet merge
+    std::vector<compaction_manager::compaction_reenabler> _compaction_reenablers_for_merging;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -959,9 +971,16 @@ bool storage_group::set_split_mode() {
             // TODO: use the actual sub-ranges instead, to help incremental selection on the read path.
             return make_lw_shared<compaction_group>(_main_cg->_t, _main_cg->group_id(), _main_cg->token_range());
         };
+        auto sstables_repaired_at = _main_cg->get_sstables_repaired_at();
         std::vector<compaction_group_ptr> split_ready_groups(2);
-        split_ready_groups[to_idx(locator::tablet_range_side::left)] = create_cg();
-        split_ready_groups[to_idx(locator::tablet_range_side::right)] = create_cg();
+        tlogger.debug("storage_group::set_split_mode: set sstables_repaired_at={} for split old_group={} old_range={}",
+                sstables_repaired_at, _main_cg->group_id(), _main_cg->token_range());
+        auto l = to_idx(locator::tablet_range_side::left);
+        auto r = to_idx(locator::tablet_range_side::right);
+        split_ready_groups[l] = create_cg();
+        split_ready_groups[r] = create_cg();
+        split_ready_groups[l]->set_sstables_repair_at(sstables_repaired_at);
+        split_ready_groups[r]->set_sstables_repair_at(sstables_repaired_at);
         _split_ready_groups = std::move(split_ready_groups);
     }
 
@@ -1959,9 +1978,29 @@ compaction_group::merge_sstables_from(compaction_group& group) {
     auto permit = co_await _t.get_sstable_list_permit();
     table::sstable_list_builder builder(_t, std::move(permit));
 
+    auto sstables_repaired_at = get_sstables_repaired_at();
     auto sstables_to_merge = group.all_sstables();
+    auto sstables_repaired_at_to_merge = group.get_sstables_repaired_at();
+    co_await seastar::async([&] {
+        // Rewrite repaired_at for tablet merge
+        for (auto& sst : sstables_to_merge) {
+            thread::maybe_yield();
+            bool repaired = repair::is_repaired(sstables_repaired_at_to_merge, sst);
+            auto& stats = sst->get_stats_metadata_for_write();
+            auto old = stats.repaired_at;
+            auto neww = repaired ? 1 : 0;
+            stats.repaired_at = neww;
+            tlogger.debug("Rewrite repaired_at for sstable {} old={} new={} for tablet merge group_id={} range={} current_sstables_repaired_at={} other_sstables_repaired_at={} is_repaired={}",
+                    sst->get_filename(), old, neww, group_id(), token_range(), sstables_repaired_at, sstables_repaired_at_to_merge, repaired);
+            if (old != neww) {
+                sst->rewrite_statistics();
+            }
+        }
+    });
+
     // re-build new list for this group with sstables of the group being merged.
     auto res = co_await builder.build_new_list(*main_sstables(), make_main_sstable_set(), sstables_to_merge, {});
+
     // execute:
     std::invoke([&] noexcept {
         set_main_sstables(std::move(res.new_sstable_set));
@@ -2434,6 +2473,14 @@ public:
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override {
         return _t.get_token_range_after_split(t);
     }
+
+    int64_t get_sstables_repaired_at() const noexcept override {
+        return _cg.get_sstables_repaired_at();
+    }
+
+    bool is_local_replication_strategy() const noexcept override {
+        return _t.get_effective_replication_map()->get_replication_strategy().get_type() == locator::replication_strategy_type::local;
+    }
 };
 
 compaction_group::compaction_group(table& t, size_t group_id, dht::token_range token_range)
@@ -2605,7 +2652,13 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
         }
         for (unsigned i = 0; i < split_size; i++) {
             auto group_id = first_new_id + i;
-            split_ready_groups[i]->update_id_and_range(group_id, new_tmap.get_token_range(locator::tablet_id(group_id)));
+            auto old_range = old_tmap.get_token_range(locator::tablet_id(id));
+            auto new_range = new_tmap.get_token_range(locator::tablet_id(group_id));
+            auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at;
+            tlogger.debug("Setting sstables_repaired_at={} for split tablet_id={} old_tid={} new_tid={} old_range={} new_range={} idx={}",
+                    sstables_repaired_at, table_id, id, group_id, old_range, new_range, i);
+            split_ready_groups[i]->update_id_and_range(group_id, new_range);
+            split_ready_groups[i]->set_sstables_repair_at(sstables_repaired_at);
             new_storage_groups[group_id] = make_lw_shared<storage_group>(std::move(split_ready_groups[i]));
         }
 
@@ -2622,18 +2675,36 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
     while (!_t.async_gate().is_closed()) {
         try {
             co_await utils::get_local_injector().inject("merge_completion_fiber", utils::wait_for_message(60s));
-
-            co_await for_each_storage_group_gently([] (storage_group& sg) -> future<> {
+            auto ks_name = schema()->ks_name();
+            auto cf_name = schema()->cf_name();
+            // Enable compaction after merge is done.
+            auto cres = std::exchange(_compaction_reenablers_for_merging, {});
+            co_await for_each_storage_group_gently([ks_name, cf_name] (storage_group& sg) -> future<> {
                 auto main_group = sg.main_compaction_group();
+                tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} started",
+                        ks_name, cf_name, main_group->group_id(), main_group->token_range());
+                int nr = 0;
+                int sz = sg.merging_groups().size();
                 for (auto& group : sg.merging_groups()) {
+                    tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} merging {} out of {} groups",
+                            ks_name, cf_name, main_group->group_id(), main_group->token_range(), ++nr, sz);
                     // Synchronize with ongoing writes that might be blocked waiting for memory.
                     // Also, disabling compaction provides stability on the sstable set.
                     co_await group->stop("tablet merge");
                     // Flushes memtable, so all the data can be moved.
                     co_await group->flush();
+                    // FIXME: Due to the async execution of merge_completion_fiber
+                    // and handle_tablet_merge_completion, when a node is
+                    // restarted before the merge_completion_fiber merges the
+                    // merging group, the sstables_repaired_at of the merging
+                    // groups will be lost. We need to persist the
+                    // sstables_repaired_at of the merging group to protect
+                    // against such reboot case.
                     co_await main_group->merge_sstables_from(*group);
                 }
                 co_await sg.remove_empty_merging_groups();
+                tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} finished",
+                        ks_name, cf_name, main_group->group_id(), main_group->token_range());
             });
         } catch (...) {
             tlogger.error("Failed to merge compaction groups for table {}.{}", schema()->ks_name(), schema()->cf_name());
@@ -2666,8 +2737,13 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
             continue;
         }
         auto new_tid = id >> log2_reduce_factor;
+        auto new_range = new_tmap.get_token_range(locator::tablet_id(new_tid));
 
-        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_tmap.get_token_range(locator::tablet_id(new_tid)));
+        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_range);
+        // The new compaction group after the merge always starts with sstables_repair_at 1
+        new_cg->set_sstables_repair_at(locator::initial_sstables_repaired_at_after_merge);
+        auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(new_cg->as_table_state(), "tablet merging");
+        _compaction_reenablers_for_merging.push_back(std::move(cre));
         auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
 
         for (unsigned i = 0; i < merge_size; i++) {
@@ -2678,8 +2754,12 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
                 throw std::runtime_error(format("Unable to find sibling tablet of id for table {}", group_id, table_id));
             }
             auto& sg = it->second;
-            sg->for_each_compaction_group([&new_sg, new_tid] (const compaction_group_ptr& cg) {
+            sg->for_each_compaction_group([this, &new_sg, new_range, new_tid, group_id] (const compaction_group_ptr& cg) {
+                auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(cg->as_table_state(), "tablet merging");
+                _compaction_reenablers_for_merging.push_back(std::move(cre));
                 cg->update_id(new_tid);
+                tlogger.debug("Adding merging_group: sstables_repaired_at={} old_range={} new_range={} old_tid={} new_tid={} old_group_id={}",
+                        cg->get_sstables_repaired_at(), cg->token_range(), new_range, cg->group_id(), new_tid, group_id);
                 new_sg->add_merging_group(cg);
             });
             // Cannot wait for group to be closed, since it can only return after some long-running operation

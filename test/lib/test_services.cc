@@ -128,6 +128,12 @@ public:
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override {
         return table().get_token_range_after_split(t);
     }
+    int64_t get_sstables_repaired_at() const noexcept override {
+        return 0;
+    }
+    bool is_local_replication_strategy() const noexcept override {
+        return table().get_effective_replication_map()->get_replication_strategy().get_type() == locator::replication_strategy_type::local;
+    }
 };
 
 table_for_tests::data::data()
