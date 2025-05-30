@@ -86,7 +86,19 @@ class Shard(object):
         self.tablets = {}
 
     def ordered_tablets(self):
-        return sorted(self.tablets.values(), key=lambda t: t.id)
+        return sorted(self.tablets.values(), key=lambda t: (t.base_id, t.seq))
+
+    def ordered_tablets_by_groups(self):
+        ts = self.ordered_tablets()
+        gs = []
+        while len(ts) > 0:
+            cur_group = (ts[0].base_id, ts[0].seq)
+            i = 1
+            while i < len(ts) and (ts[i].base_id, ts[i].seq) == cur_group:
+                i += 1
+            gs.append(ts[:i])
+            ts = ts[i:]
+        return gs
 
 
 class Tablet(object):
@@ -94,8 +106,9 @@ class Tablet(object):
     STATE_JOINING = 1
     STATE_LEAVING = 2
 
-    def __init__(self, id, node, state, initial):
+    def __init__(self, id, node, state, initial, base_id):
         self.id = id
+        self.base_id = base_id
         self.state = state
         self.insert_time = pygame.time.get_ticks()
         self.streaming = False
@@ -495,9 +508,9 @@ def update_from_cql(initial=False):
         tablet_id_by_table[table_id] += 1
         return ret
 
-    for tablet in session.execute(tablets_query):
-        tablet_seq = tablet_id_for_table(tablet.table_id)
-        id = (tablet.table_id, tablet.last_token)
+    def process_tablet(table_id, tablet, base_id):
+        tablet_seq = tablet_id_for_table(table_id)
+        id = (table_id, tablet.last_token)
         replicas = set(tablet.replicas)
         new_replicas = set(tablet.new_replicas) if tablet.new_replicas else replicas
 
@@ -525,7 +538,7 @@ def update_from_cql(initial=False):
             node = nodes_by_id[host]
             s = node.shards[shard]
             if id not in s.tablets:
-                s.tablets[id] = Tablet(id, node, state, initial=initial)
+                s.tablets[id] = Tablet(id, node, state, initial=initial, base_id=base_id)
                 stage_change = True
                 inserted = True
                 changed = True
@@ -550,6 +563,22 @@ def update_from_cql(initial=False):
                 src_tablet.streaming = dst
                 fire_tracer(id, src, dst, light_red, light_green, tablet_h,
                             streaming_trace_decay_ms, streaming_trace_duration_ms)
+
+    all_tablets = {}
+    for tablet in session.execute(tablets_query):
+        if not tablet.table_id in all_tablets:
+            all_tablets[tablet.table_id] = []
+        all_tablets[tablet.table_id].append(tablet)
+
+    for (table_id, tablet) in all_tablets.items():
+        base_id = table_id
+        try:
+            base_id = tablet[0].base_table or table_id
+        except AttributeError:
+            pass
+
+        for t in all_tablets[base_id]:
+            process_tablet(table_id, t, base_id)
 
     for n in nodes:
         for s_idx, s in enumerate(n.shards):
@@ -713,9 +742,22 @@ def redraw():
         node_x += node_frame_size
 
         for shard in node.shards:
-            for tablet in shard.ordered_tablets():
-                tablet_y = bottom_line - node_frame_size - tablet.pos
-                draw_tablet(tablet, node_x, tablet_y)
+            for tablet_group in shard.ordered_tablets_by_groups():
+                g_min_y = None
+                g_total_h = 0
+
+                for tablet in tablet_group:
+                    tablet_y = bottom_line - node_frame_size - tablet.pos
+                    draw_tablet(tablet, node_x, tablet_y)
+
+                    g_min_y = min(g_min_y or tablet_y, tablet_y)
+                    g_total_h += tablet.h
+
+                if len(tablet_group) > 1:
+                    pygame.draw.rect(window, BLACK, (node_x + tablet_frame_size,
+                                                     g_min_y + tablet_frame_size,
+                                                     tablet_w // 10,
+                                                     g_total_h - 2 * tablet_frame_size))
 
             node_x += tablet_frame_size * 2 + tablet_w
 
