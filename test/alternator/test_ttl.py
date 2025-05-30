@@ -16,12 +16,20 @@ from botocore.exceptions import ClientError
 from test.alternator.util import new_test_table, random_string, full_query, unique_table_name, is_aws, \
     client_no_transform
 
-# All tests in this file are expected to fail with tablets due to #16567.
-# To ensure that Alternator TTL is still being tested, instead of
-# xfailing these tests, we temporarily coerce the tests below to avoid
-# using default tablets setting, even if it's available. We do this by
-# using the following tags when creating each table below:
-TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+# The following fixture is to ensure that Alternator TTL is being tested with both vnodes and tablets.
+# This fixture will run automatically for every test in the module.
+# It sets the TAGS variable in the module’s global namespace to the current parameter value before each test.
+# All tests that use the global TAGS variable will see the correct value, and each test will be run for
+# both values. Thanks to this, the tests will run for both vnodes and tables without the need to change
+# their argument list.
+@pytest.fixture(params=[
+    [{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
+    [{'Key': 'experimental:initial_tablets', 'Value': '0'}],
+], ids=["using vnodes", "using tablets"], autouse=True)
+def tags_param(request):
+    # Set TAGS in the global namespace of this module
+    import sys
+    sys.modules[__name__].TAGS = request.param
 
 # passes_or_raises() is similar to pytest.raises(), except that while raises()
 # expects a certain exception must happen, the new passes_or_raises()
@@ -239,6 +247,8 @@ def test_update_ttl_errors(dynamodb):
 # test will finish in a much more reasonable time.
 @pytest.mark.veryslow
 def test_ttl_expiration(dynamodb):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     duration = 1200 if is_aws(dynamodb) else 10
     # delta is a quarter of the test duration, but no less than one second,
     # and we use it to schedule some expirations a bit after the test starts,
@@ -363,6 +373,8 @@ def test_ttl_expiration(dynamodb):
 # all we want to check is that the deletion works - not the expiration time
 # parsing and semantics.
 def test_ttl_expiration_with_rangekey(dynamodb, waits_for_expiration):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     # Note that unlike test_ttl_expiration, this test doesn't have a fixed
     # duration - it finishes as soon as the item we expect to be expired
     # is expired.
@@ -405,6 +417,8 @@ def test_ttl_expiration_with_rangekey(dynamodb, waits_for_expiration):
 # Just like test_ttl_expiration() above, these tests are extremely slow
 # on AWS because DynamoDB delays expiration by around 10 minutes.
 def test_ttl_expiration_hash(dynamodb, waits_for_expiration):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     max_duration = 1200 if is_aws(dynamodb) else 240
     sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
@@ -438,6 +452,8 @@ def test_ttl_expiration_hash(dynamodb, waits_for_expiration):
         assert check_expired()
 
 def test_ttl_expiration_range(dynamodb, waits_for_expiration):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     max_duration = 1200 if is_aws(dynamodb) else 240
     sleep = 30 if is_aws(dynamodb) else 0.1
     with new_test_table(dynamodb,
@@ -479,6 +495,8 @@ def test_ttl_expiration_range(dynamodb, waits_for_expiration):
 # This test demonstrates that:
 @pytest.mark.veryslow
 def test_ttl_expiration_hash_wrong_type(dynamodb):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     duration = 900 if is_aws(dynamodb) else 3
     with new_test_table(dynamodb,
         Tags=TAGS,
@@ -508,6 +526,8 @@ def test_ttl_expiration_hash_wrong_type(dynamodb):
 # test as soon as the item expires, instead of after a fixed "duration" as
 # in the above tests.
 def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     # In our experiments we noticed that when a table has secondary indexes,
     # items are expired with significant delay. Whereas a 10 minute delay
     # for regular tables was typical, in the table we have here we saw
@@ -604,6 +624,8 @@ def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
 # table already exists - so after such a change GSIs will no longer be a
 # special case.
 def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     # In my experiments, a 30-minute (1800 seconds) is the typical delay
     # for expiration in this test for DynamoDB
     max_duration = 3600 if is_aws(dynamodb) else 240
@@ -767,6 +789,8 @@ def read_entire_stream(dynamodbstreams, table):
 # does the paging properly.
 @pytest.mark.veryslow
 def test_ttl_expiration_long(dynamodb, waits_for_expiration):
+    if TAGS[0]['Value'] != 'none': # if using tablets
+        pytest.xfail("#18068 LWT is not yet supported with tablets")
     # Write 100*N items to the table, 1/100th of them are expired. The test
     # completes when all of them are expired (or on timeout).
     # To compilicate matter for the paging that we're trying to test,
