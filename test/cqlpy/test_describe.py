@@ -2792,13 +2792,19 @@ def test_desc_restore(cql):
             for stmt in extract_create_statements(restore_stmts):
                 cql.execute(stmt)
 
-            res = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
+            # We need to put the descriptions into a set and not a list because
+            # they cannot be sorted with regard to create statements on Scylla level
+            # -- we represent them as a fragmented sequence of bytes from the very beginning.
+            # Descriptions will be sorted by type and name, but nothing beyond that;
+            # for instance, the statements used for attaching `sl1` to `r1` and `r2`
+            # can be in either order.
+            res_iter = cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS")
 
             # Other test cases might've created keyspaces that would be included in the result
             # of `DESC SCHEMA`, so we need to filter them out.
-            res = list(remove_other_keyspaces(res))
+            res = set(remove_other_keyspaces(res_iter))
 
-            assert restore_stmts == res
+            assert set(restore_stmts) == res
         finally:
             cql.execute(f"DROP KEYSPACE IF EXISTS {ks}")
 

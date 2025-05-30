@@ -727,15 +727,13 @@ future<std::vector<cql3::description>> standard_role_manager::describe_role_gran
             .keyspace = std::nullopt,
             .type = "grant_role",
             .name = granted_role,
-            .create_statement = seastar::format("GRANT {} TO {};", formatted_granted, formatted_grantee)
+            .create_statement = to_managed_bytes(seastar::format("GRANT {} TO {};", formatted_granted, formatted_grantee))
         });
 
         co_await coroutine::maybe_yield();
     }
 
-    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) noexcept {
-        return std::make_tuple(std::ref(desc.name), std::ref(*desc.create_statement));
-    });
+    std::ranges::sort(result, std::less<>{}, std::mem_fn(&cql3::description::name));
 
     co_return result;
 }
