@@ -1512,7 +1512,8 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 database_test_wrapper(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {}),
                 query::full_partition_range,
                 s->full_slice(),
-                nullptr);
+                nullptr,
+                tombstone_gc_state(nullptr));
 
         auto f = replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks", "cf");
 
@@ -1863,6 +1864,69 @@ SEASTAR_TEST_CASE(test_max_purgeable_can_purge) {
     check(max_purgeable{200, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
 
     return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_query_tombstone_gc) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        const auto table_name = "tbl";
+
+        // Can use tablets and RF=1 after #21623 is fixed.
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+        const auto tid = schema->id();
+
+        const auto pk_value = 1;
+        const auto pk = partition_key::from_exploded(*schema, {data_value(pk_value).serialize_nonnull()});
+        const auto dk = dht::decorate_key(*schema, pk);
+        const auto key_shard = tbl.shard_for_reads(dk.token());
+
+        env.execute_cql(format("DELETE FROM {}.{} WHERE pk = 1 AND ck = 1", keyspace_name, table_name, pk_value)).get();
+
+        env.db().invoke_on(key_shard, [] (replica::database& db) {
+            return db.flush_commitlog();
+        }).get();
+
+        const auto repair_range = dht::token_range::make(dht::first_token(), dht::last_token());
+        const auto repair_time = gc_clock::now() + gc_clock::duration(std::chrono::hours(1));
+        env.db().invoke_on_all([tid, &repair_range, &repair_time] (replica::database& db) {
+            auto& tbl = db.find_column_family(tid);
+            tbl.get_compaction_manager().get_shared_tombstone_gc_state().update_repair_time(tid, repair_range, repair_time);
+        }).get();
+
+        testlog.info("repair_time: {}", repair_time);
+
+        auto slice = partition_slice_builder(*schema, schema->full_slice())
+                .with_option<query::partition_slice::option::bypass_cache>()
+                .build();
+        const auto cmd = query::read_command(schema->id(), schema->version(), slice, db.get_query_max_result_size(), query::tombstone_limit::max);
+        const auto pr = dht::partition_range::make_singular(dk);
+
+        env.db().invoke_on(key_shard, [tid, &cmd, &pr] (replica::database& db) -> future<> {
+            auto& tbl = db.find_column_family(tid);
+            const auto schema = tbl.schema();
+            auto permit = co_await db.obtain_reader_permit(tbl, "read", db::no_timeout, {});
+            auto accounter = co_await db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, query::short_read::no);
+
+            const auto res = co_await tbl.mutation_query(schema, std::move(permit), cmd, pr, {}, std::move(accounter), db::no_timeout);
+            BOOST_CHECK_EQUAL(res.partitions().size(), 0);
+        }).get();
+
+        {
+            const auto res = replica::query_mutations_on_all_shards(env.db(), schema, cmd, {pr}, {}, db::no_timeout).get();
+            BOOST_CHECK_EQUAL(std::get<0>(res)->partitions().size(), 0);
+        }
+
+        return make_ready_future<>();
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
