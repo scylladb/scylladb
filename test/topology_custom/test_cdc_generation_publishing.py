@@ -82,7 +82,7 @@ async def test_multiple_unpublished_cdc_generations(request, manager: ManagerCli
     """Test that the CDC generation publisher works correctly when there is more than one unpublished CDC generation."""
     query_gen_timestamps = SimpleStatement(
         "select time from system_distributed.cdc_generation_timestamps where key = 'timestamps'",
-        consistency_level = ConsistencyLevel.ONE)
+        consistency_level = ConsistencyLevel.ALL)
 
     logger.info("Bootstrapping first node")
     servers = [await manager.server_add()]
