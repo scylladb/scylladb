@@ -317,6 +317,20 @@ paxos_store::paxos_store(db::system_keyspace& sys_ks, gms::feature_service& feat
     , _db(db)
     , _mm(mm)
 {
+    if (this_shard_id() == 0) {
+        _mm.get_notifier().register_listener(this);
+    }
+}
+
+paxos_store::~paxos_store() {
+    SCYLLA_ASSERT(_stopped);
+}
+
+future<> paxos_store::stop() {
+    auto stopped = this_shard_id() == 0 
+        ? _mm.get_notifier().unregister_listener(this) 
+        : make_ready_future<>();
+    return stopped.then([this] { _stopped = true; });
 }
 
 schema_ptr paxos_store::create_paxos_state_schema(const schema& s) {
@@ -406,6 +420,17 @@ future<> paxos_store::ensure_initialized(const schema& s, db::timeout_clock::tim
     paxos_state::logger.info("Creating paxos state table for \"{}.{}\", timeout {} millis", 
         s.ks_name(), s.cf_name(), duration_cast<std::chrono::milliseconds>(timeout - lowres_clock::now()).count());
     return container().invoke_on(0, &paxos_store::create_paxos_state_table, std::ref(s), timeout);
+}
+
+void paxos_store::on_before_drop_column_family(const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
+    if (const auto state_schema = try_get_paxos_state_schema(schema); state_schema) {
+        auto muts = prepare_column_family_drop_announcement(_mm.get_storage_proxy(), 
+            state_schema->ks_name(),
+            state_schema->cf_name(),
+            timestamp,
+            drop_views::yes).get();
+        mutations.insert(mutations.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
+    }
 }
 
 std::optional<std::string_view> paxos_store::try_get_base_table(std::string_view cf_name) {
