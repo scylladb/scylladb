@@ -112,6 +112,8 @@ typedef std::vector<db::replay_position> replay_positions;
 
 struct compaction_history_entry;
 
+data_value ongoing_rf_change_data_to_data_value(const schema& schema, const service::ongoing_rf_change_data& value);
+
 class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
     cql3::query_processor& _qp;
     replica::database& _db;

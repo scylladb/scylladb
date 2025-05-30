@@ -123,12 +123,16 @@ public:
     topology_mutation_builder& add_ignored_nodes(const std::unordered_set<raft::server_id>& value);
     topology_mutation_builder& set_ignored_nodes(const std::unordered_set<raft::server_id>& value);
     topology_mutation_builder& add_new_committed_cdc_generation(const cdc::generation_id_v2& value);
+    topology_mutation_builder& set_ongoing_rf_change_data(const service::ongoing_rf_change_data& value);
     topology_mutation_builder& del_transition_state();
     topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();
     topology_mutation_builder& del_global_topology_request_id();
+    topology_mutation_builder& del_ongoing_rf_change_data();
     topology_mutation_builder& queue_global_topology_request_id(const utils::UUID& value);
     topology_mutation_builder& drop_first_global_topology_request_id(const std::vector<utils::UUID>&, utils::UUID&);
+    topology_mutation_builder& schedule_rf_change_request_id(const std::vector<utils::UUID>&, utils::UUID);
+    topology_mutation_builder& drop_first_scheduled_rf_change_request_id(const std::vector<utils::UUID>&);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

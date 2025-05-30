@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "types/list.hh"
 #include "utils/assert.hh"
 #include "db/system_keyspace.hh"
 #include "topology_mutation.hh"
@@ -256,6 +257,16 @@ topology_mutation_builder& topology_mutation_builder::drop_first_global_topology
     }
 }
 
+topology_mutation_builder& topology_mutation_builder::schedule_rf_change_request_id(const std::vector<utils::UUID>& values, utils::UUID id) {
+    auto v = values;
+    v.push_back(id);
+    return apply_atomic("scheduled_rf_change_requests", make_list_value(schema().get_column_definition("scheduled_rf_change_requests")->type, list_type_impl::native_type(v.begin(), v.end())));
+}
+
+topology_mutation_builder& topology_mutation_builder::drop_first_scheduled_rf_change_request_id(const std::vector<utils::UUID>& values) {
+    return apply_atomic("scheduled_rf_change_requests", make_list_value(schema().get_column_definition("scheduled_rf_change_requests")->type, list_type_impl::native_type(values.begin() + 1, values.end())));
+}
+
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology::upgrade_state_type value) {
     return apply_atomic("upgrade_state", ::format("{}", value));
 }
@@ -268,6 +279,11 @@ topology_mutation_builder& topology_mutation_builder::add_new_committed_cdc_gene
     auto dv = make_tuple_value(db::cdc_generation_ts_id_type, tuple_type_impl::native_type({value.ts, timeuuid_native_type{value.id}}));
     apply_set("committed_cdc_generations", collection_apply_mode::update, std::vector<data_value>{dv});
     apply_set("unpublished_cdc_generations", collection_apply_mode::update, std::vector<data_value>{std::move(dv)});
+    return *this;
+}
+
+topology_mutation_builder& topology_mutation_builder::set_ongoing_rf_change_data(const service::ongoing_rf_change_data& value) {
+    apply_atomic("ongoing_rf_change_data", db::ongoing_rf_change_data_to_data_value(schema(), value));
     return *this;
 }
 
@@ -285,6 +301,10 @@ topology_mutation_builder& topology_mutation_builder::del_global_topology_reques
 
 topology_mutation_builder& topology_mutation_builder::del_global_topology_request_id() {
     return del("global_topology_request_id");
+}
+
+topology_mutation_builder& topology_mutation_builder::del_ongoing_rf_change_data() {
+    return del("ongoing_rf_change_data");
 }
 
 topology_node_mutation_builder& topology_mutation_builder::with_node(raft::server_id n) {

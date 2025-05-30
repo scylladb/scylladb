@@ -25,6 +25,10 @@ namespace db {
     class system_keyspace;
 }
 
+namespace locator {
+    struct endpoint_dc_rack;
+}
+
 namespace service {
 
 enum class node_state: uint16_t {
@@ -106,6 +110,17 @@ struct topology_features {
     std::set<sstring> calculate_not_yet_enabled_features() const;
 };
 
+using dc_name = sstring;
+using rack_name = sstring;
+using dc_rack_vector = std::vector<locator::endpoint_dc_rack>;
+struct ongoing_rf_change_data {
+    sstring ks_name;
+    std::unordered_map<sstring, sstring> new_ks_props;
+    dc_rack_vector added_dc_racks;
+    dc_rack_vector removed_dc_racks;
+    bool rollback = false;
+};
+
 struct topology {
     enum class transition_state: uint16_t {
         join_group0,
@@ -179,6 +194,14 @@ struct topology {
     std::optional<sstring> new_keyspace_rf_change_ks_name;
     // The KS options to be used when executing the scheduled ALTER KS statement
     std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
+
+    // Data of an ongoing RF change operation.
+    // Analogous to `new_keyspace_rf_change_data` and `new_keyspace_rf_change_ks_name`,
+    // but designed to support rf change by more than one.
+    std::optional<ongoing_rf_change_data> ongoing_rf_change_data;
+
+    // A queue of rf change requests that are waiting to be executed.
+    std::vector<utils::UUID> rf_change_requests_queue;
 
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;

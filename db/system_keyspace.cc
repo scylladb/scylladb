@@ -24,6 +24,7 @@
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
 #include "timestamp.hh"
+#include "types/map.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"
@@ -237,6 +238,34 @@ schema_ptr system_keyspace::batchlog() {
 }
 
 thread_local data_type cdc_generation_ts_id_type = tuple_type_impl::get_instance({timestamp_type, timeuuid_type});
+static thread_local auto dc_rack_type = tuple_type_impl::get_instance({utf8_type, utf8_type});
+static thread_local auto dc_rack_vector_type = list_type_impl::get_instance(dc_rack_type, false);
+static thread_local auto new_ks_props_type = map_type_impl::get_instance(utf8_type, utf8_type, false);
+static thread_local auto ongoing_rf_change_data_type = user_type_impl::get_instance(
+        system_keyspace::NAME, "ongoing_rf_change_data", {"ks_name", "new_ks_props", "added_dc_racks", "removed_dc_racks", "rollback"},
+        {utf8_type, new_ks_props_type, dc_rack_vector_type, dc_rack_vector_type, boolean_type}, false);
+
+static data_value dc_rack_vector_to_data_value(const service::dc_rack_vector& value) {
+    auto dc_racks_serialized = value | std::views::transform([](const auto& dc_rack) {
+        return make_tuple_value(dc_rack_type, {
+            data_value(dc_rack.dc),
+            data_value(dc_rack.rack),
+        });
+    }) | std::ranges::to<std::vector<data_value>>();
+    return make_list_value(dc_rack_vector_type, list_type_impl::native_type(std::move(dc_racks_serialized)));
+}
+
+data_value ongoing_rf_change_data_to_data_value(const schema& schema, const service::ongoing_rf_change_data& value) {
+    data_value result = make_user_value(ongoing_rf_change_data_type, {
+        data_value(value.ks_name),
+        make_map_value(new_ks_props_type,
+                                map_type_impl::native_type(value.new_ks_props.begin(), value.new_ks_props.end())),
+        dc_rack_vector_to_data_value(value.added_dc_racks),
+        dc_rack_vector_to_data_value(value.removed_dc_racks),
+        data_value(value.rollback),
+    });
+    return result;
+}
 
 schema_ptr system_keyspace::topology() {
     static thread_local auto schema = [] {
@@ -275,6 +304,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .with_column("global_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("scheduled_rf_change_requests", list_type_impl::get_instance(timeuuid_type, false), column_kind::static_column)
+            .with_column("ongoing_rf_change_data", ongoing_rf_change_data_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -3101,6 +3132,35 @@ static bool must_have_tokens(service::node_state nst) {
     }
 }
 
+static service::dc_rack_vector dc_rack_vector_from_cell(const data_value& v) {
+    return value_cast<list_type_impl::native_type>(v) | std::views::transform([](const auto& el) {
+        auto tuple = value_cast<tuple_type_impl::native_type>(el);
+        return locator::endpoint_dc_rack{
+            .dc = value_cast<service::dc_name>(tuple[0]),
+            .rack = value_cast<service::rack_name>(tuple[1]),
+        };
+    }) | std::ranges::to<service::dc_rack_vector>();
+}
+
+static service::ongoing_rf_change_data ongoing_rf_change_data_from_cell(const data_value& v) {
+    std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
+    auto result = service::ongoing_rf_change_data{
+        value_cast<sstring>(dv[0]),
+        value_cast<map_type_impl::native_type>(dv[1]) | std::views::transform([](const auto& kv) {
+            return std::make_pair(value_cast<sstring>(kv.first), value_cast<sstring>(kv.second));
+        }) | std::ranges::to<std::unordered_map<sstring, sstring>>(),
+        dc_rack_vector_from_cell(dv[2]),
+        dc_rack_vector_from_cell(dv[3]),
+        value_cast<bool>(dv[4]),
+    };
+    return result;
+}
+
+static service::ongoing_rf_change_data deserialize_ongoing_rf_change_data(cql3::untyped_result_set_row::view_type raw_value) {
+    return ongoing_rf_change_data_from_cell(
+            ongoing_rf_change_data_type->deserialize_value(raw_value));
+}
+
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
@@ -3332,6 +3392,16 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             for (auto&& v : deserialize_set_column(*topology(), some_row, "global_requests")) {
                 ret.global_requests_queue.push_back(value_cast<utils::UUID>(v));
             }
+        }
+
+        if (some_row.has("scheduled_rf_change_requests")) {
+            ret.rf_change_requests_queue = some_row.get_list<utils::UUID>("scheduled_rf_change_requests");
+        }
+
+        if (some_row.has("ongoing_rf_change_data")) {
+            ret.ongoing_rf_change_data = deserialize_ongoing_rf_change_data(some_row.get_view("ongoing_rf_change_data"));
+        } else {
+            ret.ongoing_rf_change_data = std::nullopt;
         }
 
         if (some_row.has("enabled_features")) {
