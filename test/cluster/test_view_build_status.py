@@ -541,3 +541,29 @@ async def test_migration_on_existing_raft_topology(request, manager: ManagerClie
         log = await manager.server_open_log(srv.server_id)
         res = await log.grep(r'ERROR.*\[shard [0-9]: [a-z]+\] raft_topology - topology change coordinator fiber got error exceptions::unavailable_exception \(Cannot achieve consistency level for')
         assert len(res) == 0
+
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.asyncio
+async def test_view_build_status_with_synchronize_wait(manager: ManagerClient):
+    node_count = 4
+    servers = await manager.servers_add(node_count)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    ks = await create_keyspace(cql)
+    await create_table(cql, ks)
+    await create_mv(cql, ks, "vt1")
+
+    # replace a node
+    await manager.get_host_id(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[0].server_id)
+    replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
+    replacing_server = await manager.server_add(start=False, replace_cfg=replace_cfg, config={
+        'error_injections_at_startup': ['sleep_in_synchronize']
+    })
+    task = asyncio.create_task(manager.server_start(replacing_server.server_id))
+    servers.append(replacing_server)
+    log = await manager.server_open_log(replacing_server.server_id)
+    await log.wait_for("start_operation: waiting until local node leaves synchronize state to start a group 0 operation")
+    await manager.api.message_injection(replacing_server.ip_addr, 'sleep_in_synchronize')
+
+    await task
