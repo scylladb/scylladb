@@ -395,13 +395,17 @@ public:
     struct topology_requests_entry {
         utils::UUID id;
         utils::UUID initiating_host;
-        std::optional<service::topology_request> request_type;
+        std::variant<std::monostate, service::topology_request, service::global_topology_request> request_type;
         db_clock::time_point start_time;
         bool done;
         sstring error;
         db_clock::time_point end_time;
         db_clock::time_point ts;
         table_id truncate_table_id;
+        // The name of the KS that is being the target of the scheduled ALTER KS statement
+        std::optional<sstring> new_keyspace_rf_change_ks_name;
+        // The KS options to be used when executing the scheduled ALTER KS statement
+        std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 
