@@ -1981,6 +1981,55 @@ def test_index_in_system_tables(cql, test_keyspace):
         res = cql.execute(f'select * from system."IndexInfo" where table_name = \'{test_keyspace}\' AND index_name = \'{index_name}\'').one()
         assert (test_keyspace, index_name) == (res.table_name, res.index_name)
 
+# The following test needs an index that we know is already built. We
+# create here an index on an empty table, so it should be built almost
+# immediately, but nevertheless we use wait_for_index() to ensure that
+# it is (we assume that wait_for_index() works somehow, possibly differently
+# on different versions of Scylla and Cassandra).
+@pytest.fixture(scope="module")
+def built_index(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        wait_for_index(cql, test_keyspace, index_name)
+        yield (table, index_name)
+
+# Check that a built index is listed in system."IndexInfo". This system
+# table was first introduced in Cassandra 2.1.
+# This test does not check that a created but not-yet-built index is not
+# in IndexInfo.
+def test_built_index_in_system_indexinfo(cql, built_index):
+    table, index_name = built_index
+    keyspace_name, table_name = table.split('.')
+    index_info = [ (r.table_name, r.index_name) for r in cql.execute('select * from system."IndexInfo"')]
+    # Note that confusingly, the "table_name"  column in IndexInfo is
+    # NOT the table's name - it's the keyspace name!
+    assert (keyspace_name, index_name) in index_info
+
+# Check that an index is listed in system_schema.indexes. This system
+# table was first introduced in Cassandra 3.0, and we also test the
+# extra "kind" and "options" fields it contains.
+# Note that this table lists all created indexes - not just fully-built
+# indexes - but this test doesn't verify that - the index we test on is
+# already built.
+def test_index_in_system_schema_indexes(cql, built_index):
+    table, index_name = built_index
+    keyspace_name, table_name = table.split('.')
+    res = [r for r in cql.execute('select * from system_schema.indexes') if r.index_name == index_name ]
+    assert len(res) == 1
+    assert res[0].index_name == index_name
+    assert res[0].keyspace_name == keyspace_name
+    assert res[0].table_name == table_name
+    # While it's not clearly documented anywhere what the "kind" and "options"
+    # columns in this table mean, and why, we see that in both Scylla and
+    # Cassandra, "kind" is always "COMPOSITES" (for a non-custom index on
+    # a non-compact table), and the only thing that "options" contains is
+    # a "target" which (in the case of a global index of a single column)
+    # contains just the column name, here "v". Let's check that this continues
+    # to be the true, and doesn't accidentally regress.
+    assert res[0].kind == 'COMPOSITES'
+    assert res[0].options == {'target': 'v'}
+
 # Test index representation in REST API
 def test_index_in_API(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:

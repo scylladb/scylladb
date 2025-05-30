@@ -6,6 +6,10 @@
 # Various tests for the content of system tables. Many of these tables have
 # content that was defined by Cassandra, and applications and driver assume,
 # or may assume, that Scylla provides similar content.
+#
+# Some system tables are tested in other test files. For example,
+# test_secondary_index.py has tests for the system tables that are
+# specific to secondary indexes.
 #############################################################################
 
 from .util import new_test_table
