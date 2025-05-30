@@ -15,6 +15,8 @@
 #include <seastar/json/json_elements.hh>
 #include <seastar/core/reactor.hh>
 
+#include "cdc/log.hh"
+#include "cdc/metadata.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/virtual_table.hh"
@@ -1155,6 +1157,176 @@ private:
     }
 };
 
+class cdc_timestamps_table : public streaming_virtual_table {
+private:
+    replica::database& _db;
+    service::storage_service& _ss;
+public:
+    cdc_timestamps_table(replica::database& db, service::storage_service& ss)
+            : streaming_virtual_table(build_schema())
+            , _db(db)
+            , _ss(ss)
+    {
+        _shard_aware = true;
+    }
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        auto tablet_streams = _ss.get_cdc_metadata().get_all_tablet_streams();
+
+        struct decorated_table_name {
+            table_id table;
+            dht::decorated_key key;
+        };
+
+        std::vector<decorated_table_name> tables;
+
+        for (const auto& [table, _] : tablet_streams) {
+            auto& cf = _db.find_column_family(table);
+            auto base_schema = cdc::get_base_table(_db, *cf.schema());
+            auto dk = make_partition_key(base_schema->ks_name(), base_schema->cf_name());
+            if (!this_shard_owns(dk) || !contains_key(qr.partition_range(), dk)) {
+                continue;
+            }
+            tables.emplace_back(decorated_table_name{table, std::move(dk)});
+        }
+        std::ranges::sort(tables, dht::ring_position_less_comparator(*_s), std::mem_fn(&decorated_table_name::key));
+
+        for (const auto& [table, dk] : tables) {
+            co_await result.emit_partition_start(dk);
+
+            for (const auto& [_, entry] : tablet_streams.at(table)) {
+                auto created_at = api::new_timestamp();
+                clustering_row cr(make_clustering_key(entry.ts));
+                cr.apply(row_marker(created_at));
+                co_await result.emit_row(std::move(cr));
+            }
+
+            co_await result.emit_partition_end();
+        }
+    }
+
+private:
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "cdc_timestamps");
+        return schema_builder(system_keyspace::NAME, "cdc_timestamps", std::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("table_name", utf8_type, column_kind::partition_key)
+            .with_column("timestamp", uuid_type, column_kind::clustering_key)
+            .with_hash_version()
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(const std::string& ks_name, const std::string& cf_name) {
+        return dht::decorate_key(*_s, partition_key::from_exploded(*_s, {
+            data_value(ks_name).serialize_nonnull(),
+            data_value(cf_name).serialize_nonnull()
+        }));
+    }
+
+    clustering_key make_clustering_key(utils::UUID ts) {
+        return clustering_key::from_single_value(*_s,
+            uuid_type->decompose(ts)
+        );
+    }
+};
+
+class cdc_streams_table : public streaming_virtual_table {
+private:
+    replica::database& _db;
+    service::storage_service& _ss;
+public:
+    cdc_streams_table(replica::database& db, service::storage_service& ss)
+            : streaming_virtual_table(build_schema())
+            , _db(db)
+            , _ss(ss)
+    {
+        _shard_aware = true;
+    }
+
+    future<> execute(reader_permit permit, result_collector& result, const query_restrictions& qr) override {
+        auto tablet_streams = _ss.get_cdc_metadata().get_all_tablet_streams();
+
+        struct decorated_table_name {
+            table_id table;
+            dht::decorated_key key;
+        };
+
+        std::vector<decorated_table_name> tables;
+
+        for (const auto& [table, _] : tablet_streams) {
+            auto& cf = _db.find_column_family(table);
+            auto base_schema = cdc::get_base_table(_db, *cf.schema());
+            auto dk = make_partition_key(base_schema->ks_name(), base_schema->cf_name());
+            if (!this_shard_owns(dk) || !contains_key(qr.partition_range(), dk)) {
+                continue;
+            }
+            tables.emplace_back(decorated_table_name{table, std::move(dk)});
+        }
+        std::ranges::sort(tables, dht::ring_position_less_comparator(*_s), std::mem_fn(&decorated_table_name::key));
+
+        for (const auto& [table, dk] : tables) {
+            co_await result.emit_partition_start(dk);
+            auto created_at = api::new_timestamp();
+            std::optional<std::vector<cdc::stream_id>> prev_stream_set;
+            for (const auto& [_, entry] : tablet_streams.at(table)) {
+                for (const auto& sid : entry.streams) {
+                    clustering_row cr(make_clustering_key(entry.ts, cdc::stream_kind::current, sid));
+                    cr.apply(row_marker(created_at));
+                    co_await result.emit_row(std::move(cr));
+                }
+                if (prev_stream_set) {
+                    auto diff = cdc::metadata::generate_stream_diff(*prev_stream_set, entry.streams);
+                    for (const auto& sid : diff.closed_streams) {
+                        clustering_row cr(make_clustering_key(entry.ts, cdc::stream_kind::closed, sid));
+                        cr.apply(row_marker(created_at));
+                        co_await result.emit_row(std::move(cr));
+                    }
+                    for (const auto& sid : diff.opened_streams) {
+                        clustering_row cr(make_clustering_key(entry.ts, cdc::stream_kind::opened, sid));
+                        cr.apply(row_marker(created_at));
+                        co_await result.emit_row(std::move(cr));
+                    }
+                } else {
+                    for (const auto& sid : entry.streams) {
+                        clustering_row cr(make_clustering_key(entry.ts, cdc::stream_kind::opened, sid));
+                        cr.apply(row_marker(created_at));
+                        co_await result.emit_row(std::move(cr));
+                    }
+                }
+                prev_stream_set = entry.streams;
+            }
+            co_await result.emit_partition_end();
+        }
+    }
+private:
+    static schema_ptr build_schema() {
+        auto id = generate_legacy_id(system_keyspace::NAME, "cdc_streams");
+        return schema_builder(system_keyspace::NAME, "cdc_streams", std::make_optional(id))
+            .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+            .with_column("table_name", utf8_type, column_kind::partition_key)
+            .with_column("timestamp", uuid_type, column_kind::clustering_key)
+            .with_column("stream_kind", byte_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type, column_kind::clustering_key)
+            .with_hash_version()
+            .build();
+    }
+
+    dht::decorated_key make_partition_key(const std::string& ks_name, const std::string& cf_name) {
+        return dht::decorate_key(*_s, partition_key::from_exploded(*_s, {
+            data_value(ks_name).serialize_nonnull(),
+            data_value(cf_name).serialize_nonnull()
+        }));
+    }
+
+    clustering_key make_clustering_key(utils::UUID ts, cdc::stream_kind kind, const cdc::stream_id& sid) {
+        return clustering_key::from_exploded(*_s, {
+            uuid_type->decompose(ts),
+            byte_type->decompose(std::to_underlying(kind)),
+            sid.to_bytes()
+        });
+    }
+};
+
 }
 
 future<> initialize_virtual_tables(
@@ -1191,6 +1363,8 @@ future<> initialize_virtual_tables(
     co_await add_table(std::make_unique<clients_table>(ss));
     co_await add_table(std::make_unique<raft_state_table>(dist_raft_gr));
     co_await add_table(std::make_unique<load_per_node>(tablet_allocator, dist_db, dist_raft_gr, ms, dist_gossiper));
+    co_await add_table(std::make_unique<cdc_timestamps_table>(db, ss));
+    co_await add_table(std::make_unique<cdc_streams_table>(db, ss));
 
     db.find_column_family(system_keyspace::size_estimates()).set_virtual_reader(mutation_source(db::size_estimates::virtual_reader(db, sys_ks.local())));
     db.find_column_family(system_keyspace::v3::views_builds_in_progress()).set_virtual_reader(mutation_source(db::view::build_progress_virtual_reader(db)));
