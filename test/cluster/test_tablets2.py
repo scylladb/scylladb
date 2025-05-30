@@ -5,6 +5,7 @@
 #
 from typing import Any
 from cassandra.query import SimpleStatement, ConsistencyLevel
+from cassandra.protocol import InvalidRequest
 
 from test.pylib.internal_types import HostID, ServerInfo, ServerNum
 from test.pylib.manager_client import ManagerClient
@@ -2095,3 +2096,35 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
         assert row.pk == 1
         assert row.c1 == 1
         assert row.c2 is None
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
+    config = {
+        'rf_rack_valid_keyspaces': False,
+        'error_injections_at_startup': [
+            {
+                'name': 'suppress_features',
+                'value': 'LWT_WITH_TABLETS'
+            }
+        ],
+        'experimental_features': ['lwt-with-tablets']
+    }
+    await manager.server_add(config=config)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (key int PRIMARY KEY, val int)")
+        await cql.run_async(f"INSERT INTO {ks}.test (key, val) VALUES(1, 0)")
+        with pytest.raises(InvalidRequest, match=f"{ks}\.test.*LWT is not yet supported with tablets"):
+            await cql.run_async(f"INSERT INTO {ks}.test (key, val) VALUES(1, 1) IF NOT EXISTS")
+        # The query is rejected during the execution phase,
+        # so preparing the LWT query is expected to succeed.
+        stmt = cql.prepare(f"UPDATE {ks}.test SET val = 1 WHERE KEY = ? IF EXISTS")
+        with pytest.raises(InvalidRequest, match=f"{ks}\.test.*LWT is not yet supported with tablets"):
+            await cql.run_async(stmt, [1])
+        with pytest.raises(InvalidRequest, match=f"{ks}\.test.*LWT is not yet supported with tablets"):
+            await cql.run_async(f"DELETE FROM {ks}.test WHERE key = 1 IF EXISTS")
+        res = await cql.run_async(f"SELECT val FROM {ks}.test WHERE key = 1")
+        assert res[0].val == 0
