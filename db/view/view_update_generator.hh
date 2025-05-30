@@ -15,6 +15,7 @@
 #include "gc_clock.hh"
 
 #include <seastar/core/sharded.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
@@ -81,6 +82,8 @@ public:
     future<> drain();
     future<> stop();
     future<> register_staging_sstable(sstables::shared_sstable sst, lw_shared_ptr<replica::table> table);
+    // Generate view updates from staging sstables instantly and move those sstables to table's base directory
+    future<> process_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable> sstables);
 
     replica::database& get_db() noexcept { return _db; }
 
@@ -98,6 +101,7 @@ private:
             service::allow_hints allow_hints,
             wait_for_all_updates wait_for_all);
 
+    std::pair<stop_iteration, uint64_t> generate_updates_from_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable>& sstables);
 public:
     ssize_t available_register_units() const { return _registration_sem.available_units(); }
     size_t queued_batches_count() const { return _sstables_with_tables.size(); }
