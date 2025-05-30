@@ -1271,13 +1271,13 @@ uint32_t mutation_partition::do_compact(const schema& s,
     uint64_t row_limit,
     can_gc_fn& can_gc,
     bool drop_tombstones_unconditionally,
-    const tombstone_gc_state& gc_state)
+    const tombstone_gc_before_getter& gc_before_getter)
 {
     check_schema(s);
     SCYLLA_ASSERT(row_limit > 0);
 
     auto gc_before = drop_tombstones_unconditionally ? gc_clock::time_point::max() :
-        gc_state.get_gc_before_for_key(s.shared_from_this(), dk, query_time);
+        gc_before_getter.get_gc_before_for_key(s.shared_from_this(), dk, query_time);
 
     auto should_purge_tombstone = [&] (const tombstone& t, is_shadowable is_shadowable) {
         return t.deletion_time < gc_before && can_gc(t, is_shadowable);
@@ -1334,12 +1334,13 @@ mutation_partition::compact_for_query(
     bool drop_tombstones_unconditionally = false;
     // Replicas should only send non-purgeable tombstones already,
     // so we can expect to not have to actually purge any tombstones here.
-    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, row_limit, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
+    return do_compact(s, dk, query_time, row_ranges, always_return_static_content, row_limit, always_gc, drop_tombstones_unconditionally,
+            tombstone_gc_before_getter::no_gc());
 }
 
 void mutation_partition::compact_for_compaction(const schema& s,
     can_gc_fn& can_gc, const dht::decorated_key& dk, gc_clock::time_point compaction_time,
-    const tombstone_gc_state& gc_state)
+    const tombstone_gc_before_getter& gc_before_getter)
 {
     check_schema(s);
     static const std::vector<query::clustering_range> all_rows = {
@@ -1347,7 +1348,7 @@ void mutation_partition::compact_for_compaction(const schema& s,
     };
 
     bool drop_tombstones_unconditionally = false;
-    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, can_gc, drop_tombstones_unconditionally, gc_state);
+    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, can_gc, drop_tombstones_unconditionally, gc_before_getter);
 }
 
 void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(const schema& s, const dht::decorated_key& dk)
@@ -1358,7 +1359,8 @@ void mutation_partition::compact_for_compaction_drop_tombstones_unconditionally(
     };
     bool drop_tombstones_unconditionally = true;
     auto compaction_time = gc_clock::time_point::max();
-    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, always_gc, drop_tombstones_unconditionally, tombstone_gc_state(nullptr));
+    do_compact(s, dk, compaction_time, all_rows, true, query::partition_max_rows, always_gc, drop_tombstones_unconditionally,
+            tombstone_gc_before_getter::gc_all());
 }
 
 // Returns true if the mutation_partition represents no writes.
@@ -2147,7 +2149,7 @@ to_data_query_result(const reconcilable_result& r, schema_ptr s, const query::pa
     // This result was already built with a limit, don't apply another one.
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
     auto consumer = compact_for_query<query_result_builder>(*s, gc_clock::time_point::min(), slice, max_rows,
-            max_partitions, query_result_builder(*s, builder));
+            max_partitions, tombstone_gc_before_getter::no_gc(), query_result_builder(*s, builder));
     auto compaction_state = consumer.get_state();
     frozen_mutation_consumer_adaptor adaptor(s, consumer);
     for (const partition& p : r.partitions()) {
@@ -2166,7 +2168,7 @@ query::result
 query_mutation(mutation&& m, const query::partition_slice& slice, uint64_t row_limit, gc_clock::time_point now, query::result_options opts) {
     query::result::builder builder(slice, opts, query::result_memory_accounter{ query::result_memory_limiter::unlimited_result_size }, query::max_tombstones);
     auto consumer = compact_for_query<query_result_builder>(*m.schema(), now, slice, row_limit,
-            query::max_partitions, query_result_builder(*m.schema(), builder));
+            query::max_partitions, tombstone_gc_before_getter::no_gc(), query_result_builder(*m.schema(), builder));
     auto compaction_state = consumer.get_state();
     std::move(m).consume(consumer, consume_in_reverse::no);
     return builder.build(compaction_state->current_full_position());
@@ -2395,7 +2397,7 @@ future<mutation_opt> counter_write_query(schema_ptr s, const mutation_source& so
     auto r_a_r = std::make_unique<range_and_reader>(s, source, std::move(permit), dk, slice, std::move(trace_ptr));
     auto cwqrb = counter_write_query_result_builder(*s);
     auto cfq = compact_for_query<counter_write_query_result_builder>(
-            *s, gc_clock::now(), slice, query::max_rows, query::max_partitions, std::move(cwqrb));
+            *s, gc_clock::now(), slice, query::max_rows, query::max_partitions, tombstone_gc_before_getter::no_gc(), std::move(cwqrb));
     auto f = r_a_r->reader.consume(std::move(cfq));
     return f.finally([r_a_r = std::move(r_a_r)] {
         return r_a_r->reader.close();
