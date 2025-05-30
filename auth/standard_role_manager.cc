@@ -205,7 +205,7 @@ future<> standard_role_manager::maybe_create_default_role() {
     auto has_superuser = [this] () -> future<bool> {
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
         auto results = co_await _qp.execute_internal(query, db::consistency_level::LOCAL_ONE,
-                internal_distributed_query_state(), cql3::query_processor::cache_internal::no);
+                internal_distributed_query_state(), cql3::query_processor::cache_internal::yes);
         for (const auto& result : *results) {
             if (has_can_login(result)) {
                 co_return true;
