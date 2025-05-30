@@ -760,7 +760,8 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
                 now,
                 slice,
                 query::max_rows,
-                query::max_partitions);
+                query::max_partitions,
+                base_cf->get_tombstone_gc_state());
         auto consumer = compact_for_query<view_building_worker::consumer>(compaction_state, view_building_worker::consumer(
                 local_vbw._db,
                 *this,
