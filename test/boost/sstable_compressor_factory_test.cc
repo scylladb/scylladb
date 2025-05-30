@@ -14,6 +14,8 @@
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 
+BOOST_AUTO_TEST_SUITE(sstable_compressor_factory_test)
+
 // 1. Create a random message.
 // 2. Set this random message as the recommended dict.
 // 3. On all shards, create compressors.
@@ -131,3 +133,5 @@ SEASTAR_THREAD_TEST_CASE(test_numa_awareness) {
         test_one_numa_topology(n_numa_nodes);
     }
 }
+
+BOOST_AUTO_TEST_SUITE_END()
