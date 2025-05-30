@@ -283,6 +283,7 @@ public:
         _group0_as.request_abort();
         co_await _truncate_gate.close();
         co_await ser::storage_proxy_rpc_verbs::unregister(&_ms);
+        co_await _paxos_store.stop();
         _stopped = true;
     }
 

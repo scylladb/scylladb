@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include "utils/UUID_gen.hh"
 #include "service/paxos/prepare_response.hh"
+#include "service/migration_listener.hh"
 
 namespace cql3 {
     class query_processor;
@@ -110,19 +111,24 @@ public:
             tracing::trace_state_ptr tr_state);
 };
 
-class paxos_store {
+class paxos_store: service::migration_listener::empty_listener {
     db::system_keyspace& _sys_ks;
     gms::feature_service& _features;
     replica::database& _db;
     migration_manager& _mm;
+    bool _stopped = false;
 
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);
     future<schema_ptr> get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const;
 public:
     explicit paxos_store(db::system_keyspace& sys_ks, gms::feature_service& features, replica::database& db, migration_manager& mm);
+    ~paxos_store();
+    future<> stop();
+
     future<> ensure_initialized(const schema& s);
     static std::optional<std::string_view> try_get_base_table(std::string_view cf_name);
+
     future<column_mapping> get_column_mapping(table_id, table_schema_version v);
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
         db::timeout_clock::time_point timeout);
@@ -130,6 +136,8 @@ public:
     future<> save_paxos_proposal(const schema& s, const service::paxos::proposal& proposal, db::timeout_clock::time_point timeout);
     future<> save_paxos_decision(const schema& s, const service::paxos::proposal& decision, db::timeout_clock::time_point timeout);
     future<> delete_paxos_decision(const schema& s, const partition_key& key, const utils::UUID& ballot, db::timeout_clock::time_point timeout);
+
+    void on_before_drop_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override;
 };
 
 } // end of namespace "service::paxos"
