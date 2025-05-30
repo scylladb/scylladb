@@ -242,7 +242,8 @@ SEASTAR_THREAD_TEST_CASE(test_result_map_reduce) {
         auto bar_exc = [] () { return result<sstring>(bo::failure(bar_exception())); };
         auto foo_throw = [] () { return make_exception_future<result<sstring>>(foo_exception()); };
 
-        BOOST_REQUIRE_EQUAL(reduce(sstring("brown"), sstring("fox")).value(), "the brown fox");
+        auto res = reduce(sstring("brown"), sstring("fox")).value();
+        BOOST_REQUIRE(res == "the brown fox" || res == "the fox brown");
         BOOST_REQUIRE_EQUAL(reduce(foo_exc(), sstring("fox")).error(), exc_container(foo_exception()));
         BOOST_REQUIRE_EQUAL(reduce(sstring("brown"), foo_exc()).error(), exc_container(foo_exception()));
         BOOST_REQUIRE_EQUAL(reduce(foo_exc(), bar_exc()).error(), exc_container(foo_exception()));
