@@ -7,6 +7,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
+#include "db/schema_features.hh"
 #include "utils/log.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
@@ -178,6 +179,7 @@ db::schema_features feature_service::cluster_schema_features() const {
     f.set<db::schema_feature::GROUP0_SCHEMA_VERSIONING>();
     f.set_if<db::schema_feature::IN_MEMORY_TABLES>(bool(in_memory_tables));
     f.set_if<db::schema_feature::TABLET_OPTIONS>(bool(tablet_options));
+    f.set_if<db::schema_feature::KEYSPACE_MULTI_RF_CHANGE>(bool(keyspace_multi_rf_change));
     return f;
 }
 

@@ -179,6 +179,7 @@ public:
     gms::feature topology_noop_request { *this, "TOPOLOGY_NOOP_REQUEST"sv };
     gms::feature tablets_intermediate_fallback_cleanup { *this, "TABLETS_INTERMEDIATE_FALLBACK_CLEANUP"sv };
     gms::feature batchlog_v2 { *this, "BATCHLOG_V2"sv };
+    gms::feature keyspace_multi_rf_change { *this, "KEYSPACE_MULTI_RF_CHANGE"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

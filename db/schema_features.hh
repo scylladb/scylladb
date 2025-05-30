@@ -33,6 +33,11 @@ enum class schema_feature {
 
     // Per-table tablet options
     TABLET_OPTIONS,
+
+    // When enabled, `system_schema.keyspaces` will keep three replication values:
+    // the initial, the current, and the target replication factor,
+    // which reflect the phases of the multi RF change.
+    KEYSPACE_MULTI_RF_CHANGE,
 };
 
 using schema_features = enum_set<super_enum<schema_feature,
@@ -43,7 +48,8 @@ using schema_features = enum_set<super_enum<schema_feature,
     schema_feature::TABLE_DIGEST_INSENSITIVE_TO_EXPIRY,
     schema_feature::GROUP0_SCHEMA_VERSIONING,
     schema_feature::IN_MEMORY_TABLES,
-    schema_feature::TABLET_OPTIONS
+    schema_feature::TABLET_OPTIONS,
+    schema_feature::KEYSPACE_MULTI_RF_CHANGE
     >>;
 
 }
