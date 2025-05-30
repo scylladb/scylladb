@@ -168,6 +168,7 @@ private:
     sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
+    sharded<service::vector_store> _vector_store;
     db::config* _db_config;
 
     service::raft_group0_client* _group0_client;
@@ -702,7 +703,12 @@ private:
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            _qp.start(std::ref(_proxy), std::move(local_data_dict), std::ref(_mnotifier), qp_mcfg, std::ref(_cql_config), auth_prep_cache_config, std::ref(_lang_manager)).get();
+            _vector_store.start().get();
+            auto stop_vector_store = defer_verbose_shutdown("vector_store", [this] {
+                _vector_store.stop().get();
+            });
+
+            _qp.start(std::ref(_proxy), std::move(local_data_dict), std::ref(_mnotifier), std::ref(_vector_store), qp_mcfg, std::ref(_cql_config), auth_prep_cache_config, std::ref(_lang_manager)).get();
             auto stop_qp = defer_verbose_shutdown("query processor", [this] { _qp.stop().get(); });
 
             _elc_notif.start().get();
