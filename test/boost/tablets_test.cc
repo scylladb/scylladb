@@ -10,6 +10,7 @@
 
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <source_location>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/random_utils.hh"
@@ -1687,6 +1688,12 @@ void check_no_rack_overload(const token_metadata& tm) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
+    cql_test_config cfg{};
+    // This test relies on the fact that we use an RF strictly smaller than the number of racks.
+    // Because of that, we cannot enable `rf_rack_valid_keyspaces` in this test because we won't
+    // be able to create a keyspace.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
 
@@ -1733,7 +1740,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
         });
 
         BOOST_REQUIRE_EQUAL(1, stm.get()->tablets().get_tablet_map(table1).tablet_count());
-    }).get();
+    }, cfg).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
@@ -2123,9 +2130,10 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     // which is a proof that it doesn't stop due to active migrations.
 
     topology_builder topo(e);
-    auto host1 = topo.add_node(node_state::normal, 1);
+    auto host1 = topo.add_node(node_state::normal, 2);
+    topo.start_new_rack();
     auto host2 = topo.add_node(node_state::normal, 1);
-    auto host3 = topo.add_node(node_state::normal, 2);
+    auto host3 = topo.add_node(node_state::normal, 1);
 
     auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 4);
     auto table1 = add_table(e, ks_name).get();
@@ -2146,8 +2154,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
                 tablet_transition_stage::allow_write_both_read_old,
                 tablet_transition_kind::migration,
                 tablet_replica_set {
+                        tablet_replica {host1, 0},
                         tablet_replica {host3, 0},
-                        tablet_replica {host2, 0},
                 },
                 tablet_replica {host3, 0}
         });
@@ -2183,6 +2191,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     topology_builder topo(e);
 
     auto host1 = topo.add_node(node_state::normal, 1);
+    topo.start_new_rack();
     auto host2 = topo.add_node(node_state::normal, 1);
     topo.add_node(node_state::normal, 2);
 
@@ -2225,10 +2234,13 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
     topology_builder topo(e);
 
     const auto shard_count = 2;
-    auto host1 = topo.add_node(node_state::normal, shard_count);
-    auto host2 = topo.add_node(node_state::normal, shard_count);
-    auto host3 = topo.add_node(node_state::normal, shard_count);
-    auto host4 = topo.add_node(node_state::normal, shard_count);
+    auto rack1 = topo.rack();
+    auto rack2 = topo.start_new_rack();
+
+    auto host1 = topo.add_node(node_state::normal, shard_count, rack1);
+    auto host2 = topo.add_node(node_state::normal, shard_count, rack2);
+    auto host3 = topo.add_node(node_state::normal, shard_count, rack1);
+    auto host4 = topo.add_node(node_state::normal, shard_count, rack2);
 
     auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 16);
     auto table1 = add_table(e, ks_name).get();
@@ -2533,35 +2545,39 @@ allocate_replicas_in_racks(const std::vector<endpoint_dc_rack>& racks, int rf,
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
-  do_with_cql_env_thread([] (auto& e) {
-    topology_builder topo(e);
-    const int n_hosts = 6;
-    auto shard_count = 2;
+  auto do_test_case = [] (const shard_id rf) {
+    return do_with_cql_env_thread([rf] (auto& e) {
+        topology_builder topo(e);
+        const int n_hosts = 6;
+        auto shard_count = 2;
 
-    std::vector<host_id> hosts;
-    std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
+        // Sanity check just in case someone modifies the caller of this lambda
+        // and starts providing RF > n_hosts. In that case, we wouldn't be able
+        // to create an RF-rack-valid keyspace.
+        assert(rf <= n_hosts);
 
-    std::vector<endpoint_dc_rack> racks {
-        topo.rack(),
-        topo.start_new_rack(),
-    };
+        std::vector<host_id> hosts;
+        std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
 
-    for (int i = 0; i < n_hosts; ++i) {
-        auto rack = racks[(i + 1) % racks.size()];
-        auto h = topo.add_node(node_state::normal, shard_count, rack);
-        if (i) {
-            // Leave the first host empty by making it invisible to allocation algorithm.
-            hosts_by_rack[rack.rack].push_back(h);
+        std::vector<endpoint_dc_rack> racks{topo.rack()};
+        for (shard_id i = 1; i < rf; ++i) {
+            racks.push_back(topo.start_new_rack());
         }
-    }
 
-    auto& stm = e.shared_token_metadata().local();
+        for (int i = 0; i < n_hosts; ++i) {
+            auto rack = racks[(i + 1) % racks.size()];
+            auto h = topo.add_node(node_state::normal, shard_count, rack);
+            if (i) {
+                // Leave the first host empty by making it invisible to allocation algorithm.
+                hosts_by_rack[rack.rack].push_back(h);
+            }
+        }
 
-    for (int i = 0; i < 13; ++i) {
+        auto& stm = e.shared_token_metadata().local();
+
         size_t total_tablet_count = 0;
         std::vector<sstring> keyspaces;
         size_t tablet_count_bits = 8;
-        int rf = tests::random::get_int<shard_id>(2, 4);
         for (size_t log2_tablets = 0; log2_tablets < tablet_count_bits; ++log2_tablets) {
             if (tests::random::get_bool()) {
                 continue;
@@ -2622,8 +2638,15 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         seastar::parallel_for_each(keyspaces, [&] (const sstring& ks) {
             return e.execute_cql(fmt::format("DROP KEYSPACE {}", ks)).discard_result();
         }).get();
-    }
-  }).get();
+    });
+  };
+
+  const int test_case_number = 13;
+  for (int i = 0; i < test_case_number; ++i) {
+    const shard_id rf = tests::random::get_int<shard_id>(2, 4);
+    testlog.info("{}: Starting test case {} for RF={}", std::source_location::current().function_name(), i + 1, rf);
+    do_test_case(rf).get();
+  }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
@@ -2820,6 +2843,13 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
 }
 
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
+    cql_test_config cfg = tablet_cql_test_config();
+    // FIXME: This test creates two keyspaces with two different replication factors.
+    //        What's more, we distribute the nodes across only two racks. Because of that,
+    //        we won't be able to enable `rf_rack_valid_keyspaces`. That would require
+    //        increasing the number of racks to three, as well as implementing scylladb/scylladb#23426.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     do_with_cql_env_thread([] (auto& e) {
         auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
 
@@ -2871,7 +2901,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
                 BOOST_REQUIRE_LE(l.max(), 2 * per_shard_goal);
             }
         }
-    }, tablet_cql_test_config()).get();
+    }, cfg).get();
 }
 
 // This test verifies that per-table tablet count is adjusted
@@ -3174,6 +3204,12 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_random_load) 
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) {
+    cql_test_config cfg{};
+    // This test purposefully uses just one rack, which means that we cannot enable
+    // the `rf_rack_valid_keyspaces` configuration option because we won't be able to create
+    // a keyspace with RF > 1.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 2;
         const int n_racks = 1;
@@ -3200,7 +3236,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_single_rack) 
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, cfg).get();
 }
 
 // Verify merge can proceed with multiple racks and RF=#racks
@@ -3243,6 +3279,20 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_multiple_rack
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) {
+    cql_test_config cfg{};
+    // The scenario this test addresses cannot happen with `rf_rack_valid_keyspaces` set to true.
+    //
+    // Among the tablet replicas for a given tablet, there CANNOT be two nodes from the same rack.
+    // After the decommission of B, both tablets will reside on ALL other nodes, which implies that
+    // they're on pairwise distinct racks. However, since B was taking part in replication of the
+    // tablets, it must've been among the replicas of at least one of the tablets and, for the very
+    // same reason, it must be on a separate rack. Hence, all nodes must reside on pairwise distinct racks.
+    //
+    // So, we if want to keep the current number of nodes and RF, we must have 4 racks. But we cannot
+    // do that until we've implemented scylladb/scylladb#23737. Besides, the test seems to rely on
+    // using just one rack, which makes it incompatible with `rf_rack_valid_keyspaces: true` anyway.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     do_with_cql_env_thread([] (auto& e) {
         const int rf = 3;
         const int n_racks = 1;
@@ -3292,7 +3342,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_merge_colocation_with_decomission) 
         };
 
         do_test_load_balancing_merge_colocation(e, n_racks, rf, n_hosts, shard_count, initial_tablets, set_tablets);
-    }).get();
+    }, cfg).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
@@ -3300,6 +3350,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         topology_builder topo(e);
 
         topo.add_node(node_state::normal, 2);
+        topo.start_new_rack();
         topo.add_node(node_state::normal, 2);
 
         const size_t initial_tablets = 2;
