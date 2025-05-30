@@ -312,7 +312,6 @@ class Test:
         if xdist_worker_id := get_xdist_worker_id():
             self.uname = f"{xdist_worker_id}.{self.uname}"
         self.log_filename = self.suite.log_dir / f"{self.uname}.log"
-        self.log_filename.parent.mkdir(parents=True, exist_ok=True)
         self.is_flaky = self.shortname in suite.flaky_tests
         # True if the test was retried after it failed
         self.is_flaky_failure = False
@@ -402,6 +401,7 @@ toxiproxy_id_gen = 0
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
+    test.log_filename.parent.mkdir(parents=True, exist_ok=True)
     with test.log_filename.open("wb") as log:
         def report_error(error, failure_injection_desc = None):
             msg = "=== TEST.PY SUMMARY START ===\n"
@@ -590,3 +590,12 @@ def find_suite_config(path: pathlib.Path) -> pathlib.Path:
         if suite_config.exists():
             return suite_config
     raise FileNotFoundError(f"Unable to find a suite config file ({SUITE_CONFIG_FILENAME}) related to {path}")
+
+
+async def get_testpy_test(path: pathlib.Path, options: argparse.Namespace, mode: str) -> Test:
+    """Create an instance of Test class for the path provided."""
+
+    suite_config = find_suite_config(path)
+    suite = TestSuite.opt_create(path=str(suite_config.parent), options=options, mode=mode)
+    await suite.add_test(shortname=str(path.relative_to(suite.suite_path).with_suffix("")), casename=None)
+    return suite.tests[-1]

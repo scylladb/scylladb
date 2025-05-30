@@ -156,7 +156,8 @@ def abort_run_with_dir(pid, tmpdir):
 def abort_run_with_temporary_dir(pid):
     return abort_run_with_dir(pid, pid_to_dir(pid))
 
-omit_scylla_output = "--omit-scylla-output" in sys.argv
+if omit_scylla_output := "--omit-scylla-output" in sys.argv:
+    sys.argv.remove("--omit-scylla-output")  # don't pass this option to pytest
 summary=''
 run_pytest_pids = set()
 

@@ -11,26 +11,18 @@
 
 import pytest
 import requests
-import ssl
-import sys
 
-from cassandra.auth import PlainTextAuthProvider
-from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
-from cassandra.policies import RoundRobinPolicy
-
-
-from ..cqlpy.util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
+from test.conftest import testpy_test_fixture_scope
+from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
+from test.cqlpy.util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
+from test.pylib.suite.python import add_host_option, add_cql_connection_options
 
 # By default, tests run against a Scylla server listening
 # on localhost:9042 for CQL and localhost:10000 for the REST API.
 # Add the --host, --port, --ssl, or --api-port options to allow overriding these defaults.
 def pytest_addoption(parser):
-    parser.addoption('--host', action='store', default='localhost',
-        help='Scylla server host to connect to')
-    parser.addoption('--port', action='store', default='9042',
-        help='Scylla CQL port to connect to')
-    parser.addoption('--ssl', action='store_true',
-        help='Connect to CQL via an encrypted TLSv1.2 connection')
+    add_host_option(parser)
+    add_cql_connection_options(parser)
     parser.addoption('--api-port', action='store', default='10000',
         help='server REST API port to connect to')
 
@@ -53,77 +45,22 @@ class RestApiSession:
 # "api" fixture: set up client object for communicating with Scylla API.
 # The host/port combination of the server are determined by the --host and
 # --port options, and defaults to localhost and 10000, respectively.
-# We use scope="session" so that all tests will reuse the same client object.
-@pytest.fixture(scope="session")
-def rest_api(request):
-    host = request.config.getoption('host')
+@pytest.fixture(scope=testpy_test_fixture_scope)
+def rest_api(request, host):
     port = request.config.getoption('api_port')
     return RestApiSession(host, port)
-
-# "cql" fixture: set up client object for communicating with the CQL API.
-# The host/port combination of the server are determined by the --host and
-# --port options, and defaults to localhost and 9042, respectively.
-# We use scope="session" so that all tests will reuse the same client object.
-@pytest.fixture(scope="session")
-def cql(request):
-    profile = ExecutionProfile(
-        load_balancing_policy=RoundRobinPolicy(),
-        consistency_level=ConsistencyLevel.LOCAL_QUORUM,
-        serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
-        # The default timeout (in seconds) for execute() commands is 10, which
-        # should have been more than enough, but in some extreme cases with a
-        # very slow debug build running on a very busy machine and a very slow
-        # request (e.g., a DROP KEYSPACE needing to drop multiple tables)
-        # 10 seconds may not be enough, so let's increase it. See issue #7838.
-        request_timeout = 120)
-    if request.config.getoption('ssl'):
-        # Scylla does not support any earlier TLS protocol. If you try,
-        # you will get mysterious EOF errors (see issue #6971) :-(
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-    else:
-        ssl_context = None
-    cluster = Cluster(execution_profiles={EXEC_PROFILE_DEFAULT: profile},
-        contact_points=[request.config.getoption('host')],
-        port=int(request.config.getoption('port')),
-        # TODO: make the protocol version an option, to allow testing with
-        # different versions. If we drop this setting completely, it will
-        # mean pick the latest version supported by the client and the server.
-        protocol_version=4,
-        # Use the default superuser credentials, which work for both Scylla and Cassandra
-        auth_provider=PlainTextAuthProvider(username='cassandra', password='cassandra'),
-        ssl_context=ssl_context,
-        # The default timeout for new connections is 5 seconds, and for
-        # requests made by the control connection is 2 seconds. These should
-        # have been more than enough, but in some extreme cases with a very
-        # slow debug build running on a very busy machine, they may not be.
-        # so let's increase them to 60 seconds. See issue #11289.
-        connect_timeout = 60,
-        control_connection_timeout = 60,
-    )
-    return cluster.connect()
-
-# Until Cassandra 4, NetworkTopologyStrategy did not support the option
-# replication_factor (https://issues.apache.org/jira/browse/CASSANDRA-14303).
-# We want to allow these tests to run on Cassandra 3.* (for the convenience
-# of developers who happen to have it installed), so we'll use the older
-# syntax that needs to specify a DC name explicitly. For this, will have
-# a "this_dc" fixture to figure out the name of the current DC, so it can be
-# used in NetworkTopologyStrategy.
-@pytest.fixture(scope="session")
-def this_dc(cql):
-    yield cql.execute("SELECT data_center FROM system.local").one()[0]
 
 # The "scylla_only" fixture can be used by tests for Scylla-only features,
 # which do not exist on Apache Cassandra. A test using this fixture will be
 # skipped if running with "run-cassandra".
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def scylla_only(cql):
     # We recognize Scylla by checking if there is any system table whose name
     # contains the word "scylla":
     if not is_scylla(cql):
         pytest.skip('Scylla-only test skipped')
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def has_tablets(cql):
     with new_test_keyspace(cql, " WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor': 1}") as keyspace:
         return keyspace_has_tablets(cql, keyspace)
@@ -138,7 +75,7 @@ def skip_without_tablets(scylla_only, has_tablets):
     if not has_tablets:
         pytest.skip("Test needs tablets experimental feature on")
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_keyspace_vnodes(cql, this_dc, has_tablets):
     name = unique_name()
     if has_tablets:
@@ -149,7 +86,7 @@ def test_keyspace_vnodes(cql, this_dc, has_tablets):
     yield name
     cql.execute("DROP KEYSPACE " + name)
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope=testpy_test_fixture_scope)
 def test_keyspace(cql, this_dc):
     name = unique_name()
     cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")

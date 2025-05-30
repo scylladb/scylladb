@@ -390,7 +390,7 @@ def test_total_operations(dynamodb, metrics):
 # this configuration does not exist, skip this test. If the configuration
 # isn't low enough (it is more than one second), skip this test unless
 # the "--runveryslow" option is used.
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def alternator_ttl_period_in_seconds(dynamodb, request):
     # If not running on Scylla, skip the test
     if is_aws(dynamodb):
