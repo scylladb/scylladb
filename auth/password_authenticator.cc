@@ -142,7 +142,7 @@ future<> password_authenticator::maybe_create_default_password() {
         const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
         auto results = co_await _qp.execute_internal(query,
                 db::consistency_level::LOCAL_ONE,
-                internal_distributed_query_state(), cql3::query_processor::cache_internal::no);
+                internal_distributed_query_state(), cql3::query_processor::cache_internal::yes);
         // Don't add default password if
         // - there is no default superuser
         // - there is a superuser with a password.
