@@ -28,6 +28,7 @@
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
+#include "service/vector_store.hh"
 #include "utils/assert.hh"
 #include "utils/observable.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -107,6 +108,7 @@ private:
     service::storage_proxy& _proxy;
     data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
+    service::vector_store& _vector_store;
     memory_config _mcfg;
     const cql_config& _cql_config;
 
@@ -146,7 +148,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query, dialect d);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries, dialect d);
 
-    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
+    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, service::vector_store& vs, memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
 
     ~query_processor();
 
@@ -175,6 +177,14 @@ public:
     }
 
     lang::manager& lang() { return _lang_manager; }
+
+    const service::vector_store& vector_store() const noexcept {
+        return _vector_store;
+    }
+
+    service::vector_store& vector_store() noexcept {
+        return _vector_store;
+    }
 
     db::auth_version_t auth_version;
 
