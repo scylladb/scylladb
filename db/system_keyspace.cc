@@ -287,6 +287,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
             .with_column("global_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("paused_rf_change_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -3395,6 +3396,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         if (some_row.has("global_requests")) {
             for (auto&& v : deserialize_set_column(*topology(), some_row, "global_requests")) {
                 ret.global_requests_queue.push_back(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("paused_rf_change_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "paused_rf_change_requests")) {
+                ret.paused_rf_change_requests.insert(value_cast<utils::UUID>(v));
             }
         }
 
