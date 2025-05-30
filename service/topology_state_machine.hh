@@ -180,6 +180,10 @@ struct topology {
     // The KS options to be used when executing the scheduled ALTER KS statement
     std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
 
+    // The ids of RF change requests that are paused because they require tablet co-location.
+    // It may happen during altering from numerical RF to rack list.
+    std::unordered_set<utils::UUID> paused_rf_change_requests;
+
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
 

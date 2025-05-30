@@ -256,6 +256,20 @@ topology_mutation_builder& topology_mutation_builder::drop_first_global_topology
     }
 }
 
+topology_mutation_builder& topology_mutation_builder::pause_rf_change_request(const utils::UUID& id) {
+    return apply_set("paused_rf_change_requests", collection_apply_mode::update, std::vector<data_value>{id});
+}
+
+topology_mutation_builder& topology_mutation_builder::resume_rf_change_request(const std::unordered_set<utils::UUID>& values, const utils::UUID& id) {
+    if (values.contains(id)) {
+        auto new_values = values;
+        new_values.erase(id);
+        return apply_set("paused_rf_change_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
+    } else {
+        return *this;
+    }
+}
+
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology::upgrade_state_type value) {
     return apply_atomic("upgrade_state", ::format("{}", value));
 }
