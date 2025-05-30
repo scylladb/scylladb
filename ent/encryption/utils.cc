@@ -15,10 +15,11 @@
 
 using namespace seastar;
 
-encryption::httpclient::httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> creds)
+encryption::httpclient::httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> creds, bool tls_wait_on_close)
     : _host(std::move(host))
     , _port(port)
     , _creds(std::move(creds))
+    , _tls_wait_on_close(tls_wait_on_close)
     , _req(http::request::make(httpd::operation_type::GET, _host, ""))
 {
     _req._version = "1.1";
@@ -62,18 +63,20 @@ seastar::future<> encryption::httpclient::send(const handler_func& f) {
         socket_address _addr;
         shared_ptr<tls::certificate_credentials> _creds;
         sstring _host;
+        bool _tls_wait_on_close;
     public:
-        my_connection_factory(socket_address addr, shared_ptr<tls::certificate_credentials> creds, sstring host)
+        my_connection_factory(socket_address addr, shared_ptr<tls::certificate_credentials> creds, sstring host, bool tls_wait_on_close = true)
             : _addr(std::move(addr))
             , _creds(std::move(creds))
             , _host(std::move(host))
+            , _tls_wait_on_close(tls_wait_on_close)
         {}
         future<connected_socket> make(abort_source* as) override {
             // don't verify host cert name if "host" is just an ip address.
             // typically testing.
             bool is_numeric_host = seastar::net::inet_address::parse_numerical(_host).has_value();
             connected_socket s = co_await (_creds 
-                ? http::experimental::tls_connection_factory(_addr, _creds, is_numeric_host ? sstring{} : _host).make(as) 
+                ? tls::connect(_creds, _addr, tls::tls_options{ .wait_for_eof_on_shutdown = _tls_wait_on_close, .server_name = is_numeric_host ? sstring{} : _host})
                 : http::experimental::basic_connection_factory(_addr).make(as)
             );
             s.set_keepalive(true);
@@ -89,7 +92,7 @@ seastar::future<> encryption::httpclient::send(const handler_func& f) {
         _req._headers[CONTENT_TYPE_HEADER] = "application/x-www-form-urlencoded";
     }
 
-    http::experimental::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _host));
+    http::experimental::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _host, _tls_wait_on_close));
 
     std::exception_ptr p;
     try {
@@ -148,4 +151,28 @@ fmt::formatter<encryption::httpclient::result_type>::format(const encryption::ht
     return os;
 }
 
+auto
+fmt::formatter<encryption::redacted_request_type>::format(const encryption::redacted_request_type& rr, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    const auto& r = rr.original;
+    auto os = fmt::format_to(ctx.out(), "{} {} HTTP/{}{}", r._method, r._url, r._version, linesep);
+    for (auto& [k, v] : r._headers) {
+        os = fmt::format_to(os, "{}: {}{}", k, rr.filter_header(k, v).value_or(v), linesep);
+    }
+    os = fmt::format_to(os, "{}{}", linesep, rr.filter_body(r.content).value_or(r.content));
+    return os;
+}
 
+auto
+fmt::formatter<encryption::redacted_result_type>::format(const encryption::redacted_result_type& rr, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    const auto& r = rr.original;
+    auto s = r.reply.response_line();
+    // remove the trailing \r\n from response_line string. we want our own linebreak, hence substr.
+    auto os = fmt::format_to(ctx.out(), "{}{}", std::string_view(s).substr(0, s.size()-2), linesep);
+    for (auto& [k, v] : r.reply._headers) {
+        os = fmt::format_to(os, "{}: {}{}", k, rr.filter_header(k, v).value_or(v), linesep);
+    }
+    auto redacted_body_opt = rr.filter_body(r.body());
+    auto redacted_body_view = redacted_body_opt.has_value() ? *redacted_body_opt : r.body();
+    os = fmt::format_to(os, "{}{}", linesep, redacted_body_view);
+    return os;
+}

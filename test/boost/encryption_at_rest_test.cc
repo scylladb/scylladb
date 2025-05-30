@@ -25,6 +25,8 @@
 #include "ent/encryption/encryption.hh"
 #include "ent/encryption/symmetric_key.hh"
 #include "ent/encryption/local_file_provider.hh"
+#include "ent/encryption/encryption_exceptions.hh"
+#include "ent/encryption/azure_host.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/cql_test_env.hh"
@@ -38,6 +40,7 @@
 #include "sstables/sstables.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/rjson.hh"
+#include "utils/azure/identity/exceptions.hh"
 #include "replica/database.hh"
 #include "service/client_state.hh"
 
@@ -1245,3 +1248,272 @@ SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
 // but there is no infrastructure for that atm.
+
+/*
+    Simple test of Azure Key Provider.
+
+    User1 is assumed to have permissions to wrap/unwrap using the given key.
+    User2 is assumed to _not_ have permissions to wrap/unwrap using the given key.
+
+    This test is parameterized with env vars:
+    * ENABLE_AZURE_TEST - set to non-zero (1/true) to run
+    * AZURE_TENANT_ID - the tenant where the principals live
+    * AZURE_USER_1_CLIENT_ID - the client ID of user1
+    * AZURE_USER_1_CLIENT_SECRET - the secret of user1
+    * AZURE_USER_1_CLIENT_CERTIFICATE - the PEM-encoded certificate and private key of user1
+    * AZURE_USER_2_CLIENT_ID - the client ID of user2
+    * AZURE_USER_2_CLIENT_SECRET - the secret of user2
+    * AZURE_USER_2_CLIENT_CERTIFICATE - the PEM-encoded certificate and private key of user2
+    * AZURE_KEY_NAME - set to <vault_name>/<keyname>
+*/
+
+struct azure_test_env {
+    std::string key_name;
+    std::string tenant_id;
+    std::string user_1_client_id;
+    std::string user_1_client_secret;
+    std::string user_1_client_certificate;
+    std::string user_2_client_id;
+    std::string user_2_client_secret;
+    std::string user_2_client_certificate;
+};
+
+static future<> azure_test_helper(std::function<future<>(const tmpdir&, const azure_test_env&)> f) {
+    azure_test_env env {
+        .key_name = get_var_or_default("AZURE_KEY_NAME", ""),
+        .tenant_id = get_var_or_default("AZURE_TENANT_ID", ""),
+        .user_1_client_id = get_var_or_default("AZURE_USER_1_CLIENT_ID", ""),
+        .user_1_client_secret = get_var_or_default("AZURE_USER_1_CLIENT_SECRET", ""),
+        .user_1_client_certificate = get_var_or_default("AZURE_USER_1_CLIENT_CERTIFICATE", ""),
+        .user_2_client_id = get_var_or_default("AZURE_USER_2_CLIENT_ID", ""),
+        .user_2_client_secret = get_var_or_default("AZURE_USER_2_CLIENT_SECRET", ""),
+        .user_2_client_certificate = get_var_or_default("AZURE_USER_2_CLIENT_CERTIFICATE", ""),
+    };
+
+    tmpdir tmp;
+
+    if (env.key_name.empty()) {
+        BOOST_ERROR("No 'AZURE_KEY_NAME' provided");
+    }
+    if (env.tenant_id.empty()) {
+        BOOST_ERROR("No 'AZURE_TENANT_ID' provided");
+    }
+    if (env.user_1_client_id.empty() || env.user_1_client_secret.empty() || env.user_1_client_certificate.empty()) {
+        BOOST_ERROR("Missing or incompete credentials for user 1: All three of 'AZURE_USER_1_CLIENT_ID', 'AZURE_USER_1_CLIENT_SECRET' and 'AZURE_USER_1_CLIENT_CERTIFICATE' must be provided");
+    }
+    if (env.user_2_client_id.empty() || env.user_2_client_secret.empty() || env.user_2_client_certificate.empty()) {
+        BOOST_ERROR("Missing or incompete credentials for user 2: All three of 'AZURE_USER_2_CLIENT_ID', 'AZURE_USER_2_CLIENT_SECRET' and 'AZURE_USER_2_CLIENT_CERTIFICATE' must be provided");
+    }
+
+    co_await f(tmp, env);
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_secret, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate
+        );
+
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    });
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_certificate, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_certificate_path: {4}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate
+        );
+
+        co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
+    });
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_master_key_in_cf, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , exceptions::configuration_exception, [](const exceptions::configuration_exception& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const encryption::configuration_error& inner) {
+                    return sstring(inner.what()).find("No master key set") != sstring::npos;
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+
+        // should be ok
+        co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", azure.key_name)
+            , tmp, yaml
+            );
+    });
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_no_host, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = R"foo(
+            azure_hosts:
+            )foo";
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , std::invalid_argument
+            , [](const std::invalid_argument& e) {
+                return sstring(e.what()).find("No such host") != sstring::npos;
+            }
+        );
+    });
+}
+
+/**
+ * Verify that the Azure key provider throws if the provided Service Principal
+ * credentials are incomplete. The provider will first fall back to the default
+ * credentials source to detect credentials from the system (env vars, Azure CLI,
+ * IMDS), and only after all these attempts fail will it throw.
+*/
+SEASTAR_TEST_CASE(test_azure_provider_with_incomplete_creds, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , permission_error, [](const encryption::permission_error& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const azure::auth_error& inner) {
+                    return sstring(inner.what()).find("No credentials found in any source.") != sstring::npos;
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+    });
+}
+
+SEASTAR_TEST_CASE(test_azure_provider_with_invalid_key, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto vault = azure.key_name.substr(0, azure.key_name.find('/'));
+        auto master_key = fmt::format("{}/nonexistentkey", vault);
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    )foo"
+            , master_key, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_1_client_certificate
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , service_error, [](const service_error& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const encryption::vault_error& inner) {
+                    return inner.code() == "Forbidden";
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+    });
+}
+
+/**
+ * Verify that trying to access key materials with a user w/o permissions to wrap/unwrap using vault
+ * fails.
+*/
+SEASTAR_TEST_CASE(test_azure_provider_with_invalid_user, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    master_key: {0}
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_2_client_id, azure.user_2_client_secret, azure.user_2_client_certificate
+        );
+
+        // should fail
+        BOOST_REQUIRE_EXCEPTION(
+            co_await test_provider("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml)
+            , service_error, [](const service_error& e) {
+                try {
+                    std::rethrow_if_nested(e);
+                } catch (const encryption::vault_error& inner) {
+                    return inner.code() == "Forbidden";
+                } catch (...) {
+                    return false; // Unexpected nested exception type
+                }
+                return false; // No nested exception
+            }
+        );
+    });
+}
+
+/**
+ * Verify that the secret has higher precedence that the certificate.
+ * Use the wrong user's certificate to make sure it causes the test to fail.
+*/
+SEASTAR_TEST_CASE(test_azure_provider_with_both_secret_and_cert, *check_run_test_decorator("ENABLE_AZURE_TEST")) {
+    co_await azure_test_helper([](const tmpdir& tmp, const azure_test_env& azure) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            azure_hosts:
+                azure_test:
+                    azure_tenant_id: {1}
+                    azure_client_id: {2}
+                    azure_client_secret: {3}
+                    azure_client_certificate_path: {4}
+                    )foo"
+            , azure.key_name, azure.tenant_id, azure.user_1_client_id, azure.user_1_client_secret, azure.user_2_client_certificate // deliberately using user2's cert
+        );
+
+        // should be ok
+        co_await test_provider(fmt::format("'key_provider': 'AzureKeyProviderFactory', 'azure_host': 'azure_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", azure.key_name)
+            , tmp, yaml
+            );
+    });
+}
