@@ -123,25 +123,17 @@ class BoostTestFacade(CppTestFacade):
         if not test_passed:
             allure.attach(stdout_file_path.read_bytes(), name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
-                'working_dir: {working_dir}\n'
-                'Internal Error: calling {executable} '
-                'for test {test_id} failed (return_code={return_code}):\n'
-                'output file:{stdout}\n'
-                'log:{log}\n'
-                'command to repeat:{command}'
+                f'working_dir: {os.getcwd()}\n'
+                f'Internal Error: calling {executable} '
+                f'for test {test_name} failed ({return_code=}):\n'
+                f'output file:{stdout_file_path.absolute()}\n'
+                f'log:{log}\n'
+                f'command to repeat:{" ".join(args)}\n'
             )
             failure = CppTestFailure(
                 file_name.name,
                 line_num=results[0].line_num,
-                contents=msg.format(
-                    working_dir=os.getcwd(),
-                    executable=executable,
-                    test_id=test_name,
-                    stdout=stdout_file_path.absolute(),
-                    log=log,
-                    command=' '.join(args),
-                    return_code=return_code,
-                ),
+                contents=msg
             )
             return [failure], ''
 
