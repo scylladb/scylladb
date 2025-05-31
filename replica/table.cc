@@ -2859,21 +2859,6 @@ db::replay_position table::highest_flushed_replay_position() const {
 
 future<>
 table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
-    std::ostringstream ss;
-    int n = 0;
-    ss << "{" << std::endl << "\t\"files\" : [ ";
-    for (const auto& fsp : file_sets) {
-      for (const auto& rf : *fsp) {
-        if (n++ > 0) {
-            ss << ", ";
-        }
-        ss << "\"" << rf << "\"";
-        co_await coroutine::maybe_yield();
-      }
-    }
-    ss << " ]" << std::endl << "}" << std::endl;
-
-    auto json = ss.str();
     auto jsonfile = jsondir + "/manifest.json";
 
     tlogger.debug("Storing manifest {}", jsonfile);
@@ -2883,7 +2868,23 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
     auto out = co_await make_file_output_stream(std::move(f));
     std::exception_ptr ex;
     try {
-        co_await out.write(json.c_str(), json.size());
+        int n = 0;
+        co_await out.write("{\n");
+        co_await out.write("\t\"files\" : [ ");
+        for (const auto& fsp : file_sets) {
+            for (const auto& rf : *fsp) {
+                if (n++ > 0) {
+                    co_await out.write(", ");
+                }
+                co_await out.write("\"");
+                co_await out.write(rf.c_str(), rf.size());
+                co_await out.write("\"");
+                co_await coroutine::maybe_yield();
+            }
+        }
+        co_await out.write(" ]\n");
+        co_await out.write("}\n");
+
         co_await out.flush();
     } catch (...) {
         ex = std::current_exception();
