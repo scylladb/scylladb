@@ -30,7 +30,10 @@ DEBUG_MODES = {"debug", "sanitize"}
 def path_to(mode: str, *components: str) -> str:
     """Resolve path to built executable."""
 
-    if BUILD_DIR.joinpath("build.ninja").exists():
+    # cmake places build.ninja in build/, traditional is in ./.
+    # We choose to test for traditional, not cmake, because IDEs may
+    # invoke cmake to learn the configuration and generate false positives
+    if not TOP_SRC_DIR.joinpath("build.ninja").exists():
         *dir_components, basename = components
         return str(BUILD_DIR.joinpath(*dir_components, ALL_MODES[mode], basename))
     return str(BUILD_DIR.joinpath(mode, *components))

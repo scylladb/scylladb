@@ -273,7 +273,10 @@ def ninja(target: str) -> str:
     """Build specified target using ninja."""
 
     return subprocess.Popen(
-        args=["ninja", *(["-C", str(BUILD_DIR)] if BUILD_DIR.joinpath("build.ninja").exists() else []), target],
+        # cmake places build.ninja in build/, traditional is in ./.
+        # We choose to test for traditional, not cmake, because IDEs may
+        # invoke cmake to learn the configuration and generate false positives
+        args=["ninja", *(["-C", str(BUILD_DIR)] if not TOP_SRC_DIR.joinpath("build.ninja").exists() else []), target],
         stdout=subprocess.PIPE,
         cwd=TOP_SRC_DIR,
     ).communicate()[0].decode()
