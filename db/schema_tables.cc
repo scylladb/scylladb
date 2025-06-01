@@ -1840,7 +1840,7 @@ void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type time
 static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns);
 static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, utils::chunked_vector<mutation>& mutations);
 
-static bool should_create_view(const index_metadata & index) {
+bool should_create_view(const index_metadata & index) {
     auto custom_class = secondary_index::secondary_index_manager::get_custom_class(index);
     if (!custom_class) {
         return true;
