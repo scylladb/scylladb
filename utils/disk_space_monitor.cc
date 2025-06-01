@@ -43,6 +43,16 @@ disk_space_monitor::~disk_space_monitor() {
     SCYLLA_ASSERT(_poller_fut.available());
 }
 
+disk_space_monitor::space_source_registration::space_source_registration(disk_space_monitor& m)
+    : _monitor(m)
+    , _prev_space_source(m._space_source)
+{
+}
+
+disk_space_monitor::space_source_registration::~space_source_registration() {
+    _monitor._space_source = _prev_space_source;
+}
+
 future<> disk_space_monitor::start() {
     _space_info = co_await get_filesystem_space();
     _poller_fut = poll();

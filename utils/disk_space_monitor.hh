@@ -80,9 +80,22 @@ public:
 
     signal_connection_type listen(signal_callback_type callback);
 
+    // Registers a new space source function and returns an object that
+    // restores the previous one when it goes out of scope.
+    class space_source_registration {
+        disk_space_monitor& _monitor;
+        space_source_fn _prev_space_source;
+    public:
+        space_source_registration(disk_space_monitor& m);
+
+        ~space_source_registration();
+    };
+
     // Replaces default way of obtaining file system usage information.
-    void set_space_source(space_source_fn space_source) {
+    space_source_registration set_space_source(space_source_fn space_source) {
+        auto ret = space_source_registration(*this);
         _space_source = std::move(space_source);
+        return ret;
     }
 
     void trigger_poll() noexcept;
@@ -93,6 +106,8 @@ private:
     future<std::filesystem::space_info> get_filesystem_space();
 
     clock_type::duration get_polling_interval() const noexcept;
+
+    friend class space_source_registration;
 };
 
 } // namespace utils
