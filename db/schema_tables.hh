@@ -306,6 +306,8 @@ utils::chunked_vector<mutation> make_drop_view_mutations(lw_shared_ptr<keyspace_
 
 void check_no_legacy_secondary_index_mv_schema(replica::database& db, const view_ptr& v, schema_ptr base_schema);
 
+bool view_should_exist(const index_metadata& im);
+
 sstring serialize_kind(column_kind kind);
 column_kind deserialize_kind(sstring kind);
 data_type parse_type(sstring str);

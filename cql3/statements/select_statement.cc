@@ -18,6 +18,9 @@
 #include "cql3/statements/prune_materialized_view_statement.hh"
 #include "cql3/statements/strongly_consistent_select_statement.hh"
 
+#include "exceptions/exceptions.hh"
+#include <seastar/core/future.hh>
+#include <seastar/coroutine/exception.hh>
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
 #include "transport/messages/result_message.hh"
@@ -25,10 +28,13 @@
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
+#include "index/secondary_index.hh"
+#include "types/vector.hh"
 #include "validation.hh"
 #include "exceptions/unrecognized_entity_exception.hh"
 #include <optional>
 #include <ranges>
+#include <variant>
 #include <seastar/core/shared_ptr.hh>
 #include "query-result-reader.hh"
 #include "query_ranges_to_vnodes.hh"
@@ -976,6 +982,14 @@ primary_key_select_statement::primary_key_select_statement(schema_ptr schema, ui
     }
 }
 
+bool check_needs_allow_filtering_anyway(const restrictions::statement_restrictions& restrictions) {
+    // Even if no filtering happens on the coordinator, we still warn about poor performance when partition
+    // slice is defined but in potentially unlimited number of partitions (see #7608).
+    return (restrictions.partition_key_restrictions_is_empty() || restrictions.has_token_restrictions()) // Potentially unlimited partitions.
+            && restrictions.has_clustering_columns_restriction() // Slice defined.
+            && !restrictions.uses_secondary_indexing(); // Base-table is used. (Index-table use always limits partitions.)
+}
+
 ::shared_ptr<cql3::statements::select_statement>
 indexed_table_select_statement::prepare(data_dictionary::database db,
                                         schema_ptr schema,
@@ -986,6 +1000,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
                                         ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                         bool is_reversed,
                                         ordering_comparator_type ordering_comparator,
+                                        std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                         std::optional<expr::expression> limit,
                                          std::optional<expr::expression> per_partition_limit,
                                          cql_stats &stats,
@@ -994,6 +1009,30 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
     auto cf = db.find_column_family(schema);
     auto& sim = cf.get_index_manager();
     auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
+
+    if (prepared_ann_ordering.has_value()) {
+        auto indexes = sim.list_indexes();
+        auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
+            return (ind.metadata().options().contains(db::index::secondary_index::custom_index_option_name)
+                && ind.metadata().options().at(db::index::secondary_index::custom_index_option_name) == ann_custom_index_option)
+                && (ind.target_column() == prepared_ann_ordering->first->name_as_text());
+        });
+
+        if (it == indexes.end()) {
+            throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
+        } else {
+            if (index_opt || parameters->allow_filtering() || restrictions->need_filtering() || check_needs_allow_filtering_anyway(*restrictions)) {
+                throw exceptions::invalid_request_exception("ANN ordering by vector does not support filtering");
+            }
+            index_opt = *it;
+        }
+    } else if (index_opt) {
+        auto it = index_opt->metadata().options().find(db::index::secondary_index::custom_index_option_name);
+        if (it != index_opt->metadata().options().end() && it->second == ann_custom_index_option) {
+            throw exceptions::invalid_request_exception("Vector indexes only support ANN queries");
+        }
+    }
+
     if (!index_opt) {
         throw std::runtime_error("No index found.");
     }
@@ -1009,6 +1048,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
             std::move(group_by_cell_indices),
             is_reversed,
             std::move(ordering_comparator),
+            std::move(prepared_ann_ordering),
             std::move(limit),
             std::move(per_partition_limit),
             stats,
@@ -1026,6 +1066,7 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
+                                                           std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                                            std::optional<expr::expression> limit,
                                                            std::optional<expr::expression> per_partition_limit,
                                                            cql_stats &stats,
@@ -1037,6 +1078,7 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
     , _index{index}
     , _used_index_restrictions(std::move(used_index_restrictions))
     , _view_schema(view_schema)
+    , _prepared_ann_ordering(std::move(prepared_ann_ordering))
 {
     if (_index.metadata().local()) {
         _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_local_index_posting_list(options); };
@@ -1145,7 +1187,20 @@ indexed_table_select_statement::do_execute(query_processor& qp,
             ? source_selector::INTERNAL : source_selector::USER;
     ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 
-    SCYLLA_ASSERT(_restrictions->uses_secondary_indexing());
+    SCYLLA_ASSERT(_restrictions->uses_secondary_indexing() || _prepared_ann_ordering.has_value());
+
+    if (_prepared_ann_ordering.has_value()) {
+        auto limit = get_limit(options, _limit);
+        if (limit > max_ann_query_limit) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
+        }
+
+        auto [ann_column, ann_vector_expr] = _prepared_ann_ordering.value();
+        auto ann_vector = ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes());
+        // TODO: not implemented
+        logger.debug("Executing ANN search for vector {}", ann_vector.to_parsable_string());
+        throw exceptions::invalid_request_exception("ANN index not implemented");
+    }
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
 
@@ -2052,19 +2107,33 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     select_statement::ordering_comparator_type ordering_comparator;
     bool is_reversed_ = false;
 
-    if (!_parameters->orderings().empty()) {
-        SCYLLA_ASSERT(!for_view);
-        verify_ordering_is_allowed(*_parameters, *restrictions);
-        prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
-        verify_ordering_is_valid(prepared_orderings, *schema, *restrictions);
+    std::optional<prepared_ann_ordering_type> prepared_ann_ordering;
 
-        ordering_comparator = get_ordering_comparator(prepared_orderings, *selection, *restrictions);
-        is_reversed_ = is_ordering_reversed(prepared_orderings);
+    auto orderings = _parameters->orderings();
+
+    if (!orderings.empty()) {
+        std::visit([&](auto&& ordering) {
+            using T = std::decay_t<decltype(ordering)>;
+            if constexpr (std::is_same_v<T, select_statement::ann_vector>) {
+                verify_ann_ordering_is_valid(_limit, _per_partition_limit, *selection);
+                prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
+            } else {
+                SCYLLA_ASSERT(!for_view);
+                verify_ordering_is_allowed(*_parameters, *restrictions);
+                prepared_orderings_type prepared_orderings = prepare_orderings(*schema);
+                verify_ordering_is_valid(prepared_orderings, *schema, *restrictions);
+
+                ordering_comparator = get_ordering_comparator(prepared_orderings, *selection, *restrictions);
+                is_reversed_ = is_ordering_reversed(prepared_orderings);
+            }
+        }, orderings.front().second);
     }
 
     std::vector<sstring> warnings;
-    check_needs_filtering(*restrictions, db.get_config().strict_allow_filtering(), warnings);
-    ensure_filtering_columns_retrieval(db, *selection, *restrictions);
+    if (!prepared_ann_ordering.has_value()) {
+        check_needs_filtering(*restrictions, db.get_config().strict_allow_filtering(), warnings);
+        ensure_filtering_columns_retrieval(db, *selection, *restrictions);
+    }
     auto group_by_cell_indices = ::make_shared<std::vector<size_t>>(prepare_group_by(*schema, *selection));
 
     if (_parameters->is_distinct() && group_by_references_clustering_keys(*selection, *group_by_cell_indices)) {
@@ -2145,7 +2214,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
-    } else if (restrictions->uses_secondary_indexing()) {
+    } else if (restrictions->uses_secondary_indexing() || prepared_ann_ordering) {
         stmt = indexed_table_select_statement::prepare(
                 db,
                 schema,
@@ -2156,6 +2225,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(group_by_cell_indices),
                 is_reversed_,
                 std::move(ordering_comparator),
+                std::move(prepared_ann_ordering),
                 prepare_limit(db, ctx, _limit),
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
@@ -2300,19 +2370,14 @@ select_statement::prepared_orderings_type select_statement::prepare_orderings(co
 // Checks whether this ordering causes select results on this column to be reversed.
 // A clustering column can be ordered in the descending order in the table.
 // Then specifying ascending order would cause the results of this column to be reverse in comparison to a standard select.
-static bool are_column_select_results_reversed(const column_definition& column, select_statement::ordering column_ordering) {
-    if (column_ordering == select_statement::ordering::ascending) {
-        if (column.type->is_reversed()) {
-            return true;
-        } else {
-            return false;
-        }
-    } else { // descending ordering
-        if (column.type->is_reversed()) {
-            return false;
-        } else {
-            return true;
-        }
+static bool are_column_select_results_reversed(const column_definition& column, select_statement::ordering_type column_ordering) {
+    auto ordering = std::get_if<select_statement::ordering>(&column_ordering);
+    SCYLLA_ASSERT(ordering);
+
+    if (*ordering == select_statement::ordering::ascending) {
+        return column.type->is_reversed();
+    } else { // descending
+        return !column.type->is_reversed();
     }
 }
 
@@ -2369,6 +2434,44 @@ void select_statement::verify_ordering_is_valid(const prepared_orderings_type& o
             }
         }
     }
+}
+
+void select_statement::verify_ann_ordering_is_valid(const std::optional<expr::expression>& limit,
+                                                    const std::optional<expr::expression>& per_partition_limit,
+                                                    const selection::selection& selection) const {
+    if (!limit.has_value()) {
+        throw exceptions::invalid_request_exception("ANN queries must have a limit specified");
+    }
+
+    if (per_partition_limit.has_value()) {
+        throw exceptions::invalid_request_exception("ANN queries do not support per-partition limits");
+    }
+
+    if (selection.is_aggregate()) {
+        throw exceptions::invalid_request_exception("ANN queries can not be run with aggregation");
+    }
+}
+
+select_statement::prepared_ann_ordering_type select_statement::prepare_ann_ordering(const schema& schema, prepare_context& ctx, data_dictionary::database db) const {
+    auto [column_id, ordering] = _parameters->orderings().front();
+    const auto& ann_vector = std::get_if<select_statement::ann_vector>(&ordering);
+    SCYLLA_ASSERT(ann_vector);
+
+    ::shared_ptr<column_identifier> column = column_id->prepare_column_identifier(schema);
+    const column_definition* def = schema.get_column_definition(column->name());
+    if (!def) {
+        throw exceptions::invalid_request_exception(
+                fmt::format("Undefined column name {}", column->name()));
+    }
+
+    if (!def->type->is_vector() || static_cast<const vector_type_impl*>(def->type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
+        throw exceptions::invalid_request_exception("ANN ordering is only supported on float vector indexes");
+    }
+
+    auto e =  expr::prepare_expression(*ann_vector, db, keyspace(), nullptr, def->column_specification);
+    expr::fill_prepare_context(e, ctx);
+
+    return std::make_pair(std::move(def), std::move(e));
 }
 
 select_statement::ordering_comparator_type select_statement::get_ordering_comparator(const prepared_orderings_type& orderings,
@@ -2457,13 +2560,7 @@ static bool needs_allow_filtering_anyway(
     if (strict_allow_filtering == flag_t::FALSE) {
         return false;
     }
-    const auto& ck_restrictions = restrictions.get_clustering_columns_restrictions();
-    const auto& pk_restrictions = restrictions.get_partition_key_restrictions();
-    // Even if no filtering happens on the coordinator, we still warn about poor performance when partition
-    // slice is defined but in potentially unlimited number of partitions (see #7608).
-    if ((restrictions::is_empty_restriction(pk_restrictions) || restrictions.has_token_restrictions()) // Potentially unlimited partitions.
-        && !restrictions::is_empty_restriction(ck_restrictions) // Slice defined.
-        && !restrictions.uses_secondary_indexing()) { // Base-table is used. (Index-table use always limits partitions.)
+    if (check_needs_allow_filtering_anyway(restrictions)) {
         if (strict_allow_filtering == flag_t::WARN) {
             warnings.emplace_back("This query should use ALLOW FILTERING and will be rejected in future versions.");
             return false;
