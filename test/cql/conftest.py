@@ -48,18 +48,17 @@ def pytest_collect_file(file_path: Path, parent: Collector) -> Collector | None:
 
 
 @pytest.fixture(autouse=True)
-def cql_test_connection(request: pytest.FixtureRequest, cql: Session) -> Generator[None]:
+def cql_test_connection(cql: Session) -> Generator[None]:
     """Check if a DB node is still up after test finished."""
 
     yield
 
     try:
-        # We want to run a do-nothing CQL command. "use system" is the
-        # closest to do-nothing I could find...
+        # We want to run a do-nothing CQL command.
+        # "use system" is the closest to do-nothing I could find...
         cql.execute("use system")
-    except Exception:     # noqa: E722     pylint: disable=broad-except
-        pytest.exit("Scylla appears to have crashed in test "
-                    f"{request.node.parent.name}::{request.node.name}")
+    except Exception as exc:
+        pytest.fail(f"Scylla appears to have crashed: {exc}")
 
 
 @pytest.fixture(scope=testpy_test_fixture_scope, autouse=True)
