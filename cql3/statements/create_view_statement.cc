@@ -195,7 +195,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         return def;
     }) | std::ranges::to<std::unordered_set<const column_definition*>>();
 
-    auto parameters = make_lw_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), false, true);
+    auto parameters = make_lw_shared<raw::select_statement::parameters>(raw::select_statement::parameters::orderings_type(), raw::select_statement::parameters::ann_orderings_type(), false, true);
     raw::select_statement raw_select(_base_name, std::move(parameters), _select_clause, _where_clause, std::nullopt, std::nullopt, {}, std::make_unique<cql3::attributes::raw>());
     raw_select.prepare_keyspace(keyspace());
     raw_select.set_bound_variables({});
