@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -34,6 +35,36 @@ def retry_till_success[T, **P](fun: Callable[P, T], *args: P.args, **kwargs: P.k
 
         # Brief pause before next attempt.
         time.sleep(0.1)
+
+
+def list_to_hashed_dict(query_response_list):
+    """
+    takes a list and hashes the contents and puts them into a dict so the contents can be compared
+    without order. unfortunately, we need to do a little massaging of our input; the result from
+    the driver can return a OrderedMapSerializedKey (e.g. [0, 9, OrderedMapSerializedKey([(10, 11)])])
+    but our "expected" list is simply a list of elements (or list of list). this means if we
+    hash the values as is we'll get different results. to avoid this, when we see a dict,
+    convert the raw values (key, value) into a list and insert that list into a new list
+    :param query_response_list the list to convert
+    :return: dict containing the contents fo the list with the hashed contents
+    """
+    hashed_dict = dict()
+    for item_lst in query_response_list:
+        normalized_list = []
+        for item in item_lst:
+            if hasattr(item, "items"):
+                tmp_list = []
+                for a, b in item.items():
+                    tmp_list.append(a)
+                    tmp_list.append(b)
+                normalized_list.append(tmp_list)
+            else:
+                normalized_list.append(item)
+        list_str = str(normalized_list)
+        utf8 = list_str.encode("utf-8", "ignore")
+        list_digest = hashlib.sha256(utf8).hexdigest()
+        hashed_dict[list_digest] = normalized_list
+    return hashed_dict
 
 
 def set_trace_probability(nodes: list[ScyllaNode], probability_value: float) -> None:
