@@ -16,13 +16,7 @@ from cassandra.protocol import SyntaxException
 
 from dtest_class import Tester
 from tools.assertions import assert_all, assert_invalid, assert_one
-from tools.cluster import minimum_scylla_version
 from tools.log_utils import wait_for_any_log
-from tools.permission import (
-    data_resource_creator_permissions,
-    function_resource_creator_permissions,
-    role_creator_permissions,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +34,9 @@ def fixture_set_cluster_settings(fixture_dtest_setup):
     fixture_dtest_setup.cluster.set_configuration_options({"enable_user_defined_functions": "true", "experimental_features": ["udf"]})
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 @pytest.mark.usefixtures("fixture_set_cluster_settings")
 class TestAuthRoles(Tester):
-    @pytest.mark.next_gating
     def test_create_drop_role(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -56,7 +48,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("DROP ROLE role1")
         assert_one(cassandra, "LIST ROLES", cassandra_role)
 
-    @pytest.mark.next_gating
     def test_conditional_create_drop_role(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -70,7 +61,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("DROP ROLE IF EXISTS role1")
         assert_one(cassandra, "LIST ROLES", cassandra_role)
 
-    @pytest.mark.next_gating
     def test_create_drop_role_validation(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -86,8 +76,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("DROP ROLE role1")
         assert_invalid(cassandra, "DROP ROLE role1", "role1 doesn't exist")
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
     def test_role_admin_validation(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -128,45 +116,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("REVOKE administrator FROM mike")
         assert_invalid(mike, "CREATE ROLE role3 WITH LOGIN = false", "User mike has no CREATE permission on <all roles> or any of its parents", Unauthorized)
 
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_creator_of_db_resource_granted_all_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND SUPERUSER = false AND LOGIN = true")
-        cassandra.execute("GRANT CREATE ON ALL KEYSPACES TO mike")
-        cassandra.execute("GRANT CREATE ON ALL ROLES TO mike")
-
-        mike = self.get_session(user="mike", password="12345")
-        # mike should automatically be granted permissions on any resource he creates, i.e. tables or roles
-        mike.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
-        mike.execute("CREATE TABLE ks.cf (id int primary key, val int)")
-        mike.execute("CREATE ROLE role1 WITH PASSWORD = '11111' AND SUPERUSER = false AND LOGIN = true")
-        mike.execute(
-            """CREATE FUNCTION ks.state_function_1(a int, b int)
-                        CALLED ON NULL INPUT
-                        RETURNS int
-                        LANGUAGE javascript
-                        AS ' a + b'"""
-        )
-        mike.execute(
-            """CREATE AGGREGATE ks.simple_aggregate_1(int)
-                        SFUNC state_function_1
-                        STYPE int
-                        INITCOND 0"""
-        )
-
-        cassandra_permissions = role_creator_permissions("cassandra", "<role mike>")
-        mike_permissions = [("mike", "<all roles>", "CREATE"), ("mike", "<all keyspaces>", "CREATE")]
-        mike_permissions.extend(role_creator_permissions("mike", "<role role1>"))
-        mike_permissions.extend(data_resource_creator_permissions("mike", "<keyspace ks>"))
-        mike_permissions.extend(data_resource_creator_permissions("mike", "<table ks.cf>"))
-        mike_permissions.extend(function_resource_creator_permissions("mike", "<function ks.state_function_1(int, int)>"))
-        mike_permissions.extend(function_resource_creator_permissions("mike", "<function ks.simple_aggregate_1(int)>"))
-
-        self.assert_permissions_listed(cassandra_permissions + mike_permissions, cassandra, "LIST ALL PERMISSIONS")
-
-    @pytest.mark.next_gating
     def test_create_and_grant_roles_with_superuser_status(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -186,7 +135,6 @@ class TestAuthRoles(Tester):
         assert_invalid(mike, "CREATE ROLE role2 WITH SUPERUSER = true", "Only superusers can create a role with superuser status", Unauthorized)
         assert_all(cassandra, "LIST ROLES OF role1", [["another_superuser", True, False, {}], ["non_superuser", False, False, {}], ["role1", False, False, {}]])
 
-    @pytest.mark.next_gating
     def test_drop_and_revoke_roles_with_superuser_status(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -206,7 +154,6 @@ class TestAuthRoles(Tester):
         mike.execute("DROP ROLE non_superuser")
         mike.execute("DROP ROLE role1")
 
-    @pytest.mark.next_gating
     def test_drop_role_removes_memberships(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -229,7 +176,6 @@ class TestAuthRoles(Tester):
         assert_one(cassandra, "LIST ROLES OF mike", mike_role)
         assert_all(cassandra, "LIST ROLES", [cassandra_role, mike_role, role2_role])
 
-    @pytest.mark.next_gating
     def test_drop_role_revokes_permissions_granted_on_it(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -245,7 +191,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("DROP ROLE role2")
         assert len(list(cassandra.execute("LIST ALL PERMISSIONS OF mike"))) == 0
 
-    @pytest.mark.next_gating
     def test_grant_revoke_roles(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -265,7 +210,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("REVOKE role1 FROM role2")
         assert_one(cassandra, "LIST ROLES OF role2", role2_role)
 
-    @pytest.mark.next_gating
     def test_grant_revoke_role_validation(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -296,7 +240,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("REVOKE role1 FROM john")
         mike.execute("REVOKE role2 from john")
 
-    @pytest.mark.next_gating
     def test_list_roles(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -327,8 +270,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("GRANT DESCRIBE ON ALL ROLES TO mike")
         assert_all(mike, "LIST ROLES", [cassandra_role, mike_role, role1_role, role2_role])
 
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
     def test_grant_revoke_permissions(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -352,164 +293,6 @@ class TestAuthRoles(Tester):
 
         assert_invalid(mike, "INSERT INTO ks.cf (id, val) VALUES (0, 0)", re.escape("mike has no MODIFY permission on <table ks.cf> or any of its parents"), Unauthorized)
 
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_filter_granted_permissions_by_resource_type(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
-        cassandra.execute("CREATE TABLE ks.cf (id int primary key, val int)")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND SUPERUSER = false AND LOGIN = true")
-        cassandra.execute("CREATE ROLE role1 WITH SUPERUSER = false AND LOGIN = false")
-        cassandra.execute("CREATE FUNCTION ks.state_func(a int, b int) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'a+b'")
-        cassandra.execute("CREATE AGGREGATE ks.agg_func(int) SFUNC state_func STYPE int")
-
-        # GRANT ALL ON ALL KEYSPACES grants Permission.ALL_DATA
-
-        # GRANT ALL ON KEYSPACE grants Permission.ALL_DATA
-        cassandra.execute("GRANT ALL ON KEYSPACE ks TO mike")
-        self.assert_permissions_listed(
-            [("mike", "<keyspace ks>", "CREATE"), ("mike", "<keyspace ks>", "ALTER"), ("mike", "<keyspace ks>", "DROP"), ("mike", "<keyspace ks>", "SELECT"), ("mike", "<keyspace ks>", "MODIFY"), ("mike", "<keyspace ks>", "AUTHORIZE")],
-            cassandra,
-            "LIST ALL PERMISSIONS OF mike",
-        )
-        cassandra.execute("REVOKE ALL ON KEYSPACE ks FROM mike")
-
-        # GRANT ALL ON TABLE does not include CREATE (because the table must already be created before the GRANT)
-        cassandra.execute("GRANT ALL ON ks.cf TO MIKE")
-        self.assert_permissions_listed(
-            [("mike", "<table ks.cf>", "ALTER"), ("mike", "<table ks.cf>", "DROP"), ("mike", "<table ks.cf>", "SELECT"), ("mike", "<table ks.cf>", "MODIFY"), ("mike", "<table ks.cf>", "AUTHORIZE")], cassandra, "LIST ALL PERMISSIONS OF mike"
-        )
-        cassandra.execute("REVOKE ALL ON ks.cf FROM mike")
-        assert_invalid(cassandra, "GRANT CREATE ON ks.cf TO MIKE", "Resource type DataResource does not support any of the requested permissions", SyntaxException)
-
-        # GRANT ALL ON ALL ROLES includes SELECT & CREATE on the root level roles resource
-        cassandra.execute("GRANT ALL ON ALL ROLES TO mike")
-        self.assert_permissions_listed(
-            [("mike", "<all roles>", "CREATE"), ("mike", "<all roles>", "ALTER"), ("mike", "<all roles>", "DROP"), ("mike", "<all roles>", "DESCRIBE"), ("mike", "<all roles>", "AUTHORIZE")], cassandra, "LIST ALL PERMISSIONS OF mike"
-        )
-        cassandra.execute("REVOKE ALL ON ALL ROLES FROM mike")
-        assert_invalid(cassandra, "GRANT SELECT ON ALL ROLES TO MIKE", "Resource type RoleResource does not support any of the requested permissions", SyntaxException)
-
-        # GRANT ALL ON ROLE does not include CREATE (because the role must already be created before the GRANT)
-        cassandra.execute("GRANT ALL ON ROLE role1 TO mike")
-        self.assert_permissions_listed([("mike", "<role role1>", "ALTER"), ("mike", "<role role1>", "DROP"), ("mike", "<role role1>", "AUTHORIZE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        assert_invalid(cassandra, "GRANT CREATE ON ROLE role1 TO MIKE", "Resource type RoleResource does not support any of the requested permissions", SyntaxException)
-        cassandra.execute("REVOKE ALL ON ROLE role1 FROM mike")
-
-        # GRANT ALL ON ALL FUNCTIONS or on all functions for a single keyspace includes AUTHORIZE, EXECUTE and USAGE
-        cassandra.execute("GRANT ALL ON ALL FUNCTIONS TO mike")
-        self.assert_permissions_listed(
-            [("mike", "<all functions>", "CREATE"), ("mike", "<all functions>", "ALTER"), ("mike", "<all functions>", "DROP"), ("mike", "<all functions>", "AUTHORIZE"), ("mike", "<all functions>", "EXECUTE")],
-            cassandra,
-            "LIST ALL PERMISSIONS OF mike",
-        )
-        cassandra.execute("REVOKE ALL ON ALL FUNCTIONS FROM mike")
-
-        cassandra.execute("GRANT ALL ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-        self.assert_permissions_listed(
-            [("mike", "<all functions in ks>", "CREATE"), ("mike", "<all functions in ks>", "ALTER"), ("mike", "<all functions in ks>", "DROP"), ("mike", "<all functions in ks>", "AUTHORIZE"), ("mike", "<all functions in ks>", "EXECUTE")],
-            cassandra,
-            "LIST ALL PERMISSIONS OF mike",
-        )
-        cassandra.execute("REVOKE ALL ON ALL FUNCTIONS IN KEYSPACE ks FROM mike")
-
-        # GRANT ALL ON FUNCTION includes AUTHORIZE, EXECUTE and USAGE for scalar functions and
-        # AUTHORIZE and EXECUTE for aggregates
-        cassandra.execute("GRANT ALL ON FUNCTION ks.state_func(int, int) TO mike")
-        self.assert_permissions_listed(
-            [
-                ("mike", "<function ks.state_func(int, int)>", "ALTER"),
-                ("mike", "<function ks.state_func(int, int)>", "DROP"),
-                ("mike", "<function ks.state_func(int, int)>", "AUTHORIZE"),
-                ("mike", "<function ks.state_func(int, int)>", "EXECUTE"),
-            ],
-            cassandra,
-            "LIST ALL PERMISSIONS OF mike",
-        )
-        cassandra.execute("REVOKE ALL ON FUNCTION ks.state_func(int, int) FROM mike")
-
-        cassandra.execute("GRANT ALL ON FUNCTION ks.agg_func(int) TO mike")
-        self.assert_permissions_listed(
-            [("mike", "<function ks.agg_func(int)>", "ALTER"), ("mike", "<function ks.agg_func(int)>", "DROP"), ("mike", "<function ks.agg_func(int)>", "AUTHORIZE"), ("mike", "<function ks.agg_func(int)>", "EXECUTE")],
-            cassandra,
-            "LIST ALL PERMISSIONS OF mike",
-        )
-        cassandra.execute("REVOKE ALL ON FUNCTION ks.agg_func(int) FROM mike")
-
-    def test_list_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
-        cassandra.execute("CREATE TABLE ks.cf (id int primary key, val int)")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND SUPERUSER = false AND LOGIN = true")
-        cassandra.execute("CREATE ROLE role1")
-        cassandra.execute("CREATE ROLE role2")
-        cassandra.execute("GRANT SELECT ON table ks.cf TO role1")
-        cassandra.execute("GRANT ALTER ON table ks.cf TO role2")
-        cassandra.execute("GRANT MODIFY ON table ks.cf TO mike")
-        cassandra.execute("GRANT ALTER ON ROLE role1 TO role2")
-        cassandra.execute("GRANT role1 TO role2")
-        cassandra.execute("GRANT role2 TO mike")
-
-        expected_permissions = [("mike", "<table ks.cf>", "MODIFY"), ("role1", "<table ks.cf>", "SELECT"), ("role2", "<table ks.cf>", "ALTER"), ("role2", "<role role1>", "ALTER")]
-        expected_permissions.extend(data_resource_creator_permissions("cassandra", "<keyspace ks>", support_func=False))
-        expected_permissions.extend(data_resource_creator_permissions("cassandra", "<table ks.cf>"))
-        expected_permissions.extend(role_creator_permissions("cassandra", "<role mike>"))
-        expected_permissions.extend(role_creator_permissions("cassandra", "<role role1>"))
-        expected_permissions.extend(role_creator_permissions("cassandra", "<role role2>"))
-
-        self.assert_permissions_listed(expected_permissions, cassandra, "LIST ALL PERMISSIONS")
-
-        self.assert_permissions_listed([("role1", "<table ks.cf>", "SELECT")], cassandra, "LIST ALL PERMISSIONS OF role1")
-
-        self.assert_permissions_listed([("role1", "<table ks.cf>", "SELECT"), ("role2", "<table ks.cf>", "ALTER"), ("role2", "<role role1>", "ALTER")], cassandra, "LIST ALL PERMISSIONS OF role2")
-
-        self.assert_permissions_listed(
-            [("cassandra", "<role role1>", "ALTER"), ("cassandra", "<role role1>", "DROP"), ("cassandra", "<role role1>", "AUTHORIZE"), ("role2", "<role role1>", "ALTER")], cassandra, "LIST ALL PERMISSIONS ON ROLE role1"
-        )
-        # we didn't specifically grant DROP on role1, so only it's creator should have it
-        self.assert_permissions_listed([("cassandra", "<role role1>", "DROP")], cassandra, "LIST DROP PERMISSION ON ROLE role1")
-        # but we did specifically grant ALTER role1 to role2
-        # so that should be listed whether we include an OF clause or not
-        self.assert_permissions_listed([("cassandra", "<role role1>", "ALTER"), ("role2", "<role role1>", "ALTER")], cassandra, "LIST ALTER PERMISSION ON ROLE role1")
-        self.assert_permissions_listed([("role2", "<role role1>", "ALTER")], cassandra, "LIST ALTER PERMISSION ON ROLE role1 OF role2")
-        # make sure ALTER on role2 is excluded properly when OF is for another role
-        cassandra.execute("CREATE ROLE role3 WITH SUPERUSER = false AND LOGIN = false")
-        assert len(list(cassandra.execute("LIST ALTER PERMISSION ON ROLE role1 OF role3"))) == 0
-
-        # now check users can list their own permissions
-        mike = self.get_session(user="mike", password="12345")
-        self.assert_permissions_listed([("mike", "<table ks.cf>", "MODIFY"), ("role1", "<table ks.cf>", "SELECT"), ("role2", "<table ks.cf>", "ALTER"), ("role2", "<role role1>", "ALTER")], mike, "LIST ALL PERMISSIONS OF mike")
-
-    def test_list_permissions_validation(self):
-        self.prepare()
-
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
-        cassandra.execute("CREATE TABLE ks.cf (id int primary key, val int)")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND SUPERUSER = false AND LOGIN = true")
-        cassandra.execute("CREATE ROLE john WITH PASSWORD = '12345' AND SUPERUSER = false AND LOGIN = true")
-        cassandra.execute("CREATE ROLE role1")
-        cassandra.execute("CREATE ROLE role2")
-
-        cassandra.execute("GRANT SELECT ON table ks.cf TO role1")
-        cassandra.execute("GRANT ALTER ON table ks.cf TO role2")
-        cassandra.execute("GRANT MODIFY ON table ks.cf TO john")
-
-        cassandra.execute("GRANT role1 TO role2")
-        cassandra.execute("GRANT role2 TO mike")
-
-        mike = self.get_session(user="mike", password="12345")
-
-        self.assert_permissions_listed([("role1", "<table ks.cf>", "SELECT"), ("role2", "<table ks.cf>", "ALTER")], mike, "LIST ALL PERMISSIONS OF role2")
-
-        self.assert_permissions_listed([("role1", "<table ks.cf>", "SELECT")], mike, "LIST ALL PERMISSIONS OF role1")
-
-        assert_invalid(mike, "LIST ALL PERMISSIONS", "You are not authorized to view everyone's permissions", Unauthorized)
-        assert_invalid(mike, "LIST ALL PERMISSIONS OF john", "You are not authorized to view john's permissions", Unauthorized)
-
-    @pytest.mark.next_gating
     def test_role_caching_authenticated_user(self):
         # This test is to show that the role caching in AuthenticatedUser
         # works correctly and revokes the roles from a logged in user
@@ -541,25 +324,6 @@ class TestAuthRoles(Tester):
 
         assert unauthorized is not None
 
-    def test_drop_non_existent_role_should_not_update_cache(self):
-        # The su status check during DROP ROLE IF EXISTS <role>
-        # should not cause a non-existent role to be cached (CASSANDRA-9189)
-        self.prepare(roles_expiry=10000)
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        cassandra.execute("CREATE KEYSPACE ks WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1}")
-        cassandra.execute("CREATE TABLE ks.cf (id int primary key, val int)")
-
-        # Dropping a role which doesn't exist should be a no-op. If we cache the fact
-        # that the role doesn't exist though, subsequent authz attempts which should
-        # succeed will fail due to the erroneous cache entry
-        cassandra.execute("DROP ROLE IF EXISTS mike")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("GRANT ALL ON ks.cf TO mike")
-
-        mike = self.get_session(user="mike", password="12345")
-        mike.execute("SELECT * FROM ks.cf")
-
-    @pytest.mark.next_gating
     def test_prevent_circular_grants(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -571,7 +335,6 @@ class TestAuthRoles(Tester):
         assert_invalid(cassandra, "GRANT mike TO role1", "mike already includes role role1.", InvalidRequest)
         assert_invalid(cassandra, "GRANT mike TO role2", "mike already includes role role2.", InvalidRequest)
 
-    @pytest.mark.next_gating
     def test_create_user_as_alias_for_create_role(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -581,7 +344,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("CREATE USER super_user WITH PASSWORD '12345' SUPERUSER")
         assert_one(cassandra, "LIST ROLES OF super_user", ["super_user", True, True, {}])
 
-    @pytest.mark.next_gating
     def test_role_name(self):
         """Simple test to verify the behavior of quoting when creating roles & users
         @jira_ticket CASSANDRA-10394
@@ -616,7 +378,6 @@ class TestAuthRoles(Tester):
         self.get_session(user="USER2", password="12345")
         self.assert_unauthenticated("Username and/or password are incorrect", "User2", "12345")
 
-    @pytest.mark.next_gating
     def test_role_requires_login_privilege_to_authenticate(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -633,21 +394,6 @@ class TestAuthRoles(Tester):
         assert_one(cassandra, "LIST ROLES OF mike", ["mike", False, True, {}])
         self.get_session(user="mike", password="12345")
 
-    def test_roles_do_not_inherit_login_privilege(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND SUPERUSER = false AND LOGIN = false")
-        cassandra.execute("CREATE ROLE with_login WITH PASSWORD = '54321' AND SUPERUSER = false AND LOGIN = true")
-        cassandra.execute("GRANT with_login to mike")
-
-        assert_all(cassandra, "LIST ROLES OF mike", [["mike", False, False, {}], ["with_login", False, True, {}]])
-        assert_one(cassandra, "LIST ROLES OF with_login", ["with_login", False, True, {}])
-
-        # disable this check for issue: auth roles: user can still login even login is set to False #4284
-        # self.assert_unauthenticated("mike is not permitted to log in", "mike", "12345")
-
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
     def test_role_requires_password_to_login(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -656,7 +402,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("ALTER ROLE mike WITH PASSWORD = '12345'")
         self.get_session(user="mike", password="12345")
 
-    @pytest.mark.next_gating
     def test_superuser_status_is_inherited(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -670,7 +415,6 @@ class TestAuthRoles(Tester):
         mike.execute("CREATE ROLE another_role WITH SUPERUSER = false AND LOGIN = false")
         assert_all(mike, "LIST ROLES", [["another_role", False, False, {}], cassandra_role, ["db_admin", True, False, {}], mike_role])
 
-    @pytest.mark.next_gating
     def test_list_users_considers_inherited_superuser_status(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -679,299 +423,6 @@ class TestAuthRoles(Tester):
         cassandra.execute("GRANT db_admin TO mike")
         assert_all(cassandra, "LIST USERS", [["cassandra", True], ["mike", True]])
 
-    # UDF permissions tests TODO move to separate fixture & refactor this + auth_test.py
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_grant_revoke_udf_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("CREATE FUNCTION ks.\"plusOne\" ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-
-        # grant / revoke on a specific function
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        cassandra.execute('GRANT EXECUTE ON FUNCTION ks."plusOne"(int) TO mike')
-
-        self.assert_permissions_listed([("mike", "<function ks.plus_one(int)>", "EXECUTE"), ("mike", "<function ks.plusOne(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        cassandra.execute("REVOKE ALL PERMISSIONS ON FUNCTION ks.plus_one(int) FROM mike")
-        self.assert_permissions_listed([("mike", "<function ks.plusOne(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        cassandra.execute('REVOKE EXECUTE PERMISSION ON FUNCTION ks."plusOne"(int) FROM mike')
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # grant / revoke on all functions in a given keyspace
-        cassandra.execute("GRANT EXECUTE PERMISSION ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-        self.assert_permissions_listed([("mike", "<all functions in ks>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        cassandra.execute("REVOKE EXECUTE PERMISSION ON ALL FUNCTIONS IN KEYSPACE ks FROM mike")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # grant / revoke on all (non-builtin) functions
-        cassandra.execute("GRANT EXECUTE PERMISSION ON ALL FUNCTIONS TO mike")
-        self.assert_permissions_listed([("mike", "<all functions>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        cassandra.execute("REVOKE EXECUTE PERMISSION ON ALL FUNCTIONS FROM mike")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-    # Issue: Convert user-defined functions to lua #2175
-
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_grant_revoke_are_idempotent(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE ROLE mike")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        self.assert_permissions_listed([("mike", "<function ks.plus_one(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        cassandra.execute("REVOKE EXECUTE ON FUNCTION ks.plus_one(int) FROM mike")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-        cassandra.execute("REVOKE EXECUTE ON FUNCTION ks.plus_one(int) FROM mike")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_function_resource_hierarchy_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("INSERT INTO ks.t1 (k,v) values (1,1)")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("GRANT SELECT ON ks.t1 TO mike")
-        cassandra.execute("CREATE FUNCTION ks.func_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("CREATE FUNCTION ks.func_two ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-
-        mike = self.get_session(user="mike", password="12345")
-        select_one = "SELECT k, v, ks.func_one(v) FROM ks.t1 WHERE k = 1"
-        select_two = "SELECT k, v, ks.func_two(v) FROM ks.t1 WHERE k = 1"
-
-        # grant EXECUTE on only one of the two functions
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.func_one(int) TO mike")
-        mike.execute(select_one)
-        assert_invalid(mike, select_two, re.escape("User mike has no EXECUTE permission on <function ks.func_two(int)> or any of its parents"), Unauthorized)
-        # granting EXECUTE on all of the parent keyspace's should enable mike to use both functions
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-        mike.execute(select_one)
-        mike.execute(select_two)
-        # revoke the keyspace level privilege and verify that the function specific perms are unaffected
-        cassandra.execute("REVOKE EXECUTE ON ALL FUNCTIONS IN KEYSPACE ks FROM mike")
-        mike.execute(select_one)
-        assert_invalid(mike, select_two, re.escape("User mike has no EXECUTE permission on <function ks.func_two(int)> or any of its parents"), Unauthorized)
-        # now check that EXECUTE on ALL FUNCTIONS works in the same way
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS TO mike")
-        mike.execute(select_one)
-        mike.execute(select_two)
-        cassandra.execute("REVOKE EXECUTE ON ALL FUNCTIONS FROM mike")
-        mike.execute(select_one)
-        assert_invalid(mike, select_two, re.escape("User mike has no EXECUTE permission on <function ks.func_two(int)> or any of its parents"), Unauthorized)
-        # finally, check that revoking function level permissions doesn't affect root/keyspace level perms
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-        cassandra.execute("REVOKE EXECUTE ON FUNCTION ks.func_one(int) FROM mike")
-        mike.execute(select_one)
-        mike.execute(select_two)
-        cassandra.execute("REVOKE EXECUTE ON ALL FUNCTIONS IN KEYSPACE ks FROM mike")
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.func_one(int) TO mike")
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS TO mike")
-        mike.execute(select_one)
-        mike.execute(select_two)
-        cassandra.execute("REVOKE EXECUTE ON FUNCTION ks.func_one(int) FROM mike")
-        mike.execute(select_one)
-        mike.execute(select_two)
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_udf_permissions_validation(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        mike = self.get_session(user="mike", password="12345")
-
-        # can't replace an existing function without ALTER permission on the parent ks
-        cql = "CREATE OR REPLACE FUNCTION ks.plus_one( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript as '1 + input'"
-        assert_invalid(mike, cql, r"User mike has no ALTER permission on <function ks.plus_one\(int\)> or any of its parents", Unauthorized)
-        cassandra.execute("GRANT ALTER ON FUNCTION ks.plus_one(int) TO mike")
-        mike.execute(cql)
-
-        # can't grant permissions on a function without AUTHORIZE (and without the grantor having EXECUTE themself)
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        cassandra.execute("CREATE ROLE role1")
-        cql = "GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO role1"
-        assert_invalid(mike, cql, re.escape("User mike has no AUTHORIZE permission on <function ks.plus_one(int)> or any of its parents"), Unauthorized)
-        cassandra.execute("GRANT AUTHORIZE ON FUNCTION ks.plus_one(int) TO mike")
-        mike.execute(cql)
-        # now revoke AUTHORIZE from mike
-        cassandra.execute("REVOKE AUTHORIZE ON FUNCTION ks.plus_one(int) FROM mike")
-        cql = "REVOKE EXECUTE ON FUNCTION ks.plus_one(int) FROM role1"
-        assert_invalid(mike, cql, re.escape("User mike has no AUTHORIZE permission on <function ks.plus_one(int)> or any of its parents"), Unauthorized)
-        cassandra.execute("GRANT AUTHORIZE ON FUNCTION ks.plus_one(int) TO mike")
-        mike.execute(cql)
-
-        # can't drop a function without DROP
-        cql = "DROP FUNCTION ks.plus_one(int)"
-        assert_invalid(mike, cql, re.escape("User mike has no DROP permission on <function ks.plus_one(int)> or any of its parents"), Unauthorized)
-        cassandra.execute("GRANT DROP ON FUNCTION ks.plus_one(int) TO mike")
-        mike.execute(cql)
-
-        # DROP IF EXISTS on a non-existent function should return silently, DROP on a non-existent function
-        # behaves like DROP TABLE and returns an "Unconfigured XXX" error
-        cql = "DROP FUNCTION IF EXISTS ks.no_such_function(int,int)"
-        mike.execute(cql)
-
-        cql = "DROP FUNCTION ks.no_such_function(int,int)"
-        assert_invalid(mike, cql, re.escape("Unconfigured function ks.no_such_function(int,int)"), InvalidRequest)
-
-        # can't create a new function without CREATE on the parent keyspace's collection of functions
-        cql = "CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'"
-        assert_invalid(mike, cql, "User mike has no CREATE permission on <all functions in ks> or any of its parents", Unauthorized)
-        cassandra.execute("GRANT CREATE ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-        mike.execute(cql)
-
-    # Issue: Convert user-defined functions to lua #2175
-
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_drop_role_cleans_up_udf_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS TO mike")
-
-        self.assert_permissions_listed([("mike", "<all functions>", "EXECUTE"), ("mike", "<all functions in ks>", "EXECUTE"), ("mike", "<function ks.plus_one(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # drop and recreate the role to ensure permissions are cleared
-        cassandra.execute("DROP ROLE mike")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_drop_function_and_keyspace_cleans_up_udf_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-
-        self.assert_permissions_listed([("mike", "<all functions in ks>", "EXECUTE"), ("mike", "<function ks.plus_one(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # drop the function
-        cassandra.execute("DROP FUNCTION ks.plus_one")
-        self.assert_permissions_listed([("mike", "<all functions in ks>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        # drop the keyspace
-        cassandra.execute("DROP KEYSPACE ks")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_udf_with_overloads_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input double ) CALLED ON NULL INPUT RETURNS double LANGUAGE javascript AS 'input + 1'")
-
-        # grant execute on one variant
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        self.assert_permissions_listed([("mike", "<function ks.plus_one(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # and now on the other
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(double) TO mike")
-        self.assert_permissions_listed([("mike", "<function ks.plus_one(int)>", "EXECUTE"), ("mike", "<function ks.plus_one(double)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # revoke permissions on one of the functions only
-        cassandra.execute("REVOKE EXECUTE ON FUNCTION ks.plus_one(double) FROM mike")
-        self.assert_permissions_listed([("mike", "<function ks.plus_one(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # drop the function that the role has no permissions on
-        cassandra.execute("DROP FUNCTION ks.plus_one(double)")
-        self.assert_permissions_listed([("mike", "<function ks.plus_one(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-
-        # finally, drop the function that the role does have permissions on
-        cassandra.execute("DROP FUNCTION ks.plus_one(int)")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_drop_keyspace_cleans_up_function_level_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-
-        self.assert_permissions_listed([("mike", "<function ks.plus_one(int)>", "EXECUTE")], cassandra, "LIST ALL PERMISSIONS OF mike")
-        # drop the keyspace
-        cassandra.execute("DROP KEYSPACE ks")
-        self.assert_no_permissions(cassandra, "LIST ALL PERMISSIONS OF mike")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_udf_permissions_in_selection(self):
-        self.verify_udf_permissions("SELECT k, v, ks.plus_one(v) FROM ks.t1 WHERE k = 1")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_udf_permissions_in_select_where_clause(self):
-        self.verify_udf_permissions("SELECT k, v FROM ks.t1 WHERE k = ks.plus_one(0)")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_udf_permissions_in_insert(self):
-        self.verify_udf_permissions("INSERT INTO ks.t1 (k, v) VALUES (1, ks.plus_one(1))")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_udf_permissions_in_update(self):
-        self.verify_udf_permissions("UPDATE ks.t1 SET v = ks.plus_one(2) WHERE k = ks.plus_one(0)")
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_udf_permissions_in_delete(self):
-        self.verify_udf_permissions("DELETE FROM ks.t1 WHERE k = ks.plus_one(0)")
-
-    def verify_udf_permissions(self, cql):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("GRANT ALL PERMISSIONS ON ks.t1 TO mike")
-        cassandra.execute("INSERT INTO ks.t1 (k,v) values (1,1)")
-        mike = self.get_session(user="mike", password="12345")
-        assert_invalid(mike, cql, re.escape("User mike has no EXECUTE permission on <function ks.plus_one(int)> or any of its parents"), Unauthorized)
-
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.plus_one(int) TO mike")
-        return mike.execute(cql)
-
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_inheritence_of_udf_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("CREATE ROLE function_user")
-        cassandra.execute("GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE ks TO function_user")
-        cassandra.execute("CREATE FUNCTION ks.plus_one ( input int ) CALLED ON NULL INPUT RETURNS int LANGUAGE javascript AS 'input + 1'")
-        cassandra.execute("INSERT INTO ks.t1 (k,v) VALUES (1,1)")
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("GRANT SELECT ON ks.t1 TO mike")
-        mike = self.get_session(user="mike", password="12345")
-        select = "SELECT k, v, ks.plus_one(v) FROM ks.t1 WHERE k = 1"
-        assert_invalid(mike, select, re.escape("User mike has no EXECUTE permission on <function ks.plus_one(int)> or any of its parents"), Unauthorized)
-
-        cassandra.execute("GRANT function_user TO mike")
-        assert_one(mike, select, [1, 1, 2])
-
-    @pytest.mark.next_gating
     def test_builtin_functions_require_no_special_permissions(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -982,25 +433,16 @@ class TestAuthRoles(Tester):
         cassandra.execute("GRANT ALL PERMISSIONS ON ks.t1 TO mike")
         assert_one(mike, "SELECT * from ks.t1 WHERE k=blobasint(intasblob(1))", [1, 1])
 
-    @pytest.mark.next_gating
     def test_disallow_grant_revoke_on_builtin_functions(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
         self.setup_table(cassandra)
         cassandra.execute("CREATE ROLE mike")
-        if minimum_scylla_version(self.cluster.version(), "5.3-rc0", "2023.2-rc0"):
-            assert_invalid(cassandra, "GRANT EXECUTE ON FUNCTION system.intasblob(int) TO mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
-            assert_invalid(cassandra, "REVOKE ALL PERMISSIONS ON FUNCTION system.intasblob(int) FROM mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
-            assert_invalid(cassandra, "GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE system TO mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
-            assert_invalid(cassandra, "REVOKE ALL PERMISSIONS ON ALL FUNCTIONS IN KEYSPACE system FROM mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
-        else:
-            # UDF premissions aren't supported before 5.3 (https://github.com/scylladb/scylladb/issues/5572)
-            assert_invalid(cassandra, "GRANT EXECUTE ON FUNCTION system.intasblob(int) TO mike", re.escape("Error from server: code=2000 [Syntax error in CQL query]"), SyntaxException)
-            assert_invalid(cassandra, "REVOKE ALL PERMISSIONS ON FUNCTION system.intasblob(int) FROM mike", re.escape("Error from server: code=2000 [Syntax error in CQL query]"), SyntaxException)
-            assert_invalid(cassandra, "GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE system TO mike", re.escape("Error from server: code=2000 [Syntax error in CQL query]"), SyntaxException)
-            assert_invalid(cassandra, "REVOKE ALL PERMISSIONS ON ALL FUNCTIONS IN KEYSPACE system FROM mike", re.escape("Error from server: code=2000 [Syntax error in CQL query]"), SyntaxException)
+        assert_invalid(cassandra, "GRANT EXECUTE ON FUNCTION system.intasblob(int) TO mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
+        assert_invalid(cassandra, "REVOKE ALL PERMISSIONS ON FUNCTION system.intasblob(int) FROM mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
+        assert_invalid(cassandra, "GRANT EXECUTE ON ALL FUNCTIONS IN KEYSPACE system TO mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
+        assert_invalid(cassandra, "REVOKE ALL PERMISSIONS ON ALL FUNCTIONS IN KEYSPACE system FROM mike", "Altering permissions on builtin functions is not supported", InvalidRequest)
 
-    @pytest.mark.next_gating
     def test_disallow_grant_execute_on_non_function_resources(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -1017,78 +459,6 @@ class TestAuthRoles(Tester):
         assert_invalid(cassandra, "GRANT EXECUTE ON ALL ROLES TO mike", "Resource <all roles> does not support any of the requested permissions", SyntaxException)
         assert_invalid(cassandra, "GRANT EXECUTE ON ROLE mike TO role1", "Resource <role mike> does not support any of the requested permissions", SyntaxException)
 
-    # Issue: Convert user-defined functions to lua #2175
-    @pytest.mark.require("scylladb/scylla-dtest#2175")
-    def test_aggregate_function_permissions(self):
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        self.setup_table(cassandra)
-        cassandra.execute("INSERT INTO ks.t1 (k,v) VALUES (1,1)")
-        cassandra.execute("INSERT INTO ks.t1 (k,v) VALUES (2,2)")
-        cassandra.execute(
-            """CREATE FUNCTION ks.state_function( a int, b int )
-                             CALLED ON NULL INPUT
-                             RETURNS int
-                             LANGUAGE java
-                             AS 'return Integer.valueOf( (a != null ? a.intValue() : 0) + b.intValue());'"""
-        )
-        cassandra.execute(
-            """CREATE FUNCTION ks.final_function( a int )
-                             CALLED ON NULL INPUT
-                             RETURNS int
-                             LANGUAGE java
-                             AS 'return a;'"""
-        )
-        cassandra.execute("CREATE ROLE mike WITH PASSWORD = '12345' AND LOGIN = true")
-        cassandra.execute("GRANT CREATE ON ALL FUNCTIONS IN KEYSPACE ks TO mike")
-        cassandra.execute("GRANT ALL PERMISSIONS ON ks.t1 TO mike")
-        mike = self.get_session(user="mike", password="12345")
-        create_aggregate_cql = """CREATE AGGREGATE ks.simple_aggregate(int)
-                          SFUNC state_function
-                          STYPE int
-                          FINALFUNC final_function
-                          INITCOND 0"""
-        # check permissions to create the aggregate
-        assert_invalid(mike, create_aggregate_cql, re.escape("User mike has no EXECUTE permission on <function ks.state_function(int, int)> or any of its parents"), Unauthorized)
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.state_function(int, int) TO mike")
-        assert_invalid(mike, create_aggregate_cql, re.escape("User mike has no EXECUTE permission on <function ks.final_function(int)> or any of its parents"), Unauthorized)
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.final_function(int) TO mike")
-        mike.execute(create_aggregate_cql)
-
-        # without execute permissions on the state or final function we
-        # cannot use the aggregate, so revoke them to verify
-        cassandra.execute("REVOKE EXECUTE ON FUNCTION ks.state_function(int, int) FROM mike")
-        cassandra.execute("REVOKE EXECUTE ON FUNCTION ks.final_function(int) FROM mike")
-        execute_aggregate_cql = "SELECT ks.simple_aggregate(v) FROM ks.t1"
-        assert_invalid(mike, execute_aggregate_cql, re.escape("User mike has no EXECUTE permission on <function ks.state_function(int, int)> or any of its parents"), Unauthorized)
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.state_function(int, int) TO mike")
-        assert_invalid(mike, execute_aggregate_cql, re.escape("User mike has no EXECUTE permission on <function ks.final_function(int)> or any of its parents"), Unauthorized)
-        cassandra.execute("GRANT EXECUTE ON FUNCTION ks.final_function(int) TO mike")
-
-        # mike *does* have execute permission on the aggregate function, as its creator
-        assert_one(mike, execute_aggregate_cql, [3])
-
-    # in auth-v2 given corruption scenario can't happen
-    @pytest.mark.required_features("!consistent-topology-changes")
-    def test_ignore_invalid_roles(self):
-        """
-        The system_auth.roles table includes a set of roles of which each role
-        is a member. If that list were to get out of sync, so that it indicated
-        that roleA is a member of roleB, but roleB does not exist in the roles
-        table, then the result of LIST ROLES OF roleA should not include roleB
-        @jira_ticket CASSANDRA-9551
-        """
-
-        self.prepare()
-        cassandra = self.get_session(user="cassandra", password="cassandra")
-        cassandra.execute("CREATE ROLE mike WITH LOGIN = true")
-        # hack an invalid entry into the roles table for roleA
-        cassandra.execute("UPDATE system_auth.roles SET member_of = {'role1'} where role = 'mike'")
-        assert_invalid(cassandra, "LIST ROLES OF mike", "role1 doesn't exist")
-        cassandra.execute("CREATE ROLE IF NOT EXISTS role1")
-        assert_all(cassandra, "LIST ROLES OF mike", [mike_role, role1_role])
-
-    @pytest.mark.next_gating
     def test_truncate_with_rbac(self):
         self.prepare()
         cassandra = self.get_session(user="cassandra", password="cassandra")
@@ -1154,6 +524,3 @@ class TestAuthRoles(Tester):
         rows = session.execute(query)
         perms = [(str(r.role), str(r.resource), str(r.permission)) for r in rows]
         assert sorted(expected) == sorted(perms), "the current permissions do not meet expectations"
-
-    def assert_no_permissions(self, session, query):
-        assert len(list(session.execute(query))) == 0
