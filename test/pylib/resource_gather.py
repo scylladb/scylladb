@@ -13,6 +13,7 @@ import os
 import platform
 import shlex
 import subprocess
+import time
 from abc import ABC
 from datetime import datetime
 from functools import lru_cache
@@ -68,7 +69,7 @@ class ResourceGather(ABC):
             self.loop = asyncio.new_event_loop()
             self.own_loop = True
         self.test = test
-        self.db_path = self.test.suite.log_dir / DEFAULT_DB_NAME
+        self.db_path = self.test.suite.log_dir.parent / DEFAULT_DB_NAME
         standardized_name = self.test.shortname.replace("/", "_")
         self.cgroup_path = Path(
             f"{CGROUP_TESTS}/{self.test.suite.name}.{standardized_name}.{self.test.mode}.{self.test.id}"
@@ -163,6 +164,19 @@ class ResourceGatherOn(ResourceGather):
             with open(cpu_stat, 'r', ) as file:
                 self._parse_cpu_stat(file, test_metrics)
         return test_metrics
+
+    def run_process(self, args: list[str], timeout, env: dict = None):
+        stop_monitoring = asyncio.Event()
+
+        self.test.time_start = time.time()
+        test_resource_watcher = self.cgroup_monitor(test_event=stop_monitoring)
+        try:
+            p, stdout = super().run_process(args, timeout, env)
+        finally:
+            stop_monitoring.set()
+            self.test.time_end = time.time()
+            self.loop.run_until_complete(asyncio.gather(test_resource_watcher))
+        return p, stdout
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         metrics.success = success
