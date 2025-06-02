@@ -59,7 +59,7 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
 
     ss::get_moving_nodes.set(r, [](const_req req) {
         std::unordered_set<sstring> addr;
-        return container_to_vec(addr);
+        return addr | std::ranges::to<std::vector>();
     });
 
     ss::get_joining_nodes.set(r, [&tm, &g](const_req req) {
