@@ -1027,7 +1027,7 @@ rest_get_keyspaces(http_context& ctx, const_req req) {
         } else if (type == "non_local_strategy") {
             keyspaces = ctx.db.local().get_non_local_strategy_keyspaces();
         } else {
-            keyspaces = map_keys(ctx.db.local().get_keyspaces());
+            keyspaces = ctx.db.local().get_all_keyspaces();
         }
         if (replication.empty() || replication == "all") {
             return keyspaces;
