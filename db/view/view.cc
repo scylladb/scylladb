@@ -1795,25 +1795,6 @@ get_view_natural_endpoint(
     node_vector orig_base_endpoints, orig_view_endpoints;
     node_vector base_endpoints, view_endpoints;
 
-    if (rack_aware_pairing) {
-        auto dc_rf = network_topology->get_replication_factor(my_datacenter);
-        const auto& racks = topology.get_datacenter_rack_nodes().at(my_datacenter);
-        // Simple rack-aware pairing is possible when the datacenter replication factor
-        // is a multiple of the number of racks in the datacenter.
-        if (dc_rf % racks.size() == 0) {
-            simple_rack_aware_pairing = true;
-            size_t rack_rf = dc_rf / racks.size();
-            // If any rack doesn't have enough nodes to satisfy the per-rack rf
-            // simple rack-aware pairing is disabled.
-            for (const auto& [rack, nodes] : racks) {
-                if (nodes.size() < rack_rf) {
-                    simple_rack_aware_pairing = false;
-                    break;
-                }
-            }
-        }
-    }
-
     auto resolve = [&] (const locator::topology& topology, const locator::host_id& ep, bool is_view) -> const locator::node& {
         if (auto* np = topology.find_node(ep)) {
             return *np;
@@ -1821,10 +1802,7 @@ get_view_natural_endpoint(
         throw std::runtime_error(format("get_view_natural_endpoint: {} replica {} not found in topology", is_view ? "view" : "base", ep));
     };
     std::function<bool(const locator::node&)> is_candidate;
-    if (simple_rack_aware_pairing) {
-        is_candidate = [&] (const locator::node& node) { return node.dc_rack() == my_location; };
-    } else if (network_topology) {
-        // Also for the (rack_aware_pairing && !simple_rack_aware_pairing) case
+    if (network_topology) {
         is_candidate = [&] (const locator::node& node) { return node.dc() == my_datacenter; };
     } else {
         is_candidate = [&] (const locator::node&) { return true; };
@@ -1866,6 +1844,30 @@ get_view_natural_endpoint(
     } else {
         for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
             process_candidate(view_endpoints, view_topology, view_endpoint, true);
+        }
+    }
+
+    // Try optimizing for simple rack-aware pairing
+    if (rack_aware_pairing) {
+        auto dc_rf = network_topology->get_replication_factor(my_datacenter);
+        const auto& racks = topology.get_datacenter_rack_nodes().at(my_datacenter);
+        // Simple rack-aware pairing is possible when the datacenter replication factor
+        // is a multiple of the number of racks in the datacenter.
+        if (dc_rf % racks.size() == 0) {
+            simple_rack_aware_pairing = true;
+            size_t rack_rf = dc_rf / racks.size();
+            // If any rack doesn't have enough nodes to satisfy the per-rack rf
+            // simple rack-aware pairing is disabled.
+            for (const auto& [rack, nodes] : racks) {
+                if (nodes.size() < rack_rf) {
+                    simple_rack_aware_pairing = false;
+                    break;
+                }
+            }
+        }
+        if (simple_rack_aware_pairing) {
+            std::erase_if(base_endpoints, [&] (const locator::node& node) { return node.dc_rack() != my_location; });
+            std::erase_if(view_endpoints, [&] (const locator::node& node) { return node.dc_rack() != my_location; });
         }
     }
 
