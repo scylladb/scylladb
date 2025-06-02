@@ -48,7 +48,9 @@ using can_yield = utils::can_yield;
 
 using replication_strategy_state = std::map<sstring, sstring>;
 struct replication_strategy_config_options {
+    replication_strategy_state previous_replication;
     replication_strategy_state replication;
+    replication_strategy_state next_replication;
 
     bool operator==(const replication_strategy_config_options& o) const = default;
 };

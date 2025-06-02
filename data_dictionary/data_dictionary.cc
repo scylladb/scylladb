@@ -413,7 +413,7 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
 
         os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
            << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
-        for (const auto& opt: _strategy_options.replication) {
+        for (const auto& opt: _strategy_options.previous_replication.empty() ? _strategy_options.replication : _strategy_options.previous_replication) {
             os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
         }
         if (!_storage_options->is_local_type()) {

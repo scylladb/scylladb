@@ -685,7 +685,7 @@ auto fmt::formatter<locator::replication_strategy_type>::format(locator::replica
 }
 
 auto fmt::formatter<locator::replication_strategy_config_options>::format(locator::replication_strategy_config_options rsco, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "{}",  rsco.replication);
+    return fmt::format_to(ctx.out(), "previous_replication={}, replication={}, next_replication={}", rsco.previous_replication, rsco.replication, rsco.next_replication);
 }
 
 auto fmt::formatter<locator::vnode_effective_replication_map::factory_key>::format(const locator::vnode_effective_replication_map::factory_key& key,

@@ -9,6 +9,7 @@
 
 
 #include "utils/UUID.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <source_location>
