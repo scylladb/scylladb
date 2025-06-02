@@ -436,6 +436,7 @@ public:
     named_value<bool> enable_sstables_mc_format;
     named_value<bool> enable_sstables_md_format;
     named_value<sstring> sstable_format;
+    named_value<bool> sstable_compression_dictionaries_allow_in_ddl;
     named_value<bool> sstable_compression_dictionaries_enable_writing;
     named_value<float> sstable_compression_dictionaries_memory_budget_fraction;
     named_value<float> sstable_compression_dictionaries_retrain_period_in_seconds;

@@ -1243,6 +1243,13 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , sstable_format(this, "sstable_format", value_status::Used, "me", "Default sstable file format", {"md", "me"})
+    , sstable_compression_dictionaries_allow_in_ddl(this, "sstable_compression_dictionaries_allow_in_ddl", liveness::LiveUpdate, value_status::Used, true,
+        "Allows for configuring tables to use SSTable compression with shared dictionaries. "
+        "If the option is disabled, Scylla will reject CREATE and ALTER statements which try to set dictionary-based sstable compressors.\n"
+        "This is only enforced when this node validates a new DDL statement; disabling the option won't disable dictionary-based compression "
+        "on tables which already have it configured, and won't do anything to existing sstables.\n"
+        "To affect existing tables, you can ALTER them to a non-dictionary compressor, or disable dictionary compression "
+        "for the whole node through `sstable_compression_dictionaries_enable_writing`.")
     , sstable_compression_dictionaries_enable_writing(this, "sstable_compression_dictionaries_enable_writing", liveness::LiveUpdate, value_status::Used, true,
         "Enables SSTable compression with shared dictionaries (for tables which opt in). If set to false, this node won't write any new SSTables using dictionary compression.\n"
         "Option meant not for regular usage, but for unforeseen problems that call for disabling dictionaries without modifying table schema.")

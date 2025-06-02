@@ -8,9 +8,13 @@ import logging
 import pytest
 import itertools
 import time
+import contextlib
 from test.pylib.manager_client import ManagerClient, ServerInfo
-from test.pylib.rest_client import read_barrier, ScyllaMetrics
+from test.pylib.rest_client import read_barrier, ScyllaMetrics, HTTPError
 from cassandra.cluster import ConsistencyLevel, Session as CassandraSession
+from cassandra.policies import FallthroughRetryPolicy, ConstantReconnectionPolicy
+from cassandra.protocol import ServerError
+from cassandra.query import SimpleStatement
 from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
@@ -465,3 +469,84 @@ async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerC
     for algo in nondict_algorithms:
         assert (await get_compressor_names(algo)) == {name_prefix + f"{algo}Compressor"}
     assert (await get_compressor_names(no_compression)) == set()
+
+async def test_sstable_compression_dictionaries_allow_in_ddl(manager: ManagerClient):
+    """
+    Tests the sstable_compression_dictionaries_allow_in_ddl option.
+    When it's disabled, ALTER and CREATE statements should not be allowed
+    to configure tables to use compression dictionaries for sstables.
+    """
+    # Bootstrap cluster and configure server
+    logger.info("Bootstrapping cluster")
+
+    servers = (await manager.servers_add(1, cmdline=[
+        *common_debug_cli_options,
+        "--sstable-compression-dictionaries-allow-in-ddl=false",
+    ], auto_rack_dc="dc1"))
+
+    @contextlib.asynccontextmanager
+    async def with_expect_server_error(msg):
+        try:
+            yield
+        except ServerError as e:
+            if e.message != msg:
+                raise
+        else:
+            raise Exception('Expected a ServerError, got no exceptions')
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    await cql.run_async("""
+        CREATE KEYSPACE test
+        WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}
+    """)
+
+    for new_algo in ['LZ4WithDicts', 'ZstdWithDicts']:
+        logger.info(f"Tested algorithm: {new_algo}")
+        table_name = f"test.{new_algo}"
+
+        logger.info("Check that disabled sstable_compression_dictionaries_allow_in_ddl prevents CREATE with dict compression")
+        async with with_expect_server_error(f"sstable_compression {new_algo}Compressor has been disabled by `sstable_compression_dictionaries_allow_in_ddl: false`"):
+            await cql.run_async(SimpleStatement(f'''
+                CREATE TABLE {table_name} (pk int PRIMARY KEY, c blob)
+                WITH COMPRESSION = {{'sstable_compression': '{new_algo}Compressor'}};
+            ''', retry_policy=FallthroughRetryPolicy()), host=hosts[0])
+
+        logger.info("Enable the config option")
+        await live_update_config(manager, servers, 'sstable_compression_dictionaries_allow_in_ddl', "true")
+
+        logger.info("CREATE the table with dict compression")
+        await cql.run_async(SimpleStatement(f'''
+            CREATE TABLE {table_name} (pk int PRIMARY KEY, c blob)
+            WITH COMPRESSION = {{'sstable_compression': '{new_algo}Compressor'}};
+        ''', retry_policy=FallthroughRetryPolicy()), host=hosts[0])
+
+        logger.info("Disable compression on the table")
+        await cql.run_async(SimpleStatement(f'''
+            ALTER TABLE {table_name}
+            WITH COMPRESSION = {{'sstable_compression': ''}};
+        ''', retry_policy=FallthroughRetryPolicy()), host=hosts[0])
+
+        logger.info("Disable the config option again")
+        await live_update_config(manager, servers, 'sstable_compression_dictionaries_allow_in_ddl', "false")
+
+        logger.info("Check that disabled sstable_compression_dictionaries_allow_in_ddl prevents ALTER with dict compression")
+        async with with_expect_server_error(f"sstable_compression {new_algo}Compressor has been disabled by `sstable_compression_dictionaries_allow_in_ddl: false`"):
+            await cql.run_async(SimpleStatement(f'''
+                ALTER TABLE {table_name}
+                WITH COMPRESSION = {{'sstable_compression': '{new_algo}Compressor'}};
+            ''', retry_policy=FallthroughRetryPolicy()), host=hosts[0])
+
+        logger.info("Enable the config option again")
+        await live_update_config(manager, servers, 'sstable_compression_dictionaries_allow_in_ddl', "true")
+
+        logger.info("ALTER the table with dict compression")
+        await cql.run_async(SimpleStatement(f'''
+            ALTER TABLE {table_name}
+            WITH COMPRESSION = {{'sstable_compression': '{new_algo}Compressor'}};
+        ''', retry_policy=FallthroughRetryPolicy()), host=hosts[0])
+        logger.info("Enable the config option again")
+
+        logger.info("Disable the config option for the next test")
+        await live_update_config(manager, servers, 'sstable_compression_dictionaries_allow_in_ddl', "false")
