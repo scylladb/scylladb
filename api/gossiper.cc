@@ -25,10 +25,9 @@ void set_gossiper(http_context& ctx, routes& r, gms::gossiper& g) {
     });
 
 
-    httpd::gossiper_json::get_live_endpoint.set(r, [&g] (std::unique_ptr<request> req) {
-        return g.get_live_members_synchronized().then([] (auto res) {
-            return make_ready_future<json::json_return_type>(container_to_vec(res));
-        });
+    httpd::gossiper_json::get_live_endpoint.set(r, [&g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        auto res = co_await g.get_live_members_synchronized();
+        co_return json::json_return_type(container_to_vec(res));
     });
 
     httpd::gossiper_json::get_endpoint_downtime.set(r, [&g] (std::unique_ptr<request> req) -> future<json::json_return_type> {
