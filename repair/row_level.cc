@@ -2593,7 +2593,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     }
                     std::optional<db::batchlog_manager::batchlog_replay_stats> batchlog_flush_stats;
                     if (issue_flush) {
-                        batchlog_flush_stats = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no, true);
+                        batchlog_flush_stats = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes, true);
                         utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "issue_flush", fmt::to_string(flush_time));
                     }
                     sstring flush_stats_str;
