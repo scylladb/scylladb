@@ -719,8 +719,8 @@ static
 json::json_return_type
 rest_get_natural_endpoints(http_context& ctx, sharded<service::storage_service>& ss, const_req req) {
         auto keyspace = validate_keyspace(ctx, req);
-        return container_to_vec(ss.local().get_natural_endpoints(keyspace, req.get_query_param("cf"),
-                req.get_query_param("key")));
+        auto res = ss.local().get_natural_endpoints(keyspace, req.get_query_param("cf"), req.get_query_param("key"));
+        return res | std::views::transform([] (auto& ep) { return fmt::to_string(ep); }) | std::ranges::to<std::vector>();
 }
 
 static
