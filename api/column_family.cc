@@ -360,13 +360,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
         });
 
     cf::get_column_family_name_keyspace.set(r, [&ctx] (const_req req){
-        std::vector<sstring> res;
-        const flat_hash_map<sstring, replica::keyspace>& keyspaces = ctx.db.local().get_keyspaces();
-        res.reserve(keyspaces.size());
-        for (const auto& i : keyspaces) {
-            res.push_back(i.first);
-        }
-        return res;
+        return ctx.db.local().get_all_keyspaces();
     });
 
     cf::get_memtable_columns_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {

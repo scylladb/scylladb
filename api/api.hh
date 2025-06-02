@@ -67,17 +67,6 @@ T map_sum(T&& dest, const S& src) {
     return std::move(dest);
 }
 
-template <typename MAP>
-std::vector<sstring> map_keys(const MAP& map) {
-    std::vector<sstring> res;
-    res.reserve(std::size(map));
-
-    for (const auto& i : map) {
-        res.push_back(fmt::to_string(i.first));
-    }
-    return res;
-}
-
 /**
  * General sstring splitting function
  */
