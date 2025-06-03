@@ -25,6 +25,7 @@
 
 #include "db/view/base_info.hh"
 #include "db/view/view_build_status.hh"
+#include "db/view/view_consumer.hh"
 #include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
 #include "keys/clustering_bounds_comparator.hh"
@@ -377,24 +378,6 @@ public:
         return _matches_view_filter;
     }
 };
-
-static query::partition_slice make_partition_slice(const schema& s) {
-    query::partition_slice::option_set opts;
-    opts.set(query::partition_slice::option::send_partition_key);
-    opts.set(query::partition_slice::option::send_clustering_key);
-    opts.set(query::partition_slice::option::send_timestamp);
-    opts.set(query::partition_slice::option::send_ttl);
-    opts.set(query::partition_slice::option::always_return_static_content);
-    return query::partition_slice(
-            {query::full_clustering_range},
-            s.static_columns()
-                    | std::views::transform(std::mem_fn(&column_definition::id))
-                    | std::ranges::to<query::column_id_vector>(),
-            s.regular_columns()
-                    | std::views::transform(std::mem_fn(&column_definition::id))
-                    | std::ranges::to<query::column_id_vector>(),
-            std::move(opts));
-}
 
 class data_query_result_builder {
 public:
@@ -2650,19 +2633,6 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
 }
 
-static future<> flush_base(lw_shared_ptr<replica::column_family> base, abort_source& as) {
-    struct empty_state { };
-    return exponential_backoff_retry::do_until_value(1s, 1min, as, [base = std::move(base)] {
-        return base->flush().then_wrapped([base] (future<> f) -> std::optional<empty_state> {
-            if (f.failed()) {
-                vlogger.error("Error flushing base table {}.{}: {}; retrying", base->schema()->ks_name(), base->schema()->cf_name(), f.get_exception());
-                return { };
-            }
-            return { empty_state{} };
-        });
-    }).discard_result();
-}
-
 static bool should_ignore_tablet_keyspace(const replica::database& db, const sstring& ks_name) {
     return db.features().view_building_coordinator && db.has_keyspace(ks_name) && db.find_keyspace(ks_name).uses_tablets();
 }
@@ -3003,7 +2973,7 @@ void view_builder::init_virtual_table() {
 }
 
 // Called in the context of a seastar::thread.
-class view_builder::consumer {
+class view_builder::consumer : public view_consumer {
 public:
     struct built_views {
         build_step& step;
@@ -3032,25 +3002,11 @@ public:
 
 private:
     view_builder& _builder;
-    shared_ptr<view_update_generator> _gen;
     build_step& _step;
     built_views _built_views;
-    gc_clock::time_point _now;
-    std::vector<view_ptr> _views_to_build;
-    std::deque<mutation_fragment_v2> _fragments;
-    // The compact_for_query<> that feeds this consumer is already configured
-    // to feed us up to view_builder::batchsize (128) rows and not an entire
-    // partition. Still, if rows contain large blobs, saving 128 of them in
-    // _fragments may be too much. So we want to track _fragment's memory
-    // usage, and flush the _fragments if it has grown too large.
-    // Additionally, limiting _fragment's size also solves issue #4213:
-    // A single view mutation can be as large as the size of the base rows
-    // used to build it, and we cannot allow its serialized size to grow
-    // beyond our limit on mutation size (by default 32 MB).
-    size_t _fragments_memory_usage = 0;
 
 protected:
-    virtual void check_for_built_views() {
+    virtual void check_for_built_views() override {
         inject_failure("view_builder_check_for_built_views");
         for (auto it = _step.build_status.begin(); it != _step.build_status.end();) {
             // A view starts being built at token t1. Due to resharding, that may not necessarily be a
@@ -3066,7 +3022,7 @@ protected:
             }
         }
     }
-    virtual void load_views_to_build() {
+    virtual void load_views_to_build() override {
         inject_failure("view_builder_load_views");
         for (auto&& vs : _step.build_status) {
             if (_step.current_token() >= vs.next_token) {
@@ -3082,34 +3038,33 @@ protected:
         }
     }
 
-    virtual bool should_stop_consuming_end_of_partition() {
+    virtual bool should_stop_consuming_end_of_partition() override {
         return _step.build_status.empty();
     }
 
-    virtual dht::decorated_key& get_current_key() {
+    virtual dht::decorated_key& get_current_key() override {
         return _step.current_key;
     }
-    virtual void set_current_key(dht::decorated_key key) {
+    virtual void set_current_key(dht::decorated_key key) override {
         _step.current_key = std::move(key);
     }
 
-    virtual lw_shared_ptr<replica::table> base() {
+    virtual lw_shared_ptr<replica::table> base() override {
         return _step.base;
     }
-    virtual mutation_reader& reader() {
+    virtual mutation_reader& reader() override {
         return _step.reader;
     }
-    virtual reader_permit& permit() {
+    virtual reader_permit& permit() override {
         return _builder._permit;
     }
 
 public:
     consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
-            : _builder(builder)
-            , _gen(std::move(gen))
+            : view_consumer(std::move(gen), now, builder._as)
+            , _builder(builder)
             , _step(step)
-            , _built_views{step}
-            , _now(now) {
+            , _built_views{step} {
         if (!step.current_key.key().is_empty(*_step.reader.schema())) {
             load_views_to_build();
         }
