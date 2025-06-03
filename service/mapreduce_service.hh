@@ -12,6 +12,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/token_metadata.hh"
 #include "message/messaging_service_fwd.hh"
 #include "query-request.hh"
@@ -25,6 +26,7 @@ class trace_info;
 namespace service {
 
 class storage_proxy;
+class retrying_dispatcher;
 
 // `mapreduce_service` is a sharded service responsible for distributing and
 // executing aggregation requests across a cluster.
@@ -153,6 +155,7 @@ public:
 
     future<> stop();
 
+    future<> dispatch_range_and_reduce(const locator::effective_replication_map_ptr& erm, retrying_dispatcher& dispatcher_, query::mapreduce_request const& req, query::mapreduce_request&& req_with_modified_pr, locator::host_id addr, query::mapreduce_result& result_, tracing::trace_state_ptr tr_state_);
     // Splits given `mapreduce_request` and distributes execution of resulting
     // subrequests across a cluster.
     future<query::mapreduce_result> dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state);

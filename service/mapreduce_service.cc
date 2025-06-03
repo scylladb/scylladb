@@ -548,6 +548,26 @@ future<> mapreduce_service::uninit_messaging_service() {
     return ser::mapreduce_request_rpc_verbs::unregister(&_messaging);
 }
 
+future<> mapreduce_service::dispatch_range_and_reduce(const locator::effective_replication_map_ptr& erm, retrying_dispatcher& dispatcher_, const query::mapreduce_request& req, query::mapreduce_request&& req_with_modified_pr, locator::host_id addr, query::mapreduce_result& result_, tracing::trace_state_ptr tr_state_) {
+    tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
+    flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
+
+    query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(*erm, addr, std::move(req_with_modified_pr));
+    auto partial_printer = seastar::value_of([&req, &partial_result] {
+        return query::mapreduce_result::printer {
+            .functions = get_functions(req),
+            .res = partial_result
+        };
+    });
+    tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
+    flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
+
+    auto aggrs = mapreduce_aggregates(req);
+    co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+        aggrs.merge(result_, std::move(partial_result));
+    });
+}
+
 std::optional<dht::partition_range> get_next_partition_range(query_ranges_to_vnodes_generator& generator) {
      if (auto vnode = generator(1); !vnode.empty()) {
         return vnode[0];
@@ -589,30 +609,9 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
         locator::host_id addr = vnodes_with_addr.first;
-        query::mapreduce_result& result_ = result;
-        tracing::trace_state_ptr& tr_state_ = tr_state;
-        retrying_dispatcher& dispatcher_ = dispatcher;
-
         query::mapreduce_request req_with_modified_pr = req;
         req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
-
-        tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
-        flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
-
-        query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(*erm, addr, std::move(req_with_modified_pr));
-        auto partial_printer = seastar::value_of([&req, &partial_result] {
-            return query::mapreduce_result::printer {
-                .functions = get_functions(req),
-                .res = partial_result
-            };
-        });
-        tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
-        flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
-
-        auto aggrs = mapreduce_aggregates(req);
-        co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-            aggrs.merge(result_, std::move(partial_result));
-        });
+        co_await dispatch_range_and_reduce(erm, dispatcher, req, std::move(req_with_modified_pr), addr, result, tr_state);        
     });
 
     mapreduce_aggregates aggrs(req);
