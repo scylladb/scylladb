@@ -146,7 +146,10 @@ class TestSuite(ABC):
     # test case. That is, we'll have a.1, a.2, a.3, b.1, b.2, b.3 rather than
     # a.1 a.2 a.3 b.4 b.5 b.6.
     def next_id(self, test_key) -> int:
-        TestSuite._next_id[test_key] += 1
+        if getattr(self.options, "run_id", None):
+            TestSuite._next_id[test_key] = self.options.run_id
+        else:
+            TestSuite._next_id[test_key] += 1
         return TestSuite._next_id[test_key]
 
     @staticmethod
