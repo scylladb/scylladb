@@ -10,11 +10,14 @@
 
 #include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
+#include "service/topology_state_machine.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
 
 namespace service {
+
+struct ongoing_rf_change_data;
 
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
@@ -230,7 +233,7 @@ public:
     ///
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
-    future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
+    future<migration_plan> balance_tablets(locator::token_metadata_ptr, std::optional<ongoing_rf_change_data>, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
 
     void set_load_stats(locator::load_stats_ptr);
 
