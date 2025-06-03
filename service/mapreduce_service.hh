@@ -156,6 +156,7 @@ public:
 
     future<> dispatch_range_and_reduce(const locator::effective_replication_map_ptr& erm, retrying_dispatcher& dispatcher, query::mapreduce_request const& req, query::mapreduce_request&& req_with_modified_pr, locator::host_id addr, query::mapreduce_result& result_, tracing::trace_state_ptr tr_state);
     future<> dispatch_to_vnodes(schema_ptr schema, replica::column_family& cf, query::mapreduce_request& req, query::mapreduce_result& result, tracing::trace_state_ptr tr_state);
+    future<> dispatch_to_tablets(schema_ptr schema, replica::column_family& cf, query::mapreduce_request& req, query::mapreduce_result& result, tracing::trace_state_ptr tr_state);
     // Splits given `mapreduce_request` and distributes execution of resulting
     // subrequests across a cluster.
     future<query::mapreduce_result> dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state);
@@ -171,6 +172,7 @@ private:
     future<> uninit_messaging_service();
 
     friend class retrying_dispatcher;
+    friend class mapreduce_tablet_algorithm;
 };
 
 } // namespace service
