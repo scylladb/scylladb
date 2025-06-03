@@ -404,6 +404,21 @@ def test_delete_item_sort(test_table):
     test_table.delete_item(Key=key)
     assert not 'Item' in test_table.get_item(Key=key, ConsistentRead=True)
 
+# DeleteItem should return an empty response object if none of the options
+# ReturnValues, ReturnConsumedCapacity or ReturnItemCollectionMetrics are requested.
+# We have tests elsewhere (see test_returnvalues.py, test_returnconsumedcapacity.py)
+# for testing DeleteItem with those optional features.
+def test_delete_item_return(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p})
+    assert 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    ret = test_table_s.delete_item(Key={'p': p})
+    assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    # boto3 always adds a "ResponseMetadata" item to the reponse object. Remove
+    # it and verify an empty object is left:
+    del ret['ResponseMetadata']
+    assert ret == {}
+
 # Test that PutItem completely replaces an existing item. It shouldn't merge
 # it with a previously existing value, as UpdateItem does!
 # We test for a table with just hash key, and for a table with both hash and
