@@ -75,6 +75,10 @@ private:
     static future<replica_guard> get_replica_lock(const dht::token& key, clock_type::time_point timeout,
         const dht::shard_replica_set& shards);
 
+    static future<paxos_state> load_and_repair_paxos_state(db::system_keyspace& sys_ks,
+        partition_key_view key, schema_ptr s, gc_clock::time_point now,
+        db::timeout_clock::time_point timeout, const dht::shard_replica_set& shards);
+
     utils::UUID _promised_ballot = utils::UUID_gen::min_time_UUID();
     std::optional<proposal> _accepted_proposal;
     std::optional<proposal> _most_recent_commit;

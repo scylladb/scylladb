@@ -46,6 +46,10 @@ inline bool operator>(const proposal& lhs, const proposal& rhs) {
     return lhs.ballot.timestamp() > rhs.ballot.timestamp();
 }
 
+inline bool operator==(const proposal& lhs, const proposal& rhs) {
+    return lhs.ballot.timestamp() == rhs.ballot.timestamp();
+}
+
 } // end of namespace "paxos"
 } // end of namespace "service"
 
