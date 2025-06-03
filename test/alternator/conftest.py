@@ -107,7 +107,7 @@ def get_valid_alternator_role():
             pass
         # If we couldn't find a valid role, let's hope that
         # alternator-enforce-authorization is not enabled so anything will work
-        return ('unknown_user', 'unknown_secret')
+        return ('unknownuser', 'unknownsecret')
 
     return _get_valid_alternator_role
 
