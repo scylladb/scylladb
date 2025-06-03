@@ -204,7 +204,12 @@ def dynamodb_test_connection(dynamodb, request, optional_rest_api):
         # URL is the fastest one.
         url = dynamodb.meta.client._endpoint.host
         response = requests.get(url, verify=False)
-        assert response.ok
+        # We don't check response: In Alternator and DynamoDB, we expect
+        # response.ok (200), but in recent versions of DynamoDB Local we can
+        # get error code 400 because it only allows signed health requests
+        # and gives an invalid signature error on an unsigned get().
+        # In any case, any HTTP response (as opposed to exception in get())
+        # means that the server is still alive.
     except:
         dynamodb_test_connection.scylla_crashed = True
         pytest.fail(f'Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}')
