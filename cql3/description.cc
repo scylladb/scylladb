@@ -18,7 +18,7 @@ static logging::logger dlogger{"description"};
 
 namespace cql3 {
 
-std::vector<managed_bytes_opt> description::serialize(bool serialize_create_statement) const {
+std::vector<managed_bytes_opt> description::serialize(bool serialize_create_statement) && {
     std::vector<managed_bytes_opt> result{};
     result.reserve(serialize_create_statement ? 4 : 3);
 
@@ -32,7 +32,7 @@ std::vector<managed_bytes_opt> description::serialize(bool serialize_create_stat
     result.push_back(to_managed_bytes(cql3::util::maybe_quote(name)));
 
     if (serialize_create_statement && create_statement) {
-        result.push_back(create_statement.value().as_managed_bytes());
+        result.push_back(std::move(create_statement.value()).as_managed_bytes());
     } else if (serialize_create_statement) {
         on_internal_error(dlogger, "create_statement field is empty");
     }

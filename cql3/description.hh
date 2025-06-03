@@ -90,7 +90,7 @@ struct description {
     ///
     /// Precondition: if `serialize_create_statement` is true, then `create_statement.has_value()`
     ///               is also true.
-    std::vector<managed_bytes_opt> serialize(bool serialize_create_statement = true) const;
+    std::vector<managed_bytes_opt> serialize(bool serialize_create_statement = true) &&;
 };
 
 } // namespace cql3
