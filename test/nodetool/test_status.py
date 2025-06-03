@@ -515,3 +515,41 @@ def test_status_with_zero_token_nodes(request, nodetool):
     ]
 
     _do_test_status(request, nodetool, None, nodes)
+
+
+def test_status_negative_load(request, nodetool):
+    nodes = [
+        Node(
+            endpoint="127.0.0.1",
+            host_id="78a9c1d0-b341-467e-a076-9eff4cf7ffc6",
+            load=-206015,
+            tokens=["-9175818098208185248", "-3983536194780899528"],
+            datacenter="datacenter1",
+            rack="rack1",
+            status=NodeStatus.Unknown,
+            state=NodeState.Joining,
+        ),
+        Node(
+            endpoint="127.0.0.2",
+            host_id="ed341f60-b12a-4fd4-9917-e80977ded0f9",
+            load=277624,
+            tokens=["-1810801828328238220", "2983536194780899528"],
+            datacenter="datacenter1",
+            rack="rack2",
+            status=NodeStatus.Down,
+            state=NodeState.Normal,
+        ),
+        Node(
+            endpoint="127.0.0.3",
+            host_id="1e77eb26-a372-4eb4-aeaa-72f224cf6b4c",
+            load=353236,
+            tokens=["3810801828328238220", "6810801828328238220"],
+            datacenter="datacenter1",
+            rack="rack3",
+            status=NodeStatus.Up,
+            state=NodeState.Normal,
+        ),
+    ]
+
+    status_target = StatusQueryTarget(keyspace="ks", table=None, uses_tablets=False)
+    _do_test_status(request, nodetool, status_target, nodes)
