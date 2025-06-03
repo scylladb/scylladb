@@ -3047,35 +3047,9 @@ private:
     // used to build it, and we cannot allow its serialized size to grow
     // beyond our limit on mutation size (by default 32 MB).
     size_t _fragments_memory_usage = 0;
-public:
-    consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
-            : _builder(builder)
-            , _gen(std::move(gen))
-            , _step(step)
-            , _built_views{step}
-            , _now(now) {
-        if (!step.current_key.key().is_empty(*_step.reader.schema())) {
-            load_views_to_build();
-        }
-    }
 
-    void load_views_to_build() {
-        inject_failure("view_builder_load_views");
-        for (auto&& vs : _step.build_status) {
-            if (_step.current_token() >= vs.next_token) {
-                if (partition_key_matches(_builder.get_db().as_data_dictionary(), *_step.reader.schema(), *vs.view->view_info(), _step.current_key)) {
-                    _views_to_build.push_back(vs.view);
-                }
-                if (vs.next_token || _step.current_token() != vs.first_token) {
-                    vs.next_token = _step.current_key.token();
-                }
-            } else {
-                break;
-            }
-        }
-    }
-
-    void check_for_built_views() {
+protected:
+    virtual void check_for_built_views() {
         inject_failure("view_builder_check_for_built_views");
         for (auto it = _step.build_status.begin(); it != _step.build_status.end();) {
             // A view starts being built at token t1. Due to resharding, that may not necessarily be a
@@ -3091,13 +3065,61 @@ public:
             }
         }
     }
+    virtual void load_views_to_build() {
+        inject_failure("view_builder_load_views");
+        for (auto&& vs : _step.build_status) {
+            if (_step.current_token() >= vs.next_token) {
+                if (partition_key_matches(_builder.get_db().as_data_dictionary(), *_step.reader.schema(), *vs.view->view_info(), _step.current_key)) {
+                    _views_to_build.push_back(vs.view);
+                }
+                if (vs.next_token || _step.current_token() != vs.first_token) {
+                    vs.next_token = _step.current_key.token();
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    virtual bool should_stop_consuming_end_of_partition() {
+        return _step.build_status.empty();
+    }
+
+    virtual dht::decorated_key& get_current_key() {
+        return _step.current_key;
+    }
+    virtual void set_current_key(dht::decorated_key key) {
+        _step.current_key = std::move(key);
+    }
+
+    virtual lw_shared_ptr<replica::table> base() {
+        return _step.base;
+    }
+    virtual mutation_reader& reader() {
+        return _step.reader;
+    }
+    virtual reader_permit& permit() {
+        return _builder._permit;
+    }
+
+public:
+    consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
+            : _builder(builder)
+            , _gen(std::move(gen))
+            , _step(step)
+            , _built_views{step}
+            , _now(now) {
+        if (!step.current_key.key().is_empty(*_step.reader.schema())) {
+            load_views_to_build();
+        }
+    }
 
     stop_iteration consume_new_partition(const dht::decorated_key& dk) {
         inject_failure("view_builder_consume_new_partition");
         if (dk.key().is_empty()) {
             on_internal_error(vlogger, format("Trying to consume empty partition key {}", dk));
         }
-        _step.current_key = std::move(dk);
+        set_current_key(std::move(dk));
         check_for_built_views();
         _views_to_build.clear();
         load_views_to_build();
@@ -3133,8 +3155,8 @@ public:
     }
 
     void add_fragment(auto&& fragment) {
-        _fragments_memory_usage += fragment.memory_usage(*_step.reader.schema());
-        _fragments.emplace_back(*_step.reader.schema(), _builder._permit, std::move(fragment));
+        _fragments_memory_usage += fragment.memory_usage(*reader().schema());
+        _fragments.emplace_back(*reader().schema(), permit(), std::move(fragment));
         if (_fragments_memory_usage > batch_memory_max) {
             // Although we have not yet completed the batch of base rows that
             // compact_for_query<> planned for us (view_builder::batchsize),
@@ -3153,16 +3175,16 @@ public:
         inject_failure("view_builder_flush_fragments");
         _builder._as.check();
         if (!_fragments.empty()) {
-            _fragments.emplace_front(*_step.reader.schema(), _builder._permit, partition_start(_step.current_key, tombstone()));
-            auto base_schema = _step.base->schema();
-            auto reader = make_mutation_reader_from_fragments(_step.reader.schema(), _builder._permit, std::move(_fragments));
-            auto close_reader = defer([&reader] { reader.close().get(); });
-            reader.upgrade_schema(base_schema);
+            _fragments.emplace_front(*reader().schema(), permit(), partition_start(get_current_key(), tombstone()));
+            auto base_schema = base()->schema();
+            auto fragments_reader = make_mutation_reader_from_fragments(reader().schema(), permit(), std::move(_fragments));
+            auto close_reader = defer([&fragments_reader] { fragments_reader.close().get(); });
+            fragments_reader.upgrade_schema(base_schema);
             _gen->populate_views(
-                    *_step.base,
+                    *base(),
                     _views_to_build,
-                    _step.current_token(),
-                    std::move(reader),
+                    get_current_key().token(),
+                    std::move(fragments_reader),
                     _now).get();
             close_reader.cancel();
             _fragments.clear();
@@ -3174,7 +3196,7 @@ public:
         inject_failure("view_builder_consume_end_of_partition");
         utils::get_local_injector().inject("view_builder_consume_end_of_partition_delay", utils::wait_for_message(std::chrono::seconds(60))).get();
         flush_fragments();
-        return stop_iteration(_step.build_status.empty());
+        return stop_iteration(should_stop_consuming_end_of_partition());
     }
 
     // Must be called in a seastar thread.
