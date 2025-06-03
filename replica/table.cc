@@ -1768,6 +1768,8 @@ table::sstable_list_builder::build_new_list(const sstables::sstable_set& current
                               const std::vector<sstables::shared_sstable>& old_sstables) {
     std::unordered_set<sstables::shared_sstable> s(old_sstables.begin(), old_sstables.end());
 
+    co_await utils::get_local_injector().inject("sstable_list_builder_delay", std::chrono::milliseconds(100));
+
     // add sstables from the current list into the new list except the ones that are in the old list
     std::vector<sstables::shared_sstable> removed_sstables;
     co_await current_sstables.for_each_sstable_gently([&s, &removed_sstables, &new_sstable_list] (const sstables::shared_sstable& tab) {
@@ -2019,14 +2021,13 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 
-    struct compaction_group_sstable_set_updater {
+    struct compaction_group_strategy_updater {
         table& t;
         compaction_group& cg;
         compaction_backlog_tracker new_bt;
         compaction::compaction_strategy_state new_cs_state;
-        lw_shared_ptr<sstables::sstable_set> new_sstables;
 
-        compaction_group_sstable_set_updater(table& t, compaction_group& cg, sstables::compaction_strategy& new_cs)
+        compaction_group_strategy_updater(table& t, compaction_group& cg, sstables::compaction_strategy& new_cs)
             : t(t)
             , cg(cg)
             , new_bt(new_cs.make_backlog_tracker())
@@ -2037,26 +2038,32 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
             auto move_read_charges = new_cs.type() == t._compaction_strategy.type();
             cg.get_backlog_tracker().copy_ongoing_charges(new_bt, move_read_charges);
 
+<<<<<<< HEAD
             new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(t._schema));
+||||||| parent of 434c2c4649 (replica: Fix use-after-free with concurrent schema change and sstable set update)
+            new_sstables = make_lw_shared<sstables::sstable_set>(new_cs.make_sstable_set(cg.as_table_state()));
+=======
+>>>>>>> 434c2c4649 (replica: Fix use-after-free with concurrent schema change and sstable set update)
             std::vector<sstables::shared_sstable> new_sstables_for_backlog_tracker;
             new_sstables_for_backlog_tracker.reserve(cg.main_sstables()->size());
-            cg.main_sstables()->for_each_sstable([this, &new_sstables_for_backlog_tracker] (const sstables::shared_sstable& s) {
-                new_sstables->insert(s);
+            cg.main_sstables()->for_each_sstable([&new_sstables_for_backlog_tracker] (const sstables::shared_sstable& s) {
                 new_sstables_for_backlog_tracker.push_back(s);
             });
             new_bt.replace_sstables({}, std::move(new_sstables_for_backlog_tracker));
         }
 
         void execute() noexcept {
+            // Update strategy state and backlog tracker according to new strategy. SSTable set update
+            // is delayed until new compaction, which is triggered on strategy change. SSTable set
+            // cannot be updated here since it must happen under the set update lock.
             t._compaction_manager.register_backlog_tracker(cg.as_table_state(), std::move(new_bt));
-            cg.set_main_sstables(std::move(new_sstables));
             cg.set_compaction_strategy_state(std::move(new_cs_state));
         }
     };
-    std::vector<compaction_group_sstable_set_updater> cg_sstable_set_updaters;
+    std::vector<compaction_group_strategy_updater> cg_sstable_set_updaters;
 
     for_each_compaction_group([&] (compaction_group& cg) {
-        compaction_group_sstable_set_updater updater(*this, cg, new_cs);
+        compaction_group_strategy_updater updater(*this, cg, new_cs);
         updater.prepare(new_cs);
         cg_sstable_set_updaters.push_back(std::move(updater));
     });
@@ -2065,7 +2072,6 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
     for (auto& updater : cg_sstable_set_updaters) {
         updater.execute();
     }
-    refresh_compound_sstable_set();
 }
 
 size_t table::sstables_count() const {
