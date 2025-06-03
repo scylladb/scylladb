@@ -19,6 +19,7 @@ from typing import Callable, Awaitable, Optional, TypeVar, Any
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
+from cassandra.query import Statement # type: ignore # pylint: disable=no-name-in-module
 from cassandra import DriverException, ConsistencyLevel  # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import ServerInfo
@@ -261,3 +262,131 @@ async def wait_for_first_completed(coros: list[Coroutine]):
         t.cancel()
     for t in done:
         await t
+<<<<<<< HEAD
+||||||| parent of 51025de755 (test/cluster: extract execute_with_tracing() into pylib/util.py)
+
+
+def ninja(target: str) -> str:
+    """Build specified target using ninja."""
+
+    return subprocess.Popen(
+        args=["ninja", *(["-C", str(BUILD_DIR)] if BUILD_DIR.joinpath("build.ninja").exists() else []), target],
+        stdout=subprocess.PIPE,
+        cwd=TOP_SRC_DIR,
+    ).communicate()[0].decode()
+
+
+@cache
+def get_configured_modes() -> list[str]:
+    out = ninja('mode_list')
+    # [1/1] List configured modes
+    # debug release dev
+    return re.sub(r'.* List configured modes\n(.*)\n', r'\1',
+                            out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
+
+
+def get_modes_to_run(config) -> list[str]:
+    modes = config.getoption('modes')
+    if not modes:
+        modes = get_configured_modes()
+    if not modes:
+        raise RuntimeError('No modes configured. Please run ./configure.py first')
+    return modes
+
+
+async def gather_safely(*awaitables: Awaitable):
+    """
+    Developers using asyncio.gather() often assume that it waits for all futures (awaitables) givens.
+    But this isn't true when the return_exceptions parameter is False, which is the default.
+    In that case, as soon as one future completes with an exception, the gather() call will return this exception
+    immediately, and some of the finished tasks may continue to run in the background.
+    This is bad for applications that use gather() to ensure that a list of background tasks has all completed.
+    So such applications must use asyncio.gather() with return_exceptions=True, to wait for all given futures to
+    complete either successfully or unsuccessfully.
+    """
+    results = await asyncio.gather(*awaitables, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result from None
+    return results
+
+
+def get_xdist_worker_id() -> str | None:
+    return os.environ.get("PYTEST_XDIST_WORKER")
+=======
+
+
+def ninja(target: str) -> str:
+    """Build specified target using ninja."""
+
+    return subprocess.Popen(
+        args=["ninja", *(["-C", str(BUILD_DIR)] if BUILD_DIR.joinpath("build.ninja").exists() else []), target],
+        stdout=subprocess.PIPE,
+        cwd=TOP_SRC_DIR,
+    ).communicate()[0].decode()
+
+
+@cache
+def get_configured_modes() -> list[str]:
+    out = ninja('mode_list')
+    # [1/1] List configured modes
+    # debug release dev
+    return re.sub(r'.* List configured modes\n(.*)\n', r'\1',
+                            out, count=1, flags=re.DOTALL).split('\n')[-1].split(' ')
+
+
+def get_modes_to_run(config) -> list[str]:
+    modes = config.getoption('modes')
+    if not modes:
+        modes = get_configured_modes()
+    if not modes:
+        raise RuntimeError('No modes configured. Please run ./configure.py first')
+    return modes
+
+
+async def gather_safely(*awaitables: Awaitable):
+    """
+    Developers using asyncio.gather() often assume that it waits for all futures (awaitables) givens.
+    But this isn't true when the return_exceptions parameter is False, which is the default.
+    In that case, as soon as one future completes with an exception, the gather() call will return this exception
+    immediately, and some of the finished tasks may continue to run in the background.
+    This is bad for applications that use gather() to ensure that a list of background tasks has all completed.
+    So such applications must use asyncio.gather() with return_exceptions=True, to wait for all given futures to
+    complete either successfully or unsuccessfully.
+    """
+    results = await asyncio.gather(*awaitables, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result from None
+    return results
+
+
+def get_xdist_worker_id() -> str | None:
+    return os.environ.get("PYTEST_XDIST_WORKER")
+
+
+def execute_with_tracing(cql : Session, statement : str | Statement, log : bool = False, *cql_execute_extra_args, **cql_execute_extra_kwargs):
+    """ Execute statement via cql session and log the tracing output. """
+
+    cql_execute_extra_kwargs['trace'] = True
+    query_result = cql.execute(statement, *cql_execute_extra_args, **cql_execute_extra_kwargs)
+
+    tracing = query_result.get_all_query_traces(max_wait_sec_per=900)
+
+    ret = []
+    page_traces = []
+    for trace in tracing:
+        ret.append(trace.events)
+        if not log:
+            continue
+
+        trace_events = []
+        for event in trace.events:
+            trace_events.append(f"  {event.source} {event.source_elapsed} {event.description}")
+        page_traces.append("\n".join(trace_events))
+
+    if log:
+        logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
+
+    return ret
+>>>>>>> 51025de755 (test/cluster: extract execute_with_tracing() into pylib/util.py)
