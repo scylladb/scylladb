@@ -27,18 +27,22 @@ from __future__ import annotations
 
 import collections
 import io
+import logging
 import os
 import subprocess
 from collections.abc import Sequence
 from functools import cache
 from pathlib import Path
 from xml.etree import ElementTree
+from xml.etree.ElementTree import ParseError
 
 import allure
 from pytest import Config
 from test import BUILD_DIR, COMBINED_TESTS
 from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
+
+logger = logging.getLogger(__name__)
 
 class BoostTestFacade(CppTestFacade):
     """
@@ -118,30 +122,26 @@ class BoostTestFacade(CppTestFacade):
 
         log = read_file(log_xml)
 
-        results = self._parse_log(log=log)
+        try:
+            results = self._parse_log(log=log)
+        except ParseError:
+            logger.warning('Error parsing the log_sink output. Can be empty or invalid')
+            results = None
 
         if not test_passed:
             allure.attach(stdout_file_path.read_bytes(), name='output', attachment_type=allure.attachment_type.TEXT)
             msg = (
-                'working_dir: {working_dir}\n'
-                'Internal Error: calling {executable} '
-                'for test {test_id} failed (return_code={return_code}):\n'
-                'output file:{stdout}\n'
-                'log:{log}\n'
-                'command to repeat:{command}'
+                f'working_dir: {os.getcwd()}\n'
+                f'Internal Error: calling {executable} '
+                f'for test {test_name} failed ({return_code=}):\n'
+                f'output file:{stdout_file_path.absolute()}\n'
+                f'log:{log}\n'
+                f'command to repeat:{" ".join(args)}\n'
             )
             failure = CppTestFailure(
                 file_name.name,
-                line_num=results[0].line_num,
-                contents=msg.format(
-                    working_dir=os.getcwd(),
-                    executable=executable,
-                    test_id=test_name,
-                    stdout=stdout_file_path.absolute(),
-                    log=log,
-                    command=' '.join(args),
-                    return_code=return_code,
-                ),
+                line_num=results[0].line_num if results is not None else -1,
+                contents=msg
             )
             return [failure], ''
 
