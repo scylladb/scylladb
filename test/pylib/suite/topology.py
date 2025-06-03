@@ -46,7 +46,6 @@ class TopologyTest(PythonTest):
         self._prepare_pytest_params(options)
 
         async with get_cluster_manager(self.uname, self.suite.clusters, str(self.suite.log_dir)) as manager:
-            self.args.insert(0, "--tmpdir={}".format(options.tmpdir))
             self.args.insert(0, "--manager-api={}".format(manager.sock_path))
             if options.artifacts_dir_url:
                 self.args.insert(0, "--artifacts_dir_url={}".format(options.artifacts_dir_url))

@@ -141,17 +141,13 @@ must be of course performed by the author of the test. This approach
 is sometimes called "approval testing" and discussion
 about pros and cons of this methodology is widely available online.
 
-To run CQL tests, `test.py` uses an auxiliary program,
-`test/pylib/cql_repl/cql_repl.py`.
-This program reads CQL input file, evaluates it against a pre-started
-Scylla using CQL database connection, and prints output in tabular format to
-stdout. A default keyspace is created automatically.
-
-`test.py` invokes `cql_repl.py` as a pytest providing the test file
-and redirecting its output to a temporary file in `testlog` directory.
-
-After `cql_repl.py` finishes, `test.py` compares the output stored in the
-temporary file with a pre-recorded output stored in
+To run CQL tests, `test.py` uses the custom pytest file collector implemented
+in `test/pylib/cql_repl.py` file.  More specifically, the test execution done
+in `CqlTest.runtest()` method: read CQL input file, evaluate it against a
+pre-started Scylla using CQL database connection, and print output in tabular
+format to a temporary output file in `testlog` directory.  A default keyspace
+is created automatically.  At the end, the test compares the output stored in
+the temporary file with a pre-recorded output stored in
 `test/suitename/testname_test.result`.
 
 The test is considered failed if executing any CQL statement produced an

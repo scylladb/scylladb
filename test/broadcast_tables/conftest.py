@@ -8,7 +8,7 @@ from test.pylib.suite.python import add_host_option, add_cql_connection_options
 
 # Add required fixtures:
 from test.cqlpy.conftest import host, cql
-from test.pylib.cql_repl.conftest import cql_test_connection
+from test.cql.conftest import cql_test_connection
 
 
 def pytest_addoption(parser):
