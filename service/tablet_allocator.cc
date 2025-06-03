@@ -851,6 +851,32 @@ public:
         }
     }
 
+    future<> consider_scheduled_load(node_load_map& nodes) {
+        const locator::topology& topo = _tm->get_topology();
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
+                co_await coroutine::maybe_yield();
+                if (is_streaming(&trinfo)) {
+                    auto& tinfo = tmap.get_tablet_info(tid);
+                    apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo));
+                }
+            }
+        }
+    }
+
+    future<> consider_planned_load(node_load_map& nodes, const migration_plan& mplan) {
+        const locator::topology& topo = _tm->get_topology();
+        auto& tablet_meta = _tm->tablets();
+        for (const tablet_migration_info& tmi : mplan.migrations()) {
+            co_await coroutine::maybe_yield();
+            auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
+            auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
+            auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
+            apply_load(nodes, streaming_info);
+        }
+    }
+
     future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
         lblogger.debug("In make_repair_plan");
 
@@ -875,26 +901,10 @@ public:
         });
 
         // Consider load that is already scheduled
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
-            for (auto&& [tid, trinfo]: tmap.transitions()) {
-                co_await coroutine::maybe_yield();
-                if (is_streaming(&trinfo)) {
-                    auto& tinfo = tmap.get_tablet_info(tid);
-                    apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo));
-                }
-            }
-        }
+        co_await consider_scheduled_load(nodes);
 
         // Consider load that is about to be scheduled
-        auto& tablet_meta = _tm->tablets();
-        for (const tablet_migration_info& tmi : mplan.migrations()) {
-            co_await coroutine::maybe_yield();
-            auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
-            auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
-            auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
-            apply_load(nodes, streaming_info);
-        }
+        co_await consider_planned_load(nodes, mplan);
 
         struct repair_plan {
             locator::global_tablet_id gid;
