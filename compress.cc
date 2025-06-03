@@ -768,6 +768,8 @@ size_t snappy_processor::uncompress(const char* input, size_t input_len,
 
 size_t snappy_processor::compress(const char* input, size_t input_len,
                 char* output, size_t output_len) const {
+    // FIXME: snappy internally performs allocations greater than 128 kiB.
+    const memory::scoped_large_allocation_warning_threshold slawt{256*1024};
     auto ret = snappy_compress(input, input_len, output, &output_len);
     if (ret != SNAPPY_OK) {
         throw std::runtime_error("snappy compression failure: snappy_compress() failed");

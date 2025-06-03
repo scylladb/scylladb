@@ -1727,6 +1727,8 @@ void cql_server::response::compress_snappy()
     auto in = input_buffer.get_linearized_view(_body);
     size_t output_len = snappy_max_compressed_length(in.size());
     _body = output_buffer.make_bytes_ostream(output_len, [&in] (bytes_mutable_view out) {
+        // FIXME: snappy internally performs allocations greater than 128 kiB.
+        const memory::scoped_large_allocation_warning_threshold slawt{256*1024};
         size_t actual_len = out.size();
         if (snappy_compress(reinterpret_cast<const char*>(in.data()), in.size(), reinterpret_cast<char*>(out.data()), &actual_len) != SNAPPY_OK) {
             throw std::runtime_error("CQL frame Snappy compression failure");
