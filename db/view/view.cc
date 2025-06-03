@@ -3001,40 +3001,12 @@ void view_builder::init_virtual_table() {
 }
 
 // Called in the context of a seastar::thread.
-class view_builder::consumer {
-public:
-    struct built_views {
-        build_step& step;
-        std::vector<view_build_status> views;
-
-        built_views(build_step& step)
-                : step(step) {
-        }
-
-        built_views(built_views&& other)
-                : step(other.step)
-                , views(std::move(other.views)) {
-        }
-
-        ~built_views() {
-            for (auto&& status : views) {
-                // Use step.current_token(), which may have wrapped around and become < first_token.
-                step.build_status.emplace_back(view_build_status{std::move(status.view), step.current_token(), step.current_token()});
-            }
-        }
-
-        void release() {
-            views.clear();
-        }
-    };
-
-private:
-    view_builder& _builder;
+class view_consumer {
+protected:
     shared_ptr<view_update_generator> _gen;
-    build_step& _step;
-    built_views _built_views;
     gc_clock::time_point _now;
     std::vector<view_ptr> _views_to_build;
+
     std::deque<mutation_fragment_v2> _fragments;
     // The compact_for_query<> that feeds this consumer is already configured
     // to feed us up to view_builder::batchsize (128) rows and not an entire
@@ -3047,77 +3019,57 @@ private:
     // beyond our limit on mutation size (by default 32 MB).
     size_t _fragments_memory_usage = 0;
 
-protected:
-    virtual void check_for_built_views() {
-        inject_failure("view_builder_check_for_built_views");
-        for (auto it = _step.build_status.begin(); it != _step.build_status.end();) {
-            // A view starts being built at token t1. Due to resharding, that may not necessarily be a
-            // shard-owned token. We finish building the view when the next_token to build is just before
-            // (or at) the first token, but the shard-owned current token is after (or at) the first token.
-            // In the system tables, we set first_token = next_token to signal the completion of the build
-            // process in case of a restart.
-            if (it->next_token && *it->next_token <= it->first_token && _step.current_token() >= it->first_token) {
-                _built_views.views.push_back(std::move(*it));
-                it = _step.build_status.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
-    virtual void load_views_to_build() {
-        inject_failure("view_builder_load_views");
-        for (auto&& vs : _step.build_status) {
-            if (_step.current_token() >= vs.next_token) {
-                if (partition_key_matches(_builder.get_db().as_data_dictionary(), *_step.reader.schema(), *vs.view->view_info(), _step.current_key)) {
-                    _views_to_build.push_back(vs.view);
-                }
-                if (vs.next_token || _step.current_token() != vs.first_token) {
-                    vs.next_token = _step.current_key.token();
-                }
-            } else {
-                break;
-            }
+    virtual void check_for_built_views() = 0;
+    virtual void load_views_to_build() = 0;
+
+    virtual void check_abort_source() = 0;
+    virtual bool stop_consuming() = 0;
+    virtual bool stop_consuming_end_of_partition() = 0;
+
+    virtual dht::decorated_key& get_current_key() = 0;
+    virtual void set_current_key(dht::decorated_key key) = 0;
+
+    virtual lw_shared_ptr<replica::table> base() = 0;
+    virtual mutation_reader& reader() = 0;
+    virtual reader_permit& permit() = 0;
+
+    void add_fragment(auto&& fragment) {
+        _fragments_memory_usage += fragment.memory_usage(*reader().schema());
+        _fragments.emplace_back(*reader().schema(), permit(), std::move(fragment));
+        if (_fragments_memory_usage > view_builder::batch_memory_max) {
+            // Although we have not yet completed the batch of base rows that
+            // compact_for_query<> planned for us (view_builder::batchsize),
+            // we've still collected enough rows to reach sizeable memory use,
+            // so let's flush these rows now.
+            flush_fragments();
         }
     }
 
-    virtual void check_abort_source() {
-        _builder._as.check();
-    }
-    virtual bool stop_consuming() {
-        return _views_to_build.empty() || _builder._as.abort_requested();
-    }
-    virtual bool stop_consuming_end_of_partition() {
-        return _step.build_status.empty();
-    }
-
-    virtual dht::decorated_key& get_current_key() {
-        return _step.current_key;
-    }
-    virtual void set_current_key(dht::decorated_key key) {
-        _step.current_key = std::move(key);
-    }
-
-    virtual lw_shared_ptr<replica::table> base() {
-        return _step.base;
-    }
-    virtual mutation_reader& reader() {
-        return _step.reader;
-    }
-    virtual reader_permit& permit() {
-        return _builder._permit;
+    void flush_fragments() {
+        inject_failure("view_builder_flush_fragments");
+        check_abort_source();
+        if (!_fragments.empty()) {
+            _fragments.emplace_front(*reader().schema(), permit(), partition_start(get_current_key(), tombstone()));
+            auto base_schema = base()->schema();
+            auto fragemnts_reader = make_mutation_reader_from_fragments(reader().schema(), permit(), std::move(_fragments));
+            auto close_reader = defer([&fragemnts_reader] { fragemnts_reader.close().get(); });
+            fragemnts_reader.upgrade_schema(base_schema);
+            _gen->populate_views(
+                    *base(),
+                    _views_to_build,
+                    get_current_key().token(),
+                    std::move(fragemnts_reader),
+                    _now).get();
+            close_reader.cancel();
+            _fragments.clear();
+            _fragments_memory_usage = 0;
+        } 
     }
 
 public:
-    consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
-            : _builder(builder)
-            , _gen(std::move(gen))
-            , _step(step)
-            , _built_views{step}
-            , _now(now) {
-        if (!step.current_key.key().is_empty(*_step.reader.schema())) {
-            load_views_to_build();
-        }
-    }
+    view_consumer(shared_ptr<view_update_generator> gen, gc_clock::time_point now)
+            : _gen(std::move(gen))
+            , _now(now) {}
 
     stop_iteration consume_new_partition(const dht::decorated_key& dk) {
         inject_failure("view_builder_consume_new_partition");
@@ -3159,42 +3111,9 @@ public:
         return stop_iteration::no;
     }
 
-    void add_fragment(auto&& fragment) {
-        _fragments_memory_usage += fragment.memory_usage(*reader().schema());
-        _fragments.emplace_back(*reader().schema(), permit(), std::move(fragment));
-        if (_fragments_memory_usage > batch_memory_max) {
-            // Although we have not yet completed the batch of base rows that
-            // compact_for_query<> planned for us (view_builder::batchsize),
-            // we've still collected enough rows to reach sizeable memory use,
-            // so let's flush these rows now.
-            flush_fragments();
-        }
-    }
-
     stop_iteration consume(range_tombstone_change&&) {
         inject_failure("view_builder_consume_range_tombstone");
         return stop_iteration::no;
-    }
-
-    void flush_fragments() {
-        inject_failure("view_builder_flush_fragments");
-        check_abort_source();
-        if (!_fragments.empty()) {
-            _fragments.emplace_front(*reader().schema(), permit(), partition_start(get_current_key(), tombstone()));
-            auto base_schema = base()->schema();
-            auto fragemnts_reader = make_mutation_reader_from_fragments(reader().schema(), permit(), std::move(_fragments));
-            auto close_reader = defer([&fragemnts_reader] { fragemnts_reader.close().get(); });
-            fragemnts_reader.upgrade_schema(base_schema);
-            _gen->populate_views(
-                    *base(),
-                    _views_to_build,
-                    get_current_key().token(),
-                    std::move(fragemnts_reader),
-                    _now).get();
-            close_reader.cancel();
-            _fragments.clear();
-            _fragments_memory_usage = 0;
-        }
     }
 
     stop_iteration consume_end_of_partition() {
@@ -3202,6 +3121,111 @@ public:
         utils::get_local_injector().inject("view_builder_consume_end_of_partition_delay", utils::wait_for_message(std::chrono::seconds(60))).get();
         flush_fragments();
         return stop_iteration(stop_consuming_end_of_partition());
+    }
+};
+
+// Called in the context of a seastar::thread.
+class view_builder::consumer : public view_consumer {
+public:
+    struct built_views {
+        build_step& step;
+        std::vector<view_build_status> views;
+
+        built_views(build_step& step)
+                : step(step) {
+        }
+
+        built_views(built_views&& other)
+                : step(other.step)
+                , views(std::move(other.views)) {
+        }
+
+        ~built_views() {
+            for (auto&& status : views) {
+                // Use step.current_token(), which may have wrapped around and become < first_token.
+                step.build_status.emplace_back(view_build_status{std::move(status.view), step.current_token(), step.current_token()});
+            }
+        }
+
+        void release() {
+            views.clear();
+        }
+    };
+
+private:
+    view_builder& _builder;
+    build_step& _step;
+    built_views _built_views;
+
+protected:
+    virtual void check_for_built_views() override {
+        inject_failure("view_builder_check_for_built_views");
+        for (auto it = _step.build_status.begin(); it != _step.build_status.end();) {
+            // A view starts being built at token t1. Due to resharding, that may not necessarily be a
+            // shard-owned token. We finish building the view when the next_token to build is just before
+            // (or at) the first token, but the shard-owned current token is after (or at) the first token.
+            // In the system tables, we set first_token = next_token to signal the completion of the build
+            // process in case of a restart.
+            if (it->next_token && *it->next_token <= it->first_token && _step.current_token() >= it->first_token) {
+                _built_views.views.push_back(std::move(*it));
+                it = _step.build_status.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    virtual void load_views_to_build() override {
+        inject_failure("view_builder_load_views");
+        for (auto&& vs : _step.build_status) {
+            if (_step.current_token() >= vs.next_token) {
+                if (partition_key_matches(_builder.get_db().as_data_dictionary(), *_step.reader.schema(), *vs.view->view_info(), _step.current_key)) {
+                    _views_to_build.push_back(vs.view);
+                }
+                if (vs.next_token || _step.current_token() != vs.first_token) {
+                    vs.next_token = _step.current_key.token();
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    virtual void check_abort_source() override {
+        _builder._as.check();
+    }
+    virtual bool stop_consuming() override {
+        return _views_to_build.empty() || _builder._as.abort_requested();
+    }
+    virtual bool stop_consuming_end_of_partition() override {
+        return _step.build_status.empty();
+    }
+
+    virtual dht::decorated_key& get_current_key() override {
+        return _step.current_key;
+    }
+    virtual void set_current_key(dht::decorated_key key) override {
+        _step.current_key = std::move(key);
+    }
+
+    virtual lw_shared_ptr<replica::table> base() override {
+        return _step.base;
+    }
+    virtual mutation_reader& reader() override {
+        return _step.reader;
+    }
+    virtual reader_permit& permit() override {
+        return _builder._permit;
+    }
+
+public:
+    consumer(view_builder& builder, shared_ptr<view_update_generator> gen, build_step& step, gc_clock::time_point now)
+            : view_consumer(std::move(gen), now)
+            , _builder(builder)
+            , _step(step)
+            , _built_views{step} {
+        if (!step.current_key.key().is_empty(*_step.reader.schema())) {
+            load_views_to_build();
+        }
     }
 
     // Must be called in a seastar thread.
