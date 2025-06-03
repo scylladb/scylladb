@@ -826,6 +826,31 @@ public:
         co_return false;
     }
 
+    void ensure_node(node_load_map& nodes, host_id host) {
+        if (nodes.contains(host)) {
+            return;
+        }
+        const locator::topology& topo = _tm->get_topology();
+        auto* node = topo.find_node(host);
+        if (!node) {
+            on_internal_error(lblogger, format("Node {} not found in topology", host));
+        }
+        node_load& load = nodes[host];
+        load.id = host;
+        load.node = node;
+        load.shard_count = node->get_shard_count();
+        load.shards.resize(load.shard_count);
+        if (!load.shard_count) {
+            throw std::runtime_error(format("Shard count of {} not found in topology", host));
+        }
+        if (!_db.features().tablet_load_stats_v2) {
+            // This way load calculation will hold tablet count.
+            load.capacity = _target_tablet_size * load.shard_count;
+        } else if (_table_load_stats && _table_load_stats->capacity.contains(host)) {
+            load.capacity = _table_load_stats->capacity.at(host);
+        }
+    }
+
     future<tablet_repair_plan> make_repair_plan(const migration_plan& mplan) {
         lblogger.debug("In make_repair_plan");
 
@@ -841,29 +866,11 @@ public:
         // Populate the load of the migration that is already in the plan
         node_load_map nodes;
         // TODO: share code with make_plan()
-        auto ensure_node = [&] (host_id host) {
-            if (nodes.contains(host)) {
-                return;
-            }
-            auto* node = topo.find_node(host);
-            if (!node) {
-                on_internal_error(lblogger, format("Node {} not found in topology", host));
-            }
-            node_load& load = nodes[host];
-            load.id = host;
-            load.node = node;
-            load.shard_count = node->get_shard_count();
-            load.shards.resize(load.shard_count);
-            if (!load.shard_count) {
-                throw std::runtime_error(format("Shard count of {} not found in topology", host));
-            }
-        };
-        // TODO: share code with make_plan()
         topo.for_each_node([&] (const locator::node& node) {
             bool is_drained = node.get_state() == locator::node::state::being_decommissioned
                               || node.get_state() == locator::node::state::being_removed;
             if (node.get_state() == locator::node::state::normal || is_drained) {
-                ensure_node(node.host_id());
+                ensure_node(nodes, node.host_id());
             }
         });
 
@@ -2985,30 +2992,6 @@ public:
         node_load_map nodes;
         std::unordered_set<host_id> nodes_to_drain;
 
-        auto ensure_node = [&] (host_id host) {
-            if (nodes.contains(host)) {
-                return;
-            }
-            auto* node = topo.find_node(host);
-            if (!node) {
-                on_internal_error(lblogger, format("Node {} not found in topology", host));
-            }
-            node_load& load = nodes[host];
-            load.id = host;
-            load.node = node;
-            load.shard_count = node->get_shard_count();
-            load.shards.resize(load.shard_count);
-            if (!load.shard_count) {
-                throw std::runtime_error(format("Shard count of {} not found in topology", host));
-            }
-            if (!_db.features().tablet_load_stats_v2) {
-                // This way load calculation will hold tablet count.
-                load.capacity = _target_tablet_size * load.shard_count;
-            } else if (_table_load_stats && _table_load_stats->capacity.contains(host)) {
-                load.capacity = _table_load_stats->capacity.at(host);
-            }
-        };
-
         _tm->for_each_token_owner([&] (const locator::node& node) {
             if (!node_filter(node)) {
                 return;
@@ -3017,7 +3000,7 @@ public:
                               || node.get_state() == locator::node::state::being_removed;
             if (node.get_state() == locator::node::state::normal || is_drained) {
                 if (is_drained) {
-                    ensure_node(node.host_id());
+                    ensure_node(nodes, node.host_id());
                     lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc);
                     nodes_to_drain.emplace(node.host_id());
                     nodes[node.host_id()].drained = true;
@@ -3025,7 +3008,7 @@ public:
                     // Excluded nodes should not be chosen as targets for migration.
                     lblogger.debug("Ignoring excluded node {}: state={}", node.host_id(), node.get_state());
                 } else {
-                    ensure_node(node.host_id());
+                    ensure_node(nodes, node.host_id());
                 }
             }
         });
@@ -3058,7 +3041,7 @@ public:
                                                            r, global_tablet_id{table, tid}));
                     }
                     if (node->left() && node_filter(*node)) {
-                        ensure_node(r.host);
+                        ensure_node(nodes, r.host);
                         nodes_to_drain.insert(r.host);
                         nodes[r.host].drained = true;
                     }
