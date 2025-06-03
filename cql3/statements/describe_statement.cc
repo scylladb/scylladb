@@ -86,6 +86,16 @@ future<std::vector<description>> generate_descriptions(Range&& range, const Desc
     co_return result;
 }
 
+// `cql3::description` is a move-only type at the moment, and so we cannot initialize a vector passing
+// its instances as elements of an initializer list. This function serves as an intermediary to avoid
+// unnecessarily bloating some parts of the code below.
+std::vector<description> wrap_in_vector(description desc) {
+    std::vector<description> result{};
+    result.reserve(1);
+    result.push_back(std::move(desc));
+    return result;
+}
+
 bool is_index(const data_dictionary::database& db, const schema_ptr& schema) {
     return db.find_column_family(schema->view_info()->base_id()).get_index_manager().is_index(*schema);
 }
@@ -303,7 +313,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     if (schema->cdc_options().enabled()) {
         auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
         if (cdc_log_alter) {
-            result.push_back(*cdc_log_alter);
+            result.push_back(std::move(*cdc_log_alter));
         }
     }
 
@@ -321,7 +331,7 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
         std::vector<description> result;
         for (const auto& t: tables) {
             auto tables_desc = co_await table(db, ks->name(), t->cf_name(), *with_internals);
-            result.insert(result.end(), tables_desc.begin(), tables_desc.end());
+            result.insert(result.end(), std::make_move_iterator(tables_desc.begin()), std::make_move_iterator(tables_desc.end()));
             co_await coroutine::maybe_yield();
         }
 
@@ -368,7 +378,7 @@ future<std::vector<description>> list_elements(const data_dictionary::database& 
     case element_type::function:     co_return co_await functions(replica_db, ks, with_create_statement::no);
     case element_type::aggregate:    co_return co_await aggregates(replica_db, ks, with_create_statement::no);
     case element_type::table:        co_return co_await tables(db, ks_meta);
-    case element_type::keyspace:     co_return std::vector{ks_meta->describe(replica_db, with_create_statement::no)};
+    case element_type::keyspace:     co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::no));
     case element_type::view:
     case element_type::index:
         on_internal_error(dlogger, "listing of views and indexes is unsupported");
@@ -388,13 +398,13 @@ future<std::vector<description>> describe_element(const data_dictionary::databas
     auto& replica_db = db.real_database();
 
     switch (element) {
-    case element_type::type:             co_return std::vector{type(replica_db, ks_meta, name)};
+    case element_type::type:             co_return wrap_in_vector(type(replica_db, ks_meta, name));
     case element_type::function:         co_return co_await function(replica_db, ks, name);
     case element_type::aggregate:        co_return co_await aggregate(replica_db, ks, name);
     case element_type::table:            co_return co_await table(db, ks, name, with_internals);
-    case element_type::index:            co_return std::vector{index(db, ks, name, with_internals)};
-    case element_type::view:             co_return std::vector{view(db, ks, name, with_internals)};
-    case element_type::keyspace:         co_return std::vector{ks_meta->describe(replica_db, with_create_statement::yes)};
+    case element_type::index:            co_return wrap_in_vector(index(db, ks, name, with_internals));
+    case element_type::view:             co_return wrap_in_vector(view(db, ks, name, with_internals));
+    case element_type::keyspace:         co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::yes));
     }
 }
 
@@ -413,7 +423,7 @@ future<std::vector<description>> describe_all_keyspace_elements(const data_dicti
     std::vector<description> result;
 
     auto inserter = [&result] (std::vector<description>&& elements) mutable {
-        result.insert(result.end(), elements.begin(), elements.end());
+        result.insert(result.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
     };
 
     result.push_back(ks_meta->describe(replica_db, with_create_statement::yes));
@@ -610,7 +620,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
                     continue;
                 }
                 auto ks_result = co_await describe_all_keyspace_elements(db, ks, _with_internals);
-                schema_result.insert(schema_result.end(), ks_result.begin(), ks_result.end());
+                schema_result.insert(schema_result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
             }
 
             if (_with_internals) {
@@ -637,7 +647,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::d
                 auto ks_meta = get_keyspace_metadata(db, ks);
                 auto ks_desc = ks_meta->describe(db.real_database(), with_create_statement::yes);
 
-                co_return std::vector{ks_desc};
+                co_return wrap_in_vector(std::move(ks_desc));
             } else {
                 co_return co_await describe_all_keyspace_elements(db, ks, _with_internals);
             }
@@ -673,7 +683,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::
     std::vector<description> result;
     for (auto&& ks: keyspaces) {
         auto ks_result = co_await list_elements(db, ks, _element);
-        result.insert(result.end(), ks_result.begin(), ks_result.end());
+        result.insert(result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
         co_await coroutine::maybe_yield();
     }
 
@@ -740,7 +750,7 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
     auto tbl = db.try_find_table(ks_name, _name);
     if (tbl) {
         if (tbl->schema()->is_view()) {
-            co_return serialize_descriptions({view(db, ks_name, _name, _with_internals)});
+            co_return serialize_descriptions(wrap_in_vector(view(db, ks_name, _name, _with_internals)));
         } else {
             co_return serialize_descriptions(co_await table(db, ks_name, _name, _with_internals));
         }
@@ -748,12 +758,12 @@ future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::
 
     auto idx_tbl = db.find_indexed_table(ks_name, _name);
     if (idx_tbl) {
-        co_return serialize_descriptions({index(db, ks_name, _name, _with_internals)});
+        co_return serialize_descriptions(wrap_in_vector(index(db, ks_name, _name, _with_internals)));
     }
 
     auto udt_meta = ks_meta->user_types();
     if (udt_meta.has_type(to_bytes(_name))) {
-        co_return serialize_descriptions({type(replica_db, ks_meta, _name)});
+        co_return serialize_descriptions(wrap_in_vector(type(replica_db, ks_meta, _name)));
     }
 
     auto uf = functions::instance().find(functions::function_name(ks_name, _name));
