@@ -604,6 +604,7 @@ future<> mapreduce_service::dispatch_to_vnodes(schema_ptr schema, replica::colum
 
     co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
+        co_await utils::get_local_injector().inject("mapreduce_pause_parallel_dispatch", utils::wait_for_message(5min));
         locator::host_id addr = vnodes_with_addr.first;
         query::mapreduce_request req_with_modified_pr = req;
         req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
@@ -667,7 +668,7 @@ future<> mapreduce_service::dispatch_to_tablets(schema_ptr schema, replica::colu
         bool new_replica_found = false;
         co_await coroutine::parallel_for_each(active_tablet_replicas,
             [&] (const locator::tablet_replica tablet_replica) -> future<> {
-
+            co_await utils::get_local_injector().inject("mapreduce_pause_parallel_dispatch", utils::wait_for_message(5min));
             auto& ranges_for_tablet_replica = ranges_per_tablet_replica[tablet_replica];
             while (ranges_for_tablet_replica.size() > 0 && !new_replica_found) {
                 auto erm = cf.get_effective_replication_map();
