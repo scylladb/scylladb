@@ -16,6 +16,7 @@
 #include "cql3/functions/function_name.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
+#include <ranges>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
@@ -459,8 +460,8 @@ std::vector<lw_shared_ptr<column_specification>> get_element_column_specificatio
 }
 
 std::vector<std::vector<managed_bytes_opt>> serialize_descriptions(std::vector<description>&& descs, bool serialize_create_statement = true) {
-    return descs | std::views::transform([serialize_create_statement] (const description& desc) {
-        return desc.serialize(serialize_create_statement);
+    return descs | std::views::as_rvalue | std::views::transform([serialize_create_statement] (description desc) {
+        return std::move(desc).serialize(serialize_create_statement);
     }) | std::ranges::to<std::vector>();
 }
 
