@@ -35,6 +35,7 @@ class retrying:  # noqa: N801
         def inner(*args, **kwargs):
             func_args = inspect.getfullargspec(func)
             num_attempts = self.num_attempts
+            sleep_time = self.sleep_time
             func_name = self.get_func_name(func)
 
             if "num_attempts" in func_args.args:
@@ -44,14 +45,21 @@ class retrying:  # noqa: N801
                     num_attempts_position = default_args.index("num_attempts")
                     num_attempts = func_args.defaults[num_attempts_position]
 
+            if "sleep_time" in func_args.args:
+                sleep_time = kwargs.get("sleep_time")
+                if not sleep_time:
+                    default_args = func_args.args[-len(func_args.defaults) :]
+                    sleep_time_position = default_args.index("sleep_time")
+                    sleep_time = func_args.defaults[sleep_time_position]
+
             for i in range(num_attempts - 1):
                 try:
                     if self.message:
                         logger.debug(f"trying {func_name} [{i + 1}/{num_attempts}] ({self.message})")
                     return func(*args, **kwargs)
                 except self.allowed_exceptions as e:
-                    logger.debug(f"{func_name} [{i + 1}/{num_attempts}]: {e}: will retry in {self.sleep_time} second(s)")
-                    time.sleep(self.sleep_time)
+                    logger.debug(f"{func_name} [{i + 1}/{num_attempts}]: {e}: will retry in {sleep_time} second(s)")
+                    time.sleep(sleep_time)
             if self.message:
                 logger.debug(f"trying {func_name} [{'last try' if num_attempts > 1 else 'single try'}] ({self.message})")
             return func(*args, **kwargs)

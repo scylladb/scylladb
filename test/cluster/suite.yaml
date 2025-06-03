@@ -43,5 +43,6 @@ run_in_dev:
   - dtest/error_example_test
   - dtest/alternator_tests
   - dtest/bypass_cache_test
+  - dtest/auth_roles_test
 run_in_debug:
   - random_failures/test_random_failures

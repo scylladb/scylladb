@@ -7,6 +7,7 @@
 import logging
 
 from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from cassandra.concurrent import execute_concurrent_with_args
 
 from test.cluster.dtest.dtest_class import create_cf
@@ -45,3 +46,22 @@ def insert_c1c2(  # noqa: PLR0913
         statement.consistency_level = consistency
 
         execute_concurrent_with_args(session, statement, [[f"k{k}"] for k in keys], concurrency=concurrency)
+
+
+def rows_to_list(rows):
+    new_list = [list(row) for row in rows]
+    return new_list
+
+
+def get_list_res(session, query, cl, ignore_order=False, result_as_string=False, timeout=None):
+    simple_query = SimpleStatement(query, consistency_level=cl)
+    if timeout is not None:
+        res = session.execute(simple_query, timeout=timeout)
+    else:
+        res = session.execute(simple_query)
+    list_res = rows_to_list(res)
+    if ignore_order:
+        list_res = sorted(list_res)
+    if result_as_string:
+        list_res = str(list_res)
+    return list_res
