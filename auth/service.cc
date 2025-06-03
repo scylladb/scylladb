@@ -209,7 +209,9 @@ future<> service::create_legacy_keyspace_if_missing(::service::migration_manager
         auto ts = group0_guard.write_timestamp();
 
         if (!db.has_keyspace(meta::legacy::AUTH_KS)) {
-            locator::replication_strategy_config_options opts{{"replication_factor", "1"}};
+            locator::replication_strategy_config_options opts{
+                .replication = {{"replication_factor", "1"}}
+            };
 
             auto ksm = data_dictionary::keyspace_metadata::new_keyspace(
                     meta::legacy::AUTH_KS,

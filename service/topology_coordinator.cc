@@ -936,8 +936,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
             cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
 
-            auto repl_opts = new_ks_props.get_replication_options();
-            repl_opts.erase(cql3::statements::ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
+            locator::replication_strategy_config_options repl_opts;
+            repl_opts.replication = new_ks_props.get_replication_options();
+            repl_opts.replication.erase(cql3::statements::ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
             utils::chunked_vector<canonical_mutation> updates;
             sstring error;
             if (_db.has_keyspace(ks_name)) {

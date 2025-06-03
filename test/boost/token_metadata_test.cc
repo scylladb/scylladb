@@ -88,7 +88,7 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
     token_metadata->update_normal_tokens({t1}, e1_id).get();
     token_metadata->add_bootstrap_token(t2, e2_id);
 
-    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "1"}});
+    auto erm = create_erm<simple_strategy>(token_metadata, { .replication = {{"replication_factor", "1"}} });
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(0)),
         host_id_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(1)),
@@ -122,7 +122,7 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_with_replicas) {
     token_metadata->update_normal_tokens({t10}, e3_id).get();
     token_metadata->add_bootstrap_token(t100, e1_id);
 
-    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
+    auto erm = create_erm<simple_strategy>(token_metadata, { .replication = {{"replication_factor", "2"}} });
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(1)),
         host_id_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(2)),
@@ -157,7 +157,7 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_leave_with_replicas) {
     token_metadata->update_normal_tokens({t100}, e1_id).get();
     token_metadata->add_leaving_endpoint(e1_id);
 
-    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
+    auto erm = create_erm<simple_strategy>(token_metadata, { .replication = {{"replication_factor", "2"}} });
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(1)),
         host_id_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(2)),
@@ -194,7 +194,7 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
     token_metadata->update_normal_tokens({t10}, e3_id).get();
     token_metadata->add_replacing_endpoint(e3_id, e4_id);
 
-    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
+    auto erm = create_erm<simple_strategy>(token_metadata, { .replication = {{"replication_factor", "2"}} });
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(100)),
         host_id_vector_topology_change{});
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(1000)),
@@ -254,13 +254,13 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     };
 
     {
-        auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
+        auto erm = create_erm<simple_strategy>(token_metadata, { .replication = {{"replication_factor", "2"}} });
         check_no_endpoints(erm, 2);
     }
 
     {
         token_metadata->set_read_new(locator::token_metadata::read_new_t::yes);
-        auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
+        auto erm = create_erm<simple_strategy>(token_metadata, { .replication = {{"replication_factor", "2"}} });
 
         check_endpoints(erm, 2, {e3_id, e1_id});
         check_endpoints(erm, 10, {e3_id, e1_id});
@@ -289,7 +289,7 @@ SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
 
     token_metadata->add_replacing_endpoint(e1_id1, e1_id2);
 
-    auto erm = create_erm<simple_strategy>(token_metadata, {{"replication_factor", "2"}});
+    auto erm = create_erm<simple_strategy>(token_metadata, { .replication = {{"replication_factor", "2"}} });
     BOOST_REQUIRE_EQUAL(erm->get_pending_replicas(dht::token::from_int64(1)),
         host_id_vector_topology_change{e1_id2});
     BOOST_REQUIRE_EQUAL(erm->get_natural_replicas(dht::token::from_int64(1)),

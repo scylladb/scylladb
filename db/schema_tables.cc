@@ -9,6 +9,7 @@
 
 #include "db/schema_tables.hh"
 
+#include "locator/abstract_replication_strategy.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -1223,8 +1224,8 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
     m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
 
     auto map = keyspace->strategy_options();
-    map["class"] = keyspace->strategy_name();
-    store_map(m, ckey, "replication", timestamp, map);
+    map.replication["class"] = keyspace->strategy_name();
+    store_map(m, ckey, "replication", timestamp, map.replication);
 
     if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
         schema_ptr scylla_keyspaces_s = scylla_keyspaces();
@@ -1295,12 +1296,12 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
     // (or screw up shared pointers)
     const auto& replication = row.get_nonnull<map_type_impl::native_type>("replication");
 
-    std::map<sstring, sstring> strategy_options;
+    locator::replication_strategy_config_options strategy_options;
     for (auto& p : replication) {
-        strategy_options.emplace(value_cast<sstring>(p.first), value_cast<sstring>(p.second));
+        strategy_options.replication.emplace(value_cast<sstring>(p.first), value_cast<sstring>(p.second));
     }
-    auto strategy_name = strategy_options["class"];
-    strategy_options.erase("class");
+    auto strategy_name = strategy_options.replication["class"];
+    strategy_options.replication.erase("class");
     bool durable_writes = row.get_nonnull<bool>("durable_writes");
 
     data_dictionary::storage_options storage_opts;

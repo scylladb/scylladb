@@ -46,7 +46,12 @@ enum class replication_strategy_type {
 
 using can_yield = utils::can_yield;
 
-using replication_strategy_config_options = std::map<sstring, sstring>;
+using replication_strategy_state = std::map<sstring, sstring>;
+struct replication_strategy_config_options {
+    replication_strategy_state replication;
+
+    bool operator==(const replication_strategy_config_options& o) const = default;
+};
 struct replication_strategy_params {
     const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;
@@ -461,6 +466,11 @@ struct fmt::formatter<locator::replication_strategy_type> : fmt::formatter<strin
 };
 
 template <>
+struct fmt::formatter<locator::replication_strategy_config_options> : fmt::formatter<string_view> {
+    auto format(locator::replication_strategy_config_options, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
 struct fmt::formatter<locator::vnode_effective_replication_map::factory_key> : fmt::formatter<string_view> {
     auto format(const locator::vnode_effective_replication_map::factory_key&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
@@ -471,7 +481,7 @@ struct appending_hash<locator::vnode_effective_replication_map::factory_key> {
     void operator()(Hasher& h, const locator::vnode_effective_replication_map::factory_key& key) const {
         feed_hash(h, key.rs_type);
         feed_hash(h, key.ring_version);
-        for (const auto& [opt, val] : key.rs_config_options) {
+        for (const auto& [opt, val] : key.rs_config_options.replication) {
             h.update(opt.c_str(), opt.size());
             h.update(val.c_str(), val.size());
         }

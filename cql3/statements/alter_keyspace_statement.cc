@@ -88,7 +88,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
 
             if (ks.get_replication_strategy().uses_tablets()) {
-                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
+                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options().replication;
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
                 unsigned total_abs_rfs_diff = 0;
@@ -175,7 +175,7 @@ std::map<sstring, sstring> get_old_options_flattened(const data_dictionary::keys
     std::map<sstring, sstring> all_options;
 
     using namespace cql3::statements;
-    add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options(), all_options);
+    add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options().replication, all_options);
     add_prefixed_key(ks_prop_defs::KW_STORAGE, ks.metadata()->get_storage_options().to_map(), all_options);
     if (ks.metadata()->initial_tablets()) {
         add_prefixed_key(ks_prop_defs::KW_TABLETS,

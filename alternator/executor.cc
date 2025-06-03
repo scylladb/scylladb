@@ -5701,7 +5701,9 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
         elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
                 keyspace_name, rf, endpoint_count);
     }
-    auto opts = get_network_topology_options(sp, gossiper, rf);
+    locator::replication_strategy_config_options opts{
+        .replication = get_network_topology_options(sp, gossiper, rf),
+    };
 
     // Even if the "tablets" experimental feature is available, we currently
     // do not enable tablets by default on Alternator tables because LWT is

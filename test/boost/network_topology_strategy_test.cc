@@ -309,31 +309,35 @@ void simple_test() {
 
     /////////////////////////////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options323 = {
-        {"100", "3"},
-        {"101", "2"},
-        {"102", "3"}
+    replication_strategy_config_options options323{
+        .replication = {
+            {"100", "3"},
+            {"101", "2"},
+            {"102", "3"}
+        },
     };
     locator::replication_strategy_params params323(options323, std::nullopt);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params323);
 
-    full_ring_check(ring_points, options323, ars_ptr, stm.get());
+    full_ring_check(ring_points, options323.replication, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options320 = {
-        {"100", "3"},
-        {"101", "2"},
-        {"102", "0"}
+    replication_strategy_config_options options320{
+        .replication = {
+            {"100", "3"},
+            {"101", "2"},
+            {"102", "0"}
+        },
     };
     locator::replication_strategy_params params320(options320, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params320);
 
-    full_ring_check(ring_points, options320, ars_ptr, stm.get());
+    full_ring_check(ring_points, options320.replication, ars_ptr, stm.get());
 
     //
     // Check cache invalidation: invalidate the cache and run a full ring
@@ -345,7 +349,7 @@ void simple_test() {
         tm.invalidate_cached_rings();
         return make_ready_future<>();
     }).get();
-    full_ring_check(ring_points, options320, ars_ptr, stm.get());
+    full_ring_check(ring_points, options320.replication, ars_ptr, stm.get());
 }
 
 // Run in a seastar thread.
@@ -370,7 +374,7 @@ void heavy_origin_test() {
     std::vector<int> dc_endpoints = {128, 256, 512};
     std::vector<int> dc_replication = {2, 6, 6};
 
-    std::map<sstring, sstring> config_options;
+    locator::replication_strategy_config_options config_options;
     std::unordered_map<inet_address, std::unordered_set<token>> tokens;
     std::vector<ring_point> ring_points;
 
@@ -387,7 +391,7 @@ void heavy_origin_test() {
     std::shuffle(token_points.begin(), token_points.end(), random_engine);
     auto token_point_iterator = token_points.begin();
     for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
-        config_options.emplace(to_sstring(dc),
+        config_options.replication.emplace(to_sstring(dc),
                                 to_sstring(dc_replication[dc]));
         for (int rack = 0; rack < dc_racks[dc]; ++rack) {
             for (int ep = 1; ep <= dc_endpoints[dc]/dc_racks[dc]; ++ep) {
@@ -420,7 +424,7 @@ void heavy_origin_test() {
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params);
 
-    full_ring_check(ring_points, config_options, ars_ptr, stm.get());
+    full_ring_check(ring_points, config_options.replication, ars_ptr, stm.get());
 }
 
 BOOST_AUTO_TEST_SUITE(network_topology_strategy_test)
@@ -508,7 +512,9 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         };
 
         // Create the replication strategy
-        auto options = make_random_options();
+        locator::replication_strategy_config_options options{
+            .replication = make_random_options(),
+        };
         size_t tablet_count = 1 + tests::random::get_int(99);
         testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
         locator::replication_strategy_params params(options, tablet_count);
@@ -520,7 +526,9 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         full_ring_check(tmap, ars_ptr, stm.get());
 
         // Test reallocate_tablets after randomizing a different set of options
-        auto realloc_options = make_random_options();
+        locator::replication_strategy_config_options realloc_options{
+            .replication = make_random_options(),
+        };
         locator::replication_strategy_params realloc_params(realloc_options, tablet_count);
         auto realloc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
                 "NetworkTopologyStrategy", params);
@@ -600,7 +608,9 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     };
 
     // Create the replication strategy
-    auto options = make_options(rf_per_dc);
+    locator::replication_strategy_config_options options{
+        .replication = make_options(rf_per_dc),
+    };
     size_t tablet_count = 128 * num_dcs * nodes_per_dc * shard_count / rf_per_dc;
     testlog.debug("tablet_count={} options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
@@ -614,7 +624,9 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     check_tablets_balance(tmap, nts_ptr, topo);
 
     if (rf_per_dc < nodes_per_dc) {
-        auto inc_options = make_options(rf_per_dc + 1);
+        locator::replication_strategy_config_options inc_options{
+            .replication = make_options(rf_per_dc + 1),
+        };
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
         locator::replication_strategy_params inc_params(inc_options, tablet_count);
         auto inc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
@@ -628,7 +640,9 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     }
 
     if (rf_per_dc > 1) {
-        auto dec_options = make_options(rf_per_dc - 1);
+        locator::replication_strategy_config_options dec_options{
+            .replication = make_options(rf_per_dc - 1),
+        };
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
         locator::replication_strategy_params dec_params(dec_options, tablet_count);
         auto dec_ars_ptr = abstract_replication_strategy::create_replication_strategy(
@@ -820,11 +834,13 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
     };
 
     my_network_topology_strategy nts(replication_strategy_params(
-                                    datacenters | std::views::transform(
-                                                                    [](const std::pair<sstring, size_t>& p) {
-                                                                        return std::make_pair(p.first, to_sstring(p.second));
-                                                                    })
-                                                | std::ranges::to<std::map<sstring, sstring>>(),
+                                    locator::replication_strategy_config_options{
+                                        .replication = datacenters | std::views::transform(
+                                                                        [](const std::pair<sstring, size_t>& p) {
+                                                                            return std::make_pair(p.first, to_sstring(p.second));
+                                                                        })
+                                                    | std::ranges::to<std::map<sstring, sstring>>()
+                                    },
                                     std::nullopt));
 
     const token_metadata& tm = *stm.get();
@@ -1294,7 +1310,9 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
         return options;
     };
 
-    auto options = make_random_options();
+    locator::replication_strategy_config_options options{
+        .replication = make_random_options(),
+    };
     size_t tablet_count = 1 + tests::random::get_int(99);
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
@@ -1448,7 +1466,9 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
         return options;
     };
 
-    auto options = make_random_options();
+    locator::replication_strategy_config_options options{
+        .replication = make_random_options(),
+    };
     size_t tablet_count = 1 + tests::random::get_int(99);
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
@@ -1525,7 +1545,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
             cross_rack_pairs[base_location.dc]++;
         }
     }
-    for (const auto& [dc, rf_opt] : options) {
+    for (const auto& [dc, rf_opt] : options.replication) {
         auto rf = std::stol(rf_opt);
         BOOST_REQUIRE_EQUAL(same_rack_pairs[dc] + cross_rack_pairs[dc], rf);
     }
