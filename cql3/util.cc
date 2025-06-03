@@ -144,26 +144,29 @@ expr::expression where_clause_to_relations(const std::string_view& where_clause,
     return do_with_parser(where_clause, d, std::mem_fn(&cql3_parser::CqlParser::whereClause));
 }
 
-sstring rename_column_in_where_clause(const std::string_view& where_clause, column_identifier::raw from, column_identifier::raw to, dialect d) {
+sstring rename_columns_in_where_clause(const std::string_view& where_clause, std::vector<std::pair<::shared_ptr<column_identifier>, ::shared_ptr<column_identifier>>> renames, dialect d) {
     std::vector<expr::expression> relations = boolean_factors(where_clause_to_relations(where_clause, d));
     std::vector<expr::expression> new_relations;
     new_relations.reserve(relations.size());
 
     for (const expr::expression& old_relation : relations) {
-        expr::expression new_relation = expr::search_and_replace(old_relation,
-            [&](const expr::expression& e) -> std::optional<expr::expression> {
-                if (auto ident = expr::as_if<expr::unresolved_identifier>(&e)) {
-                    if (*ident->ident == from) {
-                        return expr::unresolved_identifier{
-                            ::make_shared<column_identifier::raw>(to)
-                        };
+        new_relations.emplace_back(
+            expr::search_and_replace(old_relation,
+                [&](const expr::expression& e) -> std::optional<expr::expression> {
+                    for (const auto& [view_from, view_to] : renames) {
+                        if (auto ident = expr::as_if<expr::unresolved_identifier>(&e)) {
+                            auto from = column_identifier::raw(view_from->text(), true);
+                            if (*ident->ident == from) {
+                                return expr::unresolved_identifier{
+                                    ::make_shared<column_identifier::raw>(view_to->text(), true)
+                                };
+                            }
+                        }
                     }
+                    return std::nullopt;
                 }
-                return std::nullopt;
-            }
+            )
         );
-
-        new_relations.emplace_back(std::move(new_relation));
     }
 
     return relations_to_where_clause(expr::conjunction{std::move(new_relations)});

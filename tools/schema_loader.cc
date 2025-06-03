@@ -477,7 +477,11 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     schema_mutations muts(std::move(*tables), std::move(*columns), std::move(view_virtual_columns), std::move(computed_columns), std::move(indexes),
             std::move(dropped_columns), std::move(scylla_tables));
     if (muts.is_view()) {
-        return db::schema_tables::create_view_from_mutations(ctxt, muts);
+        query::result_set rs(muts.columnfamilies_mutation());
+        const query::result_set_row& view_row = rs.row(0);
+        auto base_name = view_row.get_nonnull<sstring>("base_table_name");
+        auto base_schema = do_load_schema_from_schema_tables(dbcfg, scylla_data_path, keyspace, base_name);
+        return db::schema_tables::create_view_from_mutations(ctxt, muts, std::move(base_schema));
     } else {
         return db::schema_tables::create_table_from_mutations(ctxt, muts);
     }

@@ -17,6 +17,7 @@
 #include "schema_mutations.hh"
 #include "types/map.hh"
 #include "query-result-set.hh"
+#include "db/view/base_info.hh"
 
 #include <seastar/core/distributed.hh>
 
@@ -287,7 +288,8 @@ std::vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace_metadata>
 
 schema_ptr create_table_from_mutations(const schema_ctxt&, schema_mutations, std::optional<table_schema_version> version = {});
 
-view_ptr create_view_from_mutations(const schema_ctxt&, schema_mutations, std::optional<table_schema_version> version = {});
+view_ptr create_view_from_mutations(const schema_ctxt&, schema_mutations, schema_ptr, std::optional<table_schema_version> version = {});
+view_ptr create_view_from_mutations(const schema_ctxt&, schema_mutations, std::optional<view::base_dependent_view_info> = {}, std::optional<table_schema_version> version = {});
 
 future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result);
 
