@@ -293,7 +293,7 @@ size_t memory_usage_of(const frozen_mutation_and_schema& mut);
  */
  void create_virtual_column(schema_builder& builder, const bytes& name, const data_type& type);
 
-std::optional<locator::host_id> get_view_natural_endpoint(
+std::pair<std::optional<locator::host_id>, std::optional<locator::host_id>> get_view_natural_endpoint(
     locator::host_id node,
     const locator::effective_replication_map_ptr& base_erm,
     const locator::effective_replication_map_ptr& view_erm,
