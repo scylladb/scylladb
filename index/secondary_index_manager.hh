@@ -94,6 +94,7 @@ public:
     virtual ~custom_index() = default;
     /// Returns a custom description of the index, or std::nullopt if the default index description logic should be used instead.
     virtual std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const = 0;
+    virtual bool should_create_view() const = 0;
     virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) = 0;
 };
 
@@ -112,6 +113,7 @@ public:
     bool is_global_index(const schema& s) const;
     std::optional<sstring> custom_index_class(const schema& s) const;
     static std::optional<std::function<std::unique_ptr<custom_index>()>> get_custom_class_factory(const sstring& class_name);
+    static std::optional<std::unique_ptr<custom_index>> get_custom_class(const index_metadata& im);
 private:
     void add_index(const index_metadata& im);
 };
