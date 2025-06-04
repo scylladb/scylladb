@@ -75,7 +75,7 @@ future<> create_legacy_metadata_table_if_missing(
 ///
 /// Time-outs for internal, non-local CQL queries.
 ///
-::service::query_state& internal_distributed_query_state() noexcept;
+::service::query_state internal_distributed_query_state(cql3::query_processor& qp) noexcept;
 
 // Execute update query via group0 mechanism, mutations will be applied on all nodes.
 // Use this function when need to perform read before write on a single guard or if

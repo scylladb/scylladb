@@ -6,8 +6,11 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "test/lib/scylla_test_case.hh"
+#include <seastar/core/abort_source.hh>
 
+ #include "test/lib/scylla_test_case.hh"
+
+#include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/thread.hh>
 
 #include "cell_locking.hh"
@@ -97,8 +100,9 @@ SEASTAR_TEST_CASE(test_simple_locking_cells) {
             make_row("two", { "r2", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout).get();
-        auto f2 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout);
+        abort_source abort;
+        auto l1 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout, abort).get();
+        auto f2 = cl.lock_cells(m.decorated_key(), partition_cells_range(m.partition()), no_timeout, abort);
         BOOST_REQUIRE(!f2.available());
 
         destroy(std::move(l1));
@@ -124,9 +128,10 @@ SEASTAR_TEST_CASE(test_disjoint_mutations) {
         auto m3 = mutation(s, partition_key::from_single_value(*s, to_bytes("1")));
         m3.partition() = mutation_partition(*s, m1.partition());
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get();
-        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout).get();
-        auto l3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout).get();
+        abort_source abort;
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout, abort).get();
+        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout, abort).get();
+        auto l3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout, abort).get();
     });
 }
 
@@ -151,12 +156,13 @@ SEASTAR_TEST_CASE(test_single_cell_overlap) {
                 make_row("one", { "r2", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get();
-        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
+        abort_source abort;
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout, abort).get();
+        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout, abort);
         BOOST_REQUIRE(!f2.available());
         destroy(std::move(l1));
         auto l2 = f2.get();
-        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout);
+        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout, abort);
         BOOST_REQUIRE(!f3.available());
         destroy(std::move(l2));
         auto l3 = f3.get();
@@ -187,14 +193,15 @@ SEASTAR_TEST_CASE(test_schema_change) {
                 make_row("one", { "r1", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get();
+        abort_source abort;
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout, abort).get();
 
         destroy(std::move(m1));
         destroy(std::move(s1));
         cl.set_schema(s2);
 
-        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout).get();
-        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout);
+        auto l2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout, abort).get();
+        auto f3 = cl.lock_cells(m3.decorated_key(), partition_cells_range(m3.partition()), no_timeout, abort);
         BOOST_REQUIRE(!f3.available());
         destroy(std::move(l1));
         auto l3 = f3.get();
@@ -206,7 +213,7 @@ SEASTAR_TEST_CASE(test_schema_change) {
                 make_row("one", { "r8", "r9" }),
                 make_row("two", { "r8", "r9" }),
         });
-        auto l4 = cl.lock_cells(m4.decorated_key(), partition_cells_range(m4.partition()), no_timeout).get();
+        auto l4 = cl.lock_cells(m4.decorated_key(), partition_cells_range(m4.partition()), no_timeout, abort).get();
     });
 }
 
@@ -225,14 +232,15 @@ SEASTAR_TEST_CASE(test_timed_out) {
                     make_row("one", { "r1", "r2" }),
             });
 
-            auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get();
+            abort_source abort;
+            auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout, abort).get();
 
             auto timeout = db::timeout_clock::now();
             forward_jump_clocks(1h);
-            BOOST_REQUIRE_THROW(cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), timeout).get(),
+            BOOST_REQUIRE_THROW(cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), timeout, abort).get(),
                                 timed_out_error);
 
-            auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
+            auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout, abort);
             BOOST_REQUIRE(!f2.available());
             destroy(std::move(l1));
             auto l2 = f2.get();
@@ -255,11 +263,12 @@ SEASTAR_TEST_CASE(test_locker_stats) {
                 make_row("one", { "r2", "r3" }),
         });
 
-        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout).get();
+        abort_source abort;
+        auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout, abort).get();
         BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 4);
         BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 0);
 
-        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout);
+        auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout, abort);
         BOOST_REQUIRE_EQUAL(cl_stats.lock_acquisitions, 5);
         BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 1);
         BOOST_REQUIRE(!f2.available());
@@ -270,3 +279,26 @@ SEASTAR_TEST_CASE(test_locker_stats) {
         BOOST_REQUIRE_EQUAL(cl_stats.operations_waiting_for_lock, 0);
     });
 }
+
+SEASTAR_THREAD_TEST_CASE(test_abort) {
+    auto s = make_schema();
+    cell_locker_stats cl_stats;
+    cell_locker cl(s, cl_stats);
+
+    auto m1 = make_mutation(s, "0", { "s1", "s2", "s3"}, {
+            make_row("one", { "r2", "r3" }),
+    });
+    auto m2 = make_mutation(s, "0", { }, {
+            make_row("one", { "r1", "r2" }),
+    });
+
+    abort_source abort;
+    auto l1 = cl.lock_cells(m1.decorated_key(), partition_cells_range(m1.partition()), no_timeout, abort).get();
+
+    auto f2 = cl.lock_cells(m2.decorated_key(), partition_cells_range(m2.partition()), no_timeout, abort);
+    BOOST_REQUIRE(!f2.available());
+
+    abort.request_abort();
+    BOOST_REQUIRE_THROW(f2.get(), abort_requested_exception);
+}
+

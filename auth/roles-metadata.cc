@@ -51,9 +51,10 @@ future<bool> default_role_row_satisfies(
             meta::roles_table::name,
             meta::roles_table::role_col_name);
 
+    auto q_state = internal_distributed_query_state(qp);
     for (auto cl : { db::consistency_level::ONE, db::consistency_level::QUORUM }) {
         auto results = co_await qp.execute_internal(query, cl
-            , internal_distributed_query_state()
+            , q_state
             , {rolename.value_or(std::string(meta::DEFAULT_SUPERUSER_NAME))}
             , cql3::query_processor::cache_internal::yes
             );
@@ -70,8 +71,9 @@ future<bool> any_nondefault_role_row_satisfies(
         std::optional<std::string> rolename) {
     const sstring query = seastar::format("SELECT * FROM {}.{}", get_auth_ks_name(qp), meta::roles_table::name);
 
+    auto q_state = internal_distributed_query_state(qp);
     auto results = co_await qp.execute_internal(query, db::consistency_level::QUORUM
-        , internal_distributed_query_state(), cql3::query_processor::cache_internal::no
+        , q_state, cql3::query_processor::cache_internal::no
         );
     if (results->empty()) {
         co_return false;

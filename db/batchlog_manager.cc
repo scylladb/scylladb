@@ -158,12 +158,14 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
 future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
     typedef db_clock::rep clock_type;
 
+    auto permit = make_service_permit(_qp.start_operation());
+
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
     auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
-    auto batch = [this, limiter](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    auto batch = [this, limiter, &permit](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
@@ -208,7 +210,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 mutations.emplace_back(fm->to_mutation(s));
             }
             return mutations;
-        }).then([this, limiter, written_at, size, fms] (std::vector<mutation> mutations) {
+        }).then([this, limiter, written_at, size, fms, &permit] (std::vector<mutation> mutations) {
             if (mutations.empty()) {
                 return make_ready_future<>();
             }
@@ -234,7 +236,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
             // in both cases.
             // FIXME: verify that the above is reasonably true.
-            return limiter->reserve(size).then([this, mutations = std::move(mutations)] {
+            return limiter->reserve(size).then([this, mutations = std::move(mutations), &permit] () -> future<> {
                 _stats.write_attempts += mutations.size();
                 // #1222 - change cl level to ALL, emulating origins behaviour of sending/hinting
                 // to all natural end points.
@@ -242,7 +244,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 // send to partially or wholly fail in actually sending stuff. Since we don't
                 // have hints (yet), send with CL=ALL, and hope we can re-do this soon.
                 // See below, we use retry on write failure.
-                return _qp.proxy().mutate(mutations, db::consistency_level::ALL, db::no_timeout, nullptr, empty_service_permit(), db::allow_per_partition_rate_limit::no);
+                return _qp.proxy().mutate(mutations, db::consistency_level::ALL, db::no_timeout, nullptr, permit, db::allow_per_partition_rate_limit::no);
             });
         }).then_wrapped([this, id](future<> batch_result) {
             try {

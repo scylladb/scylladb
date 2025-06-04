@@ -671,6 +671,10 @@ client_data cql_server::connection::make_client_data() const {
     return cd;
 }
 
+service_permit cql_server::make_service_permit(semaphore_units<>&& units) const {
+    return ::make_service_permit(std::move(units), _query_processor.local().start_operation());
+}
+
 thread_local cql_server::connection::execution_stage_type
         cql_server::connection::_process_request_stage{"transport", &connection::process_request_one};
 
@@ -778,8 +782,8 @@ future<> cql_server::connection::process_request() {
               mem_permit_fut.ignore_ready_future();
               return make_ready_future<>();
           }
-          semaphore_units<> mem_permit = mem_permit_fut.get();
-          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = make_service_permit(std::move(mem_permit))] (fragmented_temporary_buffer buf) mutable {
+          auto mem_permit = _server.make_service_permit(mem_permit_fut.get());
+          return this->read_and_decompress_frame(length, flags).then([this, op, stream, tracing_requested, mem_permit = std::move(mem_permit)] (fragmented_temporary_buffer buf) mutable {
 
             ++_server._stats.requests_served;
             ++_server._stats.requests_serving;
@@ -1031,8 +1035,10 @@ cql_server::connection::process_on_shard(shard_id shard, uint16_t stream, fragme
         request_reader in(is, linearization_buffer);
         auto client_state = gcs.get();
         auto trace_state = gt.get();
+        // FIXME: semaphore units are held by the calling shard, but not on this shard.
+        auto permit = _server.make_service_permit();
         co_return co_await process_fn(client_state, server._query_processor, in, stream, _version,
-                /* FIXME */empty_service_permit(), std::move(trace_state), false, cached_vals, dialect);
+                std::move(permit), std::move(trace_state), false, cached_vals, dialect);
     });
 }
 

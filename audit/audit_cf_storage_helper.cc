@@ -16,6 +16,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "service_permit.hh"
 
 namespace audit {
 
@@ -53,8 +54,11 @@ audit_cf_storage_helper::audit_cf_storage_helper(cql3::query_processor& qp, serv
                        "username,"
                        "error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                        KEYSPACE_NAME, TABLE_NAME))
-    , _dummy_query_state(service::client_state::for_internal_calls(), empty_service_permit())
 {
+}
+
+service::query_state audit_cf_storage_helper::make_query_state() const {
+    return service::query_state(service::client_state::for_internal_calls(), make_service_permit(_qp.start_operation()));
 }
 
 future<> audit_cf_storage_helper::migrate_audit_table(service::group0_guard group0_guard) {
@@ -105,9 +109,10 @@ future<> audit_cf_storage_helper::start(const db::config &cfg) {
         if (ks = _qp.db().try_find_keyspace(KEYSPACE_NAME); !ks) {
             // releasing, because table_helper::setup_keyspace creates a raft guard of its own
             service::release_guard(std::move(group0_guard));
+            auto qs = make_query_state();
             co_return co_await table_helper::setup_keyspace(_qp, _mm, KEYSPACE_NAME,
                                                             "org.apache.cassandra.locator.NetworkTopologyStrategy",
-                                                            "3", _dummy_query_state, {&_table});
+                                                            "3", qs, {&_table});
         } else if (ks->metadata()->strategy_name() == "org.apache.cassandra.locator.SimpleStrategy") {
             // We want to migrate the old (pre-Scylla 6.0) SimpleStrategy to a newer one.
             // The migrate_audit_table() function will do nothing if it races with another strategy change:
@@ -131,14 +136,16 @@ future<> audit_cf_storage_helper::write(const audit_info* audit_info,
                                     db::consistency_level cl,
                                     const sstring& username,
                                     bool error) {
-    return _table.insert(_qp, _mm, _dummy_query_state, make_data, audit_info, node_ip, client_ip, cl, username, error);
+    auto qs = make_query_state();
+    co_await _table.insert(_qp, _mm, qs, make_data, audit_info, node_ip, client_ip, cl, username, error);
 }
 
 future<> audit_cf_storage_helper::write_login(const sstring& username,
                                               socket_address node_ip,
                                               socket_address client_ip,
                                               bool error) {
-    return _table.insert(_qp, _mm, _dummy_query_state, make_login_data, node_ip, client_ip, username, error);
+    auto qs = make_query_state();
+    co_await _table.insert(_qp, _mm, qs, make_login_data, node_ip, client_ip, username, error);
 }
 
 cql3::query_options audit_cf_storage_helper::make_data(const audit_info* audit_info,
