@@ -379,6 +379,8 @@ struct cf_stats {
 
     // How many times we failed to resolve base/view pairing
     uint64_t total_view_updates_failed_pairing = 0;
+    // How many times we had to send additional view updates when there was more view replicas than base replicas during pairing.
+    uint64_t total_view_updates_due_to_replica_count_mismatch = 0;
 };
 
 class table;

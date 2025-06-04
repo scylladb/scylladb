@@ -19,7 +19,8 @@ from test.cluster.util import new_test_keyspace
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_view
+from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas
 
 
 logger = logging.getLogger(__name__)
@@ -248,3 +249,135 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
     metrics_after = await manager.metrics.query(servers[2].ip_addr)
     failed_pairing_after = metrics_after.get('scylla_database_total_view_updates_failed_pairing')
     assert failed_pairing_before == failed_pairing_after
+# Reproduces https://github.com/scylladb/scylladb/issues/21492
+# In this test we perform a write that generates a view update while the replication
+# factor of the keyspace is being changed and the corresponding base tablet finishes
+# the migration at a different time the view tablet does.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delayed_replica", ["base", "mv"])
+@pytest.mark.parametrize("altered_dc", ["dc1", "dc2"])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altered_dc: str):
+    servers = []
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack2'}))
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack1'}))
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack2'}))
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE ks.base (pk int, ck int, PRIMARY KEY (pk, ck))")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT pk, ck FROM ks.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
+    await wait_for_view(cql, "mv", 4)
+
+    # We'll wait for a specific tablet migration later in the test, so now wait until
+    # the base and view tablets are balanced. There are 4 nodes and 4 tablets, so
+    # each replica should have 1 tablet.
+    async def replicas_balanced():
+        base_replicas = [replica[0] for replica in await get_tablet_replicas(manager, servers[0], "ks", "base", 0)]
+        view_replicas = [replica[0] for replica in await get_tablet_replicas(manager, servers[0], "ks", "mv", 0)]
+        return len(set(base_replicas) & set(view_replicas)) == 0 or None
+    await wait_for(replicas_balanced, time.time() + 60)
+
+    # Insert a row so that there's data to be streamed during tablet migration
+    await cql.run_async("INSERT INTO ks.base (pk,ck) VALUES (0,0)")
+
+    # Block (on streaming) the base or view tablet migrations, so that one table will have
+    # temporarily more replicas (that aren't pending) than the other.
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, f"block_tablet_streaming", False, parameters={'keyspace': 'ks', 'table': delayed_replica}) for s in servers])
+    ks_fut = cql.run_async(f"ALTER KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', '{altered_dc}':2}}")
+
+    # Wait until the not blocked migration finishes before performing a write
+    async def first_migration_done():
+        stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='ks' ALLOW FILTERING")
+        logger.info(f"Current stages: {[row.stage for row in stages]}")
+        return set([None, "streaming"]) == set([row.stage for row in stages]) or None
+    await wait_for(first_migration_done, time.time() + 60)
+
+    async def get_replica_mismatches():
+        metrics = await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
+        if delayed_replica == "base":
+            return sum([server_metrics.get('scylla_database_total_view_updates_due_to_replica_count_mismatch') or 0 for server_metrics in metrics])
+        else:
+            return sum([server_metrics.get('scylla_database_total_view_updates_failed_pairing') or 0 for server_metrics in metrics])
+    replica_mismatches_before = await get_replica_mismatches()
+
+    # If the base was delayed, there may be just 1 base replica in the DC even though RF is now 2, so use cl=TWO, one from each DC
+    await cql.run_async(SimpleStatement("INSERT INTO ks.base (pk,ck) VALUES (1,1)", consistency_level=ConsistencyLevel.TWO))
+
+    # Unblock the tablet migration to allow the RF change to complete
+    await asyncio.gather(*[manager.api.message_injection(s.ip_addr, f"block_tablet_streaming") for s in servers])
+    await ks_fut
+
+    # Confirm that the problematic scenario occurred
+    replica_mismatches = await get_replica_mismatches()
+    assert replica_mismatches == replica_mismatches_before + 1
+
+    # Confirm the content of the view after the migration has finished
+    async def migrations_done():
+        stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='ks' ALLOW FILTERING")
+        return [row.stage for row in stages] == [None, None] or None
+    await wait_for(migrations_done, time.time() + 60)
+
+    res = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.mv", consistency_level=ConsistencyLevel.ONE))
+    assert len(res) == 2
+
+# The same scenario as in the test above, but the RF change affects the first replica in a DC
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delayed_replica", ["base", "mv"])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: str):
+    servers = []
+    # If we run the test with more than 1 shard and the tablet for the view table gets allocated on the same shard as the tablet of the base table,
+    # we'll perform an intranode migration of one of these tablets to the other shard. This migration can be confused with the migration to the
+    # new dc in the "first_migration_done()" below. To avoid this, run servers with only 1 shard.
+    servers.append(await manager.server_add(cmdline=['--smp', '1'], config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
+    servers.append(await manager.server_add(cmdline=['--smp', '1'], config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack1'}))
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE ks.base (pk int, ck int, PRIMARY KEY (pk, ck))")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT pk, ck FROM ks.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
+    await wait_for_view(cql, "mv", 2)
+
+    # Insert a row so that there's data to be streamed during tablet migration
+    await cql.run_async("INSERT INTO ks.base (pk,ck) VALUES (0,0)")
+
+    # Block (on streaming) the base or view tablet migrations, so that one table will have
+    # temporarily more replicas (that aren't pending) than the other.
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, f"block_tablet_streaming", False, parameters={'keyspace': 'ks', 'table': delayed_replica}) for s in servers])
+    ks_fut = cql.run_async(f"ALTER KEYSPACE ks WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc2':1}}")
+
+    # Wait until the not blocked migration finishes before performing a write
+    async def first_migration_done():
+        stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='ks' ALLOW FILTERING")
+        logger.info(f"Current stages: {[row.stage for row in stages]}")
+        return set([None, "streaming"]) == set([row.stage for row in stages]) or None
+    await wait_for(first_migration_done, time.time() + 60)
+
+    async def get_replica_mismatches():
+        metrics = await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
+        if delayed_replica == "base":
+            return sum([server_metrics.get('scylla_database_total_view_updates_due_to_replica_count_mismatch') or 0 for server_metrics in metrics])
+        else:
+            return sum([server_metrics.get('scylla_database_total_view_updates_failed_pairing') or 0 for server_metrics in metrics])
+    replica_mismatches_before = await get_replica_mismatches()
+
+    await cql.run_async(SimpleStatement("INSERT INTO ks.base (pk,ck) VALUES (1,1)", consistency_level=ConsistencyLevel.ONE))
+
+    # Unblock the tablet migration to allow the RF change to complete
+    await asyncio.gather(*[manager.api.message_injection(s.ip_addr, f"block_tablet_streaming") for s in servers])
+    await ks_fut
+
+    # Confirm that the problematic scenario occurred
+    replica_mismatches = await get_replica_mismatches()
+    assert replica_mismatches == replica_mismatches_before + 1
+
+    # Confirm the content of the view after the migration has finished
+    async def migrations_done():
+        stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='ks' ALLOW FILTERING")
+        return [row.stage for row in stages] == [None, None] or None
+    await wait_for(migrations_done, time.time() + 60)
+
+    res = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.mv", consistency_level=ConsistencyLevel.ONE))
+    assert len(res) == 2
