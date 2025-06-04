@@ -4723,7 +4723,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
                 return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
-        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, &gc_state, can_always_purge);
+        auto rd1 = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, gc_state, can_always_purge);
         auto close_rd = deferred_close(rd1);
         rd1.fill_buffer().get(); // cache_mutation_reader compacts cache on fill buffer
 
@@ -4801,7 +4801,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         set_cells_timestamp_to_min(cp.clustered_row(*s.schema(), ck3));
 
         {
-            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
+            auto rd1 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, gc_state, can_always_purge);
             auto close_rd1 = deferred_close(rd1);
             rd1.fill_buffer().get();
 
@@ -4813,7 +4813,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         }
 
         {
-            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, &gc_state, can_always_purge);
+            auto rd2 = cache.make_reader(s.schema(), semaphore.make_permit(), pr, gc_state, can_always_purge);
             auto close_rd2 = deferred_close(rd2);
             rd2.fill_buffer().get();
 
@@ -4862,7 +4862,7 @@ SEASTAR_THREAD_TEST_CASE(test_cache_reader_semaphore_oom_kill) {
         semaphore.set_resources({1, memory});
         auto permit = semaphore.obtain_permit(s.schema(), "read", 0, db::no_timeout, {}).get();
         auto create_reader_and_read_all = [&] {
-            auto rd = cache.make_reader(s.schema(), permit, pr, &gc_state);
+            auto rd = cache.make_reader(s.schema(), permit, pr, gc_state);
             auto close_rd = deferred_close(rd);
             while (rd().get());
         };
@@ -5036,7 +5036,7 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
         nullptr,
         streamed_mutation::forwarding::no,
         mutation_reader::forwarding::no,
-        &gc_state);
+        gc_state);
     auto close_rd = deferred_close(rd);
     read_mutation_from_mutation_reader(rd).get();
 }
