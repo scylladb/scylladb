@@ -213,17 +213,29 @@ class partition_ranges_owned_by_this_shard {
     size_t _range_idx;
     std::optional<dht::ring_position_range_sharder> _intersecter;
     locator::effective_replication_map_ptr _erm;
+    std::optional<shard_id> forced_shard;
 public:
-    partition_ranges_owned_by_this_shard(schema_ptr s, dht::partition_range_vector v)
+    partition_ranges_owned_by_this_shard(schema_ptr s, dht::partition_range_vector v, std::optional<shard_id> forced_shard)
         :  _s(s)
         , _partition_ranges(v)
         , _range_idx(0)
         , _erm(_s->table().get_effective_replication_map())
+        , forced_shard(forced_shard)
     {}
 
     // Return the next partition_range owned by this shard, or nullopt when the
     // iteration ends.
     std::optional<dht::partition_range> next(const schema& s) {
+
+        // If forced shard is set and supported, return all ranges for that shard
+        if (forced_shard.has_value() && forced_shard.value() < seastar::smp::count) {
+            if (forced_shard.value() != this_shard_id() || _range_idx == _partition_ranges.size()) {
+                return std::nullopt;
+            } else {
+               return _partition_ranges[_range_idx++];
+            }
+        }
+
         // We may need three or more iterations in the following loop if a
         // vnode doesn't intersect with the given shard at all (such a small
         // vnode is unlikely, but possible). The loop cannot be infinite
@@ -465,7 +477,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
     static constexpr size_t max_ranges = 256;
     dht::partition_range_vector ranges_owned_by_this_shard;
     ranges_owned_by_this_shard.reserve(std::min(max_ranges, req.pr.size()));
-    partition_ranges_owned_by_this_shard owned_iter(schema, std::move(req.pr));
+    partition_ranges_owned_by_this_shard owned_iter(schema, std::move(req.pr), req.shard_id);
 
     std::optional<dht::partition_range> current_range;
     do {
@@ -694,6 +706,7 @@ future<> mapreduce_service::dispatch_to_tablets(schema_ptr schema, replica::colu
                 }
 
                 if (req_with_modified_pr.pr.size() > 0) {
+                    req_with_modified_pr.shard_id = tablet_replica.shard;
                     co_await dispatch_range_and_reduce(erm, dispatcher, req, std::move(req_with_modified_pr), tablet_replica.host, result, tr_state);
                 }
             }

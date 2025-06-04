@@ -97,6 +97,9 @@ std::ostream& operator<<(std::ostream& out, const mapreduce_request& r) {
         fmt::print(out, ", aggregation_infos=[{}]",
                    fmt::join(r.aggregation_infos.value(), ","));
     }
+    if (r.shard_id) {
+        fmt::print(out, ", shard_id={}", r.shard_id.value());
+    }
     fmt::print(out, "cmd={}, pr={}, cl={}, timeout(ms)={}}}",
                r.cmd, r.pr, r.cl, ms);
     return out;
