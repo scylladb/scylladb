@@ -1471,8 +1471,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 case locator::tablet_transition_stage::use_new:
                     transition_to_with_barrier(locator::tablet_transition_stage::cleanup);
                     break;
-                case locator::tablet_transition_stage::cleanup:
-                    if (advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
+                case locator::tablet_transition_stage::cleanup: {
+                    bool wait = utils::get_local_injector().enter("cleanup_tablet_wait");
+                    if (!wait && advance_in_background(gid, tablet_state.cleanup, "cleanup", [&] {
                         auto maybe_dst = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (!maybe_dst) {
                             rtlogger.info("Tablet cleanup of {} skipped because no replicas leaving", gid);
@@ -1489,6 +1490,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     })) {
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
+                }
                     break;
                 case locator::tablet_transition_stage::cleanup_target:
                     if (advance_in_background(gid, tablet_state.cleanup, "cleanup_target", [&] {
