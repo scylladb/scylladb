@@ -1830,6 +1830,14 @@ void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type time
 static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns);
 static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, std::vector<mutation>& mutations);
 
+static bool should_create_view(const index_metadata & index) {
+    auto custom_class = secondary_index::secondary_index_manager::get_custom_class(index);
+    if (!custom_class) {
+        return true;
+    }
+    return (*custom_class)->should_create_view();
+}
+
 static void make_update_indices_mutations(
         replica::database& db,
         schema_ptr old_table,
@@ -1845,6 +1853,9 @@ static void make_update_indices_mutations(
     for (auto&& name : diff.entries_only_on_left) {
         const index_metadata& index = old_table->all_indices().at(name);
         drop_index_from_schema_mutation(old_table, index, timestamp, mutations);
+        if (!should_create_view(index)) {
+            continue;
+        }
         schema_ptr view;
         try {
             view = db.find_schema(old_table->ks_name(), secondary_index::index_table_name(name));
@@ -1860,6 +1871,9 @@ static void make_update_indices_mutations(
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
         auto& cf = db.find_column_family(new_table);
+        if (!should_create_view(index)) {
+            return view_ptr(nullptr);
+        }
         auto view = cf.get_index_manager().create_view_for_index(index);
         auto view_mutations = make_view_mutations(view, timestamp, true);
         view_mutations.copy_to(mutations);
@@ -1879,6 +1893,9 @@ static void make_update_indices_mutations(
     // index.
     for (auto&& name : diff.entries_only_on_right) {
         auto view = add_index(name);
+        if (!view) {
+            continue;
+        }
         auto ksm = db.find_keyspace(new_table->ks_name()).metadata();
         db.get_notifier().before_create_column_family(*ksm, *view, mutations, timestamp);
     }

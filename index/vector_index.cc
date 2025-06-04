@@ -50,6 +50,9 @@ const static std::unordered_map<sstring, std::function<void(const sstring&)>> su
         {"search_beam_width", validate_unsigned_option<4096>},
     };
 
+bool vector_index::should_create_view() const {
+    return false;
+}
 
 std::optional<cql3::description> vector_index::describe(const index_metadata& im, const schema& base_schema) const {
     fragmented_ostringstream os;
