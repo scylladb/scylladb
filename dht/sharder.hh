@@ -19,6 +19,12 @@ namespace dht {
 
 // Utilities for sharding ring partition_range:s
 
+template <typename RingPositionLike>
+concept generalized_ring_position
+        = std::same_as<RingPositionLike, ring_position>
+        || std::same_as<RingPositionLike, dht::token>;
+
+
 // A ring_position range's data is divided into sub-ranges, where each sub-range's data
 // is owned by a single shard. Note that multiple non-overlapping sub-ranges may map to a
 // single shard, and some shards may not receive any sub-range.
@@ -36,26 +42,37 @@ namespace dht {
 // Successive ranges therefore always have a different `shard` than the previous return.
 // (classes that return ring_position_range_and_shard_and_element can have the same `shard`
 // in successive returns, if `element` is different).
-struct ring_position_range_and_shard {
-    dht::partition_range ring_range;
+template <generalized_ring_position RingPositionLike>
+struct generalized_ring_position_range_and_shard {
+    interval<RingPositionLike> ring_range;
     unsigned shard;
 };
 
+using ring_position_range_and_shard = generalized_ring_position_range_and_shard<ring_position>;
+using token_range_and_shard = generalized_ring_position_range_and_shard<dht::token>;
+
 // Incrementally divides a `partition_range` into sub-ranges wholly owned by a single shard.
 // During tablet migration uses a view on shard routing for reads.
-class ring_position_range_sharder {
+template <generalized_ring_position RingPositionLike>
+class generalized_ring_position_range_sharder {
     const sharder& _sharder;
-    dht::partition_range _range;
+    interval<RingPositionLike> _range;
     bool _done = false;
 public:
     // Initializes the ring_position_range_sharder with a given range to subdivide.
-    ring_position_range_sharder(const sharder& sharder, interval<ring_position> rrp)
+    generalized_ring_position_range_sharder(const sharder& sharder, interval<RingPositionLike> rrp)
             : _sharder(sharder), _range(std::move(rrp)) {}
     // Fetches the next range-shard mapping. When the input range is exhausted, std::nullopt is
     // returned. The returned ranges are contiguous and non-overlapping, and together span the
     // entire input range.
-    std::optional<ring_position_range_and_shard> next(const schema& s);
+    std::optional<generalized_ring_position_range_and_shard<RingPositionLike>> next(const schema& s);
 };
+
+using ring_position_range_sharder = generalized_ring_position_range_sharder<ring_position>;
+using token_range_sharder = generalized_ring_position_range_sharder<dht::token>;
+
+extern template class generalized_ring_position_range_sharder<ring_position>;
+extern template class generalized_ring_position_range_sharder<dht::token>;
 
 // A mapping between a partition_range and a shard (like ring_position_range_and_shard) extended
 // by having a reference to input range index. See ring_position_range_vector_sharder for use.
@@ -65,12 +82,16 @@ public:
 // Successive ranges therefore always have a different `shard` than the previous return.
 // (classes that return ring_position_range_and_shard_and_element can have the same `shard`
 // in successive returns, if `element` is different).
-struct ring_position_range_and_shard_and_element : ring_position_range_and_shard {
-    ring_position_range_and_shard_and_element(ring_position_range_and_shard&& rpras, unsigned element)
-            : ring_position_range_and_shard(std::move(rpras)), element(element) {
+template <generalized_ring_position RingPositionLike>
+struct generalized_ring_position_range_and_shard_and_element : generalized_ring_position_range_and_shard<RingPositionLike> {
+    generalized_ring_position_range_and_shard_and_element(generalized_ring_position_range_and_shard<RingPositionLike>&& rpras, unsigned element)
+            : generalized_ring_position_range_and_shard<RingPositionLike>(std::move(rpras)), element(element) {
     }
     unsigned element;
 };
+
+using ring_position_range_and_shard_and_element = generalized_ring_position_range_and_shard_and_element<ring_position>;
+using token_range_and_shard_and_element = generalized_ring_position_range_and_shard_and_element<dht::token>;
 
 // Incrementally divides several non-overlapping `partition_range`:s into sub-ranges wholly owned by
 // a single shard.
@@ -88,12 +109,15 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
 //    not, and which shards share it).
 //
 // During migration uses a view on shard routing for reads.
-class ring_position_range_vector_sharder {
-    using vec_type = dht::partition_range_vector;
+template <generalized_ring_position RingPositionLike>
+class generalized_ring_position_range_vector_sharder {
+public:
+    using vec_type = std::conditional_t<std::same_as<RingPositionLike, ring_position>, dht::partition_range_vector, dht::token_range_vector>;
+private:
     vec_type _ranges;
     const sharder& _sharder;
     vec_type::iterator _current_range;
-    std::optional<ring_position_range_sharder> _current_sharder;
+    std::optional<generalized_ring_position_range_sharder<RingPositionLike>> _current_sharder;
 private:
     void next_range() {
         if (_current_range != _ranges.end()) {
@@ -104,7 +128,7 @@ public:
     // Initializes the `ring_position_range_vector_sharder` with the ranges to be processesd.
     // Input ranges should be non-overlapping (although nothing bad will happen if they do
     // overlap).
-    ring_position_range_vector_sharder(const sharder& sharder, dht::partition_range_vector ranges);
+    generalized_ring_position_range_vector_sharder(const sharder& sharder, vec_type ranges);
     // Fetches the next range-shard mapping. When the input range is exhausted, std::nullopt is
     // returned. Within an input range, results are contiguous and non-overlapping (but since input
     // ranges usually are discontiguous, overall the results are not contiguous). Together, the results
@@ -114,8 +138,14 @@ public:
     // that the result belongs to.
     //
     // Results are returned sorted by index within the vector first, then within each vector item
-    std::optional<ring_position_range_and_shard_and_element> next(const schema& s);
+    std::optional<generalized_ring_position_range_and_shard_and_element<RingPositionLike>> next(const schema& s);
 };
+
+using ring_position_range_vector_sharder = generalized_ring_position_range_vector_sharder<ring_position>;
+using token_range_vector_sharder = generalized_ring_position_range_vector_sharder<dht::token>;
+
+extern template class generalized_ring_position_range_vector_sharder<ring_position>;
+extern template class generalized_ring_position_range_vector_sharder<dht::token>;
 
 // Incrementally divides a `partition_range` into sub-ranges wholly owned by a single shard.
 // Unlike ring_position_range_sharder, it only returns result for a shard number provided by the caller.

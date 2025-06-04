@@ -176,43 +176,86 @@ selective_token_range_sharder::next() {
     return {};
 }
 
-std::optional<ring_position_range_and_shard>
-ring_position_range_sharder::next(const schema& s) {
+static
+token
+token_from_ring_position_like(const ring_position& rp) {
+    return rp.token();
+}
+
+static
+token
+token_from_ring_position_like(const token& t) {
+    return t;
+}
+
+static
+ring_position_comparator
+make_comparator_for(const schema& s, std::type_identity<ring_position>) {
+    return ring_position_comparator(s);
+}
+
+static
+token_comparator
+make_comparator_for(const schema& s, std::type_identity<token>) {
+    return token_comparator();
+}
+
+static
+ring_position
+make_shard_boundary(token t, std::type_identity<ring_position>) {
+    return ring_position::starting_at(t);
+}
+
+static
+token
+make_shard_boundary(token t, std::type_identity<token>) {
+    return t;
+}
+
+template <generalized_ring_position RingPositionLike>
+std::optional<generalized_ring_position_range_and_shard<RingPositionLike>>
+generalized_ring_position_range_sharder<RingPositionLike>::next(const schema& s) {
     if (_done) {
         return {};
     }
-    auto token = _range.start() ? _range.start()->value().token() : dht::minimum_token();
+    auto token = _range.start() ? token_from_ring_position_like(_range.start()->value()) : dht::minimum_token();
     auto shard = _sharder.shard_for_reads(token);
     auto next_shard_and_token = _sharder.next_shard_for_reads(token);
     if (!next_shard_and_token) {
         _done = true;
-        return ring_position_range_and_shard{std::move(_range), shard};
+        return generalized_ring_position_range_and_shard<RingPositionLike>{std::move(_range), shard};
     }
     auto shard_boundary_token = next_shard_and_token->token;
-    auto shard_boundary = ring_position::starting_at(shard_boundary_token);
-    if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
+    auto shard_boundary = make_shard_boundary(shard_boundary_token, std::type_identity<RingPositionLike>());
+    auto cmp = make_comparator_for(s, std::type_identity<RingPositionLike>());
+    if ((!_range.end() || cmp(_range.end()->value(), shard_boundary) > 0)
             && !shard_boundary_token.is_maximum()) {
         // split the range at end_of_shard
         auto start = _range.start();
-        auto end = interval_bound<ring_position>(shard_boundary, false);
-        _range = dht::partition_range(
-                interval_bound<ring_position>(std::move(shard_boundary), true),
+        auto end = interval_bound<RingPositionLike>(shard_boundary, false);
+        _range = interval<RingPositionLike>(
+                interval_bound<RingPositionLike>(std::move(shard_boundary), true),
                 _range.end());
-        return ring_position_range_and_shard{dht::partition_range(std::move(start), std::move(end)), shard};
+        return generalized_ring_position_range_and_shard<RingPositionLike>{interval<RingPositionLike>(std::move(start), std::move(end)), shard};
     }
     _done = true;
-    return ring_position_range_and_shard{std::move(_range), shard};
+    return generalized_ring_position_range_and_shard<RingPositionLike>{std::move(_range), shard};
 }
 
-ring_position_range_vector_sharder::ring_position_range_vector_sharder(const sharder& sharder, dht::partition_range_vector ranges)
+template class generalized_ring_position_range_sharder<ring_position>;
+template class generalized_ring_position_range_sharder<dht::token>;
+
+template <generalized_ring_position RingPositionLike>
+generalized_ring_position_range_vector_sharder<RingPositionLike>::generalized_ring_position_range_vector_sharder(const sharder& sharder, vec_type ranges)
         : _ranges(std::move(ranges))
         , _sharder(sharder)
         , _current_range(_ranges.begin()) {
     next_range();
 }
 
-std::optional<ring_position_range_and_shard_and_element>
-ring_position_range_vector_sharder::next(const schema& s) {
+template <generalized_ring_position RingPositionLike>
+std::optional<generalized_ring_position_range_and_shard_and_element<RingPositionLike>>
+generalized_ring_position_range_vector_sharder<RingPositionLike>::next(const schema& s) {
     if (!_current_sharder) {
         return std::nullopt;
     }
@@ -221,12 +264,15 @@ ring_position_range_vector_sharder::next(const schema& s) {
         next_range();
         range_and_shard = _current_sharder->next(s);
     }
-    auto ret = std::optional<ring_position_range_and_shard_and_element>();
+    auto ret = std::optional<generalized_ring_position_range_and_shard_and_element<RingPositionLike>>();
     if (range_and_shard) {
         ret.emplace(std::move(*range_and_shard), _current_range - _ranges.begin() - 1);
     }
     return ret;
 }
+
+template class generalized_ring_position_range_vector_sharder<ring_position>;
+template class generalized_ring_position_range_vector_sharder<dht::token>;
 
 future<utils::chunked_vector<partition_range>>
 split_range_to_single_shard(const schema& s, const static_sharder& sharder, const partition_range& pr, shard_id shard) {
