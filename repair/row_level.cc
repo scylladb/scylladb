@@ -2337,7 +2337,7 @@ future<repair_update_system_table_response> repair_service::repair_update_system
         throw std::runtime_error(format("repair[{}]: range {} is not in the format of (start, end]", req.repair_uuid, req.range));
     }
     co_await db.invoke_on_all([&req] (replica::database& local_db) {
-        auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+        auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();
         return gc_state.update_repair_time(req.table_uuid, req.range, req.repair_time);
     });
     db::system_keyspace::repair_history_entry ent;
@@ -3405,7 +3405,7 @@ future<> repair_service::load_history() {
                     entry.ks, entry.cf, entry.table_uuid, entry.ts, range);
             try {
                 co_await get_db().invoke_on_all([table_uuid = entry.table_uuid, range, repair_time] (replica::database& local_db) {
-                    auto& gc_state = local_db.get_compaction_manager().get_tombstone_gc_state();
+                    auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();
                     gc_state.update_repair_time(table_uuid, range, repair_time);
                 });
             } catch (...) {
