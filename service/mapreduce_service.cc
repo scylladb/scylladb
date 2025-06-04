@@ -213,17 +213,29 @@ class partition_ranges_owned_by_this_shard {
     size_t _range_idx;
     std::optional<dht::ring_position_range_sharder> _intersecter;
     locator::effective_replication_map_ptr _erm;
+    std::optional<shard_id> forced_shard;
 public:
-    partition_ranges_owned_by_this_shard(schema_ptr s, dht::partition_range_vector v)
+    partition_ranges_owned_by_this_shard(schema_ptr s, dht::partition_range_vector v, std::optional<shard_id> forced_shard)
         :  _s(s)
         , _partition_ranges(v)
         , _range_idx(0)
         , _erm(_s->table().get_effective_replication_map())
+        , forced_shard(forced_shard)
     {}
 
     // Return the next partition_range owned by this shard, or nullopt when the
     // iteration ends.
     std::optional<dht::partition_range> next(const schema& s) {
+
+        // If forced shard is set and supported, return all ranges for that shard
+        if (forced_shard.has_value() && forced_shard.value() < seastar::smp::count) {
+            if (forced_shard.value() != this_shard_id() || _range_idx == _partition_ranges.size()) {
+                return std::nullopt;
+            } else {
+               return _partition_ranges[_range_idx++];
+            }
+        }
+
         // We may need three or more iterations in the following loop if a
         // vnode doesn't intersect with the given shard at all (such a small
         // vnode is unlikely, but possible). The loop cannot be infinite
@@ -465,7 +477,7 @@ future<query::mapreduce_result> mapreduce_service::execute_on_this_shard(
     static constexpr size_t max_ranges = 256;
     dht::partition_range_vector ranges_owned_by_this_shard;
     ranges_owned_by_this_shard.reserve(std::min(max_ranges, req.pr.size()));
-    partition_ranges_owned_by_this_shard owned_iter(schema, std::move(req.pr));
+    partition_ranges_owned_by_this_shard owned_iter(schema, std::move(req.pr), req.shard_id);
 
     std::optional<dht::partition_range> current_range;
     do {
@@ -548,25 +560,40 @@ future<> mapreduce_service::uninit_messaging_service() {
     return ser::mapreduce_request_rpc_verbs::unregister(&_messaging);
 }
 
-future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
-    schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
-    replica::table& cf = _db.local().find_column_family(schema);
-    auto erm = cf.get_effective_replication_map();
-    // next_vnode is used to iterate through all vnodes produced by
-    // query_ranges_to_vnodes_generator.
-    auto next_vnode = [
-        generator = query_ranges_to_vnodes_generator(erm->make_splitter(), schema, req.pr)
-    ] () mutable -> std::optional<dht::partition_range> {
-        if (auto vnode = generator(1); !vnode.empty()) {
-            return vnode[0];
-        }
-        return {};
-    };
+future<> mapreduce_service::dispatch_range_and_reduce(const locator::effective_replication_map_ptr& erm, retrying_dispatcher& dispatcher_, const query::mapreduce_request& req, query::mapreduce_request&& req_with_modified_pr, locator::host_id addr, query::mapreduce_result& result_, tracing::trace_state_ptr tr_state_) {
+    tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
+    flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
 
+    query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(*erm, addr, std::move(req_with_modified_pr));
+    auto partial_printer = seastar::value_of([&req, &partial_result] {
+        return query::mapreduce_result::printer {
+            .functions = get_functions(req),
+            .res = partial_result
+        };
+    });
+    tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
+    flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
+
+    auto aggrs = mapreduce_aggregates(req);
+    co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
+        aggrs.merge(result_, std::move(partial_result));
+    });
+}
+
+std::optional<dht::partition_range> get_next_partition_range(query_ranges_to_vnodes_generator& generator) {
+     if (auto vnode = generator(1); !vnode.empty()) {
+        return vnode[0];
+    }
+    return {};
+} 
+
+future<> mapreduce_service::dispatch_to_vnodes(schema_ptr schema, replica::column_family& cf, query::mapreduce_request& req, query::mapreduce_result& result, tracing::trace_state_ptr tr_state) {
+    auto erm = cf.get_effective_replication_map();
     // Group vnodes by assigned endpoint.
     std::map<locator::host_id, dht::partition_range_vector> vnodes_per_addr;
     const auto& topo = get_token_metadata_ptr()->get_topology();
-    while (std::optional<dht::partition_range> vnode = next_vnode()) {
+    auto generator = query_ranges_to_vnodes_generator(erm->make_splitter(), schema, req.pr);
+    while (std::optional<dht::partition_range> vnode = get_next_partition_range(generator)) {
         host_id_vector_replica_set live_endpoints = _proxy.get_live_endpoints(*erm, end_token(*vnode));
         // Do not choose an endpoint outside the current datacenter if a request has a local consistency
         if (db::is_datacenter_local(req.cl)) {
@@ -586,36 +613,120 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     flogger.debug("dispatching mapreduce_request to {} endpoints", vnodes_per_addr.size());
 
     retrying_dispatcher dispatcher(*this, tr_state);
-    query::mapreduce_result result;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
+        co_await utils::get_local_injector().inject("mapreduce_pause_parallel_dispatch", utils::wait_for_message(5min));
         locator::host_id addr = vnodes_with_addr.first;
-        query::mapreduce_result& result_ = result;
-        tracing::trace_state_ptr& tr_state_ = tr_state;
-        retrying_dispatcher& dispatcher_ = dispatcher;
-
         query::mapreduce_request req_with_modified_pr = req;
         req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
-
-        tracing::trace(tr_state_, "Sending mapreduce_request to {}", addr);
-        flogger.debug("dispatching mapreduce_request={} to address={}", req_with_modified_pr, addr);
-
-        query::mapreduce_result partial_result = co_await dispatcher_.dispatch_to_node(*erm, addr, std::move(req_with_modified_pr));
-        auto partial_printer = seastar::value_of([&req, &partial_result] {
-            return query::mapreduce_result::printer {
-                .functions = get_functions(req),
-                .res = partial_result
-            };
-        });
-        tracing::trace(tr_state_, "Received mapreduce_result={} from {}", partial_printer, addr);
-        flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
-
-        auto aggrs = mapreduce_aggregates(req);
-        co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-            aggrs.merge(result_, std::move(partial_result));
-        });
+        co_await dispatch_range_and_reduce(erm, dispatcher, req, std::move(req_with_modified_pr), addr, result, tr_state);        
     });
+}
+
+future<> mapreduce_service::dispatch_to_tablets(schema_ptr schema, replica::column_family& cf, query::mapreduce_request& req, query::mapreduce_result& result, tracing::trace_state_ptr tr_state) {
+    std::map<locator::tablet_replica, dht::partition_range_vector> ranges_per_tablet_replica;
+
+    auto get_tablet_replica = [this, &req] (const std::optional<dht::partition_range>& range, const locator::effective_replication_map_ptr& erm) -> locator::tablet_replica {
+        auto tablet_routing_info_opt = erm->check_locality(end_token(*range));
+        // Empty option means correctly routed
+        if (!tablet_routing_info_opt.has_value()) {
+            auto host = get_token_metadata_ptr()->get_my_id();
+            auto shard = this_shard_id();
+            return locator::tablet_replica{host, shard};
+        } else {
+            host_id_vector_replica_set live_endpoints;
+            for (auto & tablet_replica : tablet_routing_info_opt->tablet_replicas) {
+                live_endpoints.push_back(tablet_replica.host);
+            }
+            // Do not choose an endpoint outside the current datacenter if a request has a local consistency
+            if (db::is_datacenter_local(req.cl)) {
+                retain_local_endpoints(erm->get_topology(), live_endpoints);
+            }
+            if (live_endpoints.empty()) {
+                throw std::runtime_error("No live endpoint available");
+            }
+            for (auto& tablet_replica : tablet_routing_info_opt->tablet_replicas) {
+                for (auto& live_endpoint : live_endpoints) {
+                    if (tablet_replica.host == live_endpoint) {
+                        return tablet_replica;
+                    }
+                }
+            }
+            throw std::runtime_error("No matching live endpoint found");
+        }
+    };
+
+    {
+        auto erm = cf.get_effective_replication_map();
+        auto generator = query_ranges_to_vnodes_generator(erm->make_splitter(), schema, req.pr);
+        while (std::optional<dht::partition_range> range = get_next_partition_range(generator)) {
+            ranges_per_tablet_replica[get_tablet_replica(range, erm)].push_back(std::move(*range));
+            // can potentially stall e.g. with a large tablet count.
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    tracing::trace(tr_state, "Dispatching mapreduce_request to {} shards", ranges_per_tablet_replica.size());
+    flogger.debug("dispatching mapreduce_request to {} shards", ranges_per_tablet_replica.size());
+
+    retrying_dispatcher dispatcher(*this, tr_state);
+    const size_t per_shard_tablet_limit = 2;
+    while (ranges_per_tablet_replica.size() > 0) {
+        std::set<locator::tablet_replica> active_tablet_replicas;
+        for (const auto& [tablet_replica, _] : ranges_per_tablet_replica) {
+            active_tablet_replicas.insert(tablet_replica);
+        }
+        bool new_replica_found = false;
+        co_await coroutine::parallel_for_each(active_tablet_replicas,
+            [&] (const locator::tablet_replica tablet_replica) -> future<> {
+            co_await utils::get_local_injector().inject("mapreduce_pause_parallel_dispatch", utils::wait_for_message(5min));
+            auto& ranges_for_tablet_replica = ranges_per_tablet_replica[tablet_replica];
+            while (ranges_for_tablet_replica.size() > 0 && !new_replica_found) {
+                auto erm = cf.get_effective_replication_map();
+
+                query::mapreduce_request req_with_modified_pr = req;
+                req_with_modified_pr.pr = dht::partition_range_vector{};
+                while (ranges_for_tablet_replica.size() > 0) {
+                    auto range = std::move(ranges_for_tablet_replica.back());
+                    ranges_for_tablet_replica.pop_back();
+
+                    auto current_tablet_replica = get_tablet_replica(range, erm);
+                    if (current_tablet_replica == tablet_replica) {
+                        req_with_modified_pr.pr.push_back(std::move(range));
+                        if (req_with_modified_pr.pr.size() == per_shard_tablet_limit) {
+                            break;
+                        }
+                    } else {
+                        ranges_per_tablet_replica[current_tablet_replica].push_back(std::move(range));
+                        if (active_tablet_replicas.find(current_tablet_replica) == active_tablet_replicas.end()) {
+                            new_replica_found = true;
+                        }
+                    }
+                }
+
+                if (req_with_modified_pr.pr.size() > 0) {
+                    req_with_modified_pr.shard_id = tablet_replica.shard;
+                    co_await dispatch_range_and_reduce(erm, dispatcher, req, std::move(req_with_modified_pr), tablet_replica.host, result, tr_state);
+                }
+            }
+            if (ranges_for_tablet_replica.empty()) {
+                ranges_per_tablet_replica.erase(tablet_replica);
+            }
+        });
+    }
+}
+
+future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
+    schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
+    replica::table& cf = _db.local().find_column_family(schema);
+    
+    query::mapreduce_result result;
+    if (cf.uses_tablets()) {
+        co_await dispatch_to_tablets(schema, cf, req, result, tr_state);
+    } else {
+        co_await dispatch_to_vnodes(schema, cf, req, result, tr_state);
+    }
 
     mapreduce_aggregates aggrs(req);
     const bool requires_thread = aggrs.requires_thread();
