@@ -117,7 +117,7 @@ public:
     bool tombstone_gc_enabled() const noexcept override {
         return table().tombstone_gc_enabled();
     }
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
+    tombstone_gc_state get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
     }
     compaction::compaction_backlog_tracker& get_backlog_tracker() override {

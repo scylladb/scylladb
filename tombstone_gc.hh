@@ -172,6 +172,7 @@ public:
 
     // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
     [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_mode, _shared_state, false); }
+    bool is_commitlog_check_enabled() const noexcept { return _check_commitlog; }
 };
 
 std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy&, const locator::token_metadata&, bool supports_repair);
