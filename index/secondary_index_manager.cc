@@ -19,7 +19,6 @@
 #include "index/secondary_index.hh"
 #include "index/vector_index.hh"
 
-#include "cql3/statements/index_target.hh"
 #include "cql3/expr/expression.hh"
 #include "index/target_parser.hh"
 #include "schema/schema.hh"
@@ -373,6 +372,18 @@ std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_ma
     } else {
         return std::nullopt;
     }
+}
+
+std::optional<std::unique_ptr<custom_index>> secondary_index_manager::get_custom_class(const index_metadata& im) {
+    auto it = im.options().find(db::index::secondary_index::custom_index_option_name);
+    if (it == im.options().end()) {
+        return std::nullopt;
+    }
+    auto custom_class_factory = secondary_index::secondary_index_manager::get_custom_class_factory(it->second);
+    if (!custom_class_factory) {
+        return std::nullopt;
+    }
+    return (*custom_class_factory)();
 }
 
 }
