@@ -156,6 +156,8 @@ public:
             std::vector<task_essentials> failed_children;
         };
 
+        using child_variant = std::variant<task_ptr, task_essentials>;
+
         class children {
             mutable foreign_task_map _children;
             mutable std::vector<task_essentials> _finished_children;
@@ -165,6 +167,7 @@ public:
             size_t size() const noexcept;
             future<> add_child(foreign_task_ptr task);
             future<> mark_as_finished(task_id id, task_essentials essentials) const;
+            future<task_manager::task::progress> get_progress(std::function<void(progress&, const progress&)> update_progress, std::function<bool(child_variant)> include_child, progress initial) const;
             future<progress> get_progress(const std::string& progress_units) const;
             future<> for_each_task(std::function<future<>(const foreign_task_ptr&)> f_children,
                     std::function<future<>(const task_essentials&)> f_finished_children) const;
