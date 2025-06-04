@@ -199,18 +199,9 @@ class cache_mutation_reader final : public mutation_reader::impl {
         return *_snp->schema();
     }
 
-    gc_clock::time_point get_read_time() {
-        return _read_context.tombstone_gc_state() ? gc_clock::now() : gc_clock::time_point::min();
-    }
-
     gc_clock::time_point get_gc_before() {
         if (!_gc_before.has_value()) {
-            auto gc_state = _read_context.tombstone_gc_state();
-            if (gc_state) {
-                _gc_before = gc_state->with_commitlog_check_disabled().get_gc_before_for_key(_schema, _dk, _read_time);
-            } else {
-                _gc_before = gc_clock::time_point::min();
-            }
+            _gc_before = _read_context.tombstone_gc_state().with_commitlog_check_disabled().get_gc_before_for_key(_schema, _dk, _read_time);
         }
         return *_gc_before;
     }
@@ -242,7 +233,7 @@ public:
         , _read_context_holder()
         , _read_context(ctx)    // ctx is owned by the caller, who's responsible for closing it.
         , _next_row(*_schema, *_snp, false, _read_context.is_reversed())
-        , _read_time(get_read_time())
+        , _read_time(gc_clock::now())
     {
         clogger.trace("csm {}: table={}.{}, dk={}, reversed={}, snap={}",
                 fmt::ptr(this),
@@ -801,7 +792,7 @@ void cache_mutation_reader::copy_from_cache_to_buffer() {
     if (_next_row_in_range) {
         bool remove_row = false;
 
-        if (_read_context.tombstone_gc_state() // do not compact rows when tombstone_gc_state is not set (used in some unit tests)
+        if (_read_context.tombstone_gc_state().is_gc_enabled() // do not compact rows when set to no_gc() (used in some unit tests)
             && !_next_row.dummy()
             && _snp->at_latest_version()
             && _snp->at_oldest_version()) {

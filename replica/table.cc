@@ -257,7 +257,7 @@ table::make_mutation_reader(schema_ptr s,
 
     const auto bypass_cache = slice.options.contains(query::partition_slice::option::bypass_cache);
     if (cache_enabled() && !bypass_cache) {
-        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, &_compaction_manager.get_tombstone_gc_state(),
+        if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, _compaction_manager.get_tombstone_gc_state(),
                     get_max_purgeable_fn_for_cache_underlying_reader(), std::move(trace_state), fwd, fwd_mr)) {
             readers.emplace_back(std::move(*reader_opt));
         }
