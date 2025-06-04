@@ -160,7 +160,10 @@ private:
     class strategy_control;
     std::unique_ptr<strategy_control> _strategy_control;
 
-    per_table_history_maps _reconcile_history_maps;
+    shared_tombstone_gc_state _shared_tombstone_gc_state;
+    // TODO: tombstone_gc_state should now have value semantics, but the code
+    // still uses it with reference semantics (inconsistently though).
+    // Drop this member, once the code is converted into using value semantics.
     tombstone_gc_state _tombstone_gc_state;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
@@ -435,12 +438,16 @@ public:
 
     compaction::strategy_control& get_strategy_control() const noexcept;
 
-    tombstone_gc_state& get_tombstone_gc_state() noexcept {
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
         return _tombstone_gc_state;
     };
 
-    const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
-        return _tombstone_gc_state;
+    shared_tombstone_gc_state& get_shared_tombstone_gc_state() noexcept {
+        return _shared_tombstone_gc_state;
+    };
+
+    const shared_tombstone_gc_state& get_shared_tombstone_gc_state() const noexcept {
+        return _shared_tombstone_gc_state;
     };
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`

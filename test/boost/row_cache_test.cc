@@ -4386,7 +4386,7 @@ SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) 
         schema_ptr s = t.schema();
 
         // emulate commitlog behaivor
-        t.get_compaction_manager().get_tombstone_gc_state().set_gc_time_min_source([s](const table_id& id) {
+        t.get_compaction_manager().get_shared_tombstone_gc_state().set_gc_time_min_source([s](const table_id& id) {
             return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
@@ -4577,10 +4577,11 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
             cache.populate(m);
         }
 
-        tombstone_gc_state gc_state(nullptr);
+        shared_tombstone_gc_state gc_shared_state;
+        tombstone_gc_state gc_state(gc_shared_state);
 
         // emulate commitlog behaivor
-        gc_state.set_gc_time_min_source([&s](const table_id& id) {
+        gc_shared_state.set_gc_time_min_source([&s](const table_id& id) {
                 return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
@@ -4952,7 +4953,7 @@ void repair_table(cql_test_env& env, table_id tid, gc_clock::time_point repair_t
     const auto repair_range = dht::token_range::make(dht::first_token(), dht::last_token());
     env.db().invoke_on_all([&] (replica::database& db) {
         auto& tbl = db.find_column_family(tid);
-        tbl.get_compaction_manager().get_tombstone_gc_state().update_repair_time(tbl.schema()->id(), repair_range, repair_time);
+        tbl.get_compaction_manager().get_shared_tombstone_gc_state().update_repair_time(tbl.schema()->id(), repair_range, repair_time);
     }).get();
 }
 
