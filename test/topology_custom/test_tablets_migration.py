@@ -6,11 +6,12 @@
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
-from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
 from test.topology.conftest import skip_mode
-from test.topology.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver
+from test.topology.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
 import time
 import pytest
+import random
 import logging
 import asyncio
 import os
@@ -392,3 +393,95 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
         assert s0_sstables_in_staging == s1_sstables_in_staging
 
         await check(keys)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, migration_stage_and_injection):
+    """
+    Migrate a tablet from one node to another, and while in some migration
+    cleanup stage, either before or after the tablet is cleaned, restart the
+    leaving replica. Then trigger a tablet merge.
+
+    This reproduces issue #23481: when the leaving replica is restarted in
+    end_migration, after the SSTables are cleaned, it starts and allocates the
+    state for the tablet in the storage group manager, even though it was
+    cleaned already. The resulting state causes the following merge process to
+    fail with an assert.
+    """
+    stage, injection = migration_stage_and_injection
+
+    cmdline = ['--target-tablet-size-in-bytes', '30000',]
+    cfg = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
+    servers = await manager.servers_add(2, config=cfg, cmdline=cmdline)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1")
+
+        s1_log = await manager.server_open_log(servers[0].server_id)
+        s1_mark = await s1_log.mark()
+
+        total_keys = 200
+        keys = range(total_keys)
+        insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+        for pk in keys:
+            value = random.randbytes(2000)
+            cql.execute(insert, [pk, value])
+
+        await asyncio.gather(*[manager.api.flush_keyspace(s.ip_addr, ks) for s in servers])
+
+        table_id = await manager.get_table_id(ks, 'test')
+        async def get_tablet_count():
+            rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where table_id = {table_id}")
+            return rows[0].tablet_count
+
+        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+        tablet_token = 0
+
+        s0_host_id = await manager.get_host_id(servers[0].server_id)
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+        # Find which server holds the tablet
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+        if replica[0] == s0_host_id:
+            src_server, dst_host_id = servers[0], s1_host_id
+        else:
+            src_server, dst_host_id = servers[1], s0_host_id
+
+        # Injection for waiting in cleanup stage
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, injection, one_shot=False) for s in servers])
+
+        # Start migration - move tablet to other node
+        move_task = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, 'test', replica[0], replica[1], dst_host_id, 0, tablet_token))
+
+        # Wait for the tablet to reach cleanup stage
+        async def tablet_stage_is_cleanup():
+            tinfo = await get_tablet_info(manager, servers[0], ks, 'test', tablet_token)
+            if tinfo.stage == stage:
+                return True
+        await wait_for(tablet_stage_is_cleanup, time.time() + 60)
+
+        # Restart the leaving replica (src_server)
+        await manager.server_restart(src_server.server_id)
+
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
+
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+        delete_keys = range(total_keys - 1)
+        await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
+        keys = range(total_keys - 1, total_keys)
+
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+            await manager.api.keyspace_compaction(server.ip_addr, ks)
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+        await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
+        await manager.api.quiesce_topology(servers[0].ip_addr)
