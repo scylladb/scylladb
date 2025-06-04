@@ -1040,7 +1040,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
         _compaction_controller.set_max_shares(max_shares);
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(_shared_tombstone_gc_state) {
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
@@ -1064,7 +1064,7 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _compaction_max_shares_observer(_cfg.max_shares.observe([] (const float& max_shares) {}))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(_shared_tombstone_gc_state) {
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     // No metric registration because this constructor is supposed to be used only by the testing
     // infrastructure.
