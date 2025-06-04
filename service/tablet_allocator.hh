@@ -10,9 +10,11 @@
 
 #include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
+#include "seastar/util/bool_class.hh"
 #include "service/topology_state_machine.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include "locator/types.hh"
 #include <seastar/core/metrics.hh>
 
 namespace service {
@@ -134,6 +136,29 @@ struct tablet_repair_plan {
     void add(const locator::global_tablet_id& gid) {
         _repairs.insert(gid);
     }
+};
+
+enum class keyspace_rf_change_state {
+    empty,          // No ongoing rf change.
+    new_step,       // Start of a new step.
+    continue_step,  // Continuation of a current step.
+    done,           // All steps are done.
+    failed,         // All steps are rolled back.
+};
+
+using removes_replica = bool_class<class removes_replica_tag>;
+
+struct planned_replica {
+    locator::global_tablet_id gid;
+    locator::tablet_replica replica;
+};
+
+struct keyspace_rf_change_plan {
+    sstring ks_name;
+    keyspace_rf_change_state state = keyspace_rf_change_state::empty;
+    locator::endpoint_dc_rack replica;
+    removes_replica removes_replica;
+    std::vector<planned_replica> tablets;
 };
 
 class migration_plan {

@@ -6,10 +6,16 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "locator/host_id.hh"
+#include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
+#include "locator/topology.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "replica/database.hh"
+#include "seastar/core/future.hh"
+#include "seastar/core/on_internal_error.hh"
+#include "seastar/core/sstring.hh"
 #include "service/migration_listener.hh"
 #include "service/tablet_allocator.hh"
 #include "utils/assert.hh"
@@ -21,6 +27,7 @@
 #include "locator/load_sketch.hh"
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
+#include <algorithm>
 #include <iterator>
 #include <utility>
 #include <fmt/ranges.h>
@@ -33,6 +40,26 @@ using namespace replica;
 namespace service {
 
 seastar::logger lblogger("load_balancer");
+
+std::optional<locator::endpoint_dc_rack> ongoing_rf_change_data::maybe_get_added_dc_rack() {
+    auto it = added_racks_for_dc.begin();
+    if (it == added_racks_for_dc.end()) {
+        return std::nullopt;
+    }
+    auto dc = it->first;
+
+    const auto& racks = it->second;
+    auto rack_it = racks.begin();
+    if (rack_it == racks.end()) {
+        on_internal_error(lblogger, "No racks for a dc in added_racks_for_dc");
+    }
+    auto rack = *rack_it;
+
+    return locator::endpoint_dc_rack{
+        .dc = std::move(dc),
+        .rack = std::move(rack)
+    };
+}
 
 void load_balancer_stats_manager::setup_metrics(const dc_name& dc, load_balancer_dc_stats& stats) {
     namespace sm = seastar::metrics;
@@ -965,6 +992,337 @@ public:
         }
 
         co_return ret;
+    }
+
+    struct rf_change_step_data {
+        locator::endpoint_dc_rack dc_rack;
+        removes_replica removes_replica;
+    };
+
+    future<std::optional<rf_change_step_data>> get_ongoing_step() {
+        const locator::topology& topo = _tm->get_topology();
+        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+            if (!_db.column_family_exists(table) || _db.find_schema(table)->ks_name() != _ongoing_rf_change_data->ks_name) {
+                continue;
+            }
+
+            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            for (const tablet_info& info : tmap.tablets()) {
+                co_await coroutine::maybe_yield();
+                // Check if all expected replicas are present.
+                for (const auto& dc_and_racks : _ongoing_rf_change_data->added_racks_for_dc) {
+                    const auto& dc = dc_and_racks.first;
+                    const auto& racks = dc_and_racks.second;
+                    for (const auto& rack : racks) {
+                        if (std::none_of(info.replicas.cbegin(), info.replicas.cend(), [&topo, &dc, &rack] (const auto& replica) {
+                            const auto& location = topo.get_location(replica.host);
+                            return location.dc == dc && location.rack == rack;
+                        }) && !_ongoing_rf_change_data->rollback) {
+                            co_return rf_change_step_data{
+                                .dc_rack = endpoint_dc_rack{dc, rack},
+                                .removes_replica = removes_replica::no,
+                            };
+                        }
+                    }
+                }
+
+                // Check if all expected replicas are removed.
+                for (const auto& dc_and_racks : _ongoing_rf_change_data->removed_racks_for_dc) {
+                    co_await coroutine::maybe_yield();
+                    const auto& dc = dc_and_racks.first;
+                    const auto& racks = dc_and_racks.second;
+                    for (const auto& rack : racks) {
+                        if (std::any_of(info.replicas.cbegin(), info.replicas.cend(), [&topo, &dc, &rack] (const auto& replica) {
+                            const auto& location = topo.get_location(replica.host);
+                            return location.dc == dc && location.rack == rack;
+                        })) {
+                            co_return rf_change_step_data{
+                                .dc_rack = endpoint_dc_rack{dc, rack},
+                                .removes_replica = removes_replica::yes,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+        co_return std::nullopt;
+    }
+
+    future<std::optional<rf_change_step_data>> get_new_step() {
+        if (_ongoing_rf_change_data->rollback) {
+            co_return _ongoing_rf_change_data->maybe_get_added_dc_rack().transform([] (const auto& dc_rack) {
+                return rf_change_step_data{
+                    .dc_rack = dc_rack,
+                    .removes_replica = removes_replica::yes,
+                };
+            });
+        }
+
+        // Find a tablet of the keyspace.
+        auto it = std::find_if(_tm->tablets().all_table_groups().begin(), _tm->tablets().all_table_groups().end(), [&db = _db, &ks_name = _ongoing_rf_change_data->ks_name] (const auto& t) {
+            const auto& [table, _] = t;
+            return db.column_family_exists(table) && db.find_schema(table)->ks_name() == ks_name;
+        });
+        if (it == _tm->tablets().all_table_groups().end()) {
+            co_return std::nullopt;
+        }
+        const auto& tmap = _tm->tablets().get_tablet_map(it->first);
+        auto tid = tmap.first_tablet();
+        auto tinfo = tmap.get_tablet_info(tid);
+
+        // TODO: consider racks lists.
+        if (_db.has_keyspace(_ongoing_rf_change_data->ks_name)) {
+            auto& keyspace = _db.find_keyspace(_ongoing_rf_change_data->ks_name);
+            const auto& metadata = keyspace.metadata();
+            const auto& strategy = dynamic_cast<const locator::network_topology_strategy&>(keyspace.get_replication_strategy());
+            auto current_rf = strategy.get_dc_replication_factors();
+            auto target_rf = strategy.get_target_dc_replication_factors();
+            const locator::topology& topo = _tm->get_topology();
+
+            // Find a replica (dc and rack) to be added.
+            for (const auto& [dc, rf] : target_rf) {
+                co_await coroutine::maybe_yield();
+                auto it = current_rf.find(dc);
+                if (it == current_rf.end() || it->second < rf) {
+                    // Get all racks in dc.
+                    auto racks_it = topo.get_datacenter_racks().find(dc);
+                    if (racks_it == topo.get_datacenter_racks().end() || racks_it->second.size() < rf) {
+                        on_internal_error(lblogger, format("No racks found in DC {} for table {}; expected at least {} racks", dc, it->first, rf));
+                    }
+                    // Find rack on which currently there is no replica.
+                    auto rack_it = std::find_if(racks_it->second.begin(), racks_it->second.end(), [&topo, &dc, &tinfo] (const auto& rack_to_hosts) {
+                        return std::none_of(tinfo.replicas.begin(), tinfo.replicas.end(), [&topo, &dc, &rack = rack_to_hosts.first] (const auto& replica) {
+                            const auto& location = topo.get_location(replica.host);
+                            return location.dc == dc && location.rack == rack;
+                        });
+                    });
+                    if (rack_it == racks_it->second.end()) {
+                        on_internal_error(lblogger, format("No free rack found in DC {} for table {}", dc, it->first));
+                    }
+                    co_return rf_change_step_data{
+                        .dc_rack = endpoint_dc_rack{dc, rack_it->first},
+                        .removes_replica = removes_replica::no,
+                    };
+                }
+            }
+
+            // Find a replica (dc and rack) to be removed.
+            for (const auto& [dc, rf] : current_rf) {
+                co_await coroutine::maybe_yield();
+                auto it = target_rf.find(dc);
+                if (it == target_rf.end() || it->second < rf) {
+                    auto replica_it = std::find_if(tinfo.replicas.begin(), tinfo.replicas.end(), [&dc, &topo] (const auto& replica) {
+                        const auto& location = topo.get_location(replica.host);
+                        return location.dc == dc;
+                    });
+                    if (replica_it == tinfo.replicas.end()) {
+                        on_internal_error(lblogger, format("No replica found in DC {} for table {}; expected {} replicas", dc, it->first, rf));
+                    }
+                    co_return rf_change_step_data{
+                        .dc_rack = endpoint_dc_rack{dc, topo.get_location(replica_it->host).rack},
+                        .removes_replica = removes_replica::yes,
+                    };
+                }
+            }
+        }
+        co_return std::nullopt;
+    }
+
+    future<keyspace_rf_change_plan> make_rf_change_plan(const migration_plan& mplan) {
+        lblogger.debug("In make_rf_change_plan");
+
+        if (!_db.features().keyspace_multi_rf_change) {
+            lblogger.debug("make_rf_change_plan: The KEYSPACE_MULTI_RF_CHANGE feature is not enabled");
+            co_return keyspace_rf_change_plan{};
+        }
+
+        if (!_ongoing_rf_change_data.has_value()) {
+            lblogger.debug("make_rf_change_plan: No ongoing RF change data");
+            co_return keyspace_rf_change_plan{};
+        }
+        const auto& ongoing_rf_change_data = _ongoing_rf_change_data.value();
+
+        // Populate the load of the migration that is already in the plan
+        node_load_map nodes;
+        const locator::topology& topo = _tm->get_topology();
+        // TODO: share code with make_plan()
+        topo.for_each_node([&] (const locator::node& node) {
+            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+                              || node.get_state() == locator::node::state::being_removed;
+            if (node.get_state() == locator::node::state::normal || is_drained) {
+                ensure_node(nodes, node.host_id(), false);
+            }
+        });
+
+        // Consider load that is already scheduled
+        co_await consider_scheduled_load(nodes);
+
+        // Consider load that is about to be scheduled
+        co_await consider_planned_load(nodes, mplan);
+
+        keyspace_rf_change_plan rf_change_plan{
+            .ks_name = ongoing_rf_change_data.ks_name,
+        };
+
+        // Find state of rf_change.
+        // If needed, find the replica to process.
+        rf_change_step_data current_step;
+        if (auto ongoing_step_opt = co_await get_ongoing_step(); ongoing_step_opt.has_value()) {
+            rf_change_plan.state = keyspace_rf_change_state::continue_step;
+            current_step = ongoing_step_opt.value();
+        } else {
+            if (ongoing_rf_change_data.rollback && ongoing_rf_change_data.added_racks_for_dc.empty()) {
+                rf_change_plan.state = keyspace_rf_change_state::failed;
+                co_return rf_change_plan;
+            } else if (auto new_step_opt = co_await get_new_step(); new_step_opt.has_value()) {
+                rf_change_plan.state = keyspace_rf_change_state::new_step;
+                current_step = new_step_opt.value();
+            } else {
+                rf_change_plan.state = keyspace_rf_change_state::done;
+                co_return rf_change_plan;
+            }
+        }
+        rf_change_plan.replica = current_step.dc_rack;
+        rf_change_plan.removes_replica = current_step.removes_replica;
+
+        // Choose tablets to rebuild. Consider load of the nodes.
+        class dc_rack_replica_distributor {
+        private:
+            struct dst_replica_candidate {
+                locator::host_id host;
+                size_t shard_count;
+            };
+            std::queue<dst_replica_candidate> _replica_candidates;
+        public:
+            dc_rack_replica_distributor(const locator::topology& topo, const sstring& dc, const sstring& rack) {
+                auto dc_it = topo.get_datacenter_rack_nodes().find(dc);
+                if (dc_it != topo.get_datacenter_rack_nodes().end()) {
+                    const auto& rack_nodes = dc_it->second;
+                    auto rack_it = rack_nodes.find(rack);
+                    if (rack_it != rack_nodes.end()) {
+                        for (const auto& node : rack_it->second) {
+                            _replica_candidates.emplace(dst_replica_candidate{
+                                .host = node.get().host_id(),
+                                .shard_count = node.get().get_shard_count(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            future<std::optional<locator::tablet_replica>> find_new_replica_for_tablet_if(std::function<bool(const locator::tablet_replica&)> filter) {
+                if (_replica_candidates.empty()) {
+                    co_return std::nullopt;
+                }
+                auto first_host = _replica_candidates.front().host;
+                do {
+                    co_await coroutine::maybe_yield();
+                    auto candidate = _replica_candidates.front();
+                    for (size_t shard = 0; shard < candidate.shard_count; ++shard) {
+                        auto pending_replica = tablet_replica{candidate.host, shard};
+                        if (filter(pending_replica)) {
+                            co_return pending_replica;
+                        }
+                    }
+                    _replica_candidates.pop();
+                    _replica_candidates.push(std::move(candidate));
+                } while (_replica_candidates.front().host != first_host);
+                co_return std::nullopt;
+
+            }
+        };
+        auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
+        if (rf_change_plan.removes_replica) {
+            for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+                if (!_db.column_family_exists(table) || _db.find_schema(table)->ks_name() != ongoing_rf_change_data.ks_name) {
+                    continue;
+                }
+
+                const auto& tmap = _tm->tablets().get_tablet_map(table);
+                co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+                    auto gid = locator::global_tablet_id{table, id};
+                    // Skip tablet that is in transitions.
+                    auto* tti = tmap.get_tablet_transition_info(id);
+                    if (tti) {
+                        lblogger.debug("Skipped tablet rf-change rebuild for tablet={} which is already in transition={}", gid, tti->transition);
+                        co_return;
+                    }
+
+                    // Skip the tablet that is about to be in transition.
+                    if (migration_tablet_ids.contains(gid)) {
+                        co_return;
+                    }
+
+                    auto replicas = info.replicas;
+                    const auto it = std::find_if(replicas.begin(), replicas.end(), [&topo, &dc_rack = rf_change_plan.replica] (const auto& r) {
+                        return topo.get_location(r.host) == dc_rack;
+                    });
+                    // Skip if the replica was already removed.
+                    if (it == replicas.end()) {
+                        co_return;
+                    }
+
+                    auto removing_replica = *it;
+                    replicas.erase(it);
+                    auto trinfo = tablet_transition_info(locator::tablet_transition_stage::rebuild_repair,
+                    locator::tablet_transition_kind::rebuild_v2, std::move(replicas), {}, service::session_id());
+                    tablet_migration_streaming_info tmsi = get_migration_streaming_info(topo, info, trinfo);
+                    if (can_accept_load(nodes, tmsi)) {
+                        apply_load(nodes, tmsi);
+                        rf_change_plan.tablets.push_back(planned_replica{gid, removing_replica});
+                    }
+                });
+            }
+        } else {
+            dc_rack_replica_distributor replica_distributor(topo, current_step.dc_rack.dc, current_step.dc_rack.rack);
+            for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+                if (!_db.column_family_exists(table) || _db.find_schema(table)->ks_name() != ongoing_rf_change_data.ks_name) {
+                    continue;
+                }
+
+                const auto& tmap = _tm->tablets().get_tablet_map(table);
+                co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+                    auto gid = locator::global_tablet_id{table, id};
+                    // Skip tablet that is in transitions.
+                    auto* tti = tmap.get_tablet_transition_info(id);
+                    if (tti) {
+                        lblogger.debug("Skipped tablet rf-change rebuild for tablet={} which is already in transition={}", gid, tti->transition);
+                        co_return;
+                    }
+
+                    // Skip the tablet that is about to be in transition.
+                    if (migration_tablet_ids.contains(gid)) {
+                        co_return;
+                    }
+
+                    // Skip if the replica was already added.
+                    if (std::any_of(info.replicas.begin(), info.replicas.end(), [&topo, &dc_rack = rf_change_plan.replica] (const auto& r) {
+                        return topo.get_location(r.host) == dc_rack;
+                    })) {
+                        co_return;
+                    }
+
+                    auto dst = co_await replica_distributor.find_new_replica_for_tablet_if([this, &info, &nodes, &topo] (const tablet_replica& replica) {
+                        auto replicas = info.replicas;
+                        replicas.emplace_back(replica);
+                        auto trinfo = tablet_transition_info(locator::tablet_transition_stage::rebuild_repair,
+                            locator::tablet_transition_kind::rebuild_v2, std::move(replicas), replica, service::session_id());
+                        tablet_migration_streaming_info tmsi = get_migration_streaming_info(topo, info, trinfo);
+                        if (can_accept_load(nodes, tmsi)) {
+                            apply_load(nodes, tmsi);
+                            return true;
+                        }
+                        return false;
+                    });
+                    if (dst.has_value()) {
+                        rf_change_plan.tablets.push_back({gid, dst.value()});
+                        co_return;
+                    }
+                });
+            }
+        }
+
+        co_return rf_change_plan;
     }
 
     // Returns true if a table has replicas of all its sibling tablets co-located.

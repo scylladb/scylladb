@@ -119,6 +119,8 @@ struct ongoing_rf_change_data {
     dc_rack_vector added_dc_racks;
     dc_rack_vector removed_dc_racks;
     bool rollback = false;
+
+    std::optional<locator::endpoint_dc_rack> maybe_get_added_dc_rack();
 };
 
 struct topology {

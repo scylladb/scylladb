@@ -44,6 +44,17 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
     auto opts = _config_options;
     process_tablet_options(*this, opts, params);
 
+    auto process_rf = [] (sstring key) {
+        if (boost::iequals(key, "replication_factor")) {
+            if (boost::equals(key, "replication_factor")) {
+                on_internal_error(rslogger, "replication_factor should have been replaced with a DC:RF mapping by now");
+            } else {
+                throw exceptions::configuration_exception(format(
+                "'{}' is not a valid option, did you mean (lowercase) 'replication_factor'?", key));
+            }
+        }
+    };
+
     size_t rep_factor = 0;
     for (auto& config_pair : opts.replication) {
         auto& key = config_pair.first;
@@ -57,14 +68,7 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
             continue;
         }
 
-        if (boost::iequals(key, "replication_factor")) {
-            if (boost::equals(key, "replication_factor")) {
-                on_internal_error(rslogger, "replication_factor should have been replaced with a DC:RF mapping by now");
-            } else {
-                throw exceptions::configuration_exception(format(
-                "'{}' is not a valid option, did you mean (lowercase) 'replication_factor'?", key));
-            }
-        }
+        process_rf(key);
 
         auto rf = parse_replication_factor(val);
         rep_factor += rf;
@@ -73,6 +77,20 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
     }
 
     _rep_factor = rep_factor;
+
+    for (auto& config_pair : opts.next_replication) {
+        auto& key = config_pair.first;
+        auto& val = config_pair.second;
+
+        if (boost::iequals(key, "class")) {
+            continue;
+        }
+
+        process_rf(key);
+
+        auto rf = parse_replication_factor(val);
+        _target_dc_rep_factor.emplace(key, rf);
+    }
 
     rslogger.debug("Configured datacenter replicas are: {}", _dc_rep_factor);
 }
