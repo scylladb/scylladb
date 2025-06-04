@@ -60,34 +60,66 @@ struct range_repair_time {
     shard_id shard;
 };
 
-class tombstone_gc_state {
+class shared_tombstone_gc_state {
     gc_time_min_source _gc_min_source;
-    per_table_history_maps* _reconcile_history_maps;
-    [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
+    lw_shared_ptr<per_table_history_maps> _reconcile_history_maps;
 
-    [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
-
-    [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
-
-private:
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
 public:
-    tombstone_gc_state() = delete;
-    explicit tombstone_gc_state(per_table_history_maps* maps) noexcept : _reconcile_history_maps(maps) {}
+    shared_tombstone_gc_state();
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<per_table_history_maps> reconcile_history_maps);
+    shared_tombstone_gc_state(shared_tombstone_gc_state&&);
+    ~shared_tombstone_gc_state();
 
-    explicit operator bool() const noexcept {
-        return _reconcile_history_maps != nullptr;
+    const per_table_history_maps& get_reconcile_history_maps() const noexcept {
+        return *_reconcile_history_maps;
     }
 
     void set_gc_time_min_source(gc_time_min_source src) {
         _gc_min_source = std::move(src);
     }
 
-    // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
-    [[nodiscard]] bool cheap_to_get_gc_before(const schema& s) const noexcept;
+    gc_clock::time_point get_gc_min_time(const table_id& tid) const noexcept {
+        return _gc_min_source ? _gc_min_source(tid) : gc_clock::time_point::max();
+    }
+
+    void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
+    void update_group0_refresh_time(gc_clock::time_point refresh_time);
 
     void drop_repair_history_for_table(const table_id& id);
+
+    void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
+    future<> flush_pending_repair_time_update(replica::database& db);
+};
+
+class tombstone_gc_state {
+    const shared_tombstone_gc_state* _shared_state{nullptr};
+    bool _check_commitlog{true};
+
+private:
+    [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
+
+    [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
+
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
+
+    explicit tombstone_gc_state(const shared_tombstone_gc_state* shared_state, bool check_commitlog) noexcept
+        : _shared_state(shared_state)
+        , _check_commitlog(check_commitlog)
+    { }
+
+public:
+    tombstone_gc_state() = delete;
+    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state) noexcept : tombstone_gc_state(&shared_state, true) {}
+    explicit tombstone_gc_state(std::nullptr_t) noexcept : tombstone_gc_state(nullptr, true) {}
+
+    explicit operator bool() const noexcept {
+        return _shared_state != nullptr;
+    }
+
+    // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
+    [[nodiscard]] bool cheap_to_get_gc_before(const schema& s) const noexcept;
 
     struct get_gc_before_for_range_result {
         gc_clock::time_point min_gc_before;
@@ -99,14 +131,8 @@ public:
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const;
 
-    void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
-    void update_group0_refresh_time(gc_clock::time_point refresh_time);
-
     // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
-    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_reconcile_history_maps); }
-
-    void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
-    future<> flush_pending_repair_time_update(replica::database& db);
+    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_shared_state, false); }
 };
 
 std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name);
