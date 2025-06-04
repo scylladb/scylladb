@@ -72,6 +72,23 @@ class ScyllaCluster:
                         },
                         start=False,
                     )
+            case dict():
+                # Supported spec: {"dc1": {"rack1": 3, "rack2": 2}, "dc2": {"rack1": 2}}
+                for dc, dc_nodes in nodes.items():
+                    if not isinstance(dc_nodes, dict):
+                        raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                    for rack, rack_nodes in dc_nodes.items():
+                        if not isinstance(rack_nodes, int):
+                            raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                        self.manager.servers_add(
+                            servers_num=rack_nodes,
+                            config=self._config_options,
+                            property_file={
+                                "dc": dc,
+                                "rack": rack,
+                            },
+                            start=False,
+                        )
             case _:
                 raise RuntimeError(f"Unsupported topology specification: {nodes}")
 
