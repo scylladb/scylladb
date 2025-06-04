@@ -96,7 +96,7 @@ void group0_state_id_handler::refresh() {
 
     slogger.info("Setting reconcile time to {} (min id={})", tombstone_gc_time, min_state_id);
 
-    auto& gc_state = _local_db.get_compaction_manager().get_tombstone_gc_state();
+    auto& gc_state = _local_db.get_compaction_manager().get_shared_tombstone_gc_state();
     gc_state.update_group0_refresh_time(tombstone_gc_time);
 }
 

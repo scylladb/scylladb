@@ -3257,7 +3257,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 session_mgr.create_session(id);
             }
 
-            auto& gc_state = db.get_compaction_manager().get_tombstone_gc_state();
+            auto& gc_state = db.get_compaction_manager().get_shared_tombstone_gc_state();
             co_await gc_state.flush_pending_repair_time_update(db);
         });
     } catch (...) {

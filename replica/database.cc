@@ -2707,7 +2707,7 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     cf.set_truncation_time(truncated_at);
     co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
 
-    auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
+    auto& gc_state = get_compaction_manager().get_shared_tombstone_gc_state();
     gc_state.drop_repair_history_for_table(uuid);
 }
 
