@@ -577,7 +577,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
         locator::host_id addr = vnodes_with_addr.first;
-        query::mapreduce_result& result_ = result;
+        query::mapreduce_result& shared_accumulator = result;
         tracing::trace_state_ptr& tr_state_ = tr_state;
         retrying_dispatcher& dispatcher_ = dispatcher;
 
@@ -598,9 +598,21 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
         flogger.debug("received mapreduce_result={} from {}", partial_printer, addr);
 
         auto aggrs = mapreduce_aggregates(req);
-        co_return co_await aggrs.with_thread_if_needed([&result_, &aggrs, partial_result = std::move(partial_result)] () mutable {
-            aggrs.merge(result_, std::move(partial_result));
-        });
+
+        // Anytime this coroutine yields, other coroutines may want to write to `shared_accumulator`.
+        // As merging can yield internally, merging directly to `shared_accumulator` would result in race condition.
+        // We can safely write to `shared_accumulator` only when it is empty.
+        while (!shared_accumulator.query_results.empty()) {
+            // Move `shared_accumulator` content to local variable. Leave `shared_accumulator` empty - now other coroutines can safely write to it.
+            query::mapreduce_result previous_results = std::exchange(shared_accumulator, {});
+            // Merge two local variables - it can yield.
+            co_await aggrs.with_thread_if_needed([&previous_results, &aggrs, &partial_result] () mutable {
+                aggrs.merge(partial_result, std::move(previous_results));
+            });
+            // `partial_result` now contains results merged by this coroutine, but `shared_accumulator` might have been updated by others.
+        }
+        // `shared_accumulator` is empty, we can atomically write results merged by this coroutine.
+        shared_accumulator = std::move(partial_result);
     });
 
     mapreduce_aggregates aggrs(req);
