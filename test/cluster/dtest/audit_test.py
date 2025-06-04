@@ -493,8 +493,6 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3236")
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_using_non_existent_keyspace(self, helper_class):
         """
@@ -611,25 +609,21 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_audit_keyspace(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings=AuditTester.audit_default_settings, helper=helper)
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_audit_keyspace_extra_parameter(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,DML,DDL,DCL", "audit_keyspaces": "ks", "extra_parameter": "new"}, helper=helper)
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_audit_keyspace_many_ks(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "a,b,c,ks"}, helper=helper)
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_audit_keyspace_table_not_exists(self, helper_class):
         with helper_class() as helper:
@@ -697,7 +691,6 @@ class TestCQLAudit(AuditTester):
         self.execute_and_validate_audit_entry(session, query=self.AUDIT_LOG_QUERY, category="QUERY", ks="audit", table="audit_log", audit_settings=audit_settings)
 
     @pytest.mark.single_node
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_categories_invalid(self, helper_class):
         """
@@ -744,14 +737,12 @@ class TestCQLAudit(AuditTester):
         self.verify_table(audit_settings={"audit": "table", "audit_categories": "AUTH,QUERY,DDL"}, table_prefix="test_audit_categories_part1", overwrite_audit_tables=True)
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_audit_categories_part2(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH,DCL", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part2")
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_audit_categories_part3(self, helper_class):
         with helper_class() as helper:
@@ -759,7 +750,6 @@ class TestCQLAudit(AuditTester):
 
     PasswordMaskingCase = namedtuple("PasswordMaskingCase", ["name", "password", "new_password"])
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_user_password_masking(self, helper_class):
         """
@@ -877,7 +867,6 @@ class TestCQLAudit(AuditTester):
         with self.assert_entries_were_added(session, [expected_entry]):
             assert_invalid(session, stmt, expected=Unavailable)
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_role_password_masking(self, helper_class):
         """
@@ -1059,7 +1048,6 @@ class TestCQLAudit(AuditTester):
                 assert len(rows_without_error) == 1
                 break
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_prepare(self, helper_class):
         """Test prepare statement"""
@@ -1088,7 +1076,6 @@ class TestCQLAudit(AuditTester):
                 table="cf",
             )
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_permissions(self, helper_class):
         """Test user permissions"""
@@ -1121,7 +1108,6 @@ class TestCQLAudit(AuditTester):
                 expected_error=Unauthorized,
             )
 
-    @pytest.mark.require("scylladb/scylla-enterprise#3590")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_batch(self, helper_class):
         """
@@ -1257,7 +1243,6 @@ class TestCQLAudit(AuditTester):
                 for param in settings:
                     self.verify_change(node, param, settings[param], mark, expected_result)
 
-    @pytest.mark.require("scylladb/scylla-enterprise#1789")
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
     def test_config_liveupdate(self, helper_class, audit_config_changer):
@@ -1352,7 +1337,6 @@ class TestCQLAudit(AuditTester):
             with self.assert_entries_were_added(session, expected_new_entries, merge_duplicate_rows=False):
                 session.execute(auditted_query)
 
-    @pytest.mark.require("scylladb/scylladb#22973")
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_parallel_syslog_audit(self, helper_class):
         """
