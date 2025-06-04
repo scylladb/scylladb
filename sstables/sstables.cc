@@ -1261,8 +1261,8 @@ future<> sstable::load_first_and_last_position_in_partition() {
     _last_partition_last_position = std::move(*last_pos_opt);
 }
 
-double sstable::estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
-    auto gc_before = get_gc_before_for_drop_estimation(compaction_time, gc_state, s);
+double sstable::estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_before_getter& gc_before_getter, const schema_ptr& s) const {
+    auto gc_before = get_gc_before_for_drop_estimation(compaction_time, gc_before_getter, s);
 
     auto& st = get_stats_metadata();
     auto estimated_count = st.estimated_cells_count.mean() * st.estimated_cells_count.count();
@@ -3282,12 +3282,12 @@ scylla_metadata::ext_timestamp_stats::map_type sstable::get_ext_timestamp_stats(
 // gc_before for all the partitions that have record in repair history map. It
 // is fine that some of the partitions inside the sstable does not have a
 // record.
-gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
+gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_before_getter& gc_before_getter, const schema_ptr& s) const {
     auto start = get_first_decorated_key().token();
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
-    sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, bool(gc_state));
-    return gc_state.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
+    sstlog.trace("sstable={}, ks={}, cf={}, range={}, gc_state={}, estimate", get_filename(), s->ks_name(), s->cf_name(), range, bool(gc_before_getter));
+    return gc_before_getter.get_gc_before_for_range(s, range, compaction_time).max_gc_before;
 }
 
 // If the sstable contains any regular live cells, we can not drop the sstable.
@@ -3298,7 +3298,7 @@ gc_clock::time_point sstable::get_gc_before_for_drop_estimation(const gc_clock::
 // in the repair history map, we can not drop the sstable, in such case we
 // return gc_clock::time_point::min() as gc_before. Otherwise, return the
 // gc_before from the repair history map.
-gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const {
+gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_before_getter& gc_before_getter, const schema_ptr& s) const {
     auto deletion_time = get_max_local_deletion_time();
     // No need to query gc_before for the sstable if the max_deletion_time is max()
     if (deletion_time == gc_clock::time_point(gc_clock::duration(std::numeric_limits<int>::max()))) {
@@ -3310,8 +3310,8 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
     auto end = get_last_decorated_key().token();
     auto range = dht::token_range(dht::token_range::bound(start, true), dht::token_range::bound(end, true));
     sstlog.trace("sstable={}, ks={}, cf={}, range={}, get_max_local_deletion_time={}, min_timestamp={}, gc_grace_seconds={}, gc_state={}, query",
-            get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), bool(gc_state));
-    auto res = gc_state.get_gc_before_for_range(s, range, compaction_time);
+            get_filename(), s->ks_name(), s->cf_name(), range, deletion_time, get_stats_metadata().min_timestamp, s->gc_grace_seconds().count(), bool(gc_before_getter));
+    auto res = gc_before_getter.get_gc_before_for_range(s, range, compaction_time);
     return res.knows_entire_range ? res.min_gc_before : gc_clock::time_point::min();
 }
 

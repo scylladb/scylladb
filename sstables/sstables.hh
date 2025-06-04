@@ -975,7 +975,7 @@ public:
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
     // is the point before which expiring data can be purged.
-    double estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
+    double estimate_droppable_tombstone_ratio(const gc_clock::time_point& compaction_time, const tombstone_gc_before_getter& gc_before_getter, const schema_ptr& s) const;
 
     // get sstable open info from a loaded sstable, which can be used to quickly open a sstable
     // at another shard.
@@ -1053,8 +1053,8 @@ public:
     friend std::unique_ptr<DataConsumeRowsContext>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, integrity_check);
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
-    gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
-    gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
+    gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_before_getter& gc_before_getter, const schema_ptr& s) const;
+    gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_before_getter& gc_before_getter, const schema_ptr& s) const;
 
     future<std::optional<uint32_t>> read_digest();
     future<lw_shared_ptr<checksum>> read_checksum();
