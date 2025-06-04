@@ -1931,4 +1931,60 @@ SEASTAR_TEST_CASE(test_query_tombstone_gc) {
     });
 }
 
+SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
+    const auto compact_range = dht::token_range::make(dht::token(100), dht::token(200));
+
+    auto check = [&] (tombstone_gc_state tombstone_gc, schema_ptr schema, dht::decorated_key dk, gc_clock::time_point now,
+            gc_clock::time_point expected_gc_before, std::source_location loc = std::source_location::current()) {
+        testlog.info("check() @ {}:{}", loc.file_name(), loc.line());
+
+        auto gc_before = tombstone_gc.get_gc_before_for_key(schema, dk, now);
+        BOOST_REQUIRE_EQUAL(gc_before, expected_gc_before);
+
+        auto gc_res = tombstone_gc.get_gc_before_for_range(schema, compact_range, now);
+        BOOST_REQUIRE_EQUAL(gc_res.min_gc_before, expected_gc_before);
+        BOOST_REQUIRE_EQUAL(gc_res.max_gc_before, expected_gc_before);
+        BOOST_REQUIRE_EQUAL(gc_res.knows_entire_range, true);
+    };
+
+    shared_tombstone_gc_state shared_state;
+
+    for (auto gc_mode : {tombstone_gc_mode::timeout, tombstone_gc_mode::disabled, tombstone_gc_mode::immediate, tombstone_gc_mode::repair}) {
+        auto schema = schema_builder("ks", "tbl")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({{"mode", fmt::to_string(gc_mode)}}))
+            .build();
+
+        const auto repair_time = gc_clock::now() - gc_clock::duration(std::chrono::hours(6));
+        const auto repair_range = dht::token_range::make(dht::first_token(), dht::last_token());
+        shared_state.update_repair_time(schema->id(), repair_range, repair_time);
+
+        const auto now = gc_clock::now();
+
+        const auto pk = partition_key::from_single_value(*schema, serialized(1));
+        const auto dk = dht::decorate_key(*schema, pk);
+
+        // These constructors overrides gc_mode
+        check(tombstone_gc_state::no_gc(), schema, dk, now, gc_clock::time_point::min());
+        check(tombstone_gc_state::gc_all(), schema, dk, now, gc_clock::time_point::max());
+
+        switch (gc_mode) {
+            case tombstone_gc_mode::timeout:
+                check(tombstone_gc_state(shared_state, false), schema, dk, now, now - std::chrono::seconds(schema->gc_grace_seconds()));
+                break;
+            case tombstone_gc_mode::disabled:
+                check(tombstone_gc_state(shared_state, false), schema, dk, now, gc_clock::time_point::min());
+                break;
+            case tombstone_gc_mode::immediate:
+                check(tombstone_gc_state(shared_state, false), schema, dk, now, now);
+                break;
+            case tombstone_gc_mode::repair:
+                check(tombstone_gc_state(shared_state, false), schema, dk, now, repair_time - schema->tombstone_gc_options().propagation_delay_in_seconds());
+                break;
+        }
+    }
+
+    return make_ready_future<>();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
