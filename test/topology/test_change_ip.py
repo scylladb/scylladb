@@ -20,8 +20,7 @@ from test.pylib.util import wait_for_cql_and_get_hosts, wait_for
 from test.topology.util import reconnect_driver
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
-
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio

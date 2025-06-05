@@ -14,7 +14,7 @@ from cassandra.query import SimpleStatement              # type: ignore # pylint
 
 
 logger = logging.getLogger(__name__)
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+pytestmark = pytest.mark.prepare_3_racks_cluster
 
 
 @pytest.mark.asyncio
@@ -39,7 +39,7 @@ async def test_snapshot(manager, random_tables):
         await t.add_column()
 
     manager.driver_close()
-    server_d = await manager.server_add()
+    server_d = await manager.server_add(property_file=server_a.property_file())
     logger.info("Started D %s", server_d)
 
     logger.info("Stopping A %s, B %s, and C %s", server_a, server_b, server_c)
