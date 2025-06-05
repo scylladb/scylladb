@@ -392,12 +392,17 @@ async def test_read_repair_with_trace_logging(request, manager):
     await wait_for_cql_and_get_hosts(cql, srvs, time.time() + 60)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.t (pk bigint PRIMARY KEY, c int);")
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk bigint, ck bigint, c int, PRIMARY KEY (pk, ck));")
 
-        await cql.run_async(f"INSERT INTO {ks}.t (pk, c) VALUES (0, 0)")
+        await cql.run_async(f"INSERT INTO {ks}.t (pk, ck, c) VALUES (0, 0, 0)")
 
-        await manager.api.enable_injection(node1.ip_addr, "database_apply", one_shot=True)
-        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, c) VALUES (0, 1)", consistency_level = ConsistencyLevel.ONE))
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.t (pk, ck, c) VALUES (?, ?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ONE
+
+        await manager.api.enable_injection(node1.ip_addr, "database_apply", one_shot=False)
+        for ck in range(0, 100):
+            await cql.run_async(insert_stmt, (0, ck, ck))
+        await manager.api.disable_injection(node1.ip_addr, "database_apply")
 
         tracing = execute_with_tracing(cql, SimpleStatement(f"SELECT * FROM {ks}.t WHERE pk = 0", consistency_level = ConsistencyLevel.ALL), log = True)
 
