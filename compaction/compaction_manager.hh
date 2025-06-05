@@ -99,16 +99,13 @@ private:
     //
     // none: started, but not yet enabled. Once the compaction manager moves out of "none", it can
     //       never legally move back
-    // stopped: stop() was called. The compaction_manager will never be enabled or disabled again
+    // stopped: stop() was called. The compaction_manager will never be running again
     //          and can no longer be used (although it is possible to still grab metrics, stats,
     //          etc)
-    // enabled: accepting compactions
-    // disabled: not accepting compactions
-    //
-    // Moving the compaction manager to and from enabled and disable states is legal, as many times
-    // as necessary.
-    enum class state { none, stopped, disabled, enabled };
+    // running: running, started and enabled at least once. Whether new compactions are accepted or not is determined by the counter
+    enum class state { none, stopped, running };
     state _state = state::none;
+    uint8_t _disabled_state_count = 1;
 
     std::optional<future<>> _stop_future;
 
