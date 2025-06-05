@@ -95,3 +95,15 @@ def test_refresh_load_and_stream_scope(nodetool, load_and_stream_opt, scope_val)
         expected_request("POST", "/storage_service/sstables/ks",
                          params={"cf": "tbl", "load_and_stream": "true", "scope": f"{scope_val}"})])
 
+
+def test_refresh_skip_reshape(nodetool, scylla_only):
+    nodetool("refresh", "ks", "tbl", "--skip-reshape", expected_requests=[
+        expected_request("POST", "/storage_service/sstables/ks", params={"cf": "tbl", "skip_reshape": "true"})])
+
+
+def test_refresh_skip_reshape_load_and_stream(nodetool, scylla_only):
+    check_nodetool_fails_with(
+            nodetool,
+            ("refresh", "ks", "tbl", "--load-and-stream", "--skip-reshape"),
+            {"expected_requests": []},
+            ["error processing arguments: --skip-reshape takes no effect with --load-and-stream|-las"])

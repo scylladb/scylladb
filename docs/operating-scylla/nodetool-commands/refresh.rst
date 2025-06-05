@@ -67,4 +67,14 @@ Skip cleanup
 When loading an SSTable, Scylla will cleanup it from keys that the node is not responsible for. To skip this step, use the `--skip-cleanup` option.
 See :ref:`nodetool cleanup <nodetool-cleanup-cmd>`.
 
+
+Skip reshape
+---------------
+
+.. code::
+
+   nodetool refresh <my_keyspace> <my_table> [--skip-reshape]
+
+When refreshing, the SSTables to load might be out of shape, Scylla will attempt to reshape them if that's the case. To skip this step, use the `--skip-reshape` option.
+
 .. include:: nodetool-index.rst
