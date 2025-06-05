@@ -460,6 +460,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         bool primary_replica_only = primary_replica == "true" || primary_replica == "1";
         bool skip_cleanup = skip_cleanup_p == "true" || skip_cleanup_p == "1";
         auto scope = parse_stream_scope(req->get_query_param("scope"));
+        auto skip_reshape_p = req->get_query_param("skip_reshape");
+        auto skip_reshape = skip_reshape_p == "true" || skip_reshape_p == "1";
 
         if (scope != sstables_loader::stream_scope::all && !load_and_stream) {
             throw httpd::bad_param_exception("scope takes no effect without load-and-stream");
@@ -469,8 +471,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto coordinator = std::hash<sstring>()(cf) % smp::count;
         return sst_loader.invoke_on(coordinator,
                 [ks = std::move(ks), cf = std::move(cf),
-                load_and_stream, primary_replica_only, skip_cleanup, scope] (sstables_loader& loader) {
-            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only, skip_cleanup, scope);
+                load_and_stream, primary_replica_only, skip_cleanup, skip_reshape, scope] (sstables_loader& loader) {
+            return loader.load_new_sstables(ks, cf, load_and_stream, primary_replica_only, skip_cleanup, skip_reshape, scope);
         }).then_wrapped([] (auto&& f) {
             if (f.failed()) {
                 auto msg = fmt::format("Failed to load new sstables: {}", f.get_exception());
