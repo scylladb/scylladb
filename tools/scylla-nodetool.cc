@@ -1489,6 +1489,20 @@ void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         }
         params["primary_replica_only"] = "true";
     }
+    if (vm.contains("scope")) {
+        if (vm.contains("primary-replica-only")) {
+            throw std::invalid_argument("Scoped streaming of primary replica only is not supported yet");
+        }
+        if (!vm.contains("load-and-stream")) {
+            throw std::invalid_argument("--scope takes no effect without --load-and-stream|-las");
+        }
+        std::unordered_set<sstring> allowed_scopes = {"all", "dc", "rack", "node"};
+        if (!allowed_scopes.contains(vm["scope"].as<sstring>())) {
+            throw std::invalid_argument("Invalid scope parameter value");
+        }
+
+        params["scope"] = vm["scope"].as<sstring>();
+    }
     client.post(format("/storage_service/sstables/{}", vm["keyspace"].as<sstring>()), std::move(params));
 }
 
@@ -4049,6 +4063,7 @@ For more information, see: {}"
                 {
                     typed_option<>("load-and-stream", "Allows loading sstables that do not belong to this node, in which case they are automatically streamed to the owning nodes"),
                     typed_option<>("primary-replica-only", "Load the sstables and stream to primary replica node that owns the data. Repair is needed after the load and stream process"),
+                    typed_option<sstring>("scope", "Load-and-stream scope (node, rack or dc)"),
                 },
                 {
                     typed_option<sstring>("keyspace", "The keyspace to load sstable(s) into", 1),

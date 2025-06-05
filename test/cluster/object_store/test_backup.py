@@ -400,25 +400,18 @@ class topo:
         self.racks = racks
         self.dcs = dcs
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("topology_rf_validity", [
-        (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
-        (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
-        (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), True),
-        (topo(rf = 3, nodes = 6, racks = 2, dcs = 1), False),
-        (topo(rf = 3, nodes = 6, racks = 3, dcs = 1), True),
-        (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
-    ])
-async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, topology_rf_validity):
-    '''Check that restoring of a cluster with stream scopes works'''
-
-    topology, rf_rack_valid_keyspaces = topology_rf_validity
+async def create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_server=None):
     logger.info(f'Start cluster with {topology.nodes} nodes in {topology.dcs} DCs, {topology.racks} racks, rf_rack_valid_keyspaces: {rf_rack_valid_keyspaces}')
-    objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
-    cfg = { 'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces }
+
+    cfg = {'task_ttl_in_seconds': 300, 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
+    if s3_server:
+        objconf = MinioServer.create_conf(s3_server.address, s3_server.port, s3_server.region)
+        cfg['object_storage_endpoints'] = objconf
+
     cmd = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=trace:s3=trace:sstable=debug:http=debug' ]
     servers = []
     host_ids = {}
+
     for s in range(topology.nodes):
         dc = f'dc{s % topology.dcs}'
         rack = f'rack{s % topology.racks}'
@@ -427,13 +420,12 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
         servers.append(s)
         host_ids[s.server_id] = await manager.get_host_id(s.server_id)
 
-    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
-    cql = manager.get_cql()
+    return servers,host_ids
 
+def create_dataset(manager, ks, cf, topology, logger):
+    cql = manager.get_cql()
     logger.info(f'Create keyspace, rf={topology.rf}')
     keys = range(256)
-    ks = 'ks'
-    cf = 'cf'
     replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': f'{topology.rf}'})
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
 
@@ -442,9 +434,11 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     for k in keys:
         cql.execute(f"INSERT INTO {ks}.{cf} ( pk, value ) VALUES ({k}, '{k}');")
 
-    snap_name = unique_name('backup_')
+    return schema, keys, replication_opts
 
+async def take_snapshot(ks, servers, manager, logger):
     logger.info(f'Take snapshot and collect sstables lists')
+    snap_name = unique_name('backup_')
     sstables = []
     for s in servers:
         await manager.api.flush_keyspace(s.ip_addr, ks)
@@ -455,27 +449,9 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
         logger.info(f'Collected sstables from {s.ip_addr}:{cf_dir}/snapshots/{snap_name}: {tocs}')
         sstables += tocs
 
-    logger.info(f'Backup to {snap_name}')
-    prefix = f'{cf}/{snap_name}'
-    async def do_backup(s):
-        tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
-        status = await manager.api.wait_task(s.ip_addr, tid)
-        assert (status is not None) and (status['state'] == 'done')
+    return snap_name,sstables
 
-    await asyncio.gather(*(do_backup(s) for s in servers))
-
-    logger.info(f'Re-initialize keyspace')
-    cql.execute(f'DROP KEYSPACE {ks}')
-    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
-    cql.execute(schema)
-
-    logger.info(f'Restore')
-    async def do_restore(s, toc_names, scope):
-        logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
-        tid = await manager.api.restore(s.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names, scope)
-        status = await manager.api.wait_task(s.ip_addr, tid)
-        assert (status is not None) and (status['state'] == 'done')
-
+def compute_scope(topology, servers):
     if topology.dcs > 1:
         scope = 'dc'
         r_servers = servers[:topology.dcs]
@@ -486,10 +462,11 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
         scope = 'node'
         r_servers = servers
 
-    await asyncio.gather(*(do_restore(s, sstables, scope) for s in r_servers))
+    return scope,r_servers
 
+async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope):
     logger.info(f'Check the data is back')
-    async def collect_mutations(server, key):
+    async def collect_mutations(server):
         host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
         await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
         ret = {}
@@ -499,7 +476,7 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
             ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
         return ret
 
-    by_node = await asyncio.gather(*(collect_mutations(s, k) for s in servers))
+    by_node = await asyncio.gather(*(collect_mutations(s) for s in servers))
     mutations = {}
     for node_frags in by_node:
         for pk in node_frags:
@@ -508,7 +485,6 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
             mutations[pk].append(node_frags[pk])
 
     for k in random.sample(keys, 17):
-        real_rf = 0
         if not k in mutations:
             logger.info(f'{k} not found in mutations')
             logger.info(f'Mutations: {mutations}')
@@ -532,6 +508,58 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
         logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')
         assert streamed_to == scope_nodes
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topology_rf_validity", [
+        (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
+        (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
+        (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), True),
+        (topo(rf = 3, nodes = 6, racks = 2, dcs = 1), False),
+        (topo(rf = 3, nodes = 6, racks = 3, dcs = 1), True),
+        (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)
+    ])
+async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, topology_rf_validity):
+    '''Check that restoring of a cluster with stream scopes works'''
+
+    topology, rf_rack_valid_keyspaces = topology_rf_validity
+
+    servers, host_ids = await create_cluster(topology, rf_rack_valid_keyspaces, manager, logger, s3_server)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    cql = manager.get_cql()
+
+    ks = 'ks'
+    cf = 'cf'
+
+    schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
+
+    snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
+
+    logger.info(f'Backup to {snap_name}')
+    prefix = f'{cf}/{snap_name}'
+    async def do_backup(s):
+        tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
+        status = await manager.api.wait_task(s.ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
+
+    await asyncio.gather(*(do_backup(s) for s in servers))
+
+    logger.info(f'Re-initialize keyspace')
+    cql.execute(f'DROP KEYSPACE {ks}')
+    cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
+    cql.execute(schema)
+
+    logger.info(f'Restore')
+    async def do_restore(s, toc_names, scope):
+        logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
+        tid = await manager.api.restore(s.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names, scope)
+        status = await manager.api.wait_task(s.ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done')
+
+    scope,r_servers = compute_scope(topology, servers)
+
+    await asyncio.gather(*(do_restore(s, sstables, scope) for s in r_servers))
+
+    await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope)
 
 @pytest.mark.asyncio
 async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_server):
