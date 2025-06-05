@@ -977,6 +977,9 @@ public:
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
+    int64_t get_sstables_repaired_at() const noexcept override { return 0; }
+    // FIXME
+    bool is_local_replication_strategy() const noexcept override { return false; }
 };
 
 void validate_output_dir(std::filesystem::path output_dir, bool accept_nonempty_output_dir) {

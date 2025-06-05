@@ -130,6 +130,9 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
             std::unordered_set<locator::host_id> ignore_nodes);
 
 public:
+    std::unordered_map<service::session_id, std::vector<seastar::rwlock::holder>> _repair_compaction_locks;
+
+public:
     repair_service(sharded<service::topology_state_machine>& tsm,
             distributed<gms::gossiper>& gossiper,
             netw::messaging_service& ms,
@@ -245,14 +248,16 @@ public:
             streaming::stream_reason reason,
             gc_clock::time_point compaction_time,
             abort_source& as,
-            service::frozen_topology_guard topo_guard);
+            service::frozen_topology_guard topo_guard,
+            std::optional<int64_t> repaired_at);
 
     future<>
     remove_repair_meta(const locator::host_id& from,
             uint32_t repair_meta_id,
             sstring ks_name,
             sstring cf_name,
-            dht::token_range range);
+            dht::token_range range,
+            bool mark_incremental_repair);
 
     future<> remove_repair_meta(locator::host_id from);
 

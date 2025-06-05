@@ -319,8 +319,8 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::t
 }
 
 compaction_descriptor
-incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, strategy_control& control) {
-    auto candidates = control.candidates_as_runs(t);
+incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, strategy_control& control, repair::sstables_repair_state repair_state) {
+    auto candidates = repair::filter_sstables(control.candidates_as_runs(t), repair_state, t.get_sstables_repaired_at());
 
     // make local copies so they can't be changed out from under us mid-method
     size_t min_threshold = t.min_compaction_threshold();

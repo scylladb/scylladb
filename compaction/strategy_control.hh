@@ -11,6 +11,7 @@
 
 #include "compaction/compaction_fwd.hh"
 #include "sstables/sstable_set.hh"
+#include "repair/incremental.hh"
 
 namespace compaction {
 

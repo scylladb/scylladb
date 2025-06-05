@@ -44,6 +44,7 @@
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
+#include "service/session.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -681,7 +682,9 @@ private:
     void write_statistics();
     // Rewrite statistics component by creating a temporary Statistics and
     // renaming it into place of existing one.
+public:
     void rewrite_statistics();
+private:
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -1060,6 +1063,10 @@ public:
     future<lw_shared_ptr<checksum>> read_checksum();
 
     friend in_memory_config_type;
+
+public:
+    service::session_id being_repaired;
+    int64_t update_repaired_at(int64_t repaired_at);
 };
 
 // Validate checksums
