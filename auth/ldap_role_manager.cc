@@ -338,8 +338,7 @@ future<std::vector<cql3::description>> ldap_role_manager::describe_role_grants()
 }
 
 future<> ldap_role_manager::ensure_superuser_is_created() {
-    // ldap is responsible for users
-    co_return;
+    return _std_mgr.ensure_superuser_is_created();
 }
 
 } // namespace auth
