@@ -1720,3 +1720,28 @@ def test_rename_multiple_columns(cql, test_keyspace):
         with new_materialized_view(cql, table, '*', 'ck, pk', 'pk IS NOT NULL AND ck IS NOT NULL'):
             cql.execute(f'ALTER TABLE {table} RENAME pk TO pk2 AND ck TO ck2')
             cql.execute(f'INSERT INTO {table} (pk2, ck2) VALUES (0,0)')
+
+# Datastax's documentation for CREATE MATERIALIZED VIEW's SELECT clause states
+# that "All primary key columns are automatically included.". Scylla's
+# documentation doesn't spell this out, but uses an example ("SELECT meters")
+# that relies on this behavior.
+# This test confirms this behavior, that all *view* primary columns (the
+# ones listed in the CREATE MATERIALIZED VIEW's PRIMARY KEY clause) are
+# automatically selected, and don't need to be explicitly selected.
+# This test passes on Cassandra 3, but the behavior changed in Cassandra 4
+# and 5 - in those versions, all columns must be explicitly SELECTed before
+# they can be used in PRIMARY KEY, so this test fails. I consider this a
+# Cassandra bug (CASSANDRA-20701) so the test has the cassandra_bug tag
+# (remove this tag to verify it passes on Cassandra 3 but not 4 or 5).
+def test_mv_select_key_columns(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v1 int, v2 int, v3 int, primary key (p, c)') as table:
+        # Create a view with primary key (v1, p, c) and additionally select v2
+        # (but not v3). We want to check that it's fine to only mention v2 in
+        # the SELECT clause - without v1,p,c.
+        with new_materialized_view(cql, table, 'v2', 'v1, p, c', 'v1 is not null and p is not null and c is not null') as mv:
+            # Verify that the view actually contains the expected columns,
+            # v1, p, c, v2 (but not v3). This is more-or-less obvious if the
+            # CREATE MATERIALIZED VIEW statement above succeeded, but it can't
+            # hurt to make sure.
+            cql.execute(f'insert into {table} (p, c, v1, v2, v3) values (1, 2, 3, 4, 5)')
+            assert [(3,1,2,4)] == list(cql.execute(f'select * from {mv} where v1=3'))
