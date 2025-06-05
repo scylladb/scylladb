@@ -19,7 +19,7 @@ public:
     retryable_http_client(std::unique_ptr<seastar::http::experimental::connection_factory>&& factory,
                           unsigned max_conn,
                           error_handler error_func,
-                          seastar::http::experimental::client::retry_requests should_retry,
+                          seastar::http::experimental::retry_requests should_retry,
                           const aws::retry_strategy& retry_strategy);
     seastar::future<> make_request(seastar::http::request req,
                                    seastar::http::experimental::client::reply_handler handle,

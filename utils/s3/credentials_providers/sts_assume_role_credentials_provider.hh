@@ -29,7 +29,7 @@ private:
     seastar::future<> update_credentials();
     s3::aws_credentials parse_creds(seastar::sstring& body);
 
-    default_retry_strategy retry_strategy;
+    retry_strategy retry_strategy;
     std::string sts_host;
     std::string role_arn;
     unsigned port{443};
