@@ -633,7 +633,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
 }
 
 std::optional<gate::holder> compaction_manager::start_compaction(compaction_group_view& t) {
-    if (_state != state::enabled) {
+    if (is_disabled()) {
         return std::nullopt;
     }
 
@@ -1105,10 +1105,21 @@ void compaction_manager::register_metrics() {
 }
 
 void compaction_manager::enable() {
-    SCYLLA_ASSERT(_state == state::none || _state == state::disabled);
-    _state = state::enabled;
+    SCYLLA_ASSERT(_state == state::none || _state == state::running);
+    cmlog.info("Asked to enable");
+
+    if (_state == state::none) {
+        _state = state::running;
+        SCYLLA_ASSERT(_disabled_state_count == 0);
+    } else if (_disabled_state_count > 0 && --_disabled_state_count > 0) {
+        cmlog.debug("Compaction manager is still disabled, requires {} more call(s) to enable()", _disabled_state_count);
+        return;
+    }
+
+    _compaction_submission_timer.cancel();
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
     _waiting_reevalution = postponed_compactions_reevaluation();
+    cmlog.info("Enabled");
 }
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
@@ -1126,7 +1137,7 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
 future<> compaction_manager::postponed_compactions_reevaluation() {
      while (true) {
         co_await _postponed_reevaluation.when();
-        if (_state != state::enabled) {
+        if (is_disabled()) {
             _postponed.clear();
             co_return;
         }
@@ -1222,11 +1233,12 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction
 
 future<> compaction_manager::drain() {
     cmlog.info("Asked to drain");
-    if (_state == state::enabled) {
-        // This is a drain request and not a shutdown request.
-        // Disable the state so that it can be enabled later if requested.
-        _state = state::disabled;
+    if (_state == state::none) {
+        _state = state::running;
     }
+
+    ++_disabled_state_count;
+
     _compaction_submission_timer.cancel();
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
@@ -1284,7 +1296,7 @@ void compaction_manager::do_stop() noexcept {
 }
 
 inline bool compaction_manager::can_proceed(compaction_group_view* t) const {
-    if (_state != state::enabled) {
+    if (is_disabled()) {
         return false;
     }
     auto found = _compaction_state.find(t);
