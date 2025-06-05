@@ -670,8 +670,8 @@ future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_ty
     return maybe_wrap_sink(sst, type, _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as));
 }
 
-future<data_source> s3_storage::make_data_or_index_source(sstable& sst, component_type type, file, uint64_t , uint64_t , file_input_stream_options) const {
-    return maybe_wrap_source(sst, type, _client->make_download_source(make_s3_object_name(sst, type), s3::range{0, std::numeric_limits<size_t>::max()}, _as));
+future<data_source> s3_storage::make_data_or_index_source(sstable& sst, component_type type, file, uint64_t offset, uint64_t len , file_input_stream_options) const {
+    return maybe_wrap_source(sst, type, _client->make_chunked_download_source(make_s3_object_name(sst, type), s3::range{offset, len}, _as));
 }
 
 future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
