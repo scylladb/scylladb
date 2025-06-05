@@ -801,12 +801,13 @@ public:
 
         // Skip making repair plans if resize finalizations are pending, since repairs could delay finalization.
         if (plan.resize_plan().finalize_resize.empty()) {
+            plan.set_rf_change_plan(co_await make_rf_change_plan(plan));
             plan.set_repair_plan(co_await make_repair_plan(plan));
         }
 
         auto level = plan.size() > 0 ? seastar::log_level::info : seastar::log_level::debug;
-        lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s)",
-                plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count());
+        lblogger.log(level, "Prepared {} migration plans, out of which there were {} tablet migration(s) and {} resize decision(s) and {} tablet repair(s) and {} rf-change rebuild(s)",
+                plan.size(), plan.tablet_migration_count(), plan.resize_decision_count(), plan.tablet_repair_count(), plan.keyspace_rf_change_count());
         co_return std::move(plan);
     }
 
@@ -880,6 +881,26 @@ public:
             auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
             auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
             auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
+            apply_load(nodes, streaming_info);
+        }
+
+        for (const auto& tablet : mplan.rf_change_plan().tablets) {
+            co_await coroutine::maybe_yield();
+            const auto& tmap = tablet_meta.get_tablet_map(tablet.gid.table);
+            const auto& tinfo = tmap.get_tablet_info(tablet.gid.tablet);
+            tablet_replica_set replicas = tinfo.replicas;
+            std::optional<tablet_replica> pending_replica;
+            if (mplan.rf_change_plan().removes_replica) {
+                replicas.erase(std::remove_if(replicas.begin(), replicas.end(),
+                    [&replica = tablet.replica](const tablet_replica& r) { return r == replica; }), replicas.end());
+                pending_replica = {};
+            } else {
+                replicas.emplace_back(tablet.replica);
+                pending_replica = tablet.replica;
+            }
+            auto trinfo = tablet_transition_info(locator::tablet_transition_stage::rebuild_repair,
+                locator::tablet_transition_kind::rebuild_v2, std::move(replicas), pending_replica, service::session_id());
+            auto streaming_info = get_migration_streaming_info(topo, tinfo, trinfo);
             apply_load(nodes, streaming_info);
         }
     }
@@ -3729,6 +3750,10 @@ future<std::unordered_set<locator::global_tablet_id>> migration_plan::get_migrat
     for (auto& m : _migrations) {
         co_await coroutine::maybe_yield();
         tablets.insert(m.tablet);
+    }
+    for (auto& tablet : _rf_change_plan.tablets) {
+        co_await coroutine::maybe_yield();
+        tablets.insert(tablet.gid);
     }
     for (auto& gid : _repair_plan._repairs) {
         co_await coroutine::maybe_yield();
