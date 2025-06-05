@@ -40,7 +40,9 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
                 }
                 res.emplace_back(std::move(val));
             });
-            return make_ready_future<json::json_return_type>(res);
+            return make_ready_future<json::json_return_type>(json::stream_range_as_array(res, [](const fd::endpoint_state& i){
+                return i;
+            }));
         });
     });
 
