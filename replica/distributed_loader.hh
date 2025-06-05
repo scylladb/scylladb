@@ -91,7 +91,7 @@ public:
             get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg);
     static future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
             get_sstables_from_object_store(distributed<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> = {});
-    static future<> process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sstring ks_name, sstring cf_name, bool skip_cleanup);
+    static future<> process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sstring ks_name, sstring cf_name, bool skip_cleanup, bool skip_reshape);
 };
 
 future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
