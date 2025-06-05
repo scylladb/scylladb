@@ -164,6 +164,11 @@ public:
             pop_back();
         }
     }
+    // If the user of `managed_vector` wants to fit within n bytes,
+    // the `managed_vector` must have at most `(n - metadata_size()) / sizeof(T)` elements.
+    constexpr static size_t metadata_size() {
+        return sizeof(external);
+    }
     void reserve(size_type new_capacity) {
         if (new_capacity <= _capacity) {
             return;
