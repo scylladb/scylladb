@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Redirect 2025.1 upgrade guides that are not on master but were indexed by Google (404 reported)
+
+/master/upgrade/upgrade-guides/upgrade-guide-from-2024.x-to-2025.1/upgrade-guide-from-2024.x-to-2025.1.html: https://docs.scylladb.com/manual/stable/upgrade/index.html
+/master/upgrade/upgrade-guides/upgrade-guide-from-6.2-to-2025.1/index.html: https://docs.scylladb.com/manual/stable/upgrade/index.html
 
 # Remove reduntant pages
 
