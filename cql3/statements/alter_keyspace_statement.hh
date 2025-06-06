@@ -25,7 +25,7 @@ class ks_prop_defs;
 class alter_keyspace_statement : public schema_altering_statement {
     sstring _name;
     ::shared_ptr<ks_prop_defs> _attrs;
-
+    mutable bool _keyspace_multi_rf_change = false;
 public:
     alter_keyspace_statement(sstring name, ::shared_ptr<ks_prop_defs> attrs);
 
@@ -33,6 +33,10 @@ public:
         return true;
     }
     const sstring& keyspace() const override;
+
+    bool keyspace_multi_rf_change() const {
+        return _keyspace_multi_rf_change;
+    }
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
     void validate(query_processor& qp, const service::client_state& state) const override;

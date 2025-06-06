@@ -80,6 +80,7 @@ enum class global_topology_request: uint16_t {
     cleanup,
     keyspace_rf_change,
     truncate_table,
+    keyspace_rf_change_v2,
 };
 
 struct ring_slice {

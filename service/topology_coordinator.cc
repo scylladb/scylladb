@@ -1021,6 +1021,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
+        case global_topology_request::keyspace_rf_change_v2: {
+            std::vector<canonical_mutation> updates;
+            updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
+                                                        .set_transition_state(topology::transition_state::tablet_migration)
+                                                        .set_version(_topo_sm._topology.version + 1)
+                                                        .del_global_topology_request()
+                                                        .del_global_topology_request_id()
+                                                        .drop_first_global_topology_request_id(_topo_sm._topology.global_requests_queue, req_id)
+                                                        .schedule_rf_change_request_id(_topo_sm._topology.rf_change_requests_queue, req_id)
+                                                        .build()));
+            co_await update_topology_state(std::move(guard), std::move(updates), "Keyspace RF change request scheduled");
+            break;
+        }
+        break;
         case global_topology_request::truncate_table: {
             rtlogger.info("TRUNCATE TABLE requested");
             topology_mutation_builder builder(guard.write_timestamp());
