@@ -24,17 +24,6 @@
 namespace api {
 
 template<class T>
-std::vector<sstring> container_to_vec(const T& container) {
-    std::vector<sstring> res;
-    res.reserve(std::size(container));
-
-    for (const auto& i : container) {
-        res.push_back(fmt::to_string(i));
-    }
-    return res;
-}
-
-template<class T>
 std::vector<T> map_to_key_value(const std::map<sstring, sstring>& map) {
     std::vector<T> res;
     res.reserve(map.size());

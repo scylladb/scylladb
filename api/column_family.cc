@@ -1044,7 +1044,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace
             a.merge(b);
             return a;
         }).then([](const std::unordered_set<sstring>& res) {
-            return make_ready_future<json::json_return_type>(container_to_vec(res));
+            return make_ready_future<json::json_return_type>(res | std::ranges::to<std::vector>());
         });
     });
 

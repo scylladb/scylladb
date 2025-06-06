@@ -187,7 +187,7 @@ void set_config(std::shared_ptr < api_registry_builder20 > rb, http_context& ctx
     });
 
     ss::get_all_data_file_locations.set(r, [&cfg](const_req req) {
-        return container_to_vec(cfg.data_file_directories());
+        return cfg.data_file_directories();
     });
 
     ss::get_saved_caches_location.set(r, [&cfg](const_req req) {
