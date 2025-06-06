@@ -13,11 +13,8 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/bool_class.hh>
 #include "seastarx.hh"
-
-namespace gms {
-class feature_service;
-} // namespace gms
 
 class compression_parameters;
 
@@ -108,7 +105,10 @@ public:
     algorithm get_algorithm() const { return _algorithm; }
     std::optional<int> zstd_compression_level() const { return _zstd_compression_level; }
 
-    void validate(const gms::feature_service&);
+    using dicts_feature_enabled = bool_class<struct dicts_feature_enabled_tag>;
+    using dicts_usage_allowed = bool_class<struct dicts_usage_allowed_tag>;
+    void validate(dicts_feature_enabled, dicts_usage_allowed);
+
     std::map<sstring, sstring> get_options() const;
 
     bool compression_enabled() const { 

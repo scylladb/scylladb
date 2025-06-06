@@ -23,6 +23,7 @@
 #include "db/per_partition_rate_limit_options.hh"
 #include "db/tablet_options.hh"
 #include "utils/bloom_calculations.hh"
+#include "db/config.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -135,7 +136,9 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + compression_parameters::SSTABLE_COMPRESSION + "' for the '" + KW_COMPRESSION + "' option.");
         }
         compression_parameters cp(*compression_options);
-        cp.validate(db.features());
+        cp.validate(
+            compression_parameters::dicts_feature_enabled(bool(db.features().sstable_compression_dicts)),
+            compression_parameters::dicts_usage_allowed(db.get_config().sstable_compression_dictionaries_allow_in_ddl()));
     }
 
     auto per_partition_rate_limit_options = get_per_partition_rate_limit_options(schema_extensions);
