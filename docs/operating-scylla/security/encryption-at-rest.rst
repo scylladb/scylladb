@@ -60,11 +60,12 @@ all) according to the configuration that was in effect when they were written.
 When is Data Decrypted?
 ========================
 
-When ScyllaDB reads an encrypted SSTable from disk, it fetches the algorithm
-descriptor (identifying block cipher, key size, and mode of operation) from the
-SSTable's metadata file (``Scylla.db``). ScyllaDB extracts the key from the key
-provider (which is recorded in the same SSTable metadata file), and then
-decrypts the other SSTable components with the key.
+When ScyllaDB reads an encrypted SSTable from disk, it fetches the
+:ref:`algorithm descriptor <ear-cipher-algorithms>` (identifying block cipher,
+key size, and mode of operation) from the SSTable's metadata file
+(``Scylla.db``). ScyllaDB extracts the key from the key provider (which is
+recorded in the same SSTable metadata file), and then decrypts the other SSTable
+components with the key.
 
 When ScyllaDB reads an encrypted system artifact, such as a commit log, it
 fetches the algorithm descriptor and the key provider from the commit log
@@ -101,6 +102,39 @@ class:
   - They are coarser-grained because they apply to all nodes in the cluster that
     write out new SSTables for the table, while the options configured in
     ``scylla.yaml`` apply only to a particular node.
+
+.. _ear-cipher-algorithms:
+
+Cipher Algorithm Descriptors
+----------------------------
+
+The following block cipher, mode of operation, and key size combinations are
+available for use with ScyllaDB using `OpenSSL <https://www.openssl.org/>`_.
+
+.. list-table::
+   :widths: 70 30
+   :header-rows: 1
+
+   * - ``cipher_algorithm``
+     - ``secret_key_strength``
+   * - ``AES/CBC/PKCS5Padding`` (**default**)
+     - ``128`` (**default**), ``192``, or ``256``
+   * - ``AES/ECB/PKCS5Padding``
+     - ``128``, ``192``, or ``256``
+   * - ``Blowfish/CBC/PKCS5Padding``
+     - .. https://github.com/scylladb/scylla-enterprise/issues/4848
+
+       ``128``
+
+The ECB (Electronic Code Book) mode of operation is less secure than CBC (Cipher
+Block Chaining).
+
+The Blowfish block cipher's block size is 64 bits, while AES has a 128-bit block
+size. Therefore, Blowfish may leak information when encrypting more than a few
+GB of data with the same key.
+
+The default algorithm (``AES/CBC/PKCS5Padding`` with key strength ``128``) is
+strongly recommended.
 
 .. _ear-key-providers:
 
@@ -154,28 +188,6 @@ text file. The location of this file is specified in the scylla.yaml.
 You should also consider keeping the key directory on a network drive (using TLS
 for the file sharing) to avoid having keys and data on the same storage media,
 in case your storage is stolen or discarded.
-
-.. _ear-cipher-algorithms:
-
-Cipher Algorithms
-----------------------
-
-The following cipher_algorithims are available for use with ScyllaDB using
-`OpenSSL <https://www.openssl.org/>`_. Note that the default algorithm
-(AES/CBC/PKCS5Padding with key strength 128 ) is recommended.
-
-.. list-table::
-   :widths: 70 30
-   :header-rows: 1
-
-   * - cipher_algorithm
-     - secret_key_strength
-   * - AES/CBC/PKCS5Padding (**default**)
-     - 128 (**default**), 192, or 256
-   * - AES/ECB/PKCS5Padding
-     - 128, 192, or 256
-   * - Blowfish/CBC/PKCS5Padding
-     - 32-448
 
 .. _ear-create-encryption-key:
 
