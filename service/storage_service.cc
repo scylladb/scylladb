@@ -3129,8 +3129,9 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             open_sessions.insert(session);
         }
 
-        for (auto&& [table_id, tmap]: tmptr->tablets().all_tables()) {
-            for (auto&& [tid, trinfo]: tmap->transitions()) {
+        for (auto&& [table, tables] : tmptr->tablets().all_table_groups()) {
+            const auto& tmap = tmptr->tablets().get_tablet_map(table);
+            for (auto&& [tid, trinfo]: tmap.transitions()) {
                 if (trinfo.session_id) {
                     auto id = session_id(trinfo.session_id);
                     open_sessions.insert(id);
@@ -4716,13 +4717,13 @@ future<> storage_service::do_drain() {
 future<> storage_service::do_cluster_cleanup() {
     auto& raft_server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
+    utils::UUID request_id;
 
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
         auto curr_req = _topology_state_machine._topology.global_request;
-        if (curr_req && *curr_req != global_topology_request::cleanup) {
-            // FIXME: replace this with a queue
+        if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::cleanup) {
             throw std::runtime_error{
                 "topology coordinator: cluster cleanup: a different topology request is already pending, try again later"};
         }
@@ -4741,8 +4742,20 @@ future<> storage_service::do_cluster_cleanup() {
 
         rtlogger.info("cluster cleanup requested");
         topology_mutation_builder builder(guard.write_timestamp());
-        builder.set_global_topology_request(global_topology_request::cleanup);
-        topology_change change{{builder.build()}};
+        std::vector<canonical_mutation> muts;
+        if (_feature_service.topology_global_request_queue) {
+            request_id = guard.new_group0_state_id();
+            builder.queue_global_topology_request_id(request_id);
+            topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+            rtbuilder.set("done", false)
+                     .set("start_time", db_clock::now())
+                     .set("request_type", global_topology_request::cleanup);
+            muts.push_back(rtbuilder.build());
+        } else {
+            builder.set_global_topology_request(global_topology_request::cleanup);
+        }
+        muts.push_back(builder.build());
+        topology_change change{std::move(muts)};
         group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup: cluster cleanup requested"));
 
         try {
@@ -4754,7 +4767,18 @@ future<> storage_service::do_cluster_cleanup() {
         break;
     }
 
-    // Wait cleanup finishes on all nodes
+    if (request_id) {
+        // Wait until request completes
+        auto error = co_await wait_for_topology_request_completion(request_id);
+        if (!error.empty()) {
+            auto err = fmt::format("Cleanup failed. See earlier errors ({}). Request ID: {}", error, request_id);
+            rtlogger.error("{}", err);
+            throw std::runtime_error(err);
+        }
+    }
+
+    // The wait above only wait until the comand is processed by the topology coordinator which start cleanup process,
+    // but we still need to wait for cleanup to complete here.
     co_await _topology_state_machine.event.when([this] {
         return std::all_of(_topology_state_machine._topology.normal_nodes.begin(), _topology_state_machine._topology.normal_nodes.end(), [] (auto& n) {
             return n.second.cleanup == cleanup_status::clean;
@@ -4967,12 +4991,13 @@ future<> storage_service::raft_rebuild(utils::optional_param sdc_param) {
 
 future<> storage_service::raft_check_and_repair_cdc_streams() {
     std::optional<cdc::generation_id_v2> last_committed_gen;
+    utils::UUID request_id;
 
     while (true) {
         rtlogger.info("request check_and_repair_cdc_streams, refreshing topology");
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         auto curr_req = _topology_state_machine._topology.global_request;
-        if (curr_req && *curr_req != global_topology_request::new_cdc_generation) {
+        if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::new_cdc_generation) {
             // FIXME: replace this with a queue
             throw std::runtime_error{
                 "check_and_repair_cdc_streams: a different topology request is already pending, try again later"};
@@ -4990,27 +5015,69 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
             cdc_log.info("CDC generation {} needs repair, requesting a new one", last_committed_gen);
         }
 
-        topology_mutation_builder builder(guard.write_timestamp());
-        builder.set_global_topology_request(global_topology_request::new_cdc_generation);
-        topology_change change{{builder.build()}};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
-                ::format("request check+repair CDC generation from {}", _group0->group0_server().id()));
-        try {
-            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
-        } catch (group0_concurrent_modification&) {
-            rtlogger.info("request check+repair CDC: concurrent operation is detected, retrying.");
-            continue;
+        if (_topology_state_machine._topology.global_request_id || !_topology_state_machine._topology.global_requests_queue.empty()) {
+            // With global request queue this should not be needed, but test_cdc_generation_publishing assumes that multiple new_cdc_generation
+            // commands will be coalesced here, so do that until the test is fixed.
+            if (!_topology_state_machine._topology.global_requests_queue.empty()) {
+                request_id = _topology_state_machine._topology.global_requests_queue[0];
+            } else {
+                request_id = *_topology_state_machine._topology.global_request_id;
+            }
+        } else {
+            topology_mutation_builder builder(guard.write_timestamp());
+            std::vector<canonical_mutation> muts;
+            if (_feature_service.topology_global_request_queue) {
+                request_id = guard.new_group0_state_id();
+                topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
+                builder.queue_global_topology_request_id(request_id);
+                rtbuilder.set("done", false)
+                         .set("start_time", db_clock::now())
+                         .set("request_type", global_topology_request::new_cdc_generation);
+                muts.push_back(rtbuilder.build());
+            } else {
+                builder.set_global_topology_request(global_topology_request::new_cdc_generation);
+            }
+            muts.push_back(builder.build());
+            topology_change change{std::move(muts)};
+            group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard,
+                    ::format("request check+repair CDC generation from {}", _group0->group0_server().id()));
+            try {
+                co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            } catch (group0_concurrent_modification&) {
+                rtlogger.info("request check+repair CDC: concurrent operation is detected, retrying.");
+                continue;
+            }
         }
         break;
     }
 
-    // Wait until we commit a new CDC generation.
-    co_await _topology_state_machine.event.when([this, &last_committed_gen] {
+    if (request_id) {
+        // Wait until request completes
+        auto error = co_await wait_for_topology_request_completion(request_id);
+
+        if (!error.empty()) {
+            auto err = fmt::format("Check and repair cdc stream failed. See earlier errors ({}). Request ID: {}", error, request_id);
+            rtlogger.error("{}", err);
+            throw std::runtime_error(err);
+        }
+
         auto gen = _topology_state_machine._topology.committed_cdc_generations.empty()
                 ? std::nullopt
                 : std::optional(_topology_state_machine._topology.committed_cdc_generations.back());
-        return last_committed_gen != gen;
-    });
+
+        if (last_committed_gen == gen) {
+            on_internal_error(rtlogger, "Wrong generation after complation of check and repair cdc stream");
+        }
+    } else {
+        // Wait until we commit a new CDC generation.
+        co_await _topology_state_machine.event.when([this, &last_committed_gen] {
+            auto gen = _topology_state_machine._topology.committed_cdc_generations.empty()
+                    ? std::nullopt
+                    : std::optional(_topology_state_machine._topology.committed_cdc_generations.back());
+            return last_committed_gen != gen;
+        });
+    }
+
 }
 
 future<> storage_service::rebuild(utils::optional_param source_dc) {
@@ -6434,6 +6501,11 @@ future<bool> storage_service::exec_tablet_update(service::group0_guard guard, st
     co_return false;
 }
 
+replica::tablet_mutation_builder storage_service::tablet_mutation_builder_for_base_table(api::timestamp_type ts, table_id table) {
+    auto base_table = get_token_metadata_ptr()->tablets().get_base_table(table);
+    return replica::tablet_mutation_builder(ts, base_table);
+}
+
 // Repair the tablets contain the tokens and wait for the repair to finish
 // This is used to run a manual repair requested by user from the restful API.
 future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant,
@@ -6467,6 +6539,11 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // Currently tablet repair works only on base tables.
+        if (!get_token_metadata().tablets().is_base_table(table)) {
+            throw std::runtime_error("Can't set repair request on a co-located table");
+        }
+
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         std::vector<canonical_mutation> updates;
 
@@ -6489,7 +6566,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             }
             auto last_token = tmap.get_last_token(tid);
             updates.emplace_back(
-                replica::tablet_mutation_builder(guard.write_timestamp(), table)
+                tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
                     .set_repair_task_info(last_token, repair_task_info)
                     .build());
         }
@@ -6542,6 +6619,11 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
+        // Currently tablet repair requests can be set only on base tables.
+        if (!get_token_metadata().tablets().is_base_table(table)) {
+            throw std::runtime_error("Can't set repair request on a co-located table");
+        }
+
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         std::vector<canonical_mutation> updates;
 
@@ -6553,7 +6635,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             }
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
-            auto update = replica::tablet_mutation_builder(guard.write_timestamp(), table)
+            auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
                             .del_repair_task_info(last_token);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
@@ -6626,7 +6708,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             : locator::tablet_task_info::make_migration_request();
         migration_task_info.sched_nr++;
         migration_task_info.sched_time = db_clock::now();
-        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
+        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
@@ -6672,7 +6754,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
         locator::tablet_replica_set new_replicas(tinfo.replicas);
         new_replicas.push_back(dst);
 
-        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
+        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
@@ -6717,7 +6799,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
         new_replicas.reserve(tinfo.replicas.size() - 1);
         std::copy_if(tinfo.replicas.begin(), tinfo.replicas.end(), std::back_inserter(new_replicas), [&dst] (auto r) { return r != dst; });
 
-        updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, table)
+        updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))

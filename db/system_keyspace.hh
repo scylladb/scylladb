@@ -112,6 +112,8 @@ typedef std::vector<db::replay_position> replay_positions;
 
 struct compaction_history_entry;
 
+data_value ongoing_rf_change_data_to_data_value(const schema& schema, const service::ongoing_rf_change_data& value);
+
 class system_keyspace : public seastar::peering_sharded_service<system_keyspace>, public seastar::async_sharded_service<system_keyspace> {
     cql3::query_processor& _qp;
     replica::database& _db;
@@ -395,13 +397,17 @@ public:
     struct topology_requests_entry {
         utils::UUID id;
         utils::UUID initiating_host;
-        std::optional<service::topology_request> request_type;
+        std::variant<std::monostate, service::topology_request, service::global_topology_request> request_type;
         db_clock::time_point start_time;
         bool done;
         sstring error;
         db_clock::time_point end_time;
         db_clock::time_point ts;
         table_id truncate_table_id;
+        // The name of the KS that is being the target of the scheduled ALTER KS statement
+        std::optional<sstring> new_keyspace_rf_change_ks_name;
+        // The KS options to be used when executing the scheduled ALTER KS statement
+        std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 

@@ -206,17 +206,18 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     std::optional<unsigned> default_initial_tablets = enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy"
             ? std::optional<unsigned>(0) : std::nullopt;
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
-    auto options = prepare_options(sc, tm, get_replication_options());
+    locator::replication_strategy_config_options options;
+    options.replication = prepare_options(sc, tm, get_replication_options());
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat) {
-    std::map<sstring, sstring> options;
+    locator::replication_strategy_config_options options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
     if (sc) {
-        options = prepare_options(*sc, tm, get_replication_options(), old_options);
+        options.replication = prepare_options(*sc, tm, get_replication_options(), old_options.replication);
     } else {
         sc = old->strategy_name();
         options = old_options;

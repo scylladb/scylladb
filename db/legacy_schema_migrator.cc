@@ -539,9 +539,11 @@ public:
         std::vector<mutation> mutations;
 
         for (auto& ks : _keyspaces) {
+            locator::replication_strategy_config_options options;
+            options.replication = ks.replication_params;
             auto ksm = ::make_lw_shared<keyspace_metadata>(ks.name
                             , ks.replication_params["class"] // TODO, make ksm like c3?
-                            , ks.replication_params
+                            , options
                             , std::nullopt
                             , ks.durable_writes);
 

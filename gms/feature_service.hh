@@ -163,6 +163,7 @@ public:
 
     gms::feature in_memory_tables { *this, "IN_MEMORY_TABLES"sv };
     gms::feature workload_prioritization { *this, "WORKLOAD_PRIORITIZATION"sv };
+    gms::feature colocated_tablets { *this, "COLOCATED_TABLETS"sv };
     gms::feature file_stream { *this, "FILE_STREAM"sv };
     gms::feature compression_dicts { *this, "COMPRESSION_DICTS"sv };
     gms::feature tablet_options { *this, "TABLET_OPTIONS"sv };
@@ -171,6 +172,8 @@ public:
     gms::feature repair_based_tablet_rebuild { *this, "REPAIR_BASED_TABLET_REBUILD"sv };
     gms::feature enforced_raft_rpc_scheduling_group { *this, "ENFORCED_RAFT_RPC_SCHEDULING_GROUP"sv };
     gms::feature load_and_stream_abort_rpc_message { *this, "LOAD_AND_STREAM_ABORT_RPC_MESSAGE"sv };
+    gms::feature topology_global_request_queue { *this, "TOPOLOGY_GLOBAL_REQUEST_QUEUE"sv };
+    gms::feature keyspace_multi_rf_change { *this, "KEYSPACE_MULTI_RF_CHANGE"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

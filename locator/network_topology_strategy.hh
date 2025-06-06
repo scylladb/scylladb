@@ -42,6 +42,14 @@ public:
         return true;
     }
 
+    const std::unordered_map<sstring, size_t>& get_dc_replication_factors() const {
+        return _dc_rep_factor;
+    }
+
+    const std::unordered_map<sstring, size_t>& get_target_dc_replication_factors() const {
+        return _target_dc_rep_factor;
+    }
+
     [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const override;
 
 public: // tablet_aware_replication_strategy
@@ -73,5 +81,8 @@ private:
 
     std::vector<sstring> _datacenteres;
     size_t _rep_factor;
+
+    // Replication factor after ongoing rf-change.
+    std::unordered_map<sstring, size_t> _target_dc_rep_factor;
 };
 } // namespace locator

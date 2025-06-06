@@ -19,7 +19,7 @@ namespace locator {
 
 simple_strategy::simple_strategy(replication_strategy_params params) :
         abstract_replication_strategy(params, replication_strategy_type::simple) {
-    for (auto& config_pair : _config_options) {
+    for (auto& config_pair : _config_options.replication) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
 
@@ -65,8 +65,8 @@ size_t simple_strategy::get_replication_factor(const token_metadata&) const {
 }
 
 void simple_strategy::validate_options(const gms::feature_service&, const locator::topology&) const {
-    auto it = _config_options.find("replication_factor");
-    if (it == _config_options.end()) {
+    auto it = _config_options.replication.find("replication_factor");
+    if (it == _config_options.replication.end()) {
         throw exceptions::configuration_exception("SimpleStrategy requires a replication_factor strategy option.");
     }
     parse_replication_factor(it->second);

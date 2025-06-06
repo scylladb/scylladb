@@ -10,11 +10,16 @@
 
 #include "replica/database_fwd.hh"
 #include "locator/tablets.hh"
+#include "seastar/util/bool_class.hh"
+#include "service/topology_state_machine.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include "locator/types.hh"
 #include <seastar/core/metrics.hh>
 
 namespace service {
+
+struct ongoing_rf_change_data;
 
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
@@ -133,6 +138,31 @@ struct tablet_repair_plan {
     }
 };
 
+enum class keyspace_rf_change_state {
+	empty,    	    // No ongoing rf change.
+	new_step,  	    // Start of a new step.
+	continue_step, 	// Continuation of a current step.
+	done,     	    // All steps are done.
+	failed,   	    // All steps are rolled back.
+};
+
+using removes_replica = bool_class<class removes_replica_tag>;
+
+struct planned_replica {
+    locator::global_tablet_id gid;
+    locator::tablet_replica replica;
+};
+
+struct keyspace_rf_change_plan {
+	sstring ks_name;
+    keyspace_rf_change_state state = keyspace_rf_change_state::empty;
+    locator::endpoint_dc_rack replica;
+    removes_replica removes_replica;
+	std::vector<planned_replica> tablets;
+
+    size_t size() const { return tablets.size(); }
+};
+
 class migration_plan {
 public:
     using migrations_vector = utils::chunked_vector<tablet_migration_info>;
@@ -140,17 +170,19 @@ private:
     migrations_vector _migrations;
     table_resize_plan _resize_plan;
     tablet_repair_plan _repair_plan;
+    keyspace_rf_change_plan _rf_change_plan;
     bool _has_nodes_to_drain = false;
 public:
     /// Returns true iff there are decommissioning nodes which own some tablet replicas.
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
 
     const migrations_vector& migrations() const { return _migrations; }
-    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size();}
-    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size(); }
+    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size() && !_rf_change_plan.size(); }
+    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rf_change_plan.size(); }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
     size_t tablet_repair_count() const { return _repair_plan.size(); }
+    size_t keyspace_rf_change_count() const { return _rf_change_plan.size(); }
 
     void add(tablet_migration_info info) {
         _migrations.emplace_back(std::move(info));
@@ -183,6 +215,12 @@ public:
 
     void set_repair_plan(tablet_repair_plan repair) {
         _repair_plan = std::move(repair);
+    }
+
+    const keyspace_rf_change_plan& rf_change_plan() const { return _rf_change_plan; }
+
+    void set_rf_change_plan(keyspace_rf_change_plan rf_change_plan) {
+        _rf_change_plan = std::move(rf_change_plan);
     }
 
     future<std::unordered_set<locator::global_tablet_id>> get_migration_tablet_ids() const;
@@ -230,7 +268,7 @@ public:
     ///
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
-    future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
+    future<migration_plan> balance_tablets(locator::token_metadata_ptr, std::optional<ongoing_rf_change_data>, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
 
     void set_load_stats(locator::load_stats_ptr);
 

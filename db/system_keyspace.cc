@@ -24,6 +24,7 @@
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
 #include "timestamp.hh"
+#include "types/map.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"
@@ -236,6 +237,30 @@ schema_ptr system_keyspace::batchlog() {
 }
 
 thread_local data_type cdc_generation_ts_id_type = tuple_type_impl::get_instance({timestamp_type, timeuuid_type});
+static thread_local auto racks_type = set_type_impl::get_instance(utf8_type, false);
+static thread_local auto racks_for_datacenter_type = map_type_impl::get_instance(utf8_type, racks_type, false);
+static thread_local auto ongoing_rf_change_data_type = user_type_impl::get_instance(
+        system_keyspace::NAME, "ongoing_rf_change_data", {"ks_name", "new_ks_props", "added_racks_for_datacenter", "removed_racks_for_datacenter", "rollback"},
+        {utf8_type, map_type_impl::get_instance(utf8_type, utf8_type, false), racks_for_datacenter_type, racks_for_datacenter_type, boolean_type}, false);
+
+static data_value racks_for_datacenter_to_data_value(const service::racks_for_dc_map& value) {
+    auto rack_for_dc_data_values = value | std::views::transform([](const auto& kv) {
+        return std::make_pair(data_value(kv.first), make_set_value(racks_type, set_type_impl::native_type(kv.second.begin(), kv.second.end())));
+    }) | std::ranges::to<std::vector<std::pair<data_value, data_value>>>();
+    return make_map_value(racks_for_datacenter_type, map_type_impl::native_type(std::move(rack_for_dc_data_values)));
+}
+
+data_value ongoing_rf_change_data_to_data_value(const schema& schema, const service::ongoing_rf_change_data& value) {
+    data_value result = make_user_value(ongoing_rf_change_data_type, {
+        data_value(value.ks_name),
+        make_map_value(schema.get_column_definition("new_ks_props")->type,
+                                map_type_impl::native_type(value.new_ks_props.begin(), value.new_ks_props.end())),
+        racks_for_datacenter_to_data_value(value.added_racks_for_dc),
+        racks_for_datacenter_to_data_value(value.removed_racks_for_dc),
+        data_value(value.rollback),
+    });
+    return result;
+}
 
 schema_ptr system_keyspace::topology() {
     static thread_local auto schema = [] {
@@ -260,8 +285,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("request_id", timeuuid_type)
             .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
-            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column)
-            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column) // deprecated
+            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column) // deprecated
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
@@ -273,6 +298,9 @@ schema_ptr system_keyspace::topology() {
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
+            .with_column("global_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("scheduled_rf_change_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
+            .with_column("ongoing_rf_change_data", ongoing_rf_change_data_type, column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -292,6 +320,8 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("error", utf8_type)
             .with_column("end_time", timestamp_type)
             .with_column("truncate_table_id", uuid_type)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type)
+            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false))
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3067,6 +3097,35 @@ static bool must_have_tokens(service::node_state nst) {
     }
 }
 
+static service::racks_for_dc_map racks_for_dc_map_from_cell(const data_value& v) {
+    return value_cast<map_type_impl::native_type>(v) | std::views::transform([](const auto& kv) {
+        auto dc_name = value_cast<service::dc_name>(kv.first);
+        auto rack_set = value_cast<set_type_impl::native_type>(kv.second) | std::views::transform([](const auto& s) {
+            return value_cast<service::rack_name>(s);
+        }) | std::ranges::to<std::unordered_set<service::rack_name>>();
+        return std::make_pair(std::move(dc_name), std::move(rack_set));
+    }) | std::ranges::to<service::racks_for_dc_map>();
+}
+
+static service::ongoing_rf_change_data ongoing_rf_change_data_from_cell(const data_value& v) {
+    std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
+    auto result = service::ongoing_rf_change_data{
+        value_cast<sstring>(dv[0]),
+        value_cast<map_type_impl::native_type>(dv[1]) | std::views::transform([](const auto& kv) {
+            return std::make_pair(value_cast<sstring>(kv.first), value_cast<sstring>(kv.second));
+        }) | std::ranges::to<std::unordered_map<sstring, sstring>>(),
+        racks_for_dc_map_from_cell(dv[2]),
+        racks_for_dc_map_from_cell(dv[3]),
+        value_cast<bool>(dv[4]),
+    };
+    return result;
+}
+
+static service::ongoing_rf_change_data deserialize_ongoing_rf_change_data(cql3::untyped_result_set_row::view_type raw_value) {
+    return ongoing_rf_change_data_from_cell(
+            ongoing_rf_change_data_type->deserialize_value(raw_value));
+}
+
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
     auto rs = co_await execute_cql(
         format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
@@ -3294,6 +3353,24 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.global_request_id = some_row.get_as<utils::UUID>("global_topology_request_id");
         }
 
+        if (some_row.has("global_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "global_requests")) {
+                ret.global_requests_queue.push_back(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("scheduled_rf_change_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "scheduled_rf_change_requests")) {
+                ret.rf_change_requests_queue.push_back(value_cast<utils::UUID>(v));
+            }
+        }
+
+        if (some_row.has("ongoing_rf_change_data")) {
+            ret.ongoing_rf_change_data = deserialize_ongoing_rf_change_data(some_row.get_view("ongoing_rf_change_data"));
+        } else {
+            ret.ongoing_rf_change_data = std::nullopt;
+        }
+
         if (some_row.has("enabled_features")) {
             ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
         }
@@ -3469,7 +3546,13 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
         entry.initiating_host = row.get_as<utils::UUID>("initiating_host");
     }
     if (row.has("request_type")) {
-        entry.request_type = service::topology_request_from_string(row.get_as<sstring>("request_type"));
+        auto rts = row.get_as<sstring>("request_type");
+        auto rt = service::try_topology_request_from_string(rts);
+        if (rt) {
+            entry.request_type = *rt;
+        } else {
+            entry.request_type = service::global_topology_request_from_string(rts);
+        }
     }
     if (row.has("start_time")) {
         entry.start_time = row.get_as<db_clock::time_point>("start_time");
@@ -3486,6 +3569,11 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("truncate_table_id")) {
         entry.truncate_table_id = table_id(row.get_as<utils::UUID>("truncate_table_id"));
     }
+    if (row.has("new_keyspace_rf_change_data")) {
+        entry.new_keyspace_rf_change_ks_name = row.get_as<sstring>("new_keyspace_rf_change_ks_name");
+        entry.new_keyspace_rf_change_data = row.get_map<sstring,sstring>("new_keyspace_rf_change_data");
+    }
+
     return entry;
 }
 

@@ -25,6 +25,10 @@ namespace db {
     class system_keyspace;
 }
 
+namespace locator {
+struct endpoint_dc_rack;   
+}
+
 namespace service {
 
 enum class node_state: uint16_t {
@@ -106,6 +110,19 @@ struct topology_features {
     std::set<sstring> calculate_not_yet_enabled_features() const;
 };
 
+using dc_name = sstring;
+using rack_name = sstring;
+using racks_for_dc_map = std::unordered_map<dc_name, std::unordered_set<rack_name>>;
+struct ongoing_rf_change_data {
+    sstring ks_name;
+    std::unordered_map<sstring, sstring> new_ks_props;
+    racks_for_dc_map added_racks_for_dc;
+    racks_for_dc_map removed_racks_for_dc;
+    bool rollback = false;
+
+    std::optional<locator::endpoint_dc_rack> maybe_get_added_dc_rack();
+};
+
 struct topology {
     enum class transition_state: uint16_t {
         join_group0,
@@ -163,6 +180,9 @@ struct topology {
     // Pending global topology request's id, which is a new group0's state id
     std::optional<utils::UUID> global_request_id;
 
+    // A queue of pending global topology request's ids. Replaces the single one above
+    std::vector<utils::UUID> global_requests_queue;
+
     // The IDs of the committed CDC generations sorted by timestamps.
     // The obsolete generations may not be in this list as they are continually deleted.
     std::vector<cdc::generation_id_v2> committed_cdc_generations;
@@ -176,6 +196,14 @@ struct topology {
     std::optional<sstring> new_keyspace_rf_change_ks_name;
     // The KS options to be used when executing the scheduled ALTER KS statement
     std::optional<std::unordered_map<sstring, sstring>> new_keyspace_rf_change_data;
+
+    // Data of an ongoing RF change operation.
+    // Analogous to `new_keyspace_rf_change_data` and `new_keyspace_rf_change_ks_name`,
+    // but designed to support rf change by more than one.
+    std::optional<ongoing_rf_change_data> ongoing_rf_change_data;
+
+    // A queue of rf change requests that are waiting to be executed.
+    std::vector<utils::UUID> rf_change_requests_queue;
 
     // The IDs of the committed yet unpublished CDC generations sorted by timestamps.
     std::vector<cdc::generation_id_v2> unpublished_cdc_generations;
@@ -283,6 +311,7 @@ struct topology_request_state {
 
 topology::transition_state transition_state_from_string(const sstring& s);
 node_state node_state_from_string(const sstring& s);
+std::optional<topology_request> try_topology_request_from_string(const sstring& s);
 topology_request topology_request_from_string(const sstring& s);
 global_topology_request global_topology_request_from_string(const sstring&);
 cleanup_status cleanup_status_from_string(const sstring& s);

@@ -271,10 +271,12 @@ future<> system_distributed_keyspace::create_tables(std::vector<schema_ptr> tabl
         std::vector<mutation> mutations;
         sstring description;
 
+        locator::replication_strategy_config_options options;
+        options.replication = {{"replication_factor", "3"}};
         auto sd_ksm = keyspace_metadata::new_keyspace(
                 NAME,
                 "org.apache.cassandra.locator.SimpleStrategy",
-                {{"replication_factor", "3"}},
+                std::move(options),
                 std::nullopt);
         if (!db.has_keyspace(NAME)) {
             mutations = service::prepare_new_keyspace_announcement(db.real_database(), sd_ksm, ts);

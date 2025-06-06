@@ -158,8 +158,8 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
     data_dictionary::database db = qp.db();
 
-    std::map<sstring, sstring> opts;
-    opts["replication_factor"] = replication_factor;
+    locator::replication_strategy_config_options opts;
+    opts.replication["replication_factor"] = replication_factor;
     auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), std::nullopt);
 
     while (!db.has_keyspace(keyspace_name)) {
@@ -167,13 +167,13 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
         auto ts = group0_guard.write_timestamp();
 
         if (!db.has_keyspace(keyspace_name)) {
-            std::map<sstring, sstring> opts;
+            locator::replication_strategy_config_options opts;
             if (replication_strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
                 for (const auto &dc: qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters())
-                    opts[dc] = replication_factor;
+                    opts.replication[dc] = replication_factor;
             }
             else {
-                opts["replication_factor"] = replication_factor;
+                opts.replication["replication_factor"] = replication_factor;
             }
             auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), std::nullopt, true);
             try {

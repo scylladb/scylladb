@@ -1581,20 +1581,13 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             // This should never happen, the ID is supposed to be unique
             co_return api_error::internal(format("Table with ID {} already exists", schema->id()));
         }
-        co_await service::prepare_new_column_family_announcement(schema_mutations, sp, *ksm, schema, ts);
+        std::vector<schema_ptr> schemas;
+        schemas.push_back(schema);
         for (schema_builder& view_builder : view_builders) {
-            view_ptr view(view_builder.build());
-            db::schema_tables::add_table_or_view_to_schema_mutation(
-                view, ts, true, schema_mutations);
-            // add_table_or_view_to_schema_mutation() is a low-level function that
-            // doesn't call the callbacks that prepare_new_view_announcement()
-            // calls. So we need to call this callback here :-( If we don't, among
-            // other things *tablets* will not be created for the new view.
-            // These callbacks need to be called in a Seastar thread.
-            co_await seastar::async([&sp, &ksm, &view, &schema_mutations, ts] {
-                return sp.local_db().get_notifier().before_create_column_family(*ksm, *view, schema_mutations, ts);
-            });
+            schemas.push_back(view_builder.build());
         }
+        co_await service::prepare_new_column_families_announcement(schema_mutations, sp, *ksm, schemas, ts);
+
         // If a role is allowed to create a table, we must give it permissions to
         // use (and eventually delete) the specific table it just created (and
         // also the view tables). This is known as "auto-grant".
@@ -5524,7 +5517,9 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
         elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
                 keyspace_name, rf, endpoint_count);
     }
-    auto opts = get_network_topology_options(sp, gossiper, rf);
+    locator::replication_strategy_config_options opts{
+        .replication = get_network_topology_options(sp, gossiper, rf),
+    };
 
     // Even if the "tablets" experimental feature is available, we currently
     // do not enable tablets by default on Alternator tables because LWT is

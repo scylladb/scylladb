@@ -81,7 +81,7 @@ sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, in
 static
 size_t get_tablet_count(const tablet_metadata& tm) {
     size_t count = 0;
-    for (auto& [table, tmap] : tm.all_tables()) {
+    for (const auto& [table, tmap] : tm.all_tables_ungrouped()) {
         count += std::accumulate(tmap->tablets().begin(), tmap->tablets().end(), size_t(0),
                                  [] (size_t accumulator, const locator::tablet_info& info) {
                                      return accumulator + info.replicas.size();
@@ -151,7 +151,7 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
         auto prev_lb_stats = talloc.stats().for_dc(dc);
         auto start_time = std::chrono::steady_clock::now();
 
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), std::nullopt, load_stats, skiplist).get();
 
         auto end_time = std::chrono::steady_clock::now();
         auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;

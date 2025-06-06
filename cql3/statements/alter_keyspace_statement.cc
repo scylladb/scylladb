@@ -12,8 +12,10 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <stdexcept>
+#include <vector>
 #include "alter_keyspace_statement.hh"
 #include "locator/tablets.hh"
+#include "mutation/canonical_mutation.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -86,7 +88,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
 
             if (ks.get_replication_strategy().uses_tablets()) {
-                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
+                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options().replication;
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
                 unsigned total_abs_rfs_diff = 0;
@@ -173,7 +175,7 @@ std::map<sstring, sstring> get_old_options_flattened(const data_dictionary::keys
     std::map<sstring, sstring> all_options;
 
     using namespace cql3::statements;
-    add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options(), all_options);
+    add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options().replication, all_options);
     add_prefixed_key(ks_prop_defs::KW_STORAGE, ks.metadata()->get_storage_options().to_map(), all_options);
     if (ks.metadata()->initial_tablets()) {
         add_prefixed_key(ks_prop_defs::KW_TABLETS,
@@ -232,7 +234,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         //       and we'll unnecessarily trigger the processing path for ALTER tablets KS,
         //       when in reality nothing or only schema is being changed
         if (changes_tablets(qp)) {
-            if (!qp.topology_global_queue_empty()) {
+            if (!qp.proxy().features().topology_global_request_queue && !qp.topology_global_queue_empty()) {
                 return make_exception_future<std::tuple<::shared_ptr<::cql_transport::event::schema_change>, cql3::cql_warnings_vec>>(
                         exceptions::invalid_request_exception("Another global topology request is ongoing, please retry."));
             }
@@ -243,9 +245,13 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             qp.db().real_database().validate_keyspace_update(*ks_md_update);
 
             service::topology_mutation_builder builder(ts);
-            builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
-            builder.set_global_topology_request_id(global_request_id);
-            builder.set_new_keyspace_rf_change_data(_name, ks_options);
+            if (!qp.proxy().features().topology_global_request_queue) {
+                builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
+                builder.set_global_topology_request_id(global_request_id);
+                builder.set_new_keyspace_rf_change_data(_name, ks_options);
+            } else {
+                builder.queue_global_topology_request_id(global_request_id);
+            };
             service::topology_change change{{builder.build()}};
 
             auto topo_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY);
@@ -253,9 +259,13 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 return cm.to_mutation(topo_schema);
             });
 
-            service::topology_request_tracking_mutation_builder rtbuilder{global_request_id};
+            service::topology_request_tracking_mutation_builder rtbuilder{global_request_id, qp.proxy().features().topology_requests_type_column};
             rtbuilder.set("done", false)
-                     .set("start_time", db_clock::now());
+                     .set("start_time", db_clock::now())
+                     .set("request_type", service::global_topology_request::keyspace_rf_change);
+            if (qp.proxy().features().topology_global_request_queue) {
+                rtbuilder.set_new_keyspace_rf_change_data(_name, ks_options);
+            }
             service::topology_change req_change{{rtbuilder.build()}};
 
             auto topo_req_schema = qp.db().find_schema(db::system_keyspace::NAME, db::system_keyspace::TOPOLOGY_REQUESTS);
