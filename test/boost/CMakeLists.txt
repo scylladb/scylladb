@@ -283,6 +283,8 @@ add_scylla_test(wrapping_interval_test
   KIND BOOST)
 add_scylla_test(address_map_test
   KIND SEASTAR)
+add_scylla_test(vector_store_test
+  KIND SEASTAR)
 
 add_scylla_test(combined_tests
   KIND SEASTAR
@@ -339,7 +341,6 @@ add_scylla_test(combined_tests
     sstable_directory_test.cc
     sstable_set_test.cc
     statement_restrictions_test.cc
-    storage_proxy_test.cc
     tablets_test.cc
     tracing_test.cc
     user_function_test.cc
