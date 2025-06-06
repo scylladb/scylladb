@@ -2125,8 +2125,11 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "starting group 0 service");
             group0_service.start().get();
-            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
+            auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service, &ss] {
+                // Ensure group0 clients are stopped before stopping group0 itself.
                 sl_controller.local().abort_group0_operations();
+                ss.local().wait_for_group0_stop().get();
+
                 group0_service.abort().get();
             });
 
@@ -2140,13 +2143,6 @@ sharded<locator::shared_token_metadata> token_metadata;
             ss.local().init_address_map(gossip_address_map.local()).get();
             auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
                 ss.local().uninit_address_map().get();
-            });
-
-            // Need to make sure storage service stopped using group0 before running group0_service.abort()
-            // Normally it is done in storage_service::do_drain(), but in case start up fail we need to do it
-            // here as well
-            auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in local storage", [&ss] {
-               ss.local().wait_for_group0_stop().get();
             });
 
             // Setup group0 early in case the node is bootstrapped already and the group exists.
@@ -2418,7 +2414,10 @@ sharded<locator::shared_token_metadata> token_metadata;
             redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
-            auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
+            auto do_drain = defer_verbose_shutdown("local storage", [&ss, &stop_group0_service] {
+                // Applier fiber depends on local storage, so we need to stop group0 first.
+                stop_group0_service = {};
+
                 ss.local().drain_on_shutdown().get();
             });
 
