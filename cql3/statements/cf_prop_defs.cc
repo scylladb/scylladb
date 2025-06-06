@@ -42,6 +42,7 @@ const sstring cf_prop_defs::KW_MAX_INDEX_INTERVAL = "max_index_interval";
 const sstring cf_prop_defs::KW_SPECULATIVE_RETRY = "speculative_retry";
 const sstring cf_prop_defs::KW_BF_FP_CHANCE = "bloom_filter_fp_chance";
 const sstring cf_prop_defs::KW_MEMTABLE_FLUSH_PERIOD = "memtable_flush_period_in_ms";
+const sstring cf_prop_defs::KW_MEMTABLE_COMPACT_FLUSHED_DATA = "memtable_compact_flushed_data";
 const sstring cf_prop_defs::KW_SYNCHRONOUS_UPDATES = "synchronous_updates";
 
 const sstring cf_prop_defs::KW_COMPACTION = "compaction";
@@ -93,7 +94,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         KW_COMMENT,
         KW_GCGRACESECONDS, KW_CACHING, KW_DEFAULT_TIME_TO_LIVE,
         KW_MIN_INDEX_INTERVAL, KW_MAX_INDEX_INTERVAL, KW_SPECULATIVE_RETRY,
-        KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_COMPACTION,
+        KW_BF_FP_CHANCE, KW_MEMTABLE_FLUSH_PERIOD, KW_MEMTABLE_COMPACT_FLUSHED_DATA, KW_COMPACTION,
         KW_COMPRESSION, KW_CRC_CHECK_CHANCE,  KW_ID, KW_PAXOSGRACESECONDS,
         KW_SYNCHRONOUS_UPDATES, KW_TABLETS,
     });
@@ -330,6 +331,10 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
 
     if (has_property(KW_SPECULATIVE_RETRY)) {
         builder.set_speculative_retry(get_string(KW_SPECULATIVE_RETRY, builder.get_speculative_retry().to_sstring()));
+    }
+
+    if (has_property(KW_MEMTABLE_COMPACT_FLUSHED_DATA)) {
+        builder.set_memtable_compact_flushed_data(get_boolean(KW_MEMTABLE_FLUSH_PERIOD, DEFAULT_MEMTABLE_COMPACT_FLUSHED_DATA));
     }
 
     if (has_property(KW_MEMTABLE_FLUSH_PERIOD)) {

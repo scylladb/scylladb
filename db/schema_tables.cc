@@ -339,6 +339,8 @@ schema_ptr scylla_tables(schema_features features) {
         // since it is written to only after the cluster feature is enabled.
         sb.with_column("tablets", map_type_impl::get_instance(utf8_type, utf8_type, false));
 
+        sb.with_column("memtable_compact_flushed_data", boolean_type);
+
         sb.with_hash_version();
         s = sb.build();
     }
@@ -1749,6 +1751,9 @@ mutation make_scylla_tables_mutation(schema_ptr table, api::timestamp_type times
             m.set_clustered_cell(ckey, cdef, make_map_mutation(map, cdef, timestamp));
         }
     }
+    if (table->has_memtable_compact_flushed_data_option()) {
+        m.set_clustered_cell(ckey, "memtable_compact_flushed_data", table->memtable_compact_flushed_data(), timestamp);
+    }
     // In-memory tables are deprecated since scylla-2024.1.0
     // FIXME: delete the column when there's no live version supporting it anymore.
     // Writing it here breaks upgrade rollback to versions that do not support the in_memory schema_feature
@@ -2185,6 +2190,9 @@ static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, sche
     if (auto opt_map = get_map<sstring, sstring>(table_row, "tablets")) {
         auto tablet_options = db::tablet_options(*opt_map);
         builder.set_tablet_options(tablet_options.to_map());
+    }
+    if (auto val = table_row.get<bool>("memtable_compact_flushed_data")) {
+        builder.set_memtable_compact_flushed_data(*val);
     }
 }
 

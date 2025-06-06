@@ -196,6 +196,7 @@ schema_ptr system_keyspace::batchlog() {
         //    .compactionStrategyOptions(Collections.singletonMap("min_threshold", "2"))
        );
        builder.set_gc_grace_seconds(0);
+       builder.set_memtable_compact_flushed_data(true);
        builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();

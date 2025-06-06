@@ -165,6 +165,12 @@ public:
         return _raw._memtable_flush_period;
     }
 
+    schema_builder& set_memtable_compact_flushed_data(bool memtable_compact_flushed_data);
+
+    bool get_memtable_compact_flushed_data() const {
+        return _raw._memtable_compact_flushed_data.value_or(DEFAULT_MEMTABLE_COMPACT_FLUSHED_DATA);
+    }
+
     schema_builder& set_speculative_retry(sstring retry_sstring) {
         _raw._speculative_retry = speculative_retry::from_sstring(retry_sstring);
         return *this;

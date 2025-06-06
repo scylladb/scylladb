@@ -1475,6 +1475,12 @@ stop_iteration writer::consume_end_of_partition() {
 void writer::consume_end_of_stream() {
     _cfg.monitor->on_data_write_completed();
 
+    // Check if the sstable is empty and mark it for deletion if so.
+    if (!_first_key) {
+        _sst.mark_for_deletion();
+        return;
+    }
+
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state).get();
 
     if (_sst.has_component(component_type::CompressionInfo)) {

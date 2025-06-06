@@ -1669,10 +1669,21 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f), &cg] () mutable -> future<> {
             try {
                 co_await std::move(f);
-                co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
-                    co_await newtab->open_data();
-                    tlogger.debug("Flushing to {} done", newtab->get_filename());
+                auto empty_sstables = std::vector<sstables::shared_sstable>();
+                co_await coroutine::parallel_for_each(newtabs, [&empty_sstables] (auto& newtab) -> future<> {
+                    if (newtab->marked_for_deletion()) {
+                        empty_sstables.push_back(newtab);
+                        tlogger.debug("No data was flushed to {}, deleting", newtab->get_filename());
+                    } else {
+                        co_await newtab->open_data();
+                        tlogger.debug("Flushing to {} done", newtab->get_filename());
+                    }
                 });
+
+                auto [erase_begin, erase_end] = std::ranges::remove_if(newtabs, [&empty_sstables] (auto& sst) {
+                    return std::ranges::find(empty_sstables, sst) != empty_sstables.end();
+                });
+                newtabs.erase(erase_begin, erase_end);
 
                 co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
                     return update_cache(cg, old, newtabs);

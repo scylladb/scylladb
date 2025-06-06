@@ -339,6 +339,7 @@ static constexpr int DEFAULT_MIN_COMPACTION_THRESHOLD = 4;
 static constexpr int DEFAULT_MAX_COMPACTION_THRESHOLD = 32;
 static constexpr int DEFAULT_MIN_INDEX_INTERVAL = 128;
 static constexpr int DEFAULT_GC_GRACE_SECONDS = 864000;
+static constexpr bool DEFAULT_MEMTABLE_COMPACT_FLUSHED_DATA = false;
 
 // Unsafe to access across shards.
 // Safe to copy across shards.
@@ -558,6 +559,7 @@ private:
         int32_t _min_index_interval = DEFAULT_MIN_INDEX_INTERVAL;
         int32_t _max_index_interval = 2048;
         int32_t _memtable_flush_period = 0;
+        std::optional<bool> _memtable_compact_flushed_data;
         ::speculative_retry _speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
         // This is the compaction strategy that will be used by default on tables which don't have one explicitly specified.
         sstables::compaction_strategy_type _compaction_strategy = sstables::compaction_strategy_type::incremental;
@@ -715,6 +717,16 @@ public:
 
     int32_t memtable_flush_period() const {
         return _raw._memtable_flush_period;
+    }
+
+    // Does this schema have the memtable_compact_flushed_data set to any value?
+    bool has_memtable_compact_flushed_data_option() const {
+        return _raw._memtable_compact_flushed_data.has_value();
+    }
+
+    // Returns memtable_compact_flushed_data or false if not set, see has_memtable_compact_flushed_data_option()
+    bool memtable_compact_flushed_data() const {
+        return _raw._memtable_compact_flushed_data.value_or(DEFAULT_MEMTABLE_COMPACT_FLUSHED_DATA);
     }
 
     sstables::compaction_strategy_type configured_compaction_strategy() const {
