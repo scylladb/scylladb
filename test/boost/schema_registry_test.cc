@@ -174,7 +174,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
             auto sm0 = db::schema_tables::make_schema_mutations(s0, api::new_timestamp(), true);
             std::vector<mutation> muts;
             sm0.copy_to(muts);
-            db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(),
+            db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
                                             e.get_feature_service().local(), muts).get();
         }
 
