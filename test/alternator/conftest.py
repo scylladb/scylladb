@@ -107,7 +107,7 @@ def get_valid_alternator_role():
             pass
         # If we couldn't find a valid role, let's hope that
         # alternator-enforce-authorization is not enabled so anything will work
-        return ('unknown_user', 'unknown_secret')
+        return ('unknownuser', 'unknownsecret')
 
     return _get_valid_alternator_role
 
@@ -204,7 +204,12 @@ def dynamodb_test_connection(dynamodb, request, optional_rest_api):
         # URL is the fastest one.
         url = dynamodb.meta.client._endpoint.host
         response = requests.get(url, verify=False)
-        assert response.ok
+        # We don't check response: In Alternator and DynamoDB, we expect
+        # response.ok (200), but in recent versions of DynamoDB Local we can
+        # get error code 400 because it only allows signed health requests
+        # and gives an invalid signature error on an unsigned get().
+        # In any case, any HTTP response (as opposed to exception in get())
+        # means that the server is still alive.
     except:
         dynamodb_test_connection.scylla_crashed = True
         pytest.fail(f'Scylla appears to have crashed in test {request.node.parent.name}::{request.node.name}')
