@@ -507,7 +507,7 @@ async def test_migration_on_existing_raft_topology(request, manager: ManagerClie
     logging.info("Waiting until driver connects to every server")
     cql, hosts = await manager.get_ready_cql(servers)
 
-    ks = await create_keyspace(cql)
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}")
     await create_table(cql, ks)
     await create_mv(cql, ks, "vt1")
 
