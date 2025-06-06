@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove duplicate pages
+
+/stable/cql/non-reserved-keywords.html: /stable/cql/appendices.html
+/stable/cql/reserved-keywords.html: /stable/cql/appendices.html
 
 # Remove reduntant pages
 
