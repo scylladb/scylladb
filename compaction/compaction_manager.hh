@@ -109,6 +109,7 @@ private:
     // as necessary.
     enum class state { none, stopped, disabled, enabled };
     state _state = state::none;
+    uint8_t _disabled_state_count = 1;
 
     std::optional<future<>> _stop_future;
 

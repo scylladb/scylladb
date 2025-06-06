@@ -1035,6 +1035,13 @@ void compaction_manager::register_metrics() {
 
 void compaction_manager::enable() {
     SCYLLA_ASSERT(_state == state::none || _state == state::disabled);
+
+    --_disabled_state_count;
+    if (_disabled_state_count > 0) {
+        cmlog.warn("Compaction manager is still disabled, requires {} more call(s) to enable()", _disabled_state_count);
+        return;
+    }
+
     _state = state::enabled;
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
     _waiting_reevalution = postponed_compactions_reevaluation();
@@ -1140,6 +1147,7 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
 
 future<> compaction_manager::drain() {
     cmlog.info("Asked to drain");
+    ++_disabled_state_count;
     if (_state == state::enabled) {
         // This is a drain request and not a shutdown request.
         // Disable the state so that it can be enabled later if requested.
@@ -1147,6 +1155,7 @@ future<> compaction_manager::drain() {
     }
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
+    _compaction_submission_timer.cancel();
     cmlog.info("Drained");
 }
 
