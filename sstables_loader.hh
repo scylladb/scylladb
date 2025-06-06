@@ -107,7 +107,7 @@ public:
      * @return a future<> when the operation finishes.
      */
     future<> load_new_sstables(sstring ks_name, sstring cf_name,
-            bool load_and_stream, bool primary_replica_only, stream_scope scope);
+            bool load_and_stream, bool primary_replica_only, bool skip_cleanup, stream_scope scope);
 
     /**
      * Download new SSTables not currently tracked by the system from object store

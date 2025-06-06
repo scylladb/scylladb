@@ -57,4 +57,14 @@ a subset of nodes to load only SStables that belong to the rack or DC.
 This option is only valid when using the ``--load-and-stream`` option.
 
 
+Skip cleanup
+---------------
+
+.. code::
+
+   nodetool refresh <my_keyspace> <my_table> [--skip-cleanup]
+
+When loading an SSTable, Scylla will cleanup it from keys that the node is not responsible for. To skip this step, use the `--skip-cleanup` option.
+See :ref:`nodetool cleanup <nodetool-cleanup-cmd>`.
+
 .. include:: nodetool-index.rst
