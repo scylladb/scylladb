@@ -291,6 +291,9 @@ struct tablet_transition_info {
 // Returns the leaving replica for a given transition.
 std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tablet_transition_info&);
 
+bool has_leaving_replica_left(tablet_transition_stage);
+bool has_pending_replica_left(tablet_transition_stage);
+
 /// Represents intention to move a single tablet replica from src to dst.
 struct tablet_migration_info {
     locator::tablet_transition_kind kind;
@@ -602,6 +605,8 @@ private:
     void check_tablet_id(tablet_id) const;
 };
 
+using table_group_set = utils::small_vector<table_id, 2>;
+
 /// Holds information about all tablets in the cluster.
 ///
 /// When this instance is obtained via token_metadata_ptr, it is immutable
@@ -620,8 +625,17 @@ public:
     // See storage_service::replicate_to_all_cores().
     using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
     using table_to_tablet_map = std::unordered_map<table_id, tablet_map_ptr>;
+    using table_group_map = std::unordered_map<table_id, table_group_set>;
 private:
     table_to_tablet_map _tablets;
+
+    // This map contains all tables by co-location groups. The key is the base table and the value
+    // is a list all co-located tables in the co-location group, including the base table.
+    table_group_map _table_groups;
+
+    // This maps a co-located table to its base table. It contains only non-trivial relations, i.e. a base table is
+    // not mapped to itself.
+    std::unordered_map<table_id, table_id> _base_table;
 
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
@@ -629,9 +643,20 @@ public:
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
     bool has_tablet_map(table_id id) const;
-    const table_to_tablet_map& all_tables() const { return _tablets; }
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
+
+    // get all tables with their tablet maps, including both base and children tables.
+    // for a child table we get the tablet map of the base table.
+    const table_to_tablet_map& all_tables_ungrouped() const { return _tablets; }
+
+    // get all tables by co-location groups. the key is the base table and the value
+    // is the set of all co-located tables in the group (including the base table).
+    const table_group_map& all_table_groups() const { return _table_groups; }
+
+    table_id get_base_table(table_id id) const;
+    bool is_base_table(table_id id) const;
+
 public:
     tablet_metadata() = default;
     // No implicit copy, use copy()
@@ -644,6 +669,7 @@ public:
 
     void set_balancing_enabled(bool value) { _balancing_enabled = value; }
     void set_tablet_map(table_id, tablet_map);
+    future<> set_colocated_table(table_id id, table_id base_id);
     void drop_tablet_map(table_id);
 
     // Allow mutating a tablet_map

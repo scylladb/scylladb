@@ -57,6 +57,12 @@ future<mutation> tablet_map_to_mutation(const locator::tablet_map&,
                                         api::timestamp_type,
                                         const gms::feature_service& features);
 
+mutation colocated_tablet_map_to_mutation(table_id,
+                                        const sstring& keyspace_name,
+                                        const sstring& table_name,
+                                        table_id base_table,
+                                        api::timestamp_type);
+
 mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
 
 /// Stores a given tablet_metadata in system.tablets.

@@ -832,12 +832,33 @@ public:
         auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
 
         for (auto tid : tmap.tablet_ids()) {
-            auto range = tmap.get_token_range(tid);
+            // A tablet may be created with transitions. in that case, we allocate a storage group
+            // for both previous and next replicas, unless we know a replica is not needed anymore.
+            // This is important because if for example we allocate a storage group in the leaving
+            // replica and the tablet is in the 'cleanup' stage or later, then the tablet may not be cleaned.
 
-            if (tmap.has_replica(tid, local_replica)) {
-                tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
-                ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range));
+            if (!tmap.has_replica(tid, local_replica)) {
+                continue;
             }
+
+            if (auto trinfo = tmap.get_tablet_transition_info(tid)) {
+                auto leaving_replica = locator::get_leaving_replica(tmap.get_tablet_info(tid), *trinfo);
+                auto pending_replica = trinfo->pending_replica;
+
+                bool has_local_replica_left =
+                        (leaving_replica && *leaving_replica == local_replica
+                                && locator::has_leaving_replica_left(trinfo->stage))
+                        || (pending_replica && *pending_replica == local_replica
+                                && locator::has_pending_replica_left(trinfo->stage));
+
+                if (has_local_replica_left) {
+                    continue;
+                }
+            }
+
+            auto range = tmap.get_token_range(tid);
+            tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
+            ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range));
         }
         _storage_groups = std::move(ret);
     }
