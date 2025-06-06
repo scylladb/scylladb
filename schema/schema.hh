@@ -614,8 +614,18 @@ public:
     typedef std::ranges::subrange<iterator> iterator_range_type;
     typedef std::ranges::subrange<const_iterator> const_iterator_range_type;
 
-    static constexpr int32_t NAME_LENGTH = 48;
-
+    // The maximum length of any name. It is limited by the maximum length of a table name.
+    // When the existing code creates a directory to store the new table, this directory's name is
+    // created by sstables::init_table_storage(), which takes the table's full name,
+    // a dash (-), and a 32-byte UUID string. Because most Linux filesystems limit filename
+    // components to 255 bytes, this means that any table name longer than 222 bytes will attempt
+    // to mkdir() a directory name longer than the allowed 255 bytes, and fail.
+    // We also reserve 4 bytes for the "_cdc" suffix in case of CDC-enabled tables.
+    // It is Cassandra 4 and 5 compatible except for the "_cdc" suffix, which is not used in Cassandra.
+    static constexpr int32_t NAME_LENGTH = 
+        255 - 32    // 32 bytes for UUID
+            - 1     // 1 byte for the dash (-) between the name and the UUID
+            - 4;    // 4 bytes for the "_cdc" suffix in case of CDC-enabled tables
 
     struct column {
         bytes name;
