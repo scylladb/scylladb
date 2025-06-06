@@ -1505,6 +1505,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         });
 
         _tablets_ready = false;
+        bool rollback_ongoing_rf_change = false;
         // We operate here on groups of co-located tablets.
         // The tablets of several tables may be co-located and share the same tablet map, and in
         // particular their transitions are shared. Therefore, each transition must be handled for
@@ -1753,6 +1754,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             });
                         });
                     })) {
+                        if (trinfo.transition == locator::tablet_transition_kind::rebuild_v2 && _topo_sm._topology.ongoing_rf_change_data && trinfo.pending_replica) {
+                            const auto& topo = _db.get_token_metadata().get_topology();
+                            auto location = topo.get_location(trinfo.pending_replica->host);
+                            const auto& added_racks_for_dc = _topo_sm._topology.ongoing_rf_change_data->added_racks_for_dc;
+                            auto it = added_racks_for_dc.find(location.dc);
+                            if (it != added_racks_for_dc.end()) {
+                                const auto& racks = it->second;
+                                auto rack_it = racks.find(location.rack);
+                                if (rack_it != racks.end()) {
+                                    rollback_ongoing_rf_change = true;
+                                }
+                            }
+                        }
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
                 }
@@ -1883,6 +1897,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
             }
         });
+
+        if (rollback_ongoing_rf_change && _topo_sm._topology.ongoing_rf_change_data.has_value()) {
+            service::ongoing_rf_change_data new_ongoing_rf_change = _topo_sm._topology.ongoing_rf_change_data.value();
+            new_ongoing_rf_change.rollback = true;
+            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                    .set_ongoing_rf_change_data(std::move(new_ongoing_rf_change))
+                    .build());
+        }
 
         // In order to keep the cluster saturated, ask the load balancer for more transitions.
         // Unless there is a pending topology change operation.
