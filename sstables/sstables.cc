@@ -2981,28 +2981,28 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
 std::vector<unsigned>
 sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
     std::unordered_set<unsigned> shards;
-    dht::partition_range_vector token_ranges;
+    dht::token_range_vector token_ranges;
     const auto* sm = _components->scylla_metadata
             ? _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
     if (!sm || sm->token_ranges.elements.empty()) {
-        token_ranges.push_back(dht::partition_range::make(
-                dht::ring_position::starting_at(get_first_decorated_key().token()),
-                dht::ring_position::ending_at(get_last_decorated_key().token())));
+        token_ranges.push_back(dht::token_range::make(
+                get_first_decorated_key().token(),
+                get_last_decorated_key().token()));
     } else {
-        auto disk_token_range_to_ring_position_range = [] (const disk_token_range& dtr) {
+        auto disk_token_range_to_dht_token_range = [] (const disk_token_range& dtr) {
             auto t1 = dht::token(dht::token::kind::key, bytes_view(dtr.left.token));
             auto t2 = dht::token(dht::token::kind::key, bytes_view(dtr.right.token));
-            return dht::partition_range::make(
-                    (dtr.left.exclusive ? dht::ring_position::ending_at : dht::ring_position::starting_at)(std::move(t1)),
-                    (dtr.right.exclusive ? dht::ring_position::starting_at : dht::ring_position::ending_at)(std::move(t2)));
+            return dht::token_range::make(
+                    dht::token_range::bound(t1, !dtr.left.exclusive),
+                    dht::token_range::bound(t2, !dtr.right.exclusive));
         };
         token_ranges = sm->token_ranges.elements
-                | std::views::transform(disk_token_range_to_ring_position_range)
-                | std::ranges::to<dht::partition_range_vector>();
+                | std::views::transform(disk_token_range_to_dht_token_range)
+                | std::ranges::to<dht::token_range_vector>();
     }
     sstlog.trace("{}: token_ranges={}", get_filename(), token_ranges);
-    auto sharder = dht::ring_position_range_vector_sharder(sharder_, std::move(token_ranges));
+    auto sharder = dht::token_range_vector_sharder(sharder_, std::move(token_ranges));
     auto rpras = sharder.next(*_schema);
     while (rpras) {
         shards.insert(rpras->shard);
