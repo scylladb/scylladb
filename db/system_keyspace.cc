@@ -260,8 +260,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("request_id", timeuuid_type)
             .with_column("ignore_nodes", set_type_impl::get_instance(uuid_type, true), column_kind::static_column)
             .with_column("new_cdc_generation_data_uuid", timeuuid_type, column_kind::static_column)
-            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column)
-            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type, column_kind::static_column) // deprecated
+            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false), column_kind::static_column) // deprecated
             .with_column("version", long_type, column_kind::static_column)
             .with_column("fence_version", long_type, column_kind::static_column)
             .with_column("transition_state", utf8_type, column_kind::static_column)
@@ -273,6 +273,7 @@ schema_ptr system_keyspace::topology() {
             .with_column("session", uuid_type, column_kind::static_column)
             .with_column("tablet_balancing_enabled", boolean_type, column_kind::static_column)
             .with_column("upgrade_state", utf8_type, column_kind::static_column)
+            .with_column("global_requests", set_type_impl::get_instance(timeuuid_type, true), column_kind::static_column)
             .set_comment("Current state of topology change machine")
             .with_hash_version()
             .build();
@@ -292,6 +293,8 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("error", utf8_type)
             .with_column("end_time", timestamp_type)
             .with_column("truncate_table_id", uuid_type)
+            .with_column("new_keyspace_rf_change_ks_name", utf8_type)
+            .with_column("new_keyspace_rf_change_data", map_type_impl::get_instance(utf8_type, utf8_type, false))
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3294,6 +3297,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             ret.global_request_id = some_row.get_as<utils::UUID>("global_topology_request_id");
         }
 
+        if (some_row.has("global_requests")) {
+            for (auto&& v : deserialize_set_column(*topology(), some_row, "global_requests")) {
+                ret.global_requests_queue.push_back(value_cast<utils::UUID>(v));
+            }
+        }
+
         if (some_row.has("enabled_features")) {
             ret.enabled_features = decode_features(deserialize_set_column(*topology(), some_row, "enabled_features"));
         }
@@ -3469,7 +3478,13 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
         entry.initiating_host = row.get_as<utils::UUID>("initiating_host");
     }
     if (row.has("request_type")) {
-        entry.request_type = service::topology_request_from_string(row.get_as<sstring>("request_type"));
+        auto rts = row.get_as<sstring>("request_type");
+        auto rt = service::try_topology_request_from_string(rts);
+        if (rt) {
+            entry.request_type = *rt;
+        } else {
+            entry.request_type = service::global_topology_request_from_string(rts);
+        }
     }
     if (row.has("start_time")) {
         entry.start_time = row.get_as<db_clock::time_point>("start_time");
@@ -3486,6 +3501,11 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("truncate_table_id")) {
         entry.truncate_table_id = table_id(row.get_as<utils::UUID>("truncate_table_id"));
     }
+    if (row.has("new_keyspace_rf_change_data")) {
+        entry.new_keyspace_rf_change_ks_name = row.get_as<sstring>("new_keyspace_rf_change_ks_name");
+        entry.new_keyspace_rf_change_data = row.get_map<sstring,sstring>("new_keyspace_rf_change_data");
+    }
+
     return entry;
 }
 
