@@ -91,6 +91,11 @@ def test_tag_resource_overwrite(test_table):
     assert multiset(got['Tags']) == multiset(tags)
 
 PREDEFINED_TAGS = [{'Key': 'str1', 'Value': 'str2'}, {'Key': 'kkk', 'Value': 'vv'}, {'Key': 'keykey', 'Value': 'valvalvalval'}]
+
+def strip_system_tags(tags):
+    # note: stripping system tags is needed only until #24098 is merged
+    return [ t for t in tags if not t['Key'].startswith('system:') ]
+
 @pytest.fixture(scope="module")
 def test_table_tags(dynamodb):
     # The feature of creating a table already with tags was only added to
@@ -113,7 +118,7 @@ def test_list_tags_from_creation(test_table_tags):
     got = test_table_tags.meta.client.describe_table(TableName=test_table_tags.name)['Table']
     arn =  got['TableArn']
     got = test_table_tags.meta.client.list_tags_of_resource(ResourceArn=arn)
-    assert multiset(got['Tags']) == multiset(PREDEFINED_TAGS)
+    assert multiset(strip_system_tags(got['Tags'])) == multiset(PREDEFINED_TAGS)
 
 # Test checking that incorrect parameters return proper error codes
 def test_tag_resource_incorrect(test_table):
@@ -289,7 +294,7 @@ def test_tag_lsi_gsi(table_lsi_gsi):
     table_arn =  table_desc['TableArn']
     gsi_arn =  table_desc['GlobalSecondaryIndexes'][0]['IndexArn']
     lsi_arn =  table_desc['LocalSecondaryIndexes'][0]['IndexArn']
-    assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=table_arn)['Tags']
+    assert [] == strip_system_tags(table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=table_arn)['Tags'])
     with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
         assert [] == table_lsi_gsi.meta.client.list_tags_of_resource(ResourceArn=gsi_arn)['Tags']
     with pytest.raises(ClientError, match='ValidationException.*ResourceArn'):
