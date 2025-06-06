@@ -817,6 +817,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     for (const auto& gen_id : _topology_state_machine._topology.committed_cdc_generations) {
         rtlogger.trace("topology_state_load: process committed cdc generation {}", gen_id);
+        co_await utils::get_local_injector().inject("topology_state_load_before_update_cdc", [](auto& handler) -> future<> {
+            rtlogger.info("topology_state_load_before_update_cdc hit, wait for message");
+            co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+        });
         co_await _cdc_gens.local().handle_cdc_generation(gen_id);
         if (gen_id == _topology_state_machine._topology.committed_cdc_generations.back()) {
             co_await _sys_ks.local().update_cdc_generation_id(gen_id);
