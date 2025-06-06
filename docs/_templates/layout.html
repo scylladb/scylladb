@@ -1,0 +1,9 @@
+{% extends "!layout.html" %}
+
+{% block scripts %}
+    {# Add noindex meta tag for non-manual builds (opensource/enterprise) to exclude them from search engines #}
+    {% if flag != 'manual' %}
+    <meta name="robots" content="noindex">
+    {% endif %}
+    {{ super() }}
+{% endblock %} 
