@@ -16,6 +16,7 @@
 #include "locator/tablets.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
+#include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
 
 #pragma once
@@ -58,6 +59,8 @@ class compaction_group {
     // Gates async operations confined to a single group.
     seastar::named_gate _async_gate;
     bool _tombstone_gc_enabled = true;
+    db::replay_position _lowest_rp;
+    friend class table;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -117,7 +120,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush() noexcept;
+    future<> flush(std::optional<db::replay_position> = {}) noexcept;
     bool can_flush() const;
 
     const dht::token_range& token_range() const noexcept {
