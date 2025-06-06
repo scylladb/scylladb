@@ -542,7 +542,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
 // All the global operations are going to happen here, and just the reloading happens
 // in there.
 future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
-    bool load_and_stream, bool primary_replica_only, bool skip_cleanup, stream_scope scope) {
+    bool load_and_stream, bool primary_replica_only, bool skip_cleanup, bool skip_reshape, stream_scope scope) {
     if (_loading_new_sstables) {
         throw std::runtime_error("Already loading SSTables. Try again later");
     } else {
@@ -562,6 +562,10 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
         throw std::runtime_error("Skipping cleanup is not possible when doing load-and-stream");
     }
 
+    if (load_and_stream && skip_reshape) {
+        throw std::runtime_error("Skipping reshape is not possible when doing load-and-stream");
+    }
+
     llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, skip_cleanup={}",
             ks_name, cf_name, load_and_stream_desc, primary_replica_only, skip_cleanup);
     try {
@@ -578,7 +582,7 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
                 co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only, true, scope, {});
             });
         } else {
-            co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, ks_name, cf_name, skip_cleanup);
+            co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, ks_name, cf_name, skip_cleanup, skip_reshape);
         }
     } catch (...) {
         llog.warn("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=failed: {}",

@@ -104,10 +104,14 @@ public:
      *
      * @param ks_name the keyspace in which to search for new SSTables.
      * @param cf_name the column family in which to search for new SSTables.
+     * @param load_and_stream load SSTables that do not belong to this node and stream them to the appropriate nodes.
+     * @param primary_replica_only whether to stream only to the primary replica that owns the data.
+     * @param skip_cleanup whether to skip the cleanup step when loading SSTables.
+     * @param skip_reshape whether to skip the reshape step when loading SSTables.
      * @return a future<> when the operation finishes.
      */
     future<> load_new_sstables(sstring ks_name, sstring cf_name,
-            bool load_and_stream, bool primary_replica_only, bool skip_cleanup, stream_scope scope);
+            bool load_and_stream, bool primary_replica_only, bool skip_cleanup, bool skip_reshape, stream_scope scope);
 
     /**
      * Download new SSTables not currently tracked by the system from object store

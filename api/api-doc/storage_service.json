@@ -2154,6 +2154,14 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"skip_reshape",
+                     "description":"Don't reshape the loaded sstables. Invalid if load_and_stream is true",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"scope",
                      "description":"Defines the set of nodes to which mutations can be streamed",
                      "required":false,
