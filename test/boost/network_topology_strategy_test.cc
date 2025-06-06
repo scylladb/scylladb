@@ -1333,7 +1333,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
             view_token,
             use_legacy_self_pairing,
             use_tablets_basic_rack_aware_view_pairing,
-            cf_stats);
+            cf_stats).first;
 
         // view pair must be found
         BOOST_REQUIRE(view_ep_opt);
@@ -1488,7 +1488,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
             view_token,
             use_legacy_self_pairing,
             use_tablets_basic_rack_aware_view_pairing,
-            cf_stats);
+            cf_stats).first;
 
         // view pair must be found
         if (!view_ep_opt) {
