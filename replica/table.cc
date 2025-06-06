@@ -60,6 +60,7 @@
 #include "readers/combined.hh"
 #include "readers/compacting.hh"
 #include "replica/schema_describe_helper.hh"
+#include <seastar/json/json_elements.hh>
 
 namespace replica {
 
@@ -2859,21 +2860,14 @@ db::replay_position table::highest_flushed_replay_position() const {
 
 future<>
 table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) {
-    std::ostringstream ss;
-    int n = 0;
-    ss << "{" << std::endl << "\t\"files\" : [ ";
-    for (const auto& fsp : file_sets) {
-      for (const auto& rf : *fsp) {
-        if (n++ > 0) {
-            ss << ", ";
-        }
-        ss << "\"" << rf << "\"";
-        co_await coroutine::maybe_yield();
-      }
-    }
-    ss << " ]" << std::endl << "}" << std::endl;
+    struct manifest_json : public json::json_base {
+        json::json_list<sstring> sstable_data_files;
 
-    auto json = ss.str();
+        manifest_json() {
+            add(&sstable_data_files, "files", true);
+        }
+    };
+    
     auto jsonfile = jsondir + "/manifest.json";
 
     tlogger.debug("Storing manifest {}", jsonfile);
@@ -2881,9 +2875,16 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
     co_await io_check([jsondir] { return recursive_touch_directory(jsondir); });
     auto f = co_await open_checked_file_dma(general_disk_error_handler, jsonfile, open_flags::wo | open_flags::create | open_flags::truncate);
     auto out = co_await make_file_output_stream(std::move(f));
+    manifest_json manifest;
     std::exception_ptr ex;
     try {
-        co_await out.write(json.c_str(), json.size());
+        for (const auto& fsp : file_sets) {
+            for (const auto& rf : *fsp) {
+                manifest.sstable_data_files.push(rf);
+                co_await coroutine::maybe_yield();
+            }
+        }
+        co_await manifest.write(out);
         co_await out.flush();
     } catch (...) {
         ex = std::current_exception();

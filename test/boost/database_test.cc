@@ -7,6 +7,7 @@
  */
 
 
+#include <boost/smart_ptr/intrusive_ptr.hpp>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
@@ -52,6 +53,7 @@
 #include "db/view/view_builder.hh"
 #include "replica/mutation_dump.hh"
 #include "utils/disk_space_monitor.hh"
+#include "utils/rjson.hh"
 
 using namespace std::chrono_literals;
 using namespace sstables;
@@ -667,6 +669,55 @@ SEASTAR_TEST_CASE(view_snapshot_works) {
 SEASTAR_TEST_CASE(index_snapshot_works) {
     return snapshot_works(::secondary_index::index_table_name("index_cf"));
 }
+
+// Create a snapshot of a table with some data.
+// Read the manifest.json file from the snapshot directory.
+// Verify that the manifest contains all the sstables from within the snapshot directory,
+// no more, no less. Avoid reading from the table directory to avoid autocompaction interference.
+// Indirectly check that:
+// a) manifest.json is valid JSON
+// b) manifest.json contains the "files" key
+// c) for the "files" key, the value is an array of strings.
+SEASTAR_TEST_CASE(snapshot_manifest_format) {
+    co_await do_with_some_data({"cf"}, [] (cql_test_env& e) -> future<> {
+        co_await take_snapshot(e, "ks", "cf");
+
+        std::set<sstring> sstables;
+
+        auto& cf = e.local_db().find_column_family("ks", "cf");
+        auto table_directory = table_dir(cf);
+        auto snapshot_dir = table_directory / sstables::snapshots_dir / "test";
+
+        co_await lister::scan_dir(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&sstables](fs::path, directory_entry de) -> future<> {
+            if (de.name.ends_with("-Data.db")) {
+                sstables.insert(de.name);
+            }
+            co_return;
+        });
+
+        // read json string from manifest.json file
+        auto manifest_file = snapshot_dir / "manifest.json";
+
+        auto f = co_await open_file_dma(manifest_file.string(), open_flags::ro);
+        auto in = make_file_input_stream(f);
+        auto buf = co_await in.read_exactly(co_await f.size());
+        sstring json_string(buf.get(), buf.size());
+
+        co_await in.close();
+
+        // This throws if the string is not valid JSON.
+        const auto& json = rjson::parse(json_string);
+        const auto& json_array_sstables = rjson::get(json, "files");
+
+        BOOST_REQUIRE_EQUAL(json_array_sstables.GetArray().Size(), sstables.size());
+
+        for (auto& element : json_array_sstables.GetArray()) {
+            auto sstable = sstring(rjson::to_string_view(element));
+            BOOST_ASSERT(sstables.contains(sstable));
+        }
+    }, true);
+}
+
 
 SEASTAR_TEST_CASE(snapshot_skip_flush_works) {
     return do_with_some_data({"cf"}, [] (cql_test_env& e) {
