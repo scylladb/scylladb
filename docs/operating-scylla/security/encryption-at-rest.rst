@@ -298,110 +298,188 @@ implemented through Azure Key Vault's ``wrapkey`` and ``unwrapkey`` operations.
 Create Encryption Keys
 -----------------------------
 
-Depending on your key provider, you will either have the option of allowing
+Depending on your key provider, you will either have the option to allow
 ScyllaDB to generate an encryption key, or you will have to provide one:
 
-* KMIP Key Provider - you don't need to generate any key yourself
-* KMS Key Provider - you must generate a key yourself in AWS
+* Local Key Provider - you can provide your own keys, otherwise ScyllaDB will generate them for you
 * Replicated Key Provider - you must generate a system key yourself
-* Local Key Provider - If you do not generate your own secret key, ScyllaDB will
-  create one for you
+* KMIP Key Provider - you can provide your own keys, otherwise ScyllaDB will generate them for you
+* KMS Key Provider - you must generate a key yourself in AWS
+* GCP Key Provider - you must generate a key yourself in GCP
+* Azure Key Provider - you must generate a key yourself in Azure
 
+To create your own key, select one of the following options, depending on your
+desired key provider:
 
-Use the key generator script
-================================
+.. tabs::
 
-The Key Generator script generates a key in the directory of your choice.
+   .. group-tab:: Local Key Provider
 
-**Procedure**
+      The following procedure describes how you can use ScyllaDB's key generator
+      script to generate local keys for your cluster.
 
+      **Procedure**
 
-#. Create (if it doesn't exist) a local directory for storing the key.  Make
-   sure that the owner of the directory is ``scylla`` and not another user. Make
-   sure that the ``scylla`` user can read, write, and execute over the parent
-   directory. Following this procedure makes ``/etc/scylla/encryption_keys/``
-   the parent directory of your keys.
+      #. Select a local directory for storing your keys.
 
-   For example:
+         For example:
 
-   .. code-block:: none
+         .. code-block:: none
 
-      sudo mkdir -p /etc/scylla/encryption_keys/system_keys
-      sudo chown -R scylla:scylla /etc/scylla/encryption_keys
-      sudo chmod -R 700 /etc/scylla/encryption_keys
+            SCYLLA_LOCAL_KEYS_DIR=/etc/scylla/encryption_keys
 
-#. Create a key using the local file key generator script making sure that the
-   keyfile owner is ``scylla`` and not another user. Run the command:
+      #. Create the directory if it doesn't exist, along with a sub-directory
+         for your system keys.
 
-   .. code-block:: none
+         .. code-block:: none
 
-      sudo -u scylla /usr/bin/scylla local-file-key-generator <op> [options] [key-path]
+            sudo mkdir -p ${SCYLLA_LOCAL_KEYS_DIR?}/system_keys
 
-   Where:
+      #. Set the ``scylla`` user as the owner of the directory. Provide
+         ``scylla`` user with Read, Write, and Execute permissions over this
+         directory.
 
-   * ``-a,--alg <arg>`` - the encryption algorithm (e.g., AES) you want to use to encrypt the key
-   * ``-h,--help`` - displays the help menu
-   * ``-l,--length <arg>`` - the length of the encryption key in bits (i.e. 128, 256)
-   * ``-b,--block-mode <arg>`` - the encryption algorithm block mode (i.e. CBC, EBC)
-   * ``-p,--padding <arg>`` - the encryption algorithm padding method (i.e. PKCS5)
-   * ``key-path`` - is the directory you want to place the key into (/etc/scylla/encryption_keys, for example)
+         .. code-block:: none
 
-   And ``<op>`` is one of ``generate`` or ``append``, the first creating a new
-   key file with the generated key, the latter appending a new key of the
-   required type to an existing file.
+            sudo chown -R scylla:scylla ${SCYLLA_LOCAL_KEYS_DIR?}
+            sudo chmod -R 700 ${SCYLLA_LOCAL_KEYS_DIR?}
 
-   For Example:
+      #. Create a key using the local file key generator script, making sure
+         that the key file owner is ``scylla`` and not another user. Run the
+         following command:
 
-   To create a secret key and a system key using other encryption settings in a
-   different location:
+         .. code-block:: none
 
-   .. code-block:: none
+          sudo -u scylla /usr/bin/scylla local-file-key-generator <op> [options] [key-path]
 
-      sudo -u scylla /usr/bin/scylla local-file-key-generator generate -a AES -b ECB -p PKCS5 -l 192 /etc/scylla/encryption_keys/secret_key
-      sudo -u scylla /usr/bin/scylla local-file-key-generator generate -a AES -b CBC -p PKCS5 -l 128 /etc/scylla/encryption_keys/system_keys/system_key
+         Where:
 
-   To display the secret key parameters:
+         * ``<op>`` is either ``generate`` or ``append``. ``generate`` creates a
+           new key file with the generated key, while ``append`` appends a new
+           key of the required type to an existing key file.
 
-   .. code-block:: none
+         * ``[options]`` can be any combination of the following:
 
-      sudo cat /etc/scylla/encryption_keys/secret_key
+           * ``-a,--alg <arg>`` - the encryption algorithm (e.g., AES) you want to use to encrypt the key
+           * ``-h,--help`` - displays the help menu
+           * ``-l,--length <arg>`` - the length of the encryption key in bits (i.e. 128, 256)
+           * ``-b,--block-mode <arg>`` - the encryption algorithm block mode (i.e. CBC, EBC)
+           * ``-p,--padding <arg>`` - the encryption algorithm padding method (i.e. PKCS5)
 
-   Returns:
+         * ``[key-path]`` - is the directory you want to place the key into
+            (e.g., ``/etc/scylla/encryption_keys``). This is optional for
+            ``append`` if the file already exists.
 
-   .. code-block:: none
+         For example:
 
-      AES/ECB/PKCS5Padding:192:8stVxW5ypYhNxsnRVS1A6suKhk0sG4Tj
+         To create a secret key and a system key in a different location:
 
-   To display the system key parameters:
+         .. code-block:: none
 
-   .. code-block:: none
+            sudo -u scylla /usr/bin/scylla local-file-key-generator generate -a AES -b CBC -p PKCS5 -l 128 ${SCYLLA_LOCAL_KEYS_DIR?}/secret_key
+            sudo -u scylla /usr/bin/scylla local-file-key-generator generate -a AES -b CBC -p PKCS5 -l 128 ${SCYLLA_LOCAL_KEYS_DIR?}/system_keys/system_key
 
-      sudo cat /etc/scylla/encryption_keys/system_keys/system_key
+      #. Verify that the script has successfully created the key in your
+         selected location.
 
-   Returns:
+         To display the secret key parameters:
 
-   .. code-block:: none
+         .. code-block:: none
 
-      AES/CBC/PKCS5Padding:128:GGpOSxTGhtPRPLrNPYvVMQ==
+            sudo -u scylla cat ${SCYLLA_LOCAL_KEYS_DIR?}/secret_key
 
+         To display the system key parameters:
 
-   Once you have created a key, copy the key to each node, using the procedure
-   described in `Copy keys to nodes`_.
+         .. code-block:: none
 
-Copy keys to nodes
-======================
+            sudo -u scylla cat ${SCYLLA_LOCAL_KEYS_DIR?}/system_keys/system_key
 
-Every key you generate needs to be copied to the nodes for use in local key
-providers.
+         Both commands should return a single line with the following format:
 
-**Procedure**
+         .. code-block:: none
 
-#. Securely copy the key file, using ``scp`` or similar, to the same path on all
-   nodes in the cluster. Make sure the key on each target node is moved to the
-   same location as the source directory and that the target directory has the
-   same permissions as the source directory.
+            <cipher_algorithm>:<secret_key_length>:<base64encoded_key>
 
-#. Repeat for all nodes in the cluster.
+         For example:
+
+         .. code-block:: none
+
+            AES/CBC/PKCS5Padding:128:8stVxW5ypYhNxsnRVS1A6suKhk0sG4Tj
+
+      #. Securely copy the key file, using ``scp`` or similar, to the same path
+         on all nodes in the cluster. Make sure the key on each target node is
+         moved to the same location as the source directory and that the target
+         directory has the same permissions as the source directory.
+
+   .. group-tab:: Replicated Key Provider
+
+      The Replicated Key Provider requires two additional keys:
+
+      * A system key - used to encrypt the data in the system table.
+      * A local secret key - used as a fallback key, in case the Replicated Key
+        Provider fails to retrieve a key from the system table.
+
+      The system key can be either a local key, or a KMIP key. In either case,
+      you have to provide your own key (Scylla will not generate it). Check the
+      instructions in the relevant tabs on how to create such keys.
+
+      The local secret key can be created using the same method as the system
+      key, but it is also possible to let ScyllaDB generate it for you, in the
+      path that you specified in the ``scylla_encryption_options``.
+
+      .. note::
+
+         You cannot use the same key for both the system key and the local
+         secret key. They must be different keys.
+
+   .. group-tab:: KMIP Key Provider
+
+      The KMIP Key Provider will first try to discover existing keys in the KMIP
+      server, and if it does not find any, it will generate new keys. The key
+      discovery is based on attributes. If you wish to provide your own keys,
+      make sure to set the following attributes so that the KMIP Key Provider
+      can locate them:
+
+      * Object type: symmetric key
+      * Algorithm: your desired algorithm (e.g., AES)
+      * Key size: your desired key size (e.g., 128 bits)
+      * State: active
+      * Cryptographic Usage Mask: Encrypt, Decrypt
+      * (optional) Key namespace: a namespace for your key(s), - must match the
+        ``key_namespace`` option that you will specify in the
+        ``scylla_encryption_options`` in the table schema
+
+   .. group-tab:: KMS Key Provider
+
+      To use the KMS Key Provider, you must generate a key yourself in your AWS
+      account. The key must be a symmetric key, using the ``SYMMETRIC_DEFAULT``
+      key spec. If your key is regional, consider creating it in the same region
+      as your ScyllaDB cluster.
+
+      For step-by-step instructions, refer to the `AWS documentation
+      <https://docs.aws.amazon.com/kms/latest/developerguide/create-symmetric-cmk.html>`_.
+
+   .. group-tab:: GCP Key Provider
+
+      To use the GCP Key Provider, you must generate a key ring and a key in
+      your GCP account. The key must be a symmetric key with the
+      ``ENCRYPT_DECRYPT`` purpose. Consider creating your key ring in the same
+      location as your ScyllaDB cluster.
+
+      For step-by-step instructions, refer to the GCP documentation for `creating
+      a key ring <https://cloud.google.com/kms/docs/create-key-ring>`_ and
+      `creating a key <https://cloud.google.com/kms/docs/create-key>`_.
+
+   .. group-tab:: Azure Key Provider
+
+      To use the Azure Key Provider, you must create a key vault and a key in
+      your Azure account. The key must be an RSA key with either software or HSM
+      protection, and it must permit the ``wrapkey`` and ``unwrapkey`` operations.
+      Consider creating your vault in the same location as your ScyllaDB cluster.
+
+      For step-by-step instructions, refer to the Azure documentation for `creating
+      a key vault <https://docs.microsoft.com/en-us/azure/key-vault/general/quick-create-portal>`_
+      and `generating a key <https://learn.microsoft.com/en-us/azure/key-vault/keys/quick-create-portal>`_.
 
 .. _encryption-at-rest-set-kmip:
 
