@@ -226,7 +226,7 @@ void sstable_directory::validate(sstables::shared_sstable sst, process_flags fla
 
 future<sstables::shared_sstable> sstable_directory::load_sstable(sstables::entry_descriptor desc,
         const data_dictionary::storage_options& storage_opts, sstables::sstable_open_config cfg) const {
-    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    shared_sstable sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
     co_await sst->load(_sharder, cfg);
     co_return sst;
 }
@@ -504,7 +504,7 @@ sstable_directory::move_foreign_sstables(sharded<sstable_directory>& source_dire
 }
 
 future<shared_sstable> sstable_directory::load_foreign_sstable(foreign_sstable_open_info& info) {
-    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, _state, info.version, info.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, *_storage_opts, info.generation, _state, info.version, info.format, db_clock::now(), _error_handler_gen);
     co_await sst->load(std::move(info));
     co_return sst;
 }
@@ -521,7 +521,7 @@ sstable_directory::load_foreign_sstables(sstable_entry_descriptor_vector info_ve
 
 future<std::vector<shard_id>> sstable_directory::get_shards_for_this_sstable(
         const sstables::entry_descriptor& desc, const data_dictionary::storage_options& storage_opts, process_flags flags) const {
-    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, gc_clock::now(), _error_handler_gen);
+    auto sst = _manager.make_sstable(_schema, storage_opts, desc.generation, _state, desc.version, desc.format, db_clock::now(), _error_handler_gen);
     co_await sst->load_owner_shards(_sharder);
     validate(sst, flags);
     co_return sst->get_shards_for_this_sstable();

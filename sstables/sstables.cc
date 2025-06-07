@@ -3237,7 +3237,7 @@ sstable::sstable(schema_ptr schema,
         db::large_data_handler& large_data_handler,
         db::corrupt_data_handler& corrupt_data_handler,
         sstables_manager& manager,
-        gc_clock::time_point now,
+        db_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size)
     : sstable_buffer_size(buffer_size)

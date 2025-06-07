@@ -362,7 +362,7 @@ test_env::new_generation() noexcept {
 shared_sstable
 test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
         sstable::version_types v, sstable::format_types f,
-        size_t buffer_size, gc_clock::time_point now) {
+        size_t buffer_size, db_clock::time_point now) {
     // FIXME -- most of the callers work with _impl->dir's path, so
     // test_env can initialize the .dir/.prefix only once, when constructed
     auto storage = _impl->storage;
@@ -381,7 +381,7 @@ test_env::make_sstable(schema_ptr schema, sstring dir, sstable::version_types v)
 shared_sstable
 test_env::make_sstable(schema_ptr schema, sstables::generation_type generation,
         sstable::version_types v, sstable::format_types f,
-        size_t buffer_size, gc_clock::time_point now) {
+        size_t buffer_size, db_clock::time_point now) {
     return make_sstable(std::move(schema), _impl->dir.path().native(), generation, std::move(v), std::move(f), buffer_size, now);
 }
 

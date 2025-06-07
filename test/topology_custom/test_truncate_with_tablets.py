@@ -212,3 +212,39 @@ async def test_truncate_with_coordinator_crash(manager: ManagerClient):
         # Check if we have any data
         row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
         assert row[0].count == 0
+
+# Reproduces https://github.com/scylladb/scylladb/issues/23771.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_replay_position_check_during_truncate(manager):
+    logger.info("Bootstrapping cluster")
+    cfg = { 'auto_snapshot': True }
+    cmdline = ['--smp=1']
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        keys = range(10)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        #await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        await manager.api.enable_injection(server.ip_addr, "database_truncate_wait", True)
+
+        s1_log = await manager.server_open_log(server.server_id)
+        s1_mark = await s1_log.mark()
+
+        truncate_task = cql.run_async(f"TRUNCATE {ks}.test")
+
+        await s1_log.wait_for(f"database_truncate_wait: waiting", from_mark=s1_mark)
+
+        keys = range(10)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        await manager.api.message_injection(server.ip_addr, "database_truncate_wait")
+        await s1_log.wait_for(f"database_truncate_wait: message received", from_mark=s1_mark)
+        await truncate_task

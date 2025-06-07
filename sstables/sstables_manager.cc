@@ -130,7 +130,7 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         sstable_state state,
         sstable_version_types v,
         sstable_format_types f,
-        gc_clock::time_point now,
+        db_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
     return make_lw_shared<sstable>(std::move(schema), storage, generation, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);

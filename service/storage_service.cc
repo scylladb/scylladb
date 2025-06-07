@@ -6058,7 +6058,7 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
     auto load_sstable = [] (const dht::sharder& sharder, replica::table& t, sstables::entry_descriptor d) -> future<sstables::shared_sstable> {
         auto& mng = t.get_sstables_manager();
         auto sst = mng.make_sstable(t.schema(), t.get_storage_options(), d.generation, d.state.value_or(sstables::sstable_state::normal),
-                                    d.version, d.format, gc_clock::now(), default_io_error_handler_gen());
+                                    d.version, d.format, db_clock::now(), default_io_error_handler_gen());
         // The loader will consider current shard as sstable owner, despite the tablet sharder
         // will still point to leaving replica at this stage in migration. If node goes down,
         // SSTables will be loaded at pending replica and migration is retried, so correctness

@@ -202,7 +202,7 @@ public:
             db::large_data_handler& large_data_handler,
             db::corrupt_data_handler& corrupt_data_handler,
             sstables_manager& manager,
-            gc_clock::time_point now,
+            db_clock::time_point now,
             io_error_handler_gen error_handler_gen,
             size_t buffer_size);
     sstable& operator=(const sstable&) = delete;
@@ -457,7 +457,7 @@ public:
      * max_data_age, which is load time. This could maybe
      * be improved upon.
      */
-    gc_clock::time_point max_data_age() const {
+    db_clock::time_point max_data_age() const {
         return _now;
     }
     std::vector<sstring> component_filenames() const;
@@ -590,7 +590,7 @@ private:
     } _marked_for_deletion = mark_for_deletion::none;
     bool _active = true;
 
-    gc_clock::time_point _now;
+    db_clock::time_point _now;
 
     io_error_handler _read_error_handler;
     io_error_handler _write_error_handler;
