@@ -291,6 +291,10 @@ struct tablet_transition_info {
 // Returns the leaving replica for a given transition.
 std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tablet_transition_info&);
 
+// True if the tablet is transitioning and it's in a stage that follows the stage
+// where we clean up the tablet on the given replica.
+bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tablet_transition_info& trinfo);
+
 /// Represents intention to move a single tablet replica from src to dst.
 struct tablet_migration_info {
     locator::tablet_transition_kind kind;
