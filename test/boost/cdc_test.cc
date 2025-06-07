@@ -17,6 +17,8 @@
 
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
+#include "cdc/metadata.hh"
+#include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
@@ -323,6 +325,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
 
         // cdc log partition key
         assert_has_column(cdc::log_meta_column_name("stream_id"), bytes_type, column_kind::partition_key);
+        assert_has_column(cdc::log_meta_column_name("closed_time"), timeuuid_type, column_kind::static_column);
         assert_has_column(cdc::log_meta_column_name("time"), timeuuid_type, column_kind::clustering_key);
         assert_has_column(cdc::log_meta_column_name("batch_seq_no"), int32_type, column_kind::clustering_key);
 
@@ -2087,6 +2090,229 @@ SEASTAR_THREAD_TEST_CASE(test_image_deleted_column) {
 
         perform_test(false);
         perform_test(true);
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cdc_generate_stream_diff) {
+    // for convenience of testing we represent stream_id by its token as int64_t.
+    // this function takes care of translating it into stream_id and back
+    using stream_set = std::vector<int64_t>;
+
+    auto do_test_diff = [&] (stream_set a, stream_set b, stream_set expected_closed, stream_set expected_opened) {
+        std::unordered_map<int64_t, cdc::stream_id> token_to_stream;
+        std::vector<cdc::stream_id> a_sids, b_sids;
+        for (auto t : a) {
+            a_sids.push_back(cdc::stream_id(dht::token(t), 0));
+            token_to_stream[t] = a_sids.back();
+        }
+        for (auto t : b) {
+            auto it = token_to_stream.find(t);
+            if (it != token_to_stream.end()) {
+                b_sids.push_back(it->second);
+            } else {
+                b_sids.push_back(cdc::stream_id(dht::token(t), 0));
+            }
+        }
+
+        auto diff = cdc::metadata::generate_stream_diff(a_sids, b_sids);
+
+        stream_set closed_streams_tokens = std::views::transform(diff.closed_streams, [] (cdc::stream_id sid) { return dht::token::to_int64(sid.token()); }) | std::ranges::to<std::vector>();
+        stream_set opened_streams_tokens = std::views::transform(diff.opened_streams, [] (cdc::stream_id sid) { return dht::token::to_int64(sid.token()); }) | std::ranges::to<std::vector>();
+
+        BOOST_REQUIRE_EQUAL(closed_streams_tokens, expected_closed);
+        BOOST_REQUIRE_EQUAL(opened_streams_tokens, expected_opened);
+    };
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 10, 30, 50 },
+        stream_set { 20 }, stream_set { 50 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 30, 50, 70 },
+        stream_set { 10, 20 }, stream_set { 50, 70 }
+    );
+
+    do_test_diff(
+        stream_set {}, stream_set { 30, 50, 70 },
+        stream_set {}, stream_set { 30, 50, 70 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set {},
+        stream_set { 10, 20, 30 }, stream_set {}
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 5 },
+        stream_set { 10, 20, 30 }, stream_set { 5 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 5, 40, 80 },
+        stream_set { 10, 20, 30 }, stream_set { 5, 40, 80 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30 }, stream_set { 10, 15, 20, 25, 30 },
+        stream_set {}, stream_set { 15, 25 }
+    );
+
+    do_test_diff(
+        stream_set { 10, 20, 30, 40, 50 }, stream_set { 10, 30, 50},
+        stream_set { 20, 40 }, stream_set {}
+    );
+}
+
+struct cdc_compaction_test_config {
+    table_id table;
+    std::vector<std::vector<cdc::stream_id>> streams;
+    size_t new_base_stream;
+};
+
+void do_cdc_stream_compaction_test(cql_test_env& e, const cdc_compaction_test_config& cfg) {
+    auto do_group0_write = [&] (std::function<future<std::vector<mutation>>(api::timestamp_type ts)> fn) -> future<> {
+        while (true) {
+            auto& group0_client = e.get_raft_group0_client();
+            abort_source as;
+            auto guard = group0_client.start_operation(as).get();
+            auto ts = guard.write_timestamp();
+
+            auto muts = fn(ts).get();
+            std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+
+            auto group0_cmd = group0_client.prepare_command(
+                ::service::write_mutations{
+                    .mutations{std::move(cmuts)},
+                },
+                guard,
+                "test_cdc_stream_compaction");
+            try {
+                group0_client.add_entry(std::move(group0_cmd), std::move(guard), as, ::service::raft_timeout{}).get();
+            } catch (::service::group0_concurrent_modification&) {
+                continue;
+            }
+            break;
+        }
+        return make_ready_future<>();
+    };
+
+    std::vector<utils::UUID> stream_uuid;
+    {
+        auto db_now = db_clock::now();
+        auto next_stream_ts = db_now;
+        for (size_t i = 0; i < cfg.streams.size(); i++) {
+            stream_uuid.emplace_back(utils::UUID_gen::get_random_time_UUID_from_micros(next_stream_ts.time_since_epoch()));
+            next_stream_ts += std::chrono::seconds(5);
+        }
+    }
+
+    // write base stream to cdc_streams_state
+    do_group0_write([&] (api::timestamp_type ts) -> future<std::vector<mutation>> {
+        std::vector<mutation> muts;
+        muts.emplace_back(cdc::create_table_streams_mutation(cfg.table, stream_uuid[0], cfg.streams[0], ts));
+        return make_ready_future<std::vector<mutation>>(muts);
+    }).get();
+
+    // write stream diffs to cdc_streams_history
+    for (size_t i = 0; i + 1 < cfg.streams.size(); i++) {
+        do_group0_write([&] (api::timestamp_type ts) -> future<std::vector<mutation>> {
+            auto history_schema = db::system_keyspace::cdc_streams_history();
+            auto diff = cdc::metadata::generate_stream_diff(cfg.streams[i], cfg.streams[i+1]);
+            std::vector<mutation> muts;
+            muts.emplace_back(get_open_and_close_streams_mutation(cfg.table, diff, stream_uuid[i+1], ts));
+            return make_ready_future<std::vector<mutation>>(muts);
+        }).get();
+    }
+
+    // verify the base stream (streams[0]) is written to cdc_streams_state
+    e.execute_cql(format("SELECT stream_id FROM system.cdc_streams_state WHERE table_id = {}", cfg.table.uuid())).then([&] (shared_ptr<cql_transport::messages::result_message> msg) {
+        auto row_assert = assert_that(msg).is_rows()
+                    .with_size(cfg.streams[0].size());
+        for (auto sid : cfg.streams[0]) {
+            row_assert.with_row({ {sid.to_bytes()} });
+        }
+    }).get();
+
+    // compact the cdc streams with the new base stream cfg.new_base_stream
+    testlog.info("test_cdc_stream_compaction: start compaction");
+
+    do_group0_write([&] (api::timestamp_type ts) -> future<std::vector<mutation>> {
+        auto muts = cdc::get_cdc_stream_compaction_mutations(cfg.table, stream_uuid[cfg.new_base_stream], cfg.streams[cfg.new_base_stream], ts);
+        return make_ready_future<std::vector<mutation>>(muts);
+    }).get();
+
+    // verify the new base stream is written to cdc_streams_state
+    e.execute_cql(format("SELECT stream_id FROM system.cdc_streams_state WHERE table_id = {}", cfg.table.uuid())).then([&] (shared_ptr<cql_transport::messages::result_message> msg) {
+        auto row_assert = assert_that(msg).is_rows()
+                    .with_size(cfg.streams[cfg.new_base_stream].size());
+        for (auto sid : cfg.streams[cfg.new_base_stream]) {
+            row_assert.with_row({ {sid.to_bytes()} });
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cdc_stream_compaction) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+
+        {
+            // create stream sets:
+            // 0: 10 20 30
+            // 1: 10    30 40 (20 closed, 40 opened)
+            // then compact with 1 as the new base, so after compaction we should have only stream 1
+            // as the base and the history is empty
+
+            auto table = table_id(utils::UUID_gen::get_time_UUID());
+            std::vector<cdc::stream_id> streams0;
+            for (auto t : {10, 20, 30}) {
+                streams0.emplace_back(dht::token(t), 0);
+            }
+            std::vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
+
+            cdc_compaction_test_config test1 = {
+                .table = table,
+                .streams = { std::move(streams0), std::move(streams1) },
+                .new_base_stream = 1,
+            };
+
+            do_cdc_stream_compaction_test(e, test1);
+
+            e.execute_cql(format("SELECT * FROM system.cdc_streams_history WHERE table_id = {}", table.uuid())).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
+                assert_that(msg).is_rows()
+                        .with_size(0);
+            }).get();
+        }
+
+        {
+            // create stream sets:
+            // 0: 10 20 30
+            // 1: 10    30 40       (20 closed, 40 opened)
+            // 2: 10    30 40 50    (50 opened)
+            // then compact with 1 as the new base, so after compaction we should have stream 1
+            // as the base and one history entry for open 50
+
+            auto table = table_id(utils::UUID_gen::get_time_UUID());
+            std::vector<cdc::stream_id> streams0;
+            for (auto t : {10, 20, 30}) {
+                streams0.emplace_back(dht::token(t), 0);
+            }
+            std::vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
+            std::vector<cdc::stream_id> streams2 = {streams0[0], streams0[2], streams1[2], cdc::stream_id(dht::token(50), 0)};
+
+            cdc_compaction_test_config test2 = {
+                .table = table,
+                .streams = { std::move(streams0), std::move(streams1), std::move(streams2)},
+                .new_base_stream = 1,
+            };
+
+            do_cdc_stream_compaction_test(e, test2);
+
+            e.execute_cql(format("SELECT stream_kind, stream_id FROM system.cdc_streams_history WHERE table_id = {}", table.uuid())).then([&] (shared_ptr<cql_transport::messages::result_message> msg) {
+                assert_that(msg).is_rows()
+                        .with_size(1)
+                        .with_row({ {byte_type->decompose(std::to_underlying(cdc::stream_kind::opened))}, { test2.streams[2][3].to_bytes() } });
+            }).get();
+        }
     }).get();
 }
 

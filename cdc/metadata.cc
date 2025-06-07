@@ -50,6 +50,21 @@ cdc::stream_id get_stream(
     return get_stream(*it, tok);
 }
 
+static cdc::stream_id get_stream(
+        const std::vector<cdc::stream_id>& streams,
+        dht::token tok) {
+    if (streams.empty()) {
+        on_internal_error(cdc_log, "get_stream: streams empty");
+    }
+
+    auto it = std::lower_bound(streams.begin(), streams.end(), tok,
+            [] (const cdc::stream_id& sid, dht::token t) { return sid.token() < t; });
+    if (it == streams.end()) {
+        on_internal_error(cdc_log, fmt::format("get_stream: no stream for token {}.", tok));
+    }
+    return *it;
+}
+
 cdc::metadata::container_t::const_iterator cdc::metadata::gen_used_at(api::timestamp_type ts) const {
     auto it = _gens.upper_bound(ts);
     if (it == _gens.begin()) {
@@ -141,6 +156,88 @@ cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok)
     return ret;
 }
 
+const std::vector<cdc::stream_id>& cdc::metadata::get_current_tablet_stream_set(table_id tid) const {
+    auto table_it = _tablet_streams.find(tid);
+    if (table_it == _tablet_streams.end()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find stream metadata for table {}.", tid));
+    }
+    auto& table_streams = table_it->second;
+
+    auto it = table_streams.end();
+    if (it == table_streams.begin()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find any CDC stream for table {}.", tid));
+    }
+    it = std::prev(it);
+
+    const auto& streams = it->second.streams;
+    return streams;
+}
+
+const std::vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id tid, api::timestamp_type ts) const {
+    auto now = api::new_timestamp();
+    if (ts > now + get_generation_leeway().count()) {
+        throw exceptions::invalid_request_exception(seastar::format(
+                "cdc: attempted to get a stream \"from the future\" ({}; current server time: {})."
+                " With CDC you cannot send writes with timestamps arbitrarily into the future, because we don't"
+                " know what streams will be used at that time.\n"
+                "We *do* allow sending writes into the near future, but our ability to do that is limited."
+                " If you really must use your own timestamps, then make sure your clocks are well-synchronized"
+               "  with the database's clocks.", format_timestamp(ts), format_timestamp(now)));
+    }
+
+    auto table_it = _tablet_streams.find(tid);
+    if (table_it == _tablet_streams.end()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find stream metadata for table {}.", tid));
+    }
+    auto& table_streams = table_it->second;
+
+    auto it = table_streams.end();
+    if (it == table_streams.begin()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find any CDC stream for table {}.", tid));
+    }
+
+    // find the most recent entry of stream sets with timestamp <= write timestamp.
+    // start from the most recent entry, which is the most likely candidate, and go
+    // back until we find matching entry.
+    it = std::prev(it);
+
+    while (true) {
+        if (ts >= it->first) {
+            break;
+        }
+
+        if (it == table_streams.begin()) {
+            throw std::runtime_error(fmt::format(
+                    "cdc::metadata::get_stream: could not find any CDC stream for table {} for timestamp {}.", tid, ts));
+        }
+
+        it = std::prev(it);
+    }
+
+    const auto& streams = it->second.streams;
+    return streams;
+}
+
+std::pair<cdc::stream_id, std::optional<cdc::stream_id>> cdc::metadata::get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok) {
+    const auto& current_stream_set = get_tablet_stream_set(tid, ts);
+    auto sid = ::get_stream(current_stream_set, tok);
+
+    std::optional<stream_id> pending_sid;
+    if (auto table_it = _pending_streams.find(tid); table_it != _pending_streams.end()) {
+        const auto& pending_stream_set = table_it->second.stream_set;
+        auto maybe_pending_sid = ::get_stream(pending_stream_set, tok);
+        if (maybe_pending_sid != sid) {
+            pending_sid = std::move(maybe_pending_sid);
+        }
+    }
+
+    return std::make_pair(std::move(sid), std::move(pending_sid));
+}
+
 bool cdc::metadata::known_or_obsolete(db_clock::time_point tp) const {
     auto ts = to_ts(tp);
     auto it = _gens.lower_bound(ts);
@@ -202,4 +299,118 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
     }
 
     return !it->second;
+}
+
+void cdc::metadata::load_streams_state(const cdc::base_streams_state& base_data, const cdc::pending_streams& pending_data, const cdc::streams_history& history_data, const std::vector<table_id>& removed_tables) {
+    for (const auto& [table, base_table_state] : base_data) {
+        table_streams m;
+
+        auto append_stream = [&m] (utils::UUID ts_uuid, std::vector<cdc::stream_id> stream_set) {
+            auto ts = to_ts(db_clock::time_point(utils::UUID_gen::unix_timestamp(ts_uuid)));
+            m[ts] = committed_stream_set {ts_uuid, std::move(stream_set)};
+        };
+
+        auto stream_cmp = [] (const auto& a, const auto& b) { return a.token() < b.token(); };
+
+        auto base_stream_set = base_table_state.streams;
+        std::ranges::sort(base_stream_set, stream_cmp);
+
+        append_stream(base_table_state.ts, std::move(base_stream_set));
+
+        // for each history entry, comprised of closed and opened streams, construct the next
+        // stream set from the previous one, and append it to the table's stream list.
+        if (auto it = history_data.find(table); it != history_data.end()) {
+            const auto& table_history = it->second;
+            for (const auto& [ts, entries] : table_history) {
+                std::vector<stream_id> opened, closed;
+                for (const auto& entry : entries) {
+                    auto kind = entry.first;
+                    auto sid = entry.second;
+                    switch (kind) {
+                        case stream_kind::closed:
+                            closed.push_back(sid);
+                            break;
+                        case stream_kind::opened:
+                            opened.push_back(sid);
+                            break;
+                        default:
+                            on_internal_error(cdc_log, fmt::format("invalid stream_kind {} in cdc_streams_history for table {}", std::to_underlying(kind), table));
+                    }
+                }
+
+                const auto& prev_stream_set = std::crbegin(m)->second.streams;
+
+                std::vector<stream_id> next_stream_set;
+                next_stream_set.reserve(prev_stream_set.size() + opened.size() - closed.size());
+
+                std::ranges::sort(closed, stream_cmp);
+                std::ranges::set_difference(prev_stream_set, closed, std::back_inserter(next_stream_set), stream_cmp);
+                for (auto&& sid : opened) {
+                    next_stream_set.push_back(std::move(sid));
+                }
+                std::ranges::sort(next_stream_set, stream_cmp);
+
+                append_stream(ts, std::move(next_stream_set));
+            }
+        }
+
+        if (auto it = pending_data.find(table); it != pending_data.end()) {
+            auto pending_stream = it->second;
+            std::ranges::sort(pending_stream, stream_cmp);
+
+            // it is possible the pending stream is equal to the last stream according to the history table.
+            // it happens when the pending stream is committed and not closed yet.
+            auto& last_stream_set = std::crbegin(m)->second;
+            std::optional<utils::UUID> committed_time;
+            if (std::ranges::equal(pending_stream, last_stream_set.streams)) {
+                committed_time = last_stream_set.ts;
+            }
+            _pending_streams[table] = {std::move(pending_stream), committed_time};
+        } else {
+            _pending_streams.erase(table);
+        }
+
+        _tablet_streams[table] = std::move(m);
+    }
+
+    for (auto table : removed_tables) {
+        _tablet_streams.erase(table);
+        _pending_streams.erase(table);
+    }
+}
+
+cdc::cdc_stream_diff cdc::metadata::generate_stream_diff(const std::vector<stream_id>& current, const std::vector<stream_id>& pending) {
+    std::vector<stream_id> closed, opened;
+
+    auto current_it = current.begin();
+    auto pending_it = pending.begin();
+
+    while (current_it != current.end()) {
+        if (pending_it == pending.end()) {
+            while (current_it != current.end()) {
+                closed.push_back(*current_it++);
+            }
+            break;
+        }
+
+        if (pending_it->token() < current_it->token()) {
+            opened.push_back(*pending_it++);
+        } else if (pending_it->token() > current_it->token()) {
+            closed.push_back(*current_it++);
+        } else if (*pending_it != *current_it) {
+            opened.push_back(*pending_it++);
+            closed.push_back(*current_it++);
+        } else {
+            pending_it++;
+            current_it++;
+        }
+    }
+    while (pending_it != pending.end()) {
+        opened.push_back(*pending_it++);
+    }
+
+    return cdc_stream_diff {
+        std::move(closed),
+        std::move(opened)
+    };
 }
