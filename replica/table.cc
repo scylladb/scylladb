@@ -826,12 +826,19 @@ public:
         auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
 
         for (auto tid : tmap.tablet_ids()) {
-            auto range = tmap.get_token_range(tid);
-
-            if (tmap.has_replica(tid, local_replica)) {
-                tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
-                ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range));
+            if (!tmap.has_replica(tid, local_replica)) {
+                continue;
             }
+
+            // if the tablet was cleaned up already on this replica, don't allocate a storage group for it.
+            auto trinfo = tmap.get_tablet_transition_info(tid);
+            if (trinfo && locator::is_post_cleanup(local_replica, tmap.get_tablet_info(tid), *trinfo)) {
+                continue;
+            }
+
+            auto range = tmap.get_token_range(tid);
+            tlogger.debug("Tablet with id {} and range {} present for {}.{}", tid, range, schema()->ks_name(), schema()->cf_name());
+            ret[tid.value()] = allocate_storage_group(tmap, tid, std::move(range));
         }
         _storage_groups = std::move(ret);
     }
@@ -2682,7 +2689,7 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
         handle_tablet_merge_completion(*old_tablet_map, *new_tablet_map);
     }
 
-    // Allocate storage group if tablet is migrating in.
+    // Allocate storage group if tablet is migrating in, or deallocate if it's migrating out.
     auto this_replica = locator::tablet_replica{
         .host = erm.get_token_metadata().get_my_id(),
         .shard = this_shard_id()
@@ -2698,6 +2705,8 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
             auto range = new_tablet_map->get_token_range(tid);
             _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
             tablet_migrating_in = true;
+        } else if (_storage_groups.contains(tid.value()) && locator::is_post_cleanup(this_replica, new_tablet_map->get_tablet_info(tid), transition_info)) {
+            remove_storage_group(tid.value());
         }
     }
 
@@ -4099,7 +4108,6 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     co_await stop_compaction_groups(sg);
     co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
     co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
-    _sg_manager->remove_storage_group(tid.value());
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
