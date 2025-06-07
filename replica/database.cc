@@ -2627,6 +2627,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         st.truncated_at = truncated_at_opt.value_or(db_clock::now());
         st.did_flush = should_flush;
     });
+    co_await utils::get_local_injector().inject("database_truncate_wait", utils::wait_for_message(1min));
 
     if (with_snapshot) {
         auto truncated_at = truncated_at_opt.value_or(db_clock::now());
@@ -2666,7 +2667,9 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // What we want to assert is that only data generated until truncation time was included,
     // since we don't want to leave behind data on disk with RP lower than the one we set
     // in the truncation table.
-    SCYLLA_ASSERT(!st.did_flush || rp == db::replay_position() || st.low_mark >= rp);
+    if (st.did_flush && rp != db::replay_position() && st.low_mark < rp) {
+        on_internal_error(dblog, "Data written after truncation time was incorrectly truncated. Truncate is known to not work well with concurrent writes. Retry!");
+    }
     if (rp == db::replay_position()) {
         // If this shard had no mutations, st.low_mark will be an empty, default constructed
         // replay_position. This is a problem because an empty replay_position has the shard_id

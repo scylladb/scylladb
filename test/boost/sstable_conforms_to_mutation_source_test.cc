@@ -25,10 +25,14 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
+static db_clock::time_point to_db_clock(gc_clock::time_point tp) {
+    return db_clock::from_time_t(gc_clock::to_time_t(tp));
+}
+
 static
 mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
-    auto sst = env.make_sstable(s, dir, env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, query_time);
+    auto sst = env.make_sstable(s, dir, env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, to_db_clock(query_time));
     auto mt = make_memtable(s, mutations);
     auto mr = mt->make_mutation_reader(s, env.make_reader_permit());
     sst->write_components(std::move(mr), mutations.size(), s, cfg, mt->get_encoding_stats()).get();
