@@ -149,45 +149,149 @@ is holding your keys. You can use the following options:
    :header-rows: 1
 
    * - Key Provider Name
-     - key_provider Name
+     - ``key_provider`` value
      - Description
    * - Local Key Provider
-     - LocalFileSystemKeyProviderFactory (**default**)
+     - ``LocalFileSystemKeyProviderFactory`` (**default**)
      - Stores the key on the same machine as the data.
    * - Replicated Key Provider
-     - ReplicatedKeyProviderFactory
+     - ``ReplicatedKeyProviderFactory``
      - Stores table keys in a ScyllaDB table where the table itself is encrypted
-       using the system key (available from 2019.1.3)
+       using the system key.
    * - KMIP Key Provider
-     - KmipKeyProviderFactory
-     - External key management server (available from 2019.1.3)
+     - ``KmipKeyProviderFactory``
+     - Stores key(s) in an external Key Management Server using the Key
+       Management Interoperability Protocol (KMIP).
    * - KMS Key Provider
-     - KmsKeyProviderFactory
+     - ``KmsKeyProviderFactory``
      - Uses key(s) provided by the AWS KMS service.
    * - GCP Key Provider
-     - GcpKeyProviderFactory
-     - Used key(s) provided by the GCP KMS service.
+     - ``GcpKeyProviderFactory``
+     - Uses key(s) provided by the GCP KMS service.
    * - Azure Key Provider
-     - AzureKeyProviderFactory
-     - Used key(s) provided by the Azure Key Vault service.
+     - ``AzureKeyProviderFactory``
+     - Uses key(s) provided by the Azure Key Vault service.
 
+Each available key provider is further described at a high level in the
+following sections. Instructions on how to configure them are provided in later
+sections.
 
-About Local Key Storage
-==========================
+Local Key Provider
+====================
 
-Local keys are used for encrypting user data, such as SSTables. Currently, this
-is the only option  available for user data and, as such, is the default key
-storage manager. With local key storage, keys are stored locally on disk in a
-text file. The location of this file is specified in the scylla.yaml.
+.. note::
 
-.. caution:: Care should be taken so that no unauthorized person can access the
-   key data from the file system. Make sure that the owner of this file is the
-   ``scylla`` user and that the file is **not** readable by **other users**, not
-   accessible by **other roles**.
+   The Local Key Provider is less safe than other options and as such it is not
+   recommended for production use. It is the default key provider for the
+   node-local encryption configuration in ``scylla.yaml`` because it does not
+   require any external resources. In production environments, it is recommended
+   to use an external KMS instead.
+
+The Local Key Provider is the default key provider for the node-local encryption
+configuration in ScyllaDB (``user_info_encryption`` and ``system_info_encryption``
+in ``scylla.yaml``). It stores the encryption keys locally on disk in a text file.
+The location of this file is specified in ``scylla.yaml``, or in the table schema.
+The user has the option to generate the key(s) themselves, or let ScyllaDB
+generate the key(s) for them.
+
+.. caution::
+
+   Care should be taken so that no unauthorized person can access the key data
+   from the file system. Make sure that the owner of this file is the ``scylla``
+   user and that the file is **not** readable by **other users**, or accessible
+   by **other roles**.
 
 You should also consider keeping the key directory on a network drive (using TLS
 for the file sharing) to avoid having keys and data on the same storage media,
 in case your storage is stolen or discarded.
+
+Replicated Key Provider
+=========================
+
+.. note::
+
+   The Replicated Key Provider is not recommended for production use because it
+   does not support key rotation. For compatibility with DataStax Cassandra, it
+   is the default key provider for per-table encryption setup. In production
+   environments, an external KMS should be used instead.
+
+The Replicated Key Provider is the default key provider for per-table encryption
+setup in ScyllaDB (``scylla_encryption_options`` in table schema). It stores and
+distributes the encryption keys across every node in the cluster through a
+special ScyllaDB system table (``system_replicated_keys.encrypted_keys``). The
+Replicated Key Provider requires two additional keys to operate:
+
+* A system key - used to encrypt the data in the system table. The system key
+  can be either a local key, or a KMIP key.
+
+* A local secret key - used as a fallback key, in case the Replicated Key
+  Provider fails to retrieve a key from the system table.
+
+The Replicated Key Provider has some limitations:
+
+* It cannot be selected as a node's default encryption option for system or user
+  data in ``scylla.yaml``. It can only be configured per-table, through the
+  ``scylla_encryption_options`` in the table schema.
+
+* It does not support key rotation.
+
+KMIP Key Provider
+===================
+
+The KMIP Key Provider stores the encryption keys in an external Key Management
+Service (KMS) that supports the Key Management Interoperability Protocol (KMIP).
+The user has the option to generate the key(s) themselves, or let ScyllaDB
+generate the key(s) for them. When creating a key or locating an existing key,
+the key provider extracts the raw key material from the server and stores it in
+a loading cache in memory.
+
+Key rotation is supported, but the rotation must be performed by the user on the
+KMIP server level.
+
+.. _ear-key-providers-kms:
+
+KMS Key Provider
+==================
+
+The KMS Key Provider uses keys stored in the AWS Key Management Service (KMS).
+These keys are expected to be pre-created and managed entirely by the user - the
+KMS Key Provider does not create any KMS keys by itself. The user needs to
+specify a KMS key in the ``scylla.yaml`` configuration file, or in the table
+schema, along with credentials to access this key.
+
+The encryption of user or system data does not happen with KMS keys directly.
+Instead, the KMS Key Provider generates another set of keys - the data
+encryption keys - and wraps them with the KMS keys to securely store them on
+disk along with the encrypted data. The data encryption keys remain encrypted on
+disk at all times and they are temporarily stored unencrypted in memory while in
+use.
+
+The KMS Key Provider creates data encryption keys via the KMS's
+``GenerateDataKey`` operation and decrypts wrapped keys via the ``Decrypt``
+operation. It also maintains data encryption keys in a loading cache to reuse
+them for the encryption of multiple artifacts. Once a key expires from the
+cache, it generates a new one via the KMS.
+
+KMS key rotation is supported, but the rotation must be performed by the user.
+
+.. _ear-key-providers-gcp:
+
+GCP Key Provider
+==================
+
+The GCP Key Provider uses keys stored in the Google Cloud Key Management Service
+(KMS). The operating principle is similar to the :ref:`KMS Key Provider
+<ear-key-providers-kms>`, with the only difference that it generates the data
+encryption keys locally. For key wrapping, it relies on the KMS's ``encrypt``
+and ``decrypt`` operations.
+
+Azure Key Provider
+==================
+
+The Azure Key Provider uses keys stored in the Azure Key Vault service. It
+follows the same approach as the :ref:`GCP Key Provider <ear-key-providers-gcp>`,
+namely key wrapping with locally generated data encryption keys. Key wrapping is
+implemented through Azure Key Vault's ``wrapkey`` and ``unwrapkey`` operations.
 
 .. _ear-create-encryption-key:
 
