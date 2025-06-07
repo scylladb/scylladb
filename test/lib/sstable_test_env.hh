@@ -119,13 +119,13 @@ public:
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstables::generation_type generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
-            size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now());
+            size_t buffer_size = default_sstable_buffer_size, db_clock::time_point now = db_clock::now());
 
     shared_sstable make_sstable(schema_ptr schema, sstring dir, sstable::version_types v = sstables::get_highest_sstable_version());
 
     shared_sstable make_sstable(schema_ptr schema, sstables::generation_type generation,
             sstable::version_types v = sstables::get_highest_sstable_version(), sstable::format_types f = sstable::format_types::big,
-            size_t buffer_size = default_sstable_buffer_size, gc_clock::time_point now = gc_clock::now());
+            size_t buffer_size = default_sstable_buffer_size, db_clock::time_point now = db_clock::now());
 
     shared_sstable make_sstable(schema_ptr schema, sstable::version_types v = sstables::get_highest_sstable_version());
 
