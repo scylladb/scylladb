@@ -1186,10 +1186,30 @@ indexed_table_select_statement::do_execute(query_processor& qp,
         }
 
         auto [ann_column, ann_vector_expr] = _prepared_ann_ordering.value();
-        auto ann_vector = ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes());
-        // TODO: not implemented
-        logger.debug("Executing ANN search for vector {}", ann_vector.to_parsable_string());
-        throw exceptions::invalid_request_exception("ANN index not implemented");
+
+        // FIXME: Find a more efficient way to convert from data_value to std::vector<float>
+        std::vector<float> ann_vector;
+        std::ranges::transform(value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes())),
+            std::back_inserter(ann_vector),
+            [](const auto& v) { return value_cast<float>(v); });
+
+        auto pkeys = co_await qp.vector_store().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit);
+        
+        if (!pkeys.has_value()) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(fmt::format("ANN query cannot be executed with vector_store disabled")));
+        }
+
+        // If there are no clustering columns, we have to convert the partition keys to partition ranges.
+        if (_schema->clustering_key_size() == 0) {
+            std::vector<dht::partition_range> partition_ranges;
+            std::ranges::transform(pkeys.value(), std::back_inserter(partition_ranges), [](const auto& pkey) {
+                    return dht::partition_range::make_singular(pkey.partition);
+                });
+
+            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, nullptr);
+        }
+
+        co_return co_await this->execute_base_query(qp, std::move(*pkeys), state, options, now, nullptr);
     }
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
