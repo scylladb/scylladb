@@ -7,6 +7,7 @@
  */
 
 #include "vector_store.hh"
+#include "cql3/type_json.hh"
 #include "dht/i_partitioner.hh"
 #include "keys.hh"
 #include "utils/rjson.hh"
@@ -39,7 +40,7 @@ bytes get_key_column_value(const rjson::value& item, std::size_t idx, const colu
     auto const* keys_obj = rjson::find(item, column_name);
     auto const& keys_arr = keys_obj->GetArray();
     auto const& key = keys_arr[idx];
-    return column.type->from_string(rjson::print(key));
+    return from_json_object(*column.type, key);
 }
 
 partition_key pk_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& schema) {
