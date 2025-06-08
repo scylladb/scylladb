@@ -181,9 +181,6 @@ Alternator table, the following features will not work for this table:
   still change the write isolation mode of the table to a supported mode.
   See <https://github.com/scylladb/scylladb/issues/18068>.
 
-* Enabling TTL with UpdateTableToLive doesn't work (results in an error).
-  See <https://github.com/scylladb/scylla/issues/16567>.
-
 * Enabling Streams with CreateTable or UpdateTable doesn't work
   (results in an error).
   See <https://github.com/scylladb/scylla/issues/16317>.
