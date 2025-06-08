@@ -105,6 +105,21 @@ static const column_definition& attrs_column(const schema& schema) {
     return *cdef;
 }
 
+
+static lw_shared_ptr<stats> get_stats_from_schema(service::storage_proxy& sp, const schema& schema) {
+    try {
+        replica::table& table = sp.local_db().find_column_family(schema.id());
+        if (!table.get_stats().alternator_stats) {
+            table.get_stats().alternator_stats = seastar::make_shared<table_stats>(schema.ks_name(), schema.cf_name());
+        }
+        return table.get_stats().alternator_stats->_stats;
+    } catch (std::runtime_error&) {
+        // If we're here it means that a table we are currently working on was deleted before the
+        // operation completed, returning a temporary object is fine, if the table get deleted so will its metrics
+        return make_lw_shared<stats>();
+    }
+}
+
 make_jsonable::make_jsonable(rjson::value&& value)
     : _value(std::move(value))
 {}
@@ -192,6 +207,7 @@ executor::executor(gms::gossiper& gossiper,
       _ssg(ssg)
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
+    register_metrics(_metrics, _stats);
 }
 
 
@@ -719,7 +735,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     elogger.trace("Describing table {}", request);
 
     schema_ptr schema = get_table(_proxy, request);
-
+    get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value table_description = co_await fill_table_description(schema, table_status::active, _proxy, client_state, trace_state, permit);
@@ -1115,6 +1131,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::access_denied("Incorrect resource identifier");
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
+    get_stats_from_schema(_proxy, *schema)->api_operations.tag_resource++;
     const rjson::value* tags = rjson::find(request, "Tags");
     if (!tags || !tags->IsArray()) {
         co_return api_error::validation("Cannot parse tags");
@@ -1142,6 +1159,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     }
 
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
+    get_stats_from_schema(_proxy, *schema)->api_operations.untag_resource++;
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::ALTER);
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
@@ -1156,7 +1174,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
         return make_ready_future<request_return_type>(api_error::access_denied("Incorrect resource identifier"));
     }
     schema_ptr schema = get_table_from_arn(_proxy, rjson::to_string_view(*arn));
-
+    get_stats_from_schema(_proxy, *schema)->api_operations.list_tags_of_resource++;
     auto tags_map = get_tags_of_table_or_throw(schema);
     rjson::value ret = rjson::empty_object();
     rjson::add(ret, "Tags", rjson::empty_array());
@@ -2228,7 +2246,8 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         const partition_key& pk,
         const clustering_key& ck,
         service_permit permit,
-        alternator::stats& stats);
+        alternator::stats& global_stats,
+        alternator::stats& per_table_stats);
 
 static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
         schema_ptr schema,
@@ -2385,10 +2404,12 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
         const partition_key& pk,
         const clustering_key& ck,
         service_permit permit,
-        alternator::stats& stats,
+        alternator::stats& global_stats,
+        alternator::stats& per_table_stats,
         uint64_t& item_length)
 {
-    stats.reads_before_write++;
+    global_stats.reads_before_write++;
+    per_table_stats.reads_before_write++;
     auto selection = cql3::selection::selection::wildcard(schema);
     auto command = previous_item_read_command(proxy, schema, ck, selection);
     command->allow_limit = db::allow_per_partition_rate_limit::yes;
@@ -2409,17 +2430,19 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         tracing::trace_state_ptr trace_state,
         service_permit permit,
         bool needs_read_before_write,
-        stats& stats,
+        stats& global_stats,
+        stats& per_table_stats,
         uint64_t& wcu_total) {
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
             throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
         }
-        stats.reads_before_write++;
+        global_stats.reads_before_write++;
+        per_table_stats.reads_before_write++;
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, stats, _consumed_capacity._total_bytes).then(
+            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
                     [this, &proxy, &wcu_total, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
                 std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
                 if (!m) {
@@ -2438,7 +2461,8 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         });
     }
     // If we're still here, we need to do this write using LWT:
-    stats.write_using_lwt++;
+    global_stats.write_using_lwt++;
+    per_table_stats.write_using_lwt++;
     auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
     auto read_command = needs_read_before_write ?
@@ -2585,9 +2609,15 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
             });
         });
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, _stats.wcu_total[stats::wcu_types::PUT_ITEM]).finally([op, start_time, this] {
-        _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    });
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
+    per_table_stats->api_operations.put_item++;
+    uint64_t wcu_total = 0;
+    auto res = co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
+    _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
+    per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    _stats.api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    co_return res;
 }
 
 class delete_item_operation : public rmw_operation {
@@ -2659,6 +2689,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     elogger.trace("delete_item {}", request);
 
     auto op = make_shared<delete_item_operation>(_proxy, std::move(request));
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
 
@@ -2667,6 +2698,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
+        per_table_stats->shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(*shard, _ssg,
                 [request = std::move(*op).move_request(), cs = client_state.move_to_other_shard(), gt = tracing::global_trace_state_ptr(trace_state), permit = std::move(permit)]
                 (executor& e) mutable {
@@ -2680,9 +2712,14 @@ future<executor::request_return_type> executor::delete_item(client_state& client
             });
         });
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, _stats.wcu_total[stats::wcu_types::DELETE_ITEM]).finally([op, start_time, this] {
-        _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    });
+    per_table_stats->api_operations.delete_item++;
+    uint64_t wcu_total = 0;
+    auto res = co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
+    _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
+    per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    co_return res;
 }
 
 static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request) {
@@ -2865,15 +2902,23 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             "maximum is {} (from configuration variable alternator_max_items_in_batch_write)", total_items, maximum_batch_write_size));
     }
     bool should_add_wcu = wcu_consumed_capacity_counter::should_add_capacity(request);
-    size_t wcu_put_units = 0;
-    size_t wcu_delete_units = 0;
+    size_t wcu_put_units;
+    size_t wcu_delete_units;
     rjson::value consumed_capacity = rjson::empty_array();
     std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders;
+    std::vector<std::tuple<lw_shared_ptr<stats>, size_t, size_t>> per_table_wcu;
     mutation_builders.reserve(request_items.MemberCount());
+    per_table_wcu.reserve(request_items.MemberCount());
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
+        wcu_put_units = 0;
+        wcu_delete_units = 0;
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
+        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(schema));
+        per_table_stats->api_operations.batch_write_item++;
+        per_table_stats->api_operations.batch_write_item_batch_total += it->value.Size();
+        per_table_stats->api_operations.batch_write_item_histogram.add(it->value.Size());
         tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
-        size_t wcu_units = 0;
+
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
         for (auto& request : it->value.GetArray()) {
@@ -2885,9 +2930,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 auto&& put_item = put_or_delete_item(
                         item, schema, put_or_delete_item::put_item{},
                         si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name())));
-                auto units = wcu_consumed_capacity_counter::get_units(put_item.length_in_bytes());
-                wcu_units += units;
-                wcu_put_units += units;
+                wcu_put_units += wcu_consumed_capacity_counter::get_units(put_item.length_in_bytes());
                 mutation_builders.emplace_back(schema, std::move(put_item));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
@@ -2897,7 +2940,6 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             } else if (r_name == "DeleteRequest") {
                 const rjson::value& key = get_member(r.value, "Key", "DeleteRequest");
                 validate_is_object(key, "Key in DeleteRequest");
-                wcu_units++; // Delete is always 1 unit
                 wcu_delete_units++;
                 mutation_builders.emplace_back(schema, put_or_delete_item(
                         key, schema, put_or_delete_item::delete_item{}));
@@ -2911,15 +2953,24 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 co_return api_error::validation(fmt::format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
+        per_table_wcu.emplace_back(per_table_stats, wcu_delete_units, wcu_put_units);
         if (should_add_wcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", rjson::from_string(rjson::to_string_view(it->name)));
-            rjson::add(entry, "CapacityUnits", wcu_units);
+            rjson::add(entry, "CapacityUnits", wcu_delete_units + wcu_put_units);
             rjson::push_back(consumed_capacity, std::move(entry));
         }
     }
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, client_state, b.first, auth::permission::MODIFY);
+    }
+    wcu_put_units = 0;
+    wcu_delete_units = 0;
+    for (const auto& w : per_table_wcu) {
+        std::get<0>(w)->wcu_total[stats::DELETE_ITEM] += std::get<1>(w);
+        std::get<0>(w)->wcu_total[stats::PUT_ITEM] += std::get<2>(w);
+        wcu_delete_units += std::get<1>(w);
+        wcu_put_units += std::get<2>(w);
     }
     _stats.wcu_total[stats::PUT_ITEM] += wcu_put_units;
     _stats.wcu_total[stats::DELETE_ITEM] += wcu_delete_units;
@@ -4083,9 +4134,15 @@ future<executor::request_return_type> executor::update_item(client_state& client
             });
         });
     }
-    co_return co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, _stats.wcu_total[stats::wcu_types::UPDATE_ITEM]).finally([op, start_time, this] {
-        _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    });
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
+    per_table_stats->api_operations.update_item++;
+    uint64_t wcu_total = 0;
+    auto res = co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
+    _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
+    per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    _stats.api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    co_return res;
 }
 
 // Check according to the request's "ConsistentRead" field, which consistency
@@ -4133,7 +4190,8 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     elogger.trace("Getting item {}", request);
 
     schema_ptr schema = get_table(_proxy, request);
-
+    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
+    per_table_stats->api_operations.get_item++;
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value& query_key = request["Key"];
@@ -4170,11 +4228,15 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::SELECT);
     co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
-            [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
+            [per_table_stats, this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
 
+        per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-
-        return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, _stats.rcu_half_units_total)));
+        uint64_t rcu_half_units = 0;
+        auto res = make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units)));
+        per_table_stats->rcu_half_units_total += rcu_half_units;
+        _stats.rcu_half_units_total += rcu_half_units;
+        return res;
     });
 }
 
@@ -4306,6 +4368,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (const auto& rs : requests) {
         responses_sizes[responses_sizes_pos].resize(rs.requests.size());
         size_t pos = 0;
+        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
+        per_table_stats->api_operations.batch_get_item_histogram.add(rs.requests.size());
         for (const auto &r : rs.requests) {
             auto& pk = r.first;
             auto& cks = r.second;
@@ -4396,6 +4460,8 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             pos++;
         }
         _stats.rcu_half_units_total += rcu_half_units;
+        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
+        per_table_stats->rcu_half_units_total += rcu_half_units;
         if (should_add_rcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", table);
@@ -4841,7 +4907,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     elogger.trace("Scanning {}", request);
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
-
+    get_stats_from_schema(_proxy, *schema)->api_operations.scan++;
     auto segment = get_int_attribute(request, "Segment");
     auto total_segments = get_int_attribute(request, "TotalSegments");
     if (segment || total_segments) {
@@ -5318,7 +5384,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
     elogger.trace("Querying {}", request);
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
-
+    get_stats_from_schema(_proxy, *schema)->api_operations.query++;
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");

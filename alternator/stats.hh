@@ -22,7 +22,6 @@ namespace alternator {
 // visible by the metrics REST API, with the "alternator" prefix.
 class stats {
 public:
-    stats();
     // Count of DynamoDB API operations by types
     struct {
         uint64_t batch_get_item = 0;
@@ -102,10 +101,13 @@ public:
     uint64_t wcu_total[NUM_TYPES] = {0};
     // CQL-derived stats
     cql3::cql_stats cql_stats;
-private:
-    // The metric_groups object holds this stat object's metrics registered
-    // as long as the stats object is alive.
-    seastar::metrics::metric_groups _metrics;
 };
+
+struct table_stats {
+    table_stats(const sstring& ks, const sstring& table);
+    seastar::metrics::metric_groups _metrics;
+    lw_shared_ptr<stats> _stats;
+};
+void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats);
 
 }

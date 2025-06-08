@@ -118,7 +118,8 @@ public:
             tracing::trace_state_ptr trace_state,
             service_permit permit,
             bool needs_read_before_write,
-            stats& stats,
+            stats& global_stats,
+            stats& per_table_stats,
             uint64_t& wcu_total);
     std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
 };
