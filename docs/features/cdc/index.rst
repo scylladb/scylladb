@@ -2,8 +2,6 @@
 Change Data Capture (CDC)
 =========================
 
-.. note:: CDC is not supported in keyspaces with :doc:`tablets</architecture/tablets>` enabled.
-
 .. toctree::
    :maxdepth: 2
    :hidden:
@@ -12,7 +10,7 @@ Change Data Capture (CDC)
    cdc-log-table
    cdc-basic-operations
    cdc-streams
-   cdc-stream-generations
+   cdc-stream-changes
    cdc-querying-streams
    cdc-advanced-types
    cdc-preimages
@@ -30,7 +28,7 @@ Change Data Capture (CDC)
   * :doc:`The CDC Log Table <cdc-log-table>`
   * :doc:`Basic Operations in CDC <cdc-basic-operations>`
   * :doc:`CDC Streams <cdc-streams>`
-  * :doc:`CDC Stream Generations <cdc-stream-generations>`
+  * :doc:`CDC Stream Changes <cdc-stream-changes>`
   * :doc:`Querying CDC Streams <cdc-querying-streams>`
   * :doc:`Advanced Column Types <cdc-advanced-types>`
   * :doc:`Preimages and Postimages <cdc-preimages>`
