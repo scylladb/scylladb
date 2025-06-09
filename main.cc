@@ -1031,6 +1031,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             tm_cfg.topo_cfg.this_endpoint = broadcast_addr;
             tm_cfg.topo_cfg.this_cql_address = broadcast_rpc_addr;
             tm_cfg.topo_cfg.local_dc_rack = snitch.local()->get_location();
+            tm_cfg.topo_cfg.force_rack_valid_keyspaces = cfg->rf_rack_valid_keyspaces();
             if (snitch.local()->get_name() == "org.apache.cassandra.locator.SimpleSnitch") {
                 //
                 // Simple snitch wants sort_by_proximity() not to reorder nodes anyhow

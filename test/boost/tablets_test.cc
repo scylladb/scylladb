@@ -3786,6 +3786,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     tm_cfg.topo_cfg.this_endpoint = test_config.ring_points[0].host;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     tm_cfg.topo_cfg.this_host_id = test_config.ring_points[0].id;
+    tm_cfg.topo_cfg.force_rack_valid_keyspaces = false; // FIXME: Convert the test to use rack lists.
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
     auto stop_stm = deferred_stop(stm);
 

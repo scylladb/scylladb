@@ -87,7 +87,7 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
         }
 
         replication_factor_data rf = parse_replication_factor(val, racks);
-        if (rf.count() && !rf.is_rack_based()) {
+        if (topo->get_config().force_rack_valid_keyspaces && rf.count() && !rf.is_rack_based()) {
             on_fatal_internal_error(rslogger, format("Invalid replication factor option: {}: must be a comma-separated list of rack names, or 0", val));
         }
         rep_factor += rf.count();
