@@ -186,24 +186,26 @@ public:
     }
 
     // The priority comparator for the rack_info
-    friend bool operator<(const rack_info& rack1, const rack_info& rack2) {
-        if (rack1._assigned_voters_count != rack2._assigned_voters_count) {
-            return rack1._assigned_voters_count > rack2._assigned_voters_count;
+    struct priority_compare {
+        bool operator()(const rack_info& lhs, const rack_info& rhs) const {
+            if (lhs._assigned_voters_count != rhs._assigned_voters_count) {
+                return lhs._assigned_voters_count > rhs._assigned_voters_count;
+            }
+            // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
+            // its leadership and is about to be replaced by a new leader
+            if (lhs._owns_alive_leader != rhs._owns_alive_leader) {
+                return rhs._owns_alive_leader;
+            }
+            if (lhs._existing_alive_voters_remaining != rhs._existing_alive_voters_remaining) {
+                return lhs._existing_alive_voters_remaining < rhs._existing_alive_voters_remaining;
+            }
+            if (lhs._alive_nodes_remaining != rhs._alive_nodes_remaining) {
+                return lhs._alive_nodes_remaining < rhs._alive_nodes_remaining;
+            }
+            // We retain the dead voters in case we can't find enough alive voters.
+            return lhs._existing_dead_voters_remaining < rhs._existing_dead_voters_remaining;
         }
-        // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
-        // its leadership and is about to be replaced by a new leader
-        if (rack1._owns_alive_leader != rack2._owns_alive_leader) {
-            return rack2._owns_alive_leader;
-        }
-        if (rack1._existing_alive_voters_remaining != rack2._existing_alive_voters_remaining) {
-            return rack1._existing_alive_voters_remaining < rack2._existing_alive_voters_remaining;
-        }
-        if (rack1._alive_nodes_remaining != rack2._alive_nodes_remaining) {
-            return rack1._alive_nodes_remaining < rack2._alive_nodes_remaining;
-        }
-        // We retain the dead voters in case we can't find enough alive voters.
-        return rack1._existing_dead_voters_remaining < rack2._existing_dead_voters_remaining;
-    }
+    };
 };
 
 
@@ -225,7 +227,7 @@ class datacenter_info {
 
     bool _owns_alive_leader = false;
 
-    using racks_store_t = std::priority_queue<rack_info>;
+    using racks_store_t = std::priority_queue<rack_info, std::vector<rack_info>, rack_info::priority_compare>;
     racks_store_t _racks;
 
     static racks_store_t create_racks_list(std::ranges::input_range auto&& nodes, size_t& existing_alive_voters_remaining, bool& owns_alive_leader) {
@@ -310,26 +312,28 @@ public:
     }
 
     // The priority comparator for the datacenter_info
-    friend bool operator<(const datacenter_info& dc1, const datacenter_info& dc2) {
-        if (dc1._assigned_voters_count != dc2._assigned_voters_count) {
-            return dc1._assigned_voters_count > dc2._assigned_voters_count;
+    struct priority_compare {
+        bool operator()(const datacenter_info& lhs, const datacenter_info& rhs) const {
+            if (lhs._assigned_voters_count != rhs._assigned_voters_count) {
+                return lhs._assigned_voters_count > rhs._assigned_voters_count;
+            }
+            // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
+            // its leadership and is about to be replaced by a new leader
+            if (lhs._owns_alive_leader != rhs._owns_alive_leader) {
+                return rhs._owns_alive_leader;
+            }
+            if (lhs._existing_alive_voters_remaining != rhs._existing_alive_voters_remaining) {
+                return lhs._existing_alive_voters_remaining < rhs._existing_alive_voters_remaining;
+            }
+            return lhs._racks.size() < rhs._racks.size();
         }
-        // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
-        // its leadership and is about to be replaced by a new leader
-        if (dc1._owns_alive_leader != dc2._owns_alive_leader) {
-            return dc2._owns_alive_leader;
-        }
-        if (dc1._existing_alive_voters_remaining != dc2._existing_alive_voters_remaining) {
-            return dc1._existing_alive_voters_remaining < dc2._existing_alive_voters_remaining;
-        }
-        return dc1._racks.size() < dc2._racks.size();
-    }
+    };
 };
 
 
 class calculator_impl {
 
-    using datacenters_store_t = std::priority_queue<datacenter_info>;
+    using datacenters_store_t = std::priority_queue<datacenter_info, std::vector<datacenter_info>, datacenter_info::priority_compare>;
 
     size_t _largest_dc_size = 0;
     datacenters_store_t _datacenters;
