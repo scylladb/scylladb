@@ -2037,6 +2037,7 @@ private:
     // that length can have different meaning depends on the operation but the
     // the calculation of length in bytes to WCU is the same.
     uint64_t _length_in_bytes = 0;
+    bool _is_delete = true;
 public:
     struct delete_item {};
     struct put_item {};
@@ -2049,6 +2050,12 @@ public:
     const clustering_key& ck() const { return _ck; }
     uint64_t length_in_bytes() const noexcept {
         return _length_in_bytes;
+    }
+    void set_length_in_bytes(uint64_t length) noexcept {
+        _length_in_bytes = length;
+    }
+    bool is_delete_item() const noexcept {
+        return _is_delete;
     }
 };
 
@@ -2142,7 +2149,7 @@ static inline void validate_value_if_gsi_key(
 }
 
 put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, std::unordered_map<bytes, std::string> key_attributes)
-        : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)) {
+        : _pk(pk_from_json(item, schema)), _ck(ck_from_json(item, schema)), _is_delete(false) {
     _cells = std::vector<cell>();
     _cells->reserve(item.MemberCount());
     for (auto it = item.MemberBegin(); it != item.MemberEnd(); ++it) {
@@ -2398,6 +2405,30 @@ static future<executor::request_return_type> rmw_operation_return(rjson::value&&
 }
 
 static future<std::unique_ptr<rjson::value>> get_previous_item(
+            service::storage_proxy& proxy,
+            service::client_state& client_state,
+            schema_ptr schema,
+            const partition_key& pk,
+            const clustering_key& ck,
+            service_permit permit,
+            db::consistency_level cl,
+            uint64_t& item_length)
+    {
+        auto selection = cql3::selection::selection::wildcard(schema);
+        auto command = previous_item_read_command(proxy, schema, ck, selection);
+        command->allow_limit = db::allow_per_partition_rate_limit::yes;
+        return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
+            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
+        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
+        if (previous_item) {
+            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
+        } else {
+            return make_ready_future<std::unique_ptr<rjson::value>>();
+        }
+    });
+}
+
+static future<std::unique_ptr<rjson::value>> get_previous_item(
         service::storage_proxy& proxy,
         service::client_state& client_state,
         schema_ptr schema,
@@ -2410,19 +2441,19 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
 {
     global_stats.reads_before_write++;
     per_table_stats.reads_before_write++;
-    auto selection = cql3::selection::selection::wildcard(schema);
-    auto command = previous_item_read_command(proxy, schema, ck, selection);
-    command->allow_limit = db::allow_per_partition_rate_limit::yes;
-    auto cl = db::consistency_level::LOCAL_QUORUM;
-    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
-        if (previous_item) {
-            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
-        } else {
-            return make_ready_future<std::unique_ptr<rjson::value>>();
-        }
-    });
+    return get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_QUORUM, item_length);
+}
+
+static future<uint64_t> get_previous_item_size(
+            service::storage_proxy& proxy,
+            service::client_state& client_state,
+            schema_ptr schema,
+            const partition_key& pk,
+            const clustering_key& ck,
+            service_permit permit) {
+    uint64_t item_length = 0;
+    co_await  get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_ONE, item_length);
+    co_return item_length;
 }
 
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
@@ -2903,16 +2934,12 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             "maximum is {} (from configuration variable alternator_max_items_in_batch_write)", total_items, maximum_batch_write_size));
     }
     bool should_add_wcu = wcu_consumed_capacity_counter::should_add_capacity(request);
-    size_t wcu_put_units;
-    size_t wcu_delete_units;
     rjson::value consumed_capacity = rjson::empty_array();
     std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders;
-    std::vector<std::tuple<lw_shared_ptr<stats>, size_t, size_t>> per_table_wcu;
+    std::vector<std::tuple<lw_shared_ptr<stats>, schema_ptr, std::string>> per_table_wcu;
     mutation_builders.reserve(request_items.MemberCount());
     per_table_wcu.reserve(request_items.MemberCount());
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
-        wcu_put_units = 0;
-        wcu_delete_units = 0;
         schema_ptr schema = get_table_from_batch_request(_proxy, it);
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(schema));
         per_table_stats->api_operations.batch_write_item++;
@@ -2931,7 +2958,6 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 auto&& put_item = put_or_delete_item(
                         item, schema, put_or_delete_item::put_item{},
                         si_key_attributes(_proxy.data_dictionary().find_table(schema->ks_name(), schema->cf_name())));
-                wcu_put_units += wcu_consumed_capacity_counter::get_units(put_item.length_in_bytes());
                 mutation_builders.emplace_back(schema, std::move(put_item));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(), mutation_builders.back().second.ck());
                 if (used_keys.contains(mut_key)) {
@@ -2941,7 +2967,6 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             } else if (r_name == "DeleteRequest") {
                 const rjson::value& key = get_member(r.value, "Key", "DeleteRequest");
                 validate_is_object(key, "Key in DeleteRequest");
-                wcu_delete_units++;
                 mutation_builders.emplace_back(schema, put_or_delete_item(
                         key, schema, put_or_delete_item::delete_item{}));
                 auto mut_key = std::make_pair(mutation_builders.back().second.pk(),
@@ -2954,24 +2979,60 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 co_return api_error::validation(fmt::format("Unknown BatchWriteItem request type: {}", r_name));
             }
         }
-        per_table_wcu.emplace_back(per_table_stats, wcu_delete_units, wcu_put_units);
-        if (should_add_wcu) {
-            rjson::value entry = rjson::empty_object();
-            rjson::add(entry, "TableName", rjson::from_string(rjson::to_string_view(it->name)));
-            rjson::add(entry, "CapacityUnits", wcu_delete_units + wcu_put_units);
-            rjson::push_back(consumed_capacity, std::move(entry));
-        }
+        per_table_wcu.emplace_back(per_table_stats, schema, rjson::to_string_view(it->name));
     }
     for (const auto& b : mutation_builders) {
         co_await verify_permission(_enforce_authorization, client_state, b.first, auth::permission::MODIFY);
     }
-    wcu_put_units = 0;
-    wcu_delete_units = 0;
+
+    if (needs_read_before_write) {
+        std::vector<future<uint64_t>> previous_items_sizes;
+        previous_items_sizes.reserve(mutation_builders.size());
+        for (const auto& b : mutation_builders) {
+            previous_items_sizes.emplace_back(get_previous_item_size(
+                _proxy,
+                client_state,
+                b.first,
+                b.second.pk(),
+                b.second.ck(),
+                permit));
+        }
+        size_t pos = 0;
+        for (auto&& pi : previous_items_sizes) {
+            auto res = co_await std::move(pi);
+            if (mutation_builders[pos].second.length_in_bytes() < res) {
+                mutation_builders[pos].second.set_length_in_bytes(res);
+            }
+            pos++;
+        }
+    }
+
+
+    size_t wcu_put_units = 0;
+    size_t wcu_delete_units = 0;
+
+    size_t pos = 0;
+    size_t total_wcu;
     for (const auto& w : per_table_wcu) {
-        std::get<0>(w)->wcu_total[stats::DELETE_ITEM] += std::get<1>(w);
-        std::get<0>(w)->wcu_total[stats::PUT_ITEM] += std::get<2>(w);
-        wcu_delete_units += std::get<1>(w);
-        wcu_put_units += std::get<2>(w);
+        total_wcu = 0;
+        while(pos < mutation_builders.size() && std::get<1>(w)->id() == mutation_builders[pos].first->id()) {
+            size_t wcu =  wcu_consumed_capacity_counter::get_units((mutation_builders[pos].second.length_in_bytes())? mutation_builders[pos].second.length_in_bytes() : 1);
+            total_wcu += wcu;
+            if (mutation_builders[pos].second.is_delete_item()) {
+                std::get<0>(w)->wcu_total[stats::DELETE_ITEM] += wcu;
+                wcu_delete_units += wcu;
+            } else {
+                std::get<0>(w)->wcu_total[stats::PUT_ITEM] += wcu;
+                wcu_put_units += wcu;
+            }
+            pos++;
+        }
+        if (should_add_wcu) {
+            rjson::value entry = rjson::empty_object();
+            rjson::add(entry, "TableName", rjson::from_string(std::get<2>(w)));
+            rjson::add(entry, "CapacityUnits", total_wcu);
+            rjson::push_back(consumed_capacity, std::move(entry));
+        }
     }
     _stats.wcu_total[stats::PUT_ITEM] += wcu_put_units;
     _stats.wcu_total[stats::DELETE_ITEM] += wcu_delete_units;
