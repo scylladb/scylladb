@@ -104,3 +104,9 @@ def test_describe_custom_index(cql, test_keyspace):
 
         assert f"CREATE CUSTOM INDEX custom ON {table}{maybe_space}(v1) USING '{custom_class}'" in a_desc
         assert f"CREATE CUSTOM INDEX custom1 ON {table}{maybe_space}(v2) USING '{custom_class}'" in b_desc
+
+        # Try to recreate the indexes with the describe output
+        cql.execute(f"DROP INDEX {test_keyspace}.custom")
+        cql.execute(f"DROP INDEX {test_keyspace}.custom1")
+        cql.execute(a_desc)
+        cql.execute(b_desc)

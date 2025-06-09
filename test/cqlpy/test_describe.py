@@ -2738,6 +2738,7 @@ def test_desc_restore(cql):
         cql.execute(f"CREATE TYPE {ks}.my_type (value int)")
         cql.execute(f"""CREATE TABLE {ks}.some_other_table (c1 frozen<my_type>, c2 double, c3 int, c4 set<int>,
                         PRIMARY KEY ((c1, c2), c3)) WITH comment = 'some comment'""")
+        cql.execute(f"CREATE TABLE {ks}.vector_table (pk int PRIMARY KEY, v vector<float, 3>)")
 
         cql.execute(f"""CREATE MATERIALIZED VIEW {ks}.mv AS
                             SELECT pk FROM {ks}.my_table
@@ -2746,6 +2747,7 @@ def test_desc_restore(cql):
                             WITH comment='some other comment'""")
 
         cql.execute(f"CREATE INDEX myindex ON {ks}.some_other_table (c1)")
+        cql.execute(f"CREATE INDEX custom_index ON {ks}.vector_table (v) USING 'vector_index'")
 
         cql.execute(f"""CREATE FUNCTION {ks}.my_udf(val1 int, val2 int)
                         RETURNS NULL ON NULL INPUT
