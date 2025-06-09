@@ -126,6 +126,26 @@ def test_long_put(test_table):
     consumed_capacity = response['ConsumedCapacity']
     assert 2 == consumed_capacity["CapacityUnits"]
 
+# WCU is calculated based on 1KB block size.
+# The test validate that when calculating the WCU of a put item
+# over an existing item, the longer of the items is the
+# limit calculation
+# By default, Alternator does not perform a read-before-write.
+# To force it to, we need to request the old value.
+def test_short_after_long_put(test_table):
+    p = random_string()
+    c = random_string()
+    val = random_string()
+    combined_keys = "pcattanother" # Takes all the keys and make one single string out of them
+
+    val2 = 'a' * (2*KB)  # val2 is a string that makes the total message length larger than 2KB
+    response = test_table.put_item(Item={'p': p, 'c': c, 'att': val, 'another': val2}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 3 == response['ConsumedCapacity']["CapacityUnits"]
+
+    response = test_table.put_item(Item={'p': p, 'c': c, 'att': val, 'another': 'a'}, ReturnConsumedCapacity='TOTAL', ReturnValues='ALL_OLD')  # Perform a put_item with total length < 1KB
+    assert 3 == response['ConsumedCapacity']["CapacityUnits"]
+
 # This test validate that attribute names that are longer than one byte
 # (alternator tests default naming) still calculate WCU correctly.
 def test_long_put_varied_key(dynamodb):
@@ -379,3 +399,21 @@ def test_multi_table_batch_write_item(test_table_s, test_table):
         else:
             assert cc['TableName'] == test_table.name
             assert cc["CapacityUnits"] == 2
+
+# batch_write_item has no option to return the previous value
+# This test uses alternator_force_read_before_write to
+# calculate WCU real values
+def test_batch_write_item_with_true_values(test_table, cql):
+    p = random_string()
+    c = random_string()
+    test_table.put_item(Item={'p': p, 'c': c, 'a': 'a' * KB}) # Item with more than 1KB
+    p1 = random_string()
+    c1 = random_string()
+    test_table.put_item(Item={'p': p1, 'c': c1, 'a': 'a' * KB}) # Item with more than 1KB
+    cql.execute("UPDATE system.config set value = 'true' WHERE name = 'alternator_force_read_before_write'")
+    table_items = [{'PutRequest': {'Item': {'p': p, 'c': c , 'a': 'hi'}}}, {'DeleteRequest': {'Key': {'p':  p1, 'c': c1}}}]
+    response = test_table.meta.client.batch_write_item(RequestItems = {
+        test_table.name: table_items
+    }, ReturnConsumedCapacity='TOTAL')
+    cql.execute("UPDATE system.config set value = 'false' WHERE name = 'alternator_force_read_before_write'")
+    assert response['ConsumedCapacity'][0]["CapacityUnits"] == 4
