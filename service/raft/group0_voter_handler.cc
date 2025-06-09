@@ -187,30 +187,21 @@ public:
 
     // The priority comparator for the rack_info
     friend bool operator<(const rack_info& rack1, const rack_info& rack2) {
-        // First criteria: The number of already newly assigned voters (lower has more priority)
         if (rack1._assigned_voters_count != rack2._assigned_voters_count) {
             return rack1._assigned_voters_count > rack2._assigned_voters_count;
         }
-
-        // Second criteria: The ownership of existing alive leader node
-        //     - note that we don't take an existing dead leader into account here, as it is about to lose its
-        //       leadership and is about to be replaced by a new leader
+        // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
+        // its leadership and is about to be replaced by a new leader
         if (rack1._owns_alive_leader != rack2._owns_alive_leader) {
             return rack2._owns_alive_leader;
         }
-
-        // Third criteria: The number of existing alive voters remaining (higher has more priority)
         if (rack1._existing_alive_voters_remaining != rack2._existing_alive_voters_remaining) {
             return rack1._existing_alive_voters_remaining < rack2._existing_alive_voters_remaining;
         }
-
-        // Fourth criteria: The number of alive nodes (voters and non-voters) remaining (higher has more priority)
         if (rack1._alive_nodes_remaining != rack2._alive_nodes_remaining) {
             return rack1._alive_nodes_remaining < rack2._alive_nodes_remaining;
         }
-
-        // Fifth criteria: The number of existing dead voters remaining (higher has more priority)
-        //      We want to keep the dead voters in case we can't find enough alive voters.
+        // We retain the dead voters in case we can't find enough alive voters.
         return rack1._existing_dead_voters_remaining < rack2._existing_dead_voters_remaining;
     }
 };
@@ -271,8 +262,6 @@ public:
     // to the datacenter is incremented.
     [[nodiscard]] std::optional<raft::server_id> select_next_voter() {
         while (!_racks.empty()) {
-
-            // Select the datacenter with the highest priority (according to the comparator)
             auto rack = _racks.top();
             _racks.pop();
 
@@ -322,24 +311,17 @@ public:
 
     // The priority comparator for the datacenter_info
     friend bool operator<(const datacenter_info& dc1, const datacenter_info& dc2) {
-        // First criteria: The number of already newly assigned voters (lower has more priority)
         if (dc1._assigned_voters_count != dc2._assigned_voters_count) {
             return dc1._assigned_voters_count > dc2._assigned_voters_count;
         }
-
-        // Second criteria: The ownership of existing alive leader node
-        //     - note that we don't take an existing dead leader into account here, as it is about to lose its
-        //       leadership and is about to be replaced by a new leader
+        // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
+        // its leadership and is about to be replaced by a new leader
         if (dc1._owns_alive_leader != dc2._owns_alive_leader) {
             return dc2._owns_alive_leader;
         }
-
-        // Third criteria: The number of existing alive voters remaining (higher has more priority)
         if (dc1._existing_alive_voters_remaining != dc2._existing_alive_voters_remaining) {
             return dc1._existing_alive_voters_remaining < dc2._existing_alive_voters_remaining;
         }
-
-        // Fourth criteria: The number of racks (higher has more priority)
         return dc1._racks.size() < dc2._racks.size();
     }
 };
@@ -430,8 +412,6 @@ class calculator_impl {
     // from that datacenter.
     [[nodiscard]] std::optional<raft::server_id> select_next_voter() {
         while (!_datacenters.empty()) {
-
-            // Select the datacenter with the highest priority (based on the comparator)
             auto dc = _datacenters.top();
             _datacenters.pop();
 
