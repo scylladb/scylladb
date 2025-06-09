@@ -703,8 +703,27 @@ Before configuring AWS KMS integration, ensure you have:
 Set the GCP Host
 ----------------------
 
-If you are using Google GCP KMS to encrypt tables or system information, add the
-GCP information to the ``scylla.yaml`` configuration file.
+If you are using GCP Cloud KMS to encrypt tables or system information, you need
+to add the GCP host information to the ``scylla.yaml`` configuration file.
+
+**Before you Begin**
+
+Before configuring GCP KMS integration, ensure you have:
+
+* A GCP KMS key ring and key in your GCP account. Follow the procedure in
+  :ref:`Create Encryption Keys <ear-create-encryption-key>` to create them.
+
+* Credentials to authenticate ScyllaDB against the KMS key. Choose one of:
+
+  - **Attached service account** (recommended for production) - ScyllaDB will use the service account attached to the VM instance.
+  - **Impersonated service account** (recommended for production) - ScyllaDB will use the provided credentials to impersonate a service account. It allows to
+    grant temporary, limited access to resources.
+  - **Application default credentials** - `A credential file <https://cloud.google.com/docs/authentication/application-default-credentials>`_ configured via the
+    gcloud CLI.
+
+* The ``roles/cloudkms.cryptoKeyEncrypterDecrypter`` role assigned to the identity of your choice.
+
+**Procedure**
 
 #. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the
    following in KMS host(s) section:
@@ -734,8 +753,8 @@ GCP information to the ``scylla.yaml`` configuration file.
    * ``gcp_location`` - A GCP project location.
    * ``gcp_credentials_file`` - GCP credentials file used for authentication. If not specified, the provider reads it from your GCP credentials.
    * ``gcp_impersonate_service_account`` - An optional service account to impersonate when issuing key query calls.
-   * ``master_key`` - The <keyring>/<keyname> of your GCP KMS key. The key must be generated with an appropriate access policy so that the AWS user has
-     permissions to read the key and encrypt data using that key. This parameter is required.
+   * ``master_key`` - The <keyring>/<keyname> of your GCP KMS key. The key must be generated with an appropriate IAM policy so that the identity has permissions
+     to encrypt and decrypt data using that key. This parameter is required.
    * ``certificate`` - The name of the certificate and the path used to identify yourself to the KMS server.
    * ``keyfile`` - The name of the key for the certificate. It is generated together with the certificate.
    * ``truststore`` - The location and key for the truststore to present to the KMS server.
@@ -743,21 +762,75 @@ GCP information to the ``scylla.yaml`` configuration file.
    * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 600s.
    * ``key_cache_refresh`` - Key cache refresh period - the frequency at which cache is checked for expired entries. Default is 1200s.
 
-   Example:
+   Examples:
 
-   .. code-block:: yaml
+   .. tabs::
 
-       gcp_hosts:
-         my-gcp1:
-             gcp_project_id: myproject
-             gcp_location: global
-             master_key: mykeyring/mykey
+     .. group-tab:: Attached service account (recommended)
+
+        .. code-block:: yaml
+
+            gcp_hosts:
+              my-gcp1:
+                  gcp_project_id: myproject
+                  gcp_location: global
+                  master_key: mykeyring/mykey
+
+     .. group-tab:: Impersonated service account (recommended)
+
+        .. code-block:: yaml
+
+            gcp_hosts:
+              my-gcp1:
+                  gcp_project_id: myproject
+                  gcp_location: global
+                  gcp_impersonate_service_account: my-service-account@myproject.iam.gserviceaccount.com
+                  master_key: mykeyring/mykey
+
+     .. group-tab:: Application default credentials
+
+        .. code-block:: yaml
+
+            gcp_hosts:
+              my-gcp1:
+                  gcp_project_id: myproject
+                  gcp_location: global
+                  gcp_credentials_file: /home/user/.config/gcloud/application_default_credentials.json
+                  master_key: mykeyring/mykey
+
+   .. note::
+
+      **GCP Credential Resolution**
+
+      If the ``gcp_credentials_file`` option is not specified in the
+      configuration,  ScyllaDB follows Google's Application Default Credentials
+      (ADC) pattern to automatically resolve credentials in the following order:
+
+      1. **Environment Variable**: Checks the ``GOOGLE_APPLICATION_CREDENTIALS``
+         environment variable. If set, ScyllaDB loads credentials from the
+         specified file path.
+
+      2. **Well-Known File Locations**: Looks for credentials in standard gcloud
+         SDK locations:
+
+         * ``~/{CLOUDSDK_CONFIG}/application_default_credentials.json`` (if ``CLOUDSDK_CONFIG``  environment variable is set)
+         * ``~/.config/gcloud/application_default_credentials.json`` (default location)
+
+      3. **Metadata Server**: Attempts to detect if running on a Google Compute
+         Engine (GCE) instance by:
+
+         * Querying the metadata server (``metadata.google.internal`` or the host
+           specified in ``GCE_METADATA_HOST`` environment variable).
+         * Checking for "Google" in ``/sys/class/dmi/id/product_name``.
+
+         If running on GCE, it uses the metadata server to obtain credentials
+         for the service account attached to the VM instance.
 
 #. Save the file.
-#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`
+#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
 #. Restart the scylla-server service.
 
-.. include:: /rst_include/scylla-commands-restart-index.rst
+   .. include:: /rst_include/scylla-commands-restart-index.rst
 
 .. _encryption-at-rest-set-azure:
 
