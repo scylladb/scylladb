@@ -495,20 +495,18 @@ to encrypt tables or system information, add the KMIP server information to the
 
    .. code-block:: yaml
 
-      #
-      # kmip_hosts:
-      #   <name>:
-      #       hosts: <address1[:port]> [, <address2[:port]>...]
-      #       certificate: <identifying certificate> (optional)
-      #       keyfile: <identifying key> (optional; it is required if "certificate" is set)
-      #       truststore: <truststore for SSL connection> (optional)
-      #       certficate_revocation_list: <CRL file> (optional)
-      #       priority_string: <kmip tls priority string>
-      #       username: <login> (optional>
-      #       password: <password> (optional)
-      #       max_command_retries: <int> (optional; default 3)
-      #       key_cache_expiry: <key cache expiry period>
-      #       key_cache_refresh: <key cache refresh/prune period>
+       kmip_hosts:
+         <name>:
+             hosts: <address1[:port]> [, <address2[:port]>...]
+             certificate: <identifying certificate> (optional)
+             keyfile: <identifying key> (optional; it is required if "certificate" is set)
+             truststore: <truststore for SSL connection> (optional)
+             priority_string: <kmip tls priority string>
+             username: <login> (optional)
+             password: <password> (optional)
+             max_command_retries: <int> (optional; default 3)
+             key_cache_expiry: <key cache expiry period>
+             key_cache_refresh: <key cache refresh/prune period>
       #   <name>:
 
    Where:
@@ -520,25 +518,32 @@ to encrypt tables or system information, add the KMIP server information to the
      KMIP servers support read replication or other strategies for availability.
      Hosts are tried in the order they appear, and the next one in the list is
      tried if the previous one fails. The default number of retries is three,
-     but you can customize it with "max_command_retries".
+     but you can customize it with ``max_command_retries``.
    * ``certificate`` - The name of the certificate and path used to identify yourself to the KMIP server.
    * ``keyfile`` - The name of the key used to identify yourself to the KMIP server. It is generated together with the certificate.
    * ``truststore`` - The location and key for the truststore to present to the KMIP server.
-   * ``certficate_revocation_list`` - The path to a PEM-encoded certificate
-     revocation list (CRL) - a list of issued certificates that have been
-     revoked before their expiration date.
    * ``priority_string`` - The KMIP TLS priority string.
    * ``username`` - The KMIP server user name.
    * ``password`` - The KMIP server password.
    * ``max_command_retries`` - The number of attempts to connect to the KMIP server before trying the next host in the list.
-   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 600s.
-   * ``key_cache_refresh`` - Key cache refresh period - the frequency at which cache is checked for expired entries. Default is 1200s.
+   * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 30s.
+   * ``key_cache_refresh`` - Key cache refresh period - the frequency at which cache is checked for expired entries. Default is 100s.
+
+   Example:
+
+   .. code-block:: yaml
+
+       kmip_hosts:
+         my-kmip1:
+             hosts: 127.0.0.1:5696
+             certificate: /etc/kmip/cert.pem
+             keyfile: /etc/kmip/key.pem
 
 #. Save the file.
-#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`
+#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
 #. Restart the scylla-server service.
 
-.. include:: /rst_include/scylla-commands-restart-index.rst
+   .. include:: /rst_include/scylla-commands-restart-index.rst
 
 .. _encryption-at-rest-set-kms:
 
