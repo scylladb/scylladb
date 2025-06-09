@@ -23,6 +23,7 @@ class vector_index: public custom_index {
 public:
     vector_index() = default;
     ~vector_index() override = default;
+    std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const override;
     void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) override;
 };
 
