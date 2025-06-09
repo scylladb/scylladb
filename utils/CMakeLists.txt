@@ -30,6 +30,7 @@ target_sources(utils
     gz/crc_combine_table.cc
     hashers.cc
     histogram_metrics_helper.cc
+    http.cc
     human_readable.cc
     i_filter.cc
     io-wrappers.cc
