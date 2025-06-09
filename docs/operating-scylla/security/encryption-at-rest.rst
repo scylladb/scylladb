@@ -550,8 +550,26 @@ to encrypt tables or system information, add the KMIP server information to the
 Set the KMS Host
 ----------------------
 
-If you are using AWS KMS to encrypt tables or system information, add the KMS
-information to the ``scylla.yaml`` configuration file.
+If you are using AWS KMS to encrypt tables or system information, you need to
+add the KMS host information to the ``scylla.yaml`` configuration file.
+
+**Before you Begin**
+
+Before configuring AWS KMS integration, ensure you have:
+
+* An AWS KMS key in your AWS account. Follow the procedure in :ref:`Create
+  Encryption Keys <ear-create-encryption-key>` to create it.
+* Credentials to authenticate ScyllaDB against the KMS key. Choose one of:
+
+  - **EC2 instance role** (recommended for production) - ScyllaDB will use the IAM role attached to the EC2 instance.
+  - **IAM role** (recommended for production) - ScyllaDB will use the provided credentials to assume an IAM role. It allows to grant temporary, limited access to resources.
+  - **IAM user** - You will need to supply long-term credentials for this user.
+  - **AWS profile** - A profile configured via the AWS CLI.
+
+* Sufficient permissions on the KMS key to perform the ``DescribeKey``,
+  ``GenerateDataKey`` and ``Decrypt`` operations on the KMS key.
+
+**Procedure**
 
 #. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the
    following in KMS host(s) section:
@@ -584,10 +602,11 @@ information to the ``scylla.yaml`` configuration file.
      <ear-alter-table>` table.
    * ``endpoint`` - The explicit KMS host endpoint. If not provided, ``aws_region`` is used for connection.
    * ``aws_region`` - An AWS region. If not provided, ``endpoint`` is used for connection.
-   * ``aws_access_key_id`` - AWS access key used for authentication. If not specified, the provider reads it from your AWS credentials.
-   * ``aws_secret_access_key`` - AWS secret access key used for authentication. If not specified, the provider reads it from your AWS credentials.
+   * ``aws_access_key_id`` - AWS access key used for authentication.
+   * ``aws_secret_access_key`` - AWS secret access key used for authentication.
    * ``aws_session_token`` - AWS session token. Used for authentication with temporary security credentials, along with access key id and secret access key.
-   * ``aws_profile`` - AWS profile to use if reading credentials from file
+   * ``aws_profile`` - AWS profile to use when reading credentials from the ``~/.aws/credentials`` file. If not provided, the value is read from the
+     ``AWS_PROFILE`` environment variable. If neither is defined, it defaults to ``default``.
    * ``aws_use_ec2_credentials`` - If true, KMS queries will use the credentials provided by ec2 instance role metadata as initial access key.
    * ``aws_use_ec2_region`` - If true, KMS queries will use the AWS region indicated by ec2 instance metadata.
    * ``aws_assume_role_arn`` - If set, any KMS query will first attempt to assume this role.
@@ -600,26 +619,84 @@ information to the ``scylla.yaml`` configuration file.
    * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from server. Default is 600s.
    * ``key_cache_refresh`` - Key cache refresh period - the frequency at which cache is checked for expired entries. Default is 1200s.
 
+   Examples:
+
+   .. tabs::
+
+     .. group-tab:: EC2 instance role (recommended)
+
+        .. code-block:: yaml
+
+            kms_hosts:
+              my-kms1:
+                 aws_use_ec2_credentials: true
+                 aws_use_ec2_region: true
+                 master_key: myorg/MyKey
+
+     .. group-tab:: IAM role (recommended)
+
+        .. code-block:: yaml
+
+            kms_hosts:
+              my-kms1:
+                 aws_use_ec2_credentials: true
+                 aws_use_ec2_region: true
+                 aws_assume_role_arn: arn:aws:iam::123456789012:role/ScyllaDBKMSRole
+                 master_key: myorg/MyKey
+
+     .. group-tab:: IAM user
+
+        .. code-block:: yaml
+
+            kms_hosts:
+              my-kms1:
+                 aws_region: us-east-1
+                 aws_access_key_id: THISISANACCESSKEYID
+                 aws_secret_access_key: THISISASECRETACCESSKEY
+                 master_key: myorg/MyKey
+
+     .. group-tab:: AWS profile
+
+        .. code-block:: yaml
+
+            kms_hosts:
+              my-kms1:
+                 aws_region: us-east-1
+                 aws_profile: user1
+                 master_key: myorg/MyKey
+
    .. note::
 
       Note that either ``endpoint``, ``aws_region`` or ``aws_use_ec2_region``
       must be set (one of them is required for connection).
 
-   Example:
+   .. note::
 
-   .. code-block:: yaml
+      **AWS Credential Resolution**
 
-       kms_hosts:
-         my-kms1:
-             aws_use_ec2_credentials: true
-             aws_use_ec2_region: true
-             master_key: myorg/MyKey
+      If the ``aws_use_ec2_credentials`` option is set to ``false``, and no
+      explicit credentials have been provided (i.e., any of the
+      ``aws_access_key_id`` and ``aws_secret_access_key`` options is missing),
+      ScyllaDB will attempt to automatically resolve credentials in the
+      following order:
+
+      1. **Environment Variables**: Checks the ``AWS_ACCESS_KEY_ID`` and
+         ``AWS_SECRET_ACCESS_KEY`` environment variables. If set, ScyllaDB uses
+         these credentials directly.
+
+      2. **AWS Profile**: Reads credentials from the AWS credentials file
+         (``~/.aws/credentials``) using:
+
+         * The profile specified by the ``aws_profile`` option in ``scylla.yaml``.
+         * If ``aws_profile`` is not set, uses the profile from the ``AWS_PROFILE``
+           environment variable.
+         * If neither is defined, defaults to the ``default`` profile.
 
 #. Save the file.
-#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`
+#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
 #. Restart the scylla-server service.
 
-.. include:: /rst_include/scylla-commands-restart-index.rst
+   .. include:: /rst_include/scylla-commands-restart-index.rst
 
 .. _encryption-at-rest-set-gcp:
 
