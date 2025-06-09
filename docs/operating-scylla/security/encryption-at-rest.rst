@@ -957,98 +957,262 @@ Before configuring Azure Key Vault integration, ensure you have:
 Encrypt Tables
 -----------------------------
 
-ScyllaDB allows you to enable or disable default encryption of tables. When
-enabled, tables will be encrypted by default using the configuration provided
-for the ``user_info_encryption`` option in the ``scylla.yaml`` file.
+ScyllaDB allows you to enable or disable default encryption of tables on a
+particular node. When enabled, the tables on this node will be encrypted by
+default using the configuration provided for the ``user_info_encryption`` option
+in the ``scylla.yaml`` file.
 
-You can override the default configuration when you CREATE TABLE or ALTER TABLE
-with ``scylla_encryption_options``. See :ref:`Encrypt a Single Table
-<ear-create-table>` for details.
+.. note::
+
+   You can override the default configuration when you CREATE TABLE or ALTER TABLE
+   with ``scylla_encryption_options``. See :ref:`Encrypt a Single Table
+   <ear-create-table>` for details.
 
 **Before you Begin**
 
-Ensure you have an encryption key available:
+.. tabs::
 
-* If you are using AWS KMS, :ref:`set the KMS Host <encryption-at-rest-set-kms>`.
-* If you are using KMIP, :ref:`set the KMIP Host <encryption-at-rest-set-kmip>`.
-* If you are using Google GCP KMS, :ref:`set the GCP Host <encryption-at-rest-set-gcp>`.
-* If you are using Azure Key Vault, :ref:`set the Azure Host <encryption-at-rest-set-azure>`.
-* If you want to create your own key, follow the procedure in :ref:`Create Encryption Keys <ear-create-encryption-key>`.
-* If you do not create your own key, use the following procedure for ScyllaDB to create a key for you (the default location ``/etc/scylla/data_encryption_keys``
-  may cause permission issues; the following example creates a key in the directory ``/etc/scylla/encryption_keys``):
+   .. group-tab:: Local Key Provider
 
-   .. code-block:: none
+      * If you want to create your own key(s), follow the procedure in
+        :ref:`Create Encryption Keys <ear-create-encryption-key>`.
 
-      sudo mkdir -p /etc/scylla/encryption_keys
-      sudo chown -R scylla:scylla /etc/scylla/encryption_keys
-      sudo chmod -R 700 /etc/scylla/encryption_keys
+      * If you want to let Scylla create the key(s) for you, run the following
+        commands to configure a directory for your keys (the default location
+        ``/etc/scylla/data_encryption_keys`` may cause permission issues; the
+        following example selects the ``/etc/scylla/encryption_keys`` directory
+        for your keys):
+
+        .. code-block:: none
+
+           sudo mkdir -p /etc/scylla/encryption_keys
+           sudo chown -R scylla:scylla /etc/scylla/encryption_keys
+           sudo chmod -R 700 /etc/scylla/encryption_keys
+
+   .. group-tab:: Replicated Key Provider
+
+      The Replicated Key Provider cannot be used in ``user_info_encryption``.
+      You can only use it to :ref:`Encrypt a Single Table <ear-create-table>`.
+
+   .. group-tab:: KMIP Key Provider
+
+      * Make sure to :ref:`set up a KMIP Host <encryption-at-rest-set-kmip>`.
+
+   .. group-tab:: KMS Key Provider
+
+      * Make sure to :ref:`set up a KMS Host <encryption-at-rest-set-kms>`.
+
+   .. group-tab:: GCP Key Provider
+
+      * Make sure to :ref:`set up a GCP Host <encryption-at-rest-set-gcp>`.
+
+   .. group-tab:: Azure Key Provider
+
+      * Make sure to :ref:`set up an Azure Host <encryption-at-rest-set-azure>`.
 
 **Procedure**
 
-Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` and configure the
-``user_info_encryption`` option:
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` and configure the
+   ``user_info_encryption`` section based on your key provider:
 
-.. code-block:: yaml
+   .. tabs::
 
-   user_info_encryption:
-    enabled: <true|false>
-    cipher_algorithm: <hashing algorithm to create the key>
-    secret_key_strength: <length of the key>
-    key_provider: <your key provider>
-    secret_key_file: <key file>
-    kmip_host: <your kmip_host>
-    kms_host: <your kms_host>
-    gcp_host: <your gcp_host>
-    azure_host: <your azure_host>
+      .. group-tab:: Local Key Provider
 
-Where:
+         .. code-block:: yaml
 
-* ``enabled`` - Enables or disables default table encryption. Required.
-* ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
-* ``secret_key_strength`` - The length of the key in bytes ( determined by the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose). If not provided,
-  the default will be used.
-* ``key_provider`` - The name of the key provider. See :ref:`Key Providers <ear-key-providers>`. Required.
-* ``secret_key_file`` - The location of the key created by ScyllaDB (by default ``/etc/scylla/data_encryption_keys``). Required if you use a ScyllaDB-generated
-  key.
-* ``kmip_host`` - The name of your :ref:`kmip_host <encryption-at-rest-set-kmip>` group. Required if you use KMIP.
-* ``kms_host`` - The name of your :ref:`kms_host <encryption-at-rest-set-kms>` group. Required if you use KMS.
-* ``gcp_host`` - The name of your :ref:`gcp_host <encryption-at-rest-set-gcp>` group. Required if you use GCP.
-* ``azure_host`` - The name of your :ref:`azure_host <encryption-at-rest-set-azure>` group. Required if you use Azure.
+            system_key_directory: <path to system key directory>
 
-**Example**
+            user_info_encryption:
+              enabled: <true|false>
+              cipher_algorithm: <hashing algorithm to create the key>
+              secret_key_strength: <length of the key>
+              key_provider: LocalFileSystemKeyProviderFactory
+              secret_key_file: <secret key file>
+              key_name: <system key name>
 
-.. code-block:: yaml
+         Where:
 
-   user_info_encryption:
-    enabled: true
-    cipher_algorithm: AES
-    secret_key_strength: 128
-    key_provider: LocalFileSystemKeyProviderFactory
-    secret_key_file: scylla /etc/scylla/encryption_keys
+         * ``enabled`` - Enables or disables default table encryption. Required. Default is ``false``.
+         * ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the key provider. Required.
+         * ``secret_key_file`` - Full path to the secret key file created by you in :ref:`Create Encryption Keys <ear-create-encryption-key>` or that will be
+           created by Scylla. If set, Scylla will load the key directly from this location. Defaults to ``<system_key_directory>/system/<key_name>`` when not
+           provided.
+         * ``key_name`` (optional) - Base name of the system key file. Scylla constructs the path as ``<system_key_directory>/system/<key_name>``. Only used if
+           ``secret_key_file`` is **not** specified. Defaults to ``system_table_keytab``.
+         * ``system_key_directory`` (optional) - Directory that contains system key files. Used only when ``secret_key_file`` is **not** set to locate
+           ``<system_key_directory>/system/<key_name>``. The default is ``/etc/scylla/conf/resources/system_keys/``.
 
-**Examples for KMS:**
+         **Example with secret key file:**
 
-In the following example, the ``master_key`` configured for :ref:`kms_host
-<encryption-at-rest-set-kms>` will be used.
+         .. code-block:: yaml
 
-.. code-block:: yaml
+            user_info_encryption:
+              enabled: true
+              cipher_algorithm: AES
+              secret_key_strength: 128
+              key_provider: LocalFileSystemKeyProviderFactory
+              secret_key_file: /etc/scylla/encryption_keys/secret_key
 
-   user_info_encryption:
-    enabled: true
-    key_provider: KmsKeyProviderFactory
-    kms_host: my-kms1
+         **Example with key name:**
 
+         .. code-block:: yaml
 
-You can specify a different ``master_key`` than the one configured for :ref:`kms_host
-<encryption-at-rest-set-kms>`:
+            system_key_directory: /etc/scylla/encryption_keys/system_keys
 
- .. code-block:: yaml
+            user_info_encryption:
+              enabled: true
+              cipher_algorithm: AES/CBC/PKCS5Padding
+              secret_key_strength: 128
+              key_provider: LocalFileSystemKeyProviderFactory
+              key_name: system_key
 
-   user_info_encryption:
-    enabled: true
-    key_provider: KmsKeyProviderFactory
-    kms_host: my-kms1
-    master_key: myorg/SomeOtherKey
+      .. group-tab:: Replicated Key Provider
+
+         The Replicated Key Provider cannot be used in ``user_info_encryption``.
+         You can only use it to :ref:`Encrypt a Single Table <ear-create-table>`.
+
+      .. group-tab:: KMIP Key Provider
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: <true|false>
+              cipher_algorithm: <hashing algorithm to create the key>
+              secret_key_strength: <length of the key>
+              key_provider: KmipKeyProviderFactory
+              kmip_host: <your kmip_host>
+
+         Where:
+
+         * ``enabled`` - Enables or disables default table encryption. Required. Default is ``false``.
+         * ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the key provider. Required.
+         * ``kmip_host`` - The name of your :ref:`kmip_host <encryption-at-rest-set-kmip>` group.
+
+         **Example:**
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: true
+              cipher_algorithm: AES
+              secret_key_strength: 128
+              key_provider: KmipKeyProviderFactory
+              kmip_host: my-kmip1
+
+      .. group-tab:: KMS Key Provider
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: <true|false>
+              cipher_algorithm: <hashing algorithm to create the key>
+              secret_key_strength: <length of the key>
+              key_provider: KmsKeyProviderFactory
+              kms_host: <your kms_host>
+              master_key: <AWS KMS key to override the one configured in kms_host> (optional)
+
+         Where:
+
+         * ``enabled`` - Enables or disables default table encryption. Required. Default is ``false``.
+         * ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the key provider. Required.
+         * ``kms_host`` - The name of your :ref:`kms_host <encryption-at-rest-set-kms>` group.
+         * ``master_key`` - The ID or alias of an AWS KMS key. It allows you to specify a different key than the one configured in the :ref:`kms_host
+           <encryption-at-rest-set-kms>`. Optional.
+
+         **Example:**
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: true
+              cipher_algorithm: AES
+              secret_key_strength: 128
+              key_provider: KmsKeyProviderFactory
+              kms_host: my-kms1
+
+      .. group-tab:: GCP Key Provider
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: <true|false>
+              cipher_algorithm: <hashing algorithm to create the key>
+              secret_key_strength: <length of the key>
+              key_provider: GcpKeyProviderFactory
+              gcp_host: <your gcp_host>
+              master_key: <GCP KMS key to override the one configured in gcp_host> (optional)
+
+         Where:
+
+         * ``enabled`` - Enables or disables default table encryption. Required. Default is ``false``.
+         * ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the key provider. Required.
+         * ``gcp_host`` - The name of your :ref:`gcp_host <encryption-at-rest-set-gcp>` group.
+         * ``master_key`` - The <keyring>/<keyname> of a GCP KMS key. It allows you to specify a different key than the one configured in the :ref:`gcp_host
+           <encryption-at-rest-set-gcp>`. Optional.
+
+         **Example:**
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: true
+              cipher_algorithm: AES
+              secret_key_strength: 128
+              key_provider: GcpKeyProviderFactory
+              gcp_host: my-gcp1
+
+      .. group-tab:: Azure Key Provider
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: <true|false>
+              cipher_algorithm: <hashing algorithm to create the key>
+              secret_key_strength: <length of the key>
+              key_provider: AzureKeyProviderFactory
+              azure_host: <your azure_host>
+              master_key: <Azure Vault key to override the one configured in azure_host> (optional)
+
+         Where:
+
+         * ``enabled`` - Enables or disables default table encryption. Required. Default is ``false``.
+         * ``cipher_algorithm`` - One of the :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithms <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the key provider. Required.
+         * ``azure_host`` - The name of your :ref:`azure_host <encryption-at-rest-set-azure>` group.
+         * ``master_key`` - The <vaultname>/<keyname> of an Azure Key Vault key. It allows you to specify a different key than the one configured in the
+           :ref:`azure_host <encryption-at-rest-set-azure>`. Optional.
+
+         **Example:**
+
+         .. code-block:: yaml
+
+            user_info_encryption:
+              enabled: true
+              cipher_algorithm: AES
+              secret_key_strength: 128
+              key_provider: AzureKeyProviderFactory
+              azure_host: my-azure1
+
+#. Save the file.
+#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
+#. Restart the scylla-server service.
+
+   .. include:: /rst_include/scylla-commands-restart-index.rst
 
 .. _ear-create-table:
 
