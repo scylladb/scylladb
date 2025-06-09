@@ -33,6 +33,8 @@ protected:
     lw_shared_ptr<state> _state;
     shared_future<> _done;
 
+    static future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
+
     // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
     static future<> initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger) {
         co_await coroutine::all(
@@ -42,9 +44,7 @@ protected:
             },
             [state, use_https] () -> future<> {
                 if (use_https) {
-                    tls::credentials_builder cbuild;
-                    co_await cbuild.set_system_trust();
-                    state->creds = cbuild.build_certificate_credentials();
+                    state->creds = co_await system_trust_credentials();
                 }
             }
         );
