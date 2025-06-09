@@ -62,3 +62,24 @@ async def get_tablet_replica(manager: ManagerClient, server: ServerInfo, keyspac
     replicas = await get_tablet_replicas(manager, server, keyspace_name, table_name, token)
     return replicas[0]
 
+async def get_tablet_info(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, token: int) -> list[tuple[HostID, int]]:
+    """
+    Gets the tablet information of the tablet which owns a given token of a given table.
+    This call is guaranteed to see all prior changes applied to group0 tables.
+
+    :param server: server to query. Can be any live node.
+    """
+
+    host = manager.get_cql().cluster.metadata.get_host(server.ip_addr)
+
+    # read_barrier is needed to ensure that local tablet metadata on the queried node
+    # reflects the finalized tablet movement.
+    await read_barrier(manager.api, server.ip_addr)
+
+    table_id = await manager.get_table_id(keyspace_name, table_name)
+
+    rows = await manager.get_cql().run_async(f"SELECT * FROM system.tablets where table_id = {table_id}", host=host)
+    for row in rows:
+        if row.last_token >= token:
+            return row
+    return None
