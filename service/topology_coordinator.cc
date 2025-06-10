@@ -9,6 +9,7 @@
 #include <chrono>
 #include <fmt/ranges.h>
 
+#include <memory>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -49,6 +50,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
+#include "service/view_building_coordinator.hh"
 #include "topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -116,6 +118,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     replica::database& _db;
     service::raft_group0& _group0;
     service::topology_state_machine& _topo_sm;
+    view_building::view_building_state_machine& _vb_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
 
@@ -126,6 +129,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     raft_topology_cmd_handler_type _raft_topology_cmd_handler;
 
     tablet_allocator& _tablet_allocator;
+    std::unique_ptr<view_building::view_building_coordinator> _vb_coordinator;
 
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
@@ -2943,6 +2947,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    future<> run_view_building_coordinator() {
+        while (!_feature_service.view_building_coordinator && !_as.abort_requested()) {
+            condition_variable feature_cv;
+            auto listener = _feature_service.view_building_coordinator.when_enabled([&feature_cv] {
+                feature_cv.broadcast();
+            });
+            auto abort = _as.subscribe([&feature_cv] () noexcept {
+                feature_cv.broadcast();
+            });
+            co_await feature_cv.wait();
+        }
+        if (_as.abort_requested()) {
+            co_return;
+        }
+
+        try {
+            co_await _vb_coordinator->run();
+        } catch (...) {
+            on_fatal_internal_error(rtlogger, format("unhandled exception in view_building_coordinator::run(): {}", std::current_exception()));
+        }
+    }
+
     // Returns the guard if no work done. Otherwise, performs a table migration and consumes the guard.
     future<std::optional<group0_guard>> maybe_migrate_system_tables(group0_guard guard);
 
@@ -2975,18 +3001,19 @@ public:
             sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
             netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
             db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
-            service::topology_state_machine& topo_sm, abort_source& as, raft::server& raft_server,
+            service::topology_state_machine& topo_sm, view_building::view_building_state_machine& vb_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
             gms::feature_service& feature_service)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
-        , _group0(group0), _topo_sm(topo_sm), _as(as)
+        , _group0(group0), _topo_sm(topo_sm), _vb_sm(vb_sm), _as(as)
         , _feature_service(feature_service)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
+        , _vb_coordinator(std::make_unique<view_building::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _messaging, _vb_sm, _topo_sm, _term, _as))
         , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
@@ -3518,6 +3545,7 @@ future<> topology_coordinator::run() {
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
     auto group0_voter_refresher = group0_voter_refresher_fiber();
+    auto vb_coordinator_fiber = run_view_building_coordinator();
 
     while (!_as.abort_requested()) {
         bool sleep = false;
@@ -3559,6 +3587,8 @@ future<> topology_coordinator::run() {
     co_await std::move(cdc_generation_publisher);
     co_await std::move(gossiper_orphan_remover);
     co_await std::move(group0_voter_refresher);
+    co_await std::move(vb_coordinator_fiber);
+    co_await _vb_coordinator->stop();
 }
 
 future<> topology_coordinator::stop() {
@@ -3600,7 +3630,7 @@ future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
         db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
-        service::topology_state_machine& topo_sm, seastar::abort_source& as, raft::server& raft,
+        service::topology_state_machine& topo_sm, service::view_building::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
@@ -3609,7 +3639,7 @@ future<> run_topology_coordinator(
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
-            sys_ks, db, group0, topo_sm, as, raft,
+            sys_ks, db, group0, topo_sm, vb_sm, as, raft,
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             ring_delay,
