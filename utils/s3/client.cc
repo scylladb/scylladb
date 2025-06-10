@@ -1089,8 +1089,17 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     struct claimed_buffer {
         temporary_buffer<char> _buffer;
         semaphore_units<> _claimed_memory;
+<<<<<<< HEAD
         claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory) noexcept
             : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
+||||||| parent of 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
+        s3_clock::duration _consumption_time;
+        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory, s3_clock::duration consumption_time)
+            : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)), _consumption_time(consumption_time) {}
+=======
+        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory)
+            : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
+>>>>>>> 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
     };
     struct content_range {
         uint64_t start;
@@ -1139,10 +1148,19 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 range current_range{0};
                 if (_range == s3::full_range) {
                     current_range = {0, _max_buffers_size};
+<<<<<<< HEAD
                     s3l.trace(
                         "No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}",
                               _object_name,
                               current_range);
+||||||| parent of 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
+                    s3l.trace("No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}-{}", _object_name, current_range.off, current_range.len);
+=======
+                    s3l.trace("No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}-{}",
+                              _object_name,
+                              current_range.off,
+                              current_range.len);
+>>>>>>> 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
                 } else if (_is_contiguous_mode) {
                     s3l.trace("Setting contiguous download mode for '{}'", _object_name);
                     current_range = _range;
@@ -1163,9 +1181,18 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         if (_range == s3::full_range && reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
+<<<<<<< HEAD
                             s3l.trace("No range for object '{}' was provided. Setting the range to {} form the Content-Range header",
                                       _object_name,
                                       _range);
+||||||| parent of 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {}-{} form the Content-Range header", _object_name, _range->off, _range->len);
+=======
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {}-{} form the Content-Range header",
+                                      _object_name,
+                                      _range->off,
+                                      _range->len);
+>>>>>>> 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
                         }
                         auto in = std::move(in_);
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
@@ -1173,13 +1200,28 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
                             auto buf = co_await in.read();
                             auto buff_size = buf.size();
+<<<<<<< HEAD
                             gc.read_stats.update(buff_size, s3_clock::now() - start);
                             _range += buff_size;
+||||||| parent of 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
+                            _range->off += buff_size;
+                            _range->len -= buff_size;
+=======
+                            gc.read_stats.update(buff_size, s3_clock::now() - start);
+                            _range->off += buff_size;
+                            _range->len -= buff_size;
+>>>>>>> 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
                             _buffers_size += buff_size;
                             if (buff_size == 0 && _range.length() == 0) {
                                 s3l.trace("Fiber for object '{}' signals EOS", _object_name);
+<<<<<<< HEAD
                                 _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                                 _get_cv.signal();
+||||||| parent of 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
+                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size), s3_clock::now() - start);
+=======
+                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
+>>>>>>> 2b300c8eb9 (s3_client: Improve reporting of S3 client statistics)
                                 _is_finished = true;
                                 break;
                             }
