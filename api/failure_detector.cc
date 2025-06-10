@@ -64,11 +64,15 @@ void set_failure_detector(http_context& ctx, routes& r, gms::gossiper& g) {
 
     fd::get_simple_states.set(r, [&g] (std::unique_ptr<request> req) {
         return g.container().invoke_on(0, [] (gms::gossiper& g) {
-            std::map<sstring, sstring> nodes_status;
+            std::vector<fd::mapper> nodes_status;
+            nodes_status.reserve(g.num_endpoints());
             g.for_each_endpoint_state([&] (const gms::endpoint_state& es) {
-                nodes_status.emplace(fmt::to_string(es.get_ip()), g.is_alive(es.get_host_id()) ? "UP" : "DOWN");
+                fd::mapper val;
+                val.key = fmt::to_string(es.get_ip());
+                val.value = g.is_alive(es.get_host_id()) ? "UP" : "DOWN";
+                nodes_status.emplace_back(std::move(val));
             });
-            return make_ready_future<json::json_return_type>(map_to_key_value<fd::mapper>(nodes_status));
+            return make_ready_future<json::json_return_type>(std::move(nodes_status));
         });
     });
 
