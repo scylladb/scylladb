@@ -18,6 +18,7 @@
 #include "raft/raft.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_state_machine.hh"
+#include "db/view/view_building_state.hh"
 
 namespace db {
 class system_keyspace;
@@ -83,7 +84,7 @@ future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
         db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
-        service::topology_state_machine& topo_sm, seastar::abort_source& as, raft::server& raft,
+        service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
