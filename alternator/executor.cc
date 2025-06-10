@@ -157,6 +157,50 @@ json::json_return_type make_streamed(rjson::value&& value) {
     return func;
 }
 
+// make_streamed_with_extra_array() is variant of make_streamed() above, which
+// builds a response from a JSON object (rjson::value) but adds to it at the
+// end an additional array. The extra array is given a separate chunked_vector
+// to avoid putting it inside the rjson::value - because RapidJSON does
+// contiguous allocations for arrays which we want to avoid for potentially
+// long arrays in Query/Scan responses (see #23535).
+// If we ever fix RapidJSON to avoid contiguous allocations for arrays, or
+// replace it entirely (#24458), we can remove this function and the function
+// rjson::print_with_extra_array() which it calls.
+json::json_return_type make_streamed_with_extra_array(rjson::value&& value,
+    std::string array_name, utils::chunked_vector<rjson::value>&& array) {
+    // CMH. json::json_return_type uses std::function, not noncopyable_function.
+    // Need to make a copyable version of value. Gah.
+    auto rs = make_shared<rjson::value>(std::move(value));
+    auto ns = make_shared<std::string>(std::move(array_name));
+    auto as = make_shared<utils::chunked_vector<rjson::value>>(std::move(array));
+    std::function<future<>(output_stream<char>&&)> func = [rs, ns, as](output_stream<char>&& os) mutable -> future<> {
+        // move objects to coroutine frame.
+        auto los = std::move(os);
+        auto lrs = std::move(rs);
+        auto lns = std::move(ns);
+        auto las = std::move(as);
+        std::exception_ptr ex;
+        try {
+            co_await rjson::print_with_extra_array(*lrs, *lns, *las, los);
+        } catch (...) {
+            // at this point, we cannot really do anything. HTTP headers and return code are
+            // already written, and quite potentially a portion of the content data.
+            // just log + rethrow. It is probably better the HTTP server closes connection
+            // abruptly or something...
+            ex = std::current_exception();
+            elogger.error("Exception during streaming HTTP response: {}", ex);
+        }
+        co_await los.close();
+        co_await rjson::destroy_gently(std::move(*lrs));
+        // TODO: can/should we also destroy the array (*las) gently?
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+        co_return;
+    };
+    return func;
+}
+
 json_string::json_string(std::string&& value)
     : _value(std::move(value))
 {}
@@ -4654,7 +4698,11 @@ class describe_items_visitor {
     const filter& _filter;
     typename columns_t::const_iterator _column_it;
     rjson::value _item;
-    rjson::value _items;
+    // _items is a chunked_vector<rjson::value> instead of a RapidJson array
+    // (rjson::value) because unfortunately RapidJson arrays are stored
+    // contiguously in memory, and cause large allocations when a Query/Scan
+    // returns a long list of short items (issue #23535).
+    utils::chunked_vector<rjson::value> _items;
     size_t _scanned_count;
 
 public:
@@ -4664,7 +4712,6 @@ public:
             , _filter(filter)
             , _column_it(columns.begin())
             , _item(rjson::empty_object())
-            , _items(rjson::empty_array())
             , _scanned_count(0)
     {
         // _filter.check() may need additional attributes not listed in
@@ -4743,13 +4790,13 @@ public:
                 rjson::remove_member(_item, attr);
             }
 
-            rjson::push_back(_items, std::move(_item));
+            _items.push_back(std::move(_item));
         }
         _item = rjson::empty_object();
         ++_scanned_count;
     }
 
-    rjson::value get_items() && {
+    utils::chunked_vector<rjson::value> get_items() && {
         return std::move(_items);
     }
 
@@ -4758,13 +4805,25 @@ public:
     }
 };
 
-static future<std::tuple<rjson::value, size_t>> describe_items(const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
+// describe_items() returns a JSON object that includes members "Count"
+// and "ScannedCount", but *not* "Items" - that is returned separately
+// as a chunked_vector to avoid large contiguous allocations which
+// RapidJSON does of its array. The caller should add "Items" to the
+// returned JSON object if needed, or print it separately.
+// The returned chunked_vector (the items) is std::optional<>, because
+// the user may have requested only to count items, and not return any
+// items - which is different from returning an empty list of items.
+static future<std::tuple<rjson::value, std::optional<utils::chunked_vector<rjson::value>>, size_t>> describe_items(
+        const cql3::selection::selection& selection,
+        std::unique_ptr<cql3::result_set> result_set,
+        std::optional<attrs_to_get>&& attrs_to_get,
+        filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     co_await result_set->visit_gently(visitor);
     auto scanned_count = visitor.get_scanned_count();
-    rjson::value items = std::move(visitor).get_items();
+    utils::chunked_vector<rjson::value> items = std::move(visitor).get_items();
     rjson::value items_descr = rjson::empty_object();
-    auto size = items.Size();
+    auto size = items.size();
     rjson::add(items_descr, "Count", rjson::value(size));
     rjson::add(items_descr, "ScannedCount", rjson::value(scanned_count));
     // If attrs_to_get && attrs_to_get->empty(), this means the user asked not
@@ -4774,10 +4833,11 @@ static future<std::tuple<rjson::value, size_t>> describe_items(const cql3::selec
     // In that case, we currently build a list of empty items and here drop
     // it. We could just count the items and not bother with the empty items.
     // (However, remember that when we do have a filter, we need the items).
+    std::optional<utils::chunked_vector<rjson::value>> opt_items;
     if (!attrs_to_get || !attrs_to_get->empty()) {
-        rjson::add(items_descr, "Items", std::move(items));
+        opt_items = std::move(items);
     }
-    co_return std::tuple<rjson::value, size_t>{std::move(items_descr), size};
+    co_return std::tuple(std::move(items_descr), std::move(opt_items), size);
 }
 
 static rjson::value encode_paging_state(const schema& schema, const service::pager::paging_state& paging_state) {
@@ -4814,6 +4874,12 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     }
     return last_evaluated_key;
 }
+
+// RapidJSON allocates arrays contiguously in memory, so we want to avoid
+// returning a large number of items as a single rapidjson array, and use
+// a chunked_vector instead. The following constant is an arbitrary cutoff
+// point for when to switch from a rapidjson array to a chunked_vector.
+static constexpr int max_items_for_rapidjson_array = 256;
 
 static future<executor::request_return_type> do_query(service::storage_proxy& proxy,
         schema_ptr table_schema,
@@ -4887,19 +4953,35 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     }
     auto paging_state = rs->get_metadata().paging_state();
     bool has_filter = filter;
-    auto [items, size] = co_await describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
+    auto [items_descr, opt_items, size] = co_await describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
     if (paging_state) {
-        rjson::add(items, "LastEvaluatedKey", encode_paging_state(*table_schema, *paging_state));
+        rjson::add(items_descr, "LastEvaluatedKey", encode_paging_state(*table_schema, *paging_state));
     }
     if (has_filter){
         cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
         // update our "filtered_row_matched_total" for all the rows matched, despited the filter
         cql_stats.filtered_rows_matched_total += size;
     }
-    if (is_big(items)) {
-        co_return executor::request_return_type(make_streamed(std::move(items)));
+    if (opt_items) {
+        if (opt_items->size() >= max_items_for_rapidjson_array) {
+            // There are many items, better print the JSON and the array of
+            // items (opt_items) separately to avoid RapidJSON's contiguous
+            // allocation of arrays.
+            co_return executor::request_return_type(make_streamed_with_extra_array(std::move(items_descr), "Items", std::move(*opt_items)));
+        }
+        // There aren't many items in the chunked vector opt_items,
+        // let's just insert them into the JSON object and print the
+        // full JSON normally.
+        rjson::value items_json = rjson::empty_array();
+        for (auto& item : *opt_items) {
+            rjson::push_back(items_json, std::move(item));
+        }
+        rjson::add(items_descr, "Items", std::move(items_json));
     }
-    co_return executor::request_return_type(make_jsonable(std::move(items)));
+    if (is_big(items_descr)) {
+        co_return executor::request_return_type(make_streamed(std::move(items_descr)));
+    }
+    co_return executor::request_return_type(make_jsonable(std::move(items_descr)));
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {
