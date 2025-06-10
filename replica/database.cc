@@ -76,6 +76,7 @@
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 #include "utils/labels.hh"
+#include "tracing/trace_keyspace_helper.hh"
 
 #include <algorithm>
 
@@ -601,6 +602,9 @@ database::setup_metrics() {
         sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
                        sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
 
+        sm::make_counter("total_writes_rejected_due_to_out_of_space_prevention", _stats->total_writes_rejected_due_to_out_of_space_prevention,
+                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level),
+
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
@@ -731,6 +735,21 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
             co_await func(v);
         } catch (...) {
             dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, std::current_exception());
+        }
+    });
+}
+
+future<> database::set_in_critical_disk_utilization_mode(sharded<database>& sharded_db, bool enabled)
+{
+    return sharded_db.invoke_on_all([enabled] (replica::database& db) {
+        if (enabled) {
+            ++db._critical_disk_utilization_mode_count;
+        } else if (db._critical_disk_utilization_mode_count > 0) {
+            --db._critical_disk_utilization_mode_count;
+            if (db._critical_disk_utilization_mode_count > 0) {
+                dblog.warn("Database is still in critical disk utilization mode, requires {} more call(s) to disable it",
+                           db._critical_disk_utilization_mode_count);
+            }
         }
     });
 }
@@ -897,6 +916,15 @@ static bool is_system_table(const schema& s) {
 
 sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
     return get_sstables_manager(system_keyspace(is_system_table(s)));
+}
+
+static bool shall_reject_write(const database& db, const schema& s)
+{
+    // MVs/SIs, CDC Log table - are located in the same keyspace as the associated user table
+    // audit - is not an internal keyspace in the sens of data_dictionary::keyspace::is_internal
+    // cql tracing - is part of system_traces that is an internal keyspace but we want to reject
+    return db.is_in_critical_disk_utilization_mode() &&
+        (!db.as_data_dictionary().find_keyspace(s.ks_name()).is_internal() || s.ks_name() == tracing::trace_keyspace_helper::KEYSPACE_NAME);
 }
 
 void database::init_schema_commitlog() {
@@ -1850,6 +1878,10 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
+    if (shall_reject_write(*this, *s)) {
+        update_write_metrics_for_rejected_writes();
+        return make_exception_future<mutation>(replica::critical_disk_utilization_exception{"rejected counter update mutation"});
+    }
   return update_write_metrics(seastar::futurize_invoke([&] {
     if (!s->is_synced()) {
         throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
@@ -2093,6 +2125,12 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes_timedout;
 }
 
+void database::update_write_metrics_for_rejected_writes() {
+    ++_stats->total_writes;
+    ++_stats->total_writes_failed;
+    ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
+}
+
 future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
@@ -2100,6 +2138,10 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
     if (timeout <= db::timeout_clock::now()) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
+    }
+    if (shall_reject_write(*this, *s)) {
+        update_write_metrics_for_rejected_writes();
+        return make_exception_future<>(replica::critical_disk_utilization_exception{"rejected write mutation"});
     }
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply mutation using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
@@ -2110,6 +2152,10 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
 future<> database::apply_hint(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::timeout_clock::time_point timeout) {
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply hint {}", m.pretty_printer(s));
+    }
+    if (shall_reject_write(*this, *s)) {
+        update_write_metrics_for_rejected_writes();
+        return make_exception_future<>(replica::critical_disk_utilization_exception{"rejected hint mutation"});
     }
     if (!s->is_synced()) {
         on_internal_error(dblog, format("attempted to apply hint using not synced schema of {}.{}, version={}", s->ks_name(), s->cf_name(), s->version()));
