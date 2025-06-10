@@ -44,6 +44,14 @@ We recommend upgrading the Monitoring Stack to the latest version.
 See the ScyllaDB Release Notes for the latest updates. The Release Notes are published 
 at the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
 
+.. note::
+
+   If you previously upgraded from 2024.x to 2025.1 without enabling consistent
+   topology updates, ensure you enable the feature before you upgrade to 2025.2.
+   For instructions, see
+   `Enable Consistent Topology Updates <https://docs.scylladb.com/manual/branch-2025.1/upgrade/upgrade-guides/upgrade-guide-from-2024.x-to-2025.1/enable-consistent-topology.html>`_
+   in the upgrade guide for version 2025.1.
+
 Upgrade Procedure
 =================
 
