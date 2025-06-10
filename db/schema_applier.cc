@@ -9,6 +9,7 @@
 
 #include "schema_applier.hh"
 
+#include <memory>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include <seastar/core/coroutine.hh>
@@ -17,18 +18,23 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/shard_id.hh>
+#include <seastar/core/sharded.hh>
 
 #include <boost/range/join.hpp>
 
 #include <fmt/ranges.h>
 
+#include "service/storage_service.hh"
+#include "mutation/frozen_mutation.hh"
+#include "schema/schema_fwd.hh"
+#include "utils/assert.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
 #include "cql3/expr/expression.hh"
 #include "types/types.hh"
-#include "db/schema_tables.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -40,7 +46,6 @@
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
 #include "frozen_schema.hh"
-#include "schema/schema_registry.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
@@ -50,13 +55,10 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "mutation/async_utils.hh"
-#include "db/schema_tables.hh"
 
 namespace db {
 
 namespace schema_tables {
-
-enum class table_kind { table, view };
 
 static constexpr std::initializer_list<table_kind> all_table_kinds = {
     table_kind::table,
@@ -69,6 +71,24 @@ static schema_ptr get_table_holder(table_kind k) {
         case table_kind::view: return views();
     }
     abort();
+}
+
+table_selector& table_selector::operator+=(table_selector&& o) {
+    all_in_keyspace |= o.all_in_keyspace;
+    for (auto t : all_table_kinds) {
+        tables[t].merge(std::move(o.tables[t]));
+    }
+    return *this;
+}
+
+void table_selector::add(table_kind t, sstring name) {
+    tables[t].emplace(std::move(name));
+}
+
+void table_selector::add(sstring name) {
+    for (auto t : all_table_kinds) {
+        add(t, name);
+    }
 }
 
 }
@@ -92,29 +112,6 @@ template <> struct fmt::formatter<db::schema_tables::table_kind> {
 namespace db {
 
 namespace schema_tables {
-
-struct table_selector {
-    bool all_in_keyspace = false; // If true, selects all existing tables in a keyspace plus what's in "tables";
-    std::unordered_map<table_kind, std::unordered_set<sstring>> tables;
-
-    table_selector& operator+=(table_selector&& o) {
-        all_in_keyspace |= o.all_in_keyspace;
-        for (auto t : all_table_kinds) {
-            tables[t].merge(std::move(o.tables[t]));
-        }
-        return *this;
-    }
-
-    void add(table_kind t, sstring name) {
-        tables[t].emplace(std::move(name));
-    }
-
-    void add(sstring name) {
-        for (auto t : all_table_kinds) {
-            add(t, name);
-        }
-    }
-};
 
 static std::optional<table_id> table_id_from_mutations(const schema_mutations& sm) {
     auto table_rs = query::result_set(sm.columnfamilies_mutation());
@@ -242,7 +239,7 @@ static void maybe_delete_schema_version(mutation& m) {
     }
 }
 
-static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_proxy>& proxy,
+static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_proxy>& proxy,
                                                  const schema_result& before, const schema_result& after,
                                                  const schema_result& sk_before, const schema_result& sk_after)
 {
@@ -259,16 +256,22 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
     auto diff = difference(before, after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
     auto sk_diff = difference(sk_before, sk_after, indirect_equal_to<lw_shared_ptr<query::result_set>>());
 
-    auto& created = diff.entries_only_on_right;
-    auto& altered = diff.entries_differing;
-    auto& dropped = diff.entries_only_on_left;
+    auto created = std::move(diff.entries_only_on_right);
+    auto altered = std::move(diff.entries_differing);
+
+    affected_keyspaces affected;
+    affected.names.dropped = std::move(diff.entries_only_on_left);
+
+    auto& sk_created = sk_diff.entries_only_on_right;
+    auto& sk_altered = sk_diff.entries_differing;
+    auto& sk_dropped = sk_diff.entries_only_on_left;
 
     // For the ALTER case, we have to also consider changes made to SCYLLA_KEYSPACES, not only to KEYSPACES:
     // 1. changes made to non-null columns...
-    altered.insert(sk_diff.entries_differing.begin(), sk_diff.entries_differing.end());
+    altered.insert(sk_altered.begin(), sk_altered.end());
     // 2. ... and new or deleted entries - these change only when ALTERing, not CREATE'ing or DROP'ing
-    for (auto&& ks : boost::range::join(sk_diff.entries_only_on_right, sk_diff.entries_only_on_left)) {
-        if (!created.contains(ks) && !dropped.contains(ks)) {
+    for (auto&& ks : boost::range::join(sk_created, sk_dropped)) {
+        if (!created.contains(ks) && !affected.names.dropped.contains(ks)) {
             altered.emplace(ks);
         }
     }
@@ -277,21 +280,27 @@ static future<std::set<sstring>> merge_keyspaces(distributed<service::storage_pr
     for (auto& name : created) {
         slogger.info("Creating keyspace {}", name);
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
-        auto ksm = co_await create_keyspace_from_schema_partition(proxy,
+        auto ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
-        co_await replica::database::create_keyspace_on_all_shards(sharded_db, proxy, *ksm);
+        affected.created.push_back(
+                co_await replica::database::prepare_create_keyspace_on_all_shards(
+                        sharded_db, proxy, *ksm));
+        affected.names.created.insert(name);
     }
     for (auto& name : altered) {
         slogger.info("Altering keyspace {}", name);
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
-        auto tmp_ksm = co_await create_keyspace_from_schema_partition(proxy,
+        auto tmp_ksm = co_await create_keyspace_metadata(proxy,
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
-        co_await replica::database::update_keyspace_on_all_shards(sharded_db, *tmp_ksm);
+        affected.altered.push_back(
+                co_await replica::database::prepare_update_keyspace_on_all_shards(
+                        sharded_db, *tmp_ksm));
+        affected.names.altered.insert(name);
     }
-    for (auto& key : dropped) {
+    for (auto& key : affected.names.dropped) {
         slogger.info("Dropping keyspace {}", key);
     }
-    co_return dropped;
+    co_return affected;
 }
 
 static std::vector<const query::result_set_row*> collect_rows(const std::set<sstring>& keys, const schema_result& result) {
@@ -443,61 +452,18 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
     return {std::move(created), std::move(dropped)};
 }
 
-struct [[nodiscard]] user_types_to_drop final {
-    seastar::noncopyable_function<future<> ()> drop;
-};
-
 // see the comments for merge_keyspaces()
-static future<user_types_to_drop> merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after)
+static future<> merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, affected_user_types& affected)
 {
     auto diff = diff_rows(before, after);
-
-    // Create and update user types before any tables/views are created that potentially
-    // use those types. Similarly, defer dropping until after tables/views that may use
-    // some of these user types are dropped.
-
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-        auto created_types = co_await create_types(db, diff.created);
-        for (auto&& user_type : created_types) {
-            db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-            co_await db.get_notifier().create_user_type(user_type);
-        }
-        auto altered_types = co_await create_types(db, diff.altered);
-        for (auto&& user_type : altered_types) {
-            db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
-            co_await db.get_notifier().update_user_type(user_type);
-        }
+    co_await affected.start();
+    co_await affected.invoke_on_all([&] (affected_user_types_per_shard& af) mutable -> future<> {
+        auto& db = proxy.local().get_db().local();
+        af.created = co_await create_types(db, diff.created);
+        af.altered = co_await create_types(db, diff.altered);
+        af.dropped = co_await create_types(db, diff.dropped);
     });
-
-    co_return user_types_to_drop{[&proxy, before = std::move(before), rows = std::move(diff.dropped)] () mutable -> future<> {
-        co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db) -> future<> {
-            auto dropped = co_await create_types(db, rows);
-            for (auto& user_type : dropped) {
-                db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
-                co_await db.get_notifier().drop_user_type(user_type);
-            }
-        });
-    }};
 }
-
-struct schema_diff {
-    struct dropped_schema {
-        global_schema_ptr schema;
-    };
-
-    struct altered_schema {
-        global_schema_ptr old_schema;
-        global_schema_ptr new_schema;
-    };
-
-    std::vector<global_schema_ptr> created;
-    std::vector<altered_schema> altered;
-    std::vector<dropped_schema> dropped;
-
-    size_t size() const {
-        return created.size() + altered.size() + dropped.size();
-    }
-};
 
 // Which side of the diff this schema is on?
 // Helps ensuring that when creating schema for altered views, we match "before"
@@ -508,18 +474,18 @@ enum class schema_diff_side {
     right, // new, after
 };
 
-static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy,
+static schema_diff_per_shard diff_table_or_view(distributed<service::storage_proxy>& proxy,
     const std::map<table_id, schema_mutations>& before,
     const std::map<table_id, schema_mutations>& after,
     bool reload,
     noncopyable_function<schema_ptr (schema_mutations sm, schema_diff_side)> create_schema)
 {
-    schema_diff d;
+    schema_diff_per_shard d;
     auto diff = difference(before, after);
     for (auto&& key : diff.entries_only_on_left) {
         auto&& s = proxy.local().get_db().local().find_schema(key);
         slogger.info("Dropping {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        d.dropped.emplace_back(schema_diff::dropped_schema{s});
+        d.dropped.emplace_back(s);
     }
     for (auto&& key : diff.entries_only_on_right) {
         auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
@@ -530,13 +496,13 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
         auto s_before = create_schema(std::move(before.at(key)), schema_diff_side::left);
         auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
         slogger.info("Altering {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-        d.altered.emplace_back(schema_diff::altered_schema{s_before, s});
+        d.altered.emplace_back(schema_diff_per_shard::altered_schema{s_before, s});
     }
     if (reload) {
         for (auto&& key: diff.entries_in_common) {
             auto s = create_schema(std::move(after.at(key)), schema_diff_side::right);
             slogger.info("Reloading {}.{} id={} version={}", s->ks_name(), s->cf_name(), s->id(), s->version());
-            d.altered.emplace_back(schema_diff::altered_schema {s, s});
+            d.altered.emplace_back(schema_diff_per_shard::altered_schema {s, s});
         }
     }
     return d;
@@ -549,24 +515,91 @@ static schema_diff diff_table_or_view(distributed<service::storage_proxy>& proxy
 // and or filesystem calls, e.g. fsync.
 constexpr size_t max_concurrent = 8;
 
+
+in_progress_types_storage_per_shard::in_progress_types_storage_per_shard(replica::database& db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types) : _stored_user_types(db.as_user_types_storage()) {
+    // initialize metadata for new keyspaces
+    for (auto& ks_per_shard : affected_keyspaces.created) {
+        auto metadata = ks_per_shard[this_shard_id()]->metadata();
+        auto& ks_name = metadata->name();
+        if (!_in_progress_types.contains(ks_name)) {
+            // copy metadata
+            _in_progress_types[ks_name] = metadata->user_types();
+        }
+    }
+    auto& types = affected_types.local();
+    // initialize metadata for affected keyspaces (where types change)
+    for (auto& type : boost::range::join(boost::range::join(types.created, types.altered), types.dropped)) {
+        auto& ks_name = type->_keyspace;
+        if (!_in_progress_types.contains(ks_name)) {
+            // copy metadata
+            _in_progress_types[ks_name] = db.find_keyspace(ks_name).metadata()->user_types();
+        }
+    }
+
+    for (auto& type : boost::range::join(types.created, types.altered)) {
+        auto& ks_name = type->_keyspace;
+        _in_progress_types[ks_name].add_type(type);
+    }
+    for (auto& type : types.dropped) {
+        auto& ks_name = type->_keyspace;
+        _in_progress_types[ks_name].remove_type(type);
+    }
+    for (const auto &ks_name : affected_keyspaces.names.dropped) {
+        // can't reference a type when it's keyspace is being dropped
+        _in_progress_types[ks_name] = data_dictionary::user_types_metadata();
+    }
+}
+
+const data_dictionary::user_types_metadata& in_progress_types_storage_per_shard::get(const sstring& ks) const {
+    if (_in_progress_types.contains(ks)) {
+        return _in_progress_types.at(ks);
+    }
+    // keyspace is not affected
+    return _stored_user_types->get(ks);
+}
+
+std::shared_ptr<data_dictionary::user_types_storage> in_progress_types_storage_per_shard::committed_storage() {
+    return _stored_user_types;
+}
+
+future<> in_progress_types_storage::init(distributed<replica::database>& sharded_db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types) {
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) {
+        shards[this_shard_id()] = make_foreign(seastar::make_shared<in_progress_types_storage_per_shard>(db, affected_keyspaces, affected_types));
+    });
+}
+
+in_progress_types_storage_per_shard& in_progress_types_storage::local() {
+    return *shards[this_shard_id()];
+}
+
 // see the comments for merge_keyspaces()
 // Atomically publishes schema changes. In particular, this function ensures
 // that when a base schema and a subset of its views are modified together (i.e.,
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
 static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
+    distributed<service::storage_service>& ss,
     sharded<db::system_keyspace>& sys_ks,
     const std::map<table_id, schema_mutations>& tables_before,
     const std::map<table_id, schema_mutations>& tables_after,
     const std::map<table_id, schema_mutations>& views_before,
     const std::map<table_id, schema_mutations>& views_after,
+    in_progress_types_storage& types_storage,
     bool reload,
-    locator::tablet_metadata_change_hint tablet_hint)
+    locator::tablet_metadata_change_hint tablet_hint,
+    affected_tables_and_views& diff)
 {
-    auto tables_diff = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
-        return create_table_from_mutations(proxy, std::move(sm));
+    auto& user_types = types_storage.local();
+    co_await diff.tables_and_views.start();
+
+    // diffs bound to current shard
+    auto& local_views = diff.tables_and_views.local().views;
+    auto& local_tables = diff.tables_and_views.local().tables;
+
+    local_tables = diff_table_or_view(proxy, tables_before, tables_after, reload, [&] (schema_mutations sm, schema_diff_side) {
+        return create_table_from_mutations(proxy, std::move(sm), user_types);
     });
-    auto views_diff = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
+    local_views = diff_table_or_view(proxy, views_before, views_after, reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -580,7 +613,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         auto base_name = view_row.get_nonnull<sstring>("base_table_name");
 
         schema_ptr base_schema;
-        for (auto&& altered : tables_diff.altered) {
+        for (auto& altered : local_tables.altered) {
             // Chose the appropriate version of the base table schema: old -> old, new -> new.
             schema_ptr s = side == schema_diff_side::left ? altered.old_schema : altered.new_schema;
             if (s->ks_name() == ks_name && s->cf_name() == base_name) {
@@ -589,7 +622,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
             }
         }
         if (!base_schema) {
-            for (auto&& s : tables_diff.created) {
+            for (auto& s : local_tables.created) {
                 if (s.get()->ks_name() == ks_name && s.get()->cf_name() == base_name) {
                     base_schema = s;
                     break;
@@ -600,7 +633,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         if (!base_schema) {
             base_schema = proxy.local().local_db().find_schema(ks_name, base_name);
         }
-        view_ptr vp = create_view_from_mutations(proxy, std::move(sm), base_schema);
+        view_ptr vp = create_view_from_mutations(proxy, std::move(sm), user_types, base_schema);
 
         // Now when we have a referenced base - sanity check that we're not registering an old view
         // (this could happen when we skip multiple major versions in upgrade, which is unsupported.)
@@ -609,59 +642,373 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
         return vp;
     });
 
-    // First drop views and *only then* the tables, if interleaved it can lead
-    // to a mv not finding its schema when snapshotting since the main table
-    // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
-    auto& db = proxy.local().get_db();
-    co_await max_concurrent_for_each(views_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) {
-        auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
+    // create schema_ptrs for all shards
+    frozen_schema_diff tables_frozen = co_await local_tables.freeze();
+    frozen_schema_diff views_frozen = co_await local_views.freeze();
+    co_await diff.tables_and_views.invoke_on_others([&types_storage, &proxy, &tables_frozen, &views_frozen] (affected_tables_and_views_per_shard& tables_and_views) -> future<> {
+        auto& db = proxy.local().get_db().local();
+        tables_and_views.tables = co_await schema_diff_per_shard::copy_from(
+                db, types_storage, tables_frozen);
+        tables_and_views.views = co_await schema_diff_per_shard::copy_from(
+                db, types_storage, views_frozen);
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&db, &sys_ks] (schema_diff::dropped_schema& dt) -> future<> {
-        auto& s = *dt.schema.get();
-        return replica::database::drop_table_on_all_shards(db, sys_ks, s.ks_name(), s.cf_name());
+
+    auto& db = proxy.local().get_db();
+    // adding and dropping uses this locking mechanism
+    diff.locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
+            co_await replica::database::prepare_tables_metadata_change_on_all_shards(db));
+
+    co_await max_concurrent_for_each(local_views.dropped, max_concurrent, [&db, &diff] (schema_ptr& dt) -> future<> {
+        auto uuid = dt->id();
+        diff.table_shards.insert({uuid,
+                co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
+    });
+    co_await max_concurrent_for_each(local_tables.dropped, max_concurrent, [&db, &diff] (schema_ptr& dt) -> future<> {
+        auto uuid = dt->id();
+        diff.table_shards.insert({uuid,
+                co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
     });
 
     if (tablet_hint) {
         slogger.info("Tablet metadata changed");
-        // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
-        // and so that compaction groups are not destroyed altogether.
-        // We must also do it before tables are created so that new tables see the tablet map.
-        co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-            co_await db.get_notifier().update_tablet_metadata(std::move(tablet_hint));
+        auto new_token_metadata = co_await ss.local().prepare_tablet_metadata(tablet_hint);
+        co_await smp::invoke_on_others([&diff, &new_token_metadata] () -> future<> {
+            diff.new_token_metadata.local() =
+                    make_token_metadata_ptr(co_await new_token_metadata->clone_async());
         });
+        diff.new_token_metadata.local() = std::move(new_token_metadata);
+    }
+}
+
+future<frozen_schema_diff> schema_diff_per_shard::freeze() const {
+    frozen_schema_diff result;
+    for (const auto& c : created) {
+        result.created.emplace_back(frozen_schema_with_base_info(c));
+        co_await coroutine::maybe_yield();
+    }
+    for (const auto& a : altered) {
+        result.altered.push_back(frozen_schema_diff::altered_schema{
+            .old_schema = frozen_schema_with_base_info(a.old_schema),
+            .new_schema = frozen_schema_with_base_info(a.new_schema),
+        });
+        co_await coroutine::maybe_yield();
+    }
+    for (const auto& d : dropped) {
+        result.dropped.emplace_back(frozen_schema_with_base_info(d));
+        co_await coroutine::maybe_yield();
+    }
+    co_return result;
+}
+
+future<schema_diff_per_shard> schema_diff_per_shard::copy_from(replica::database& db, in_progress_types_storage& types_storage, const frozen_schema_diff& oth) {
+    auto uts = std::make_shared<in_progress_types_storage_per_shard>(types_storage.local());
+    schema_ctxt ctxt(db.get_config(), uts, db.features(), &db);
+    schema_ctxt commited_ctxt(db.get_config(), uts->committed_storage(), db.features(), &db);
+    schema_diff_per_shard result;
+
+    for (const auto& c : oth.created) {
+        result.created.emplace_back(c.unfreeze(ctxt));
+        co_await coroutine::maybe_yield();
+    }
+    for (const auto& a : oth.altered) {
+        result.altered.push_back(schema_diff_per_shard::altered_schema{
+            .old_schema = a.old_schema.unfreeze(commited_ctxt),
+            .new_schema = a.new_schema.unfreeze(ctxt),
+        });
+        co_await coroutine::maybe_yield();
+    }
+    for (const auto& d : oth.dropped) {
+        result.dropped.emplace_back(d.unfreeze(commited_ctxt));
+        co_await coroutine::maybe_yield();
     }
 
-    co_await db.invoke_on_all([&] (replica::database& db) -> future<> {
-        // In order to avoid possible races we first create the tables and only then the views.
-        // That way if a view seeks information about its base table it's guaranteed to find it.
-        co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
-        });
-        co_await max_concurrent_for_each(views_diff.created, max_concurrent, [&] (global_schema_ptr& gs) -> future<> {
-            co_await db.add_column_family_and_make_directory(gs, replica::database::is_new_cf::yes);
-        });
+    co_return result;
+}
+
+ locator::mutable_token_metadata_ptr& new_token_metadata::local() {
+    return shards[this_shard_id()];
+ }
+
+future<> new_token_metadata::destroy() {
+    return smp::invoke_on_all([this] () {
+        shards[this_shard_id()] = nullptr;
     });
-    co_await db.invoke_on_all([&](replica::database& db) -> future<> {
-        std::vector<bool> columns_changed;
-        columns_changed.reserve(tables_diff.altered.size() + views_diff.altered.size());
-        for (auto&& altered : boost::range::join(tables_diff.altered, views_diff.altered)) {
-            columns_changed.push_back(db.update_column_family(altered.new_schema));
-            co_await coroutine::maybe_yield();
+}
+
+static future<> notify_tables_and_views(service::migration_notifier& notifier, const affected_tables_and_views& diff) {
+    auto it = diff.tables_and_views.local().columns_changed.cbegin();
+    auto notify = [&] (auto& r, auto&& f) -> future<> {
+        co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
+    };
+
+    const auto& tables = diff.tables_and_views.local().tables;
+    const auto& views = diff.tables_and_views.local().views;
+
+    // View drops are notified first, because a table can only be dropped if its views are already deleted
+    co_await notify(views.dropped, [&] (auto&& dt) { return notifier.drop_view(view_ptr(dt)); });
+    co_await notify(tables.dropped, [&] (auto&& dt) { return notifier.drop_column_family(dt); });
+    // Table creations are notified first, in case a view is created right after the table
+    co_await notify(tables.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
+    co_await notify(views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
+    // Table altering is notified first, in case new base columns appear
+    co_await notify(tables.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
+    co_await notify(views.altered, [&] (auto&& altered) { return notifier.update_view(view_ptr(altered.new_schema), *it++); });
+}
+
+static void drop_cached_func(replica::database& db, const query::result_set_row& row) {
+    auto language = row.get_nonnull<sstring>("language");
+    if (language == "wasm") {
+        cql3::functions::function_name name{
+            row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
+        auto arg_types = read_arg_types(row, name.keyspace, db.user_types());
+        db.lang().remove(name, arg_types);
+    }
+}
+
+static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, in_progress_types_storage& types_storage, functions_change_batch_all_shards& batches) {
+    auto diff = diff_rows(before, after);
+    co_await batches.start();
+    co_await batches.invoke_on_all(coroutine::lambda([&] (cql3::functions::change_batch& batch) -> future<> {
+        auto& db = proxy.local().get_db().local();
+        for (const auto& val : diff.created) {
+            batch.add_function(co_await create_func(db, *val, types_storage.local()));
         }
-        auto it = columns_changed.begin();
-        auto notify = [&] (auto& r, auto&& f) -> future<> {
-            co_await max_concurrent_for_each(r, max_concurrent, std::move(f));
-        };
-        // View drops are notified first, because a table can only be dropped if its views are already deleted
-        co_await notify(views_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_view(view_ptr(dt.schema)); });
-        co_await notify(tables_diff.dropped, [&] (auto&& dt) { return db.get_notifier().drop_column_family(dt.schema); });
-        // Table creations are notified first, in case a view is created right after the table
-        co_await notify(tables_diff.created, [&] (auto&& gs) { return db.get_notifier().create_column_family(gs); });
-        co_await notify(views_diff.created, [&] (auto&& gs) { return db.get_notifier().create_view(view_ptr(gs)); });
-        // Table altering is notified first, in case new base columns appear
-        co_await notify(tables_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_column_family(altered.new_schema, *it++); });
-        co_await notify(views_diff.altered, [&] (auto&& altered) { return db.get_notifier().update_view(view_ptr(altered.new_schema), *it++); });
+        for (const auto& val : diff.dropped) {
+            cql3::functions::function_name name{
+                val->get_nonnull<sstring>("keyspace_name"), val->get_nonnull<sstring>("function_name")};
+            auto commited_storage = types_storage.local().committed_storage();
+            auto arg_types = read_arg_types(*val, name.keyspace, *commited_storage);
+            // as we don't yield between dropping cache and committing batch
+            // change there is no window between cache removal and declaration removal
+            drop_cached_func(db, *val);
+            batch.remove_function(name, arg_types);
+        }
+        for (const auto& val : diff.altered) {
+            drop_cached_func(db, *val);
+            batch.replace_function(co_await create_func(db, *val, types_storage.local()));
+        }
+    }));
+}
+
+static future<> merge_aggregates(distributed<service::storage_proxy>& proxy,
+        functions_change_batch_all_shards& batches,
+        const schema_result& before, const schema_result& after,
+        const schema_result& scylla_before, const schema_result& scylla_after, in_progress_types_storage& types_storage) {
+    auto diff = diff_aggregates_rows(before, after, scylla_before, scylla_after);
+
+    co_await batches.invoke_on_all([&] (cql3::functions::change_batch& batch)-> future<> {
+        auto& db = proxy.local().get_db().local();
+        for (const auto& val : diff.created) {
+            batch.add_function(create_aggregate(db, *val.first, val.second, batch, types_storage.local()));
+        }
+        for (const auto& val : diff.dropped) {
+            cql3::functions::function_name name{
+                val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
+            auto commited_storage = types_storage.local().committed_storage();
+            auto arg_types = read_arg_types(*val.first, name.keyspace, *commited_storage);
+            batch.remove_aggregate(name, arg_types);
+        }
+        co_return;
+    });
+}
+
+future<schema_persisted_state> schema_applier::get_schema_persisted_state() {
+    schema_persisted_state v{
+        .keyspaces = co_await read_schema_for_keyspaces(_proxy, KEYSPACES, _keyspaces),
+        .scylla_keyspaces = co_await read_schema_for_keyspaces(_proxy, SCYLLA_KEYSPACES, _keyspaces),
+        .tables = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::table, _affected_tables),
+        .types = co_await read_schema_for_keyspaces(_proxy, TYPES, _keyspaces),
+        .views = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::view, _affected_tables),
+        .functions = co_await read_schema_for_keyspaces(_proxy, FUNCTIONS, _keyspaces),
+        .aggregates = co_await read_schema_for_keyspaces(_proxy, AGGREGATES, _keyspaces),
+        .scylla_aggregates = co_await read_schema_for_keyspaces(_proxy, SCYLLA_AGGREGATES, _keyspaces),
+    };
+    co_return v;
+}
+
+future<> schema_applier::prepare(std::vector<mutation>& muts) {
+    schema_ptr s = keyspaces();
+    for (auto& mutation : muts) {
+        sstring keyspace_name = value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0)));
+
+        if (schema_tables_holding_schema_mutations().contains(mutation.schema()->id())) {
+            _affected_tables[keyspace_name] += get_affected_tables(keyspace_name, mutation);
+        }
+
+        replica::update_tablet_metadata_change_hint(_tablet_hint, mutation);
+
+        _keyspaces.emplace(std::move(keyspace_name));
+    }
+
+    if (_reload) {
+        for (auto&& ks : _proxy.local().get_db().local().get_non_system_keyspaces()) {
+            _keyspaces.emplace(ks);
+            table_selector sel;
+            sel.all_in_keyspace = true;
+            _affected_tables[ks] = sel;
+        }
+    }
+
+    // Resolve sel.all_in_keyspace == true to the actual list of tables and views.
+    for (auto&& [keyspace_name, sel] : _affected_tables) {
+        if (sel.all_in_keyspace) {
+            // FIXME: Obtain from the database object
+            slogger.trace("Reading table list for keyspace {}", keyspace_name);
+            for (auto k : all_table_kinds) {
+                for (auto&& n : co_await read_table_names_of_keyspace(_proxy, keyspace_name, get_table_holder(k))) {
+                    sel.add(k, std::move(n));
+                }
+            }
+        }
+        slogger.debug("Affected tables for keyspace {}: {}", keyspace_name, sel.tables);
+    }
+
+    _before = co_await get_schema_persisted_state();
+
+    for (auto& mut : muts) {
+        // We must force recalculation of schema version after the merge, since the resulting
+        // schema may be a mix of the old and new schemas, with the exception of entries
+        // that originate from group 0.
+        maybe_delete_schema_version(mut);
+    }
+}
+
+future<> schema_applier::update() {
+    _after = co_await get_schema_persisted_state();
+
+    _affected_keyspaces = co_await merge_keyspaces(_proxy, _before.keyspaces, _after.keyspaces, _before.scylla_keyspaces, _after.scylla_keyspaces);
+    co_await merge_types(_proxy, _before.types, _after.types, _affected_user_types);
+    co_await _types_storage.init(_proxy.local().get_db(), _affected_keyspaces, _affected_user_types);
+    co_await merge_tables_and_views(_proxy, _ss, _sys_ks,
+            _before.tables, _after.tables,
+            _before.views, _after.views,
+            _types_storage,
+            _reload, _tablet_hint,
+            _affected_tables_and_views);
+
+    co_await merge_functions(_proxy, _before.functions, _after.functions, _types_storage, _functions_batch);
+    co_await merge_aggregates(_proxy, _functions_batch, _before.aggregates, _after.aggregates,
+            _before.scylla_aggregates, _after.scylla_aggregates, _types_storage);
+}
+
+void schema_applier::commit_tables_and_views() {
+    auto& sharded_db = _proxy.local().get_db();
+    auto& db = sharded_db.local();
+    auto& diff = _affected_tables_and_views;
+    const auto& tables = diff.tables_and_views.local().tables;
+    const auto& views = diff.tables_and_views.local().views;
+
+    for (auto& dropped_view : views.dropped) {
+        auto s = dropped_view.get();
+        replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
+    }
+    for (auto& dropped_table : tables.dropped) {
+        auto s = dropped_table.get();
+        replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
+    }
+
+    for (auto& schema : tables.created) {
+        auto& ks = db.find_keyspace(schema->ks_name());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
+    }
+
+    for (auto& schema : views.created) {
+        auto& ks = db.find_keyspace(schema->ks_name());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
+    }
+
+    diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
+    for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
+        bool changed = db.update_column_family(altered.new_schema);
+        diff.tables_and_views.local().columns_changed.push_back(changed);
+    }
+}
+
+void schema_applier::commit_on_shard(replica::database& db) {
+    // commit keyspace operations
+    for (auto& ks_per_shard : _affected_keyspaces.created) {
+        auto ks = ks_per_shard[this_shard_id()].release();
+        db.insert_keyspace(std::move(ks));
+    }
+    for (auto& ks_change_per_shard : _affected_keyspaces.altered) {
+        auto ks_change = ks_change_per_shard[this_shard_id()].release();
+        db.update_keyspace(std::move(ks_change));
+    }
+
+    // commit user defined types,
+    // create and update user types before any tables/views are created that potentially
+    // use those types
+    for (auto& user_type : _affected_user_types.local().created) {
+        db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+    }
+    for (auto& user_type : _affected_user_types.local().altered) {
+        db.find_keyspace(user_type->_keyspace).add_user_type(user_type);
+    }
+
+    commit_tables_and_views();
+
+    // commit user functions and aggregates
+    _functions_batch.local().commit();
+
+    // dropping user types only after tables/views/functions/aggregates that may use some them are dropped
+    for (auto& user_type : _affected_user_types.local().dropped) {
+        db.find_keyspace(user_type->_keyspace).remove_user_type(user_type);
+    }
+
+    // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
+    for (const auto& ks_name : _affected_keyspaces.names.dropped) {
+        db.drop_keyspace(ks_name);
+    }
+}
+
+// TODO: move per shard logic directly to raft so that all subsystems can be updated together
+// (requires switching all affected subsystems to 'applier' interface first)
+future<> schema_applier::commit() {
+    auto& sharded_db = _proxy.local().get_db();
+    // Run func first on shard 0
+    // to allow "seeding" of the effective_replication_map
+    // with a new e_r_m instance.
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    commit_on_shard(sharded_db.local());
+    co_await sharded_db.invoke_on_others([this] (replica::database& db) {
+        commit_on_shard(db);
+    });
+    // unlock as some functions in post_commit() may read data under those locks
+    _affected_tables_and_views.locks = nullptr;
+}
+
+future<> schema_applier::finalize_tables_and_views() {
+    auto& sharded_db = _proxy.local().get_db();
+    auto& diff = _affected_tables_and_views;
+
+    // first drop views and *only then* the tables, if interleaved it can lead
+    // to a mv not finding its schema when snapshotting since the main table
+    // was already dropped (see https://github.com/scylladb/scylla/issues/5614)
+    for (auto& dropped_view : diff.tables_and_views.local().views.dropped) {
+        auto s = dropped_view.get();
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+    }
+    for (auto& dropped_table : diff.tables_and_views.local().tables.dropped) {
+        auto s = dropped_table.get();
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+    }
+
+    // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
+    // and so that compaction groups are not destroyed altogether.
+    // TODO: maybe untangle this dependency
+    if (diff.new_token_metadata.local()) {
+        co_await _ss.local().commit_tablet_metadata(diff.new_token_metadata.local());
+    }
+
+    co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
+        const auto& tables = diff.tables_and_views.local().tables;
+        const auto& views = diff.tables_and_views.local().views;
+        for (auto& created_table : tables.created) {
+            co_await db.make_column_family_directory(created_table);
+        }
+        for (auto& created_view : views.created) {
+            co_await db.make_column_family_directory(created_view);
+        }
     });
 
     // Insert column_mapping into history table for altered and created tables.
@@ -674,168 +1021,94 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     //
     // Drop column mapping entries for dropped tables since these will not be TTLed automatically
     // and will stay there forever if we don't clean them up manually
-    co_await max_concurrent_for_each(tables_diff.created, max_concurrent, [&proxy] (global_schema_ptr& gs) -> future<> {
-        co_await store_column_mapping(proxy, gs.get(), false);
+    co_await max_concurrent_for_each(diff.tables_and_views.local().tables.created, max_concurrent, [this] (const schema_ptr& gs) -> future<> {
+        co_await store_column_mapping(_proxy, gs, false);
     });
-    co_await max_concurrent_for_each(tables_diff.altered, max_concurrent, [&proxy] (schema_diff::altered_schema& altered) -> future<> {
+    co_await max_concurrent_for_each(diff.tables_and_views.local().tables.altered, max_concurrent, [this] (const schema_diff_per_shard::altered_schema& altered) -> future<> {
         co_await when_all_succeed(
-            store_column_mapping(proxy, altered.old_schema.get(), true),
-            store_column_mapping(proxy, altered.new_schema.get(), false));
+            store_column_mapping(_proxy, altered.old_schema, true),
+            store_column_mapping(_proxy, altered.new_schema, false));
     });
-    co_await max_concurrent_for_each(tables_diff.dropped, max_concurrent, [&sys_ks] (schema_diff::dropped_schema& dropped) -> future<> {
-        schema_ptr s = dropped.schema.get();
-        co_await drop_column_mapping(sys_ks.local(), s->id(), s->version());
-    });
-}
-
-static void drop_cached_func(replica::database& db, const query::result_set_row& row) {
-    auto language = row.get_nonnull<sstring>("language");
-    if (language == "wasm") {
-        cql3::functions::function_name name{
-            row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("function_name")};
-        auto arg_types = read_arg_types(db, row, name.keyspace);
-        db.lang().remove(name, arg_types);
-    }
-}
-
-static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after) {
-    auto diff = diff_rows(before, after);
-
-    co_await proxy.local().get_db().invoke_on_all(coroutine::lambda([&] (replica::database& db) -> future<> {
-        cql3::functions::change_batch batch;
-        for (const auto& val : diff.created) {
-            batch.add_function(co_await create_func(db, *val));
-        }
-        auto events = make_ready_future<>();
-        for (const auto& val : diff.dropped) {
-            cql3::functions::function_name name{
-                val->get_nonnull<sstring>("keyspace_name"), val->get_nonnull<sstring>("function_name")};
-            auto arg_types = read_arg_types(db, *val, name.keyspace);
-            // as we don't yield between dropping cache and committing batch
-            // change there is no window between cache removal and declaration removal
-            drop_cached_func(db, *val);
-            batch.remove_function(name, arg_types);
-            events = events.then([&db, name, arg_types] () {
-                return db.get_notifier().drop_function(std::move(name), std::move(arg_types));
-            });
-        }
-        for (const auto& val : diff.altered) {
-            drop_cached_func(db, *val);
-            batch.replace_function(co_await create_func(db, *val));
-        }
-        batch.commit();
-        co_await std::move(events);
-    }));
-}
-
-static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, const schema_result& before, const schema_result& after,
-        const schema_result& scylla_before, const schema_result& scylla_after) {
-    auto diff = diff_aggregates_rows(before, after, scylla_before, scylla_after);
-
-    co_await proxy.local().get_db().invoke_on_all([&] (replica::database& db)-> future<> {
-        cql3::functions::change_batch batch;
-        for (const auto& val : diff.created) {
-            batch.add_function(create_aggregate(db, *val.first, val.second, batch));
-        }
-        auto events = make_ready_future<>();
-        for (const auto& val : diff.dropped) {
-            cql3::functions::function_name name{
-                val.first->get_nonnull<sstring>("keyspace_name"), val.first->get_nonnull<sstring>("aggregate_name")};
-            auto arg_types = read_arg_types(db, *val.first, name.keyspace);
-            batch.remove_function(name, arg_types);
-            events = events.then([&db, name, arg_types] () {
-                return db.get_notifier().drop_aggregate(std::move(name), std::move(arg_types));
-            });
-        }
-        batch.commit();
-        co_await std::move(events);
+    co_await max_concurrent_for_each(diff.tables_and_views.local().tables.dropped, max_concurrent, [this] (const schema_ptr& s) -> future<> {
+        co_await drop_column_mapping(_sys_ks.local(), s->id(), s->version());
     });
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
-{
-    slogger.trace("do_merge_schema: {}", mutations);
-    schema_ptr s = keyspaces();
-    // compare before/after schemas of the affected keyspaces only
-    std::set<sstring> keyspaces;
-    using keyspace_name = sstring;
-    std::unordered_map<keyspace_name, table_selector> affected_tables;
-    locator::tablet_metadata_change_hint tablet_hint;
-    for (auto&& mutation : mutations) {
-        sstring keyspace_name = value_cast<sstring>(utf8_type->deserialize(mutation.key().get_component(*s, 0)));
-
-        if (schema_tables_holding_schema_mutations().contains(mutation.schema()->id())) {
-            affected_tables[keyspace_name] += get_affected_tables(keyspace_name, mutation);
+future<> schema_applier::post_commit() {
+    co_await finalize_tables_and_views();
+    auto& sharded_db = _proxy.local().get_db();
+    co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
+        auto& notifier = db.get_notifier();
+        // notify about keyspaces
+        for (const auto& name : _affected_keyspaces.names.created) {
+            co_await notifier.create_keyspace(name);
+        }
+        for (const auto& name : _affected_keyspaces.names.altered) {
+            co_await notifier.update_keyspace(name);
+        }
+        for (const auto& name : _affected_keyspaces.names.dropped) {
+            co_await notifier.drop_keyspace(name);
+        }
+        // notify about user types
+        auto& types = _affected_user_types.local();
+        for (auto& type : types.created) {
+            co_await notifier.create_user_type(type);
+        }
+        for (auto& type : types.altered) {
+            co_await notifier.update_user_type(type);
+        }
+        for (auto& type : types.dropped) {
+            co_await notifier.drop_user_type(type);
         }
 
-        replica::update_tablet_metadata_change_hint(tablet_hint, mutation);
+        co_await notify_tables_and_views(notifier, _affected_tables_and_views);
 
-        keyspaces.emplace(std::move(keyspace_name));
-        // We must force recalculation of schema version after the merge, since the resulting
-        // schema may be a mix of the old and new schemas, with the exception of entries
-        // that originate from group 0.
-        maybe_delete_schema_version(mutation);
-    }
-
-    if (reload) {
-        for (auto&& ks : proxy.local().get_db().local().get_non_system_keyspaces()) {
-            keyspaces.emplace(ks);
-            table_selector sel;
-            sel.all_in_keyspace = true;
-            affected_tables[ks] = sel;
-        }
-    }
-
-    // Resolve sel.all_in_keyspace == true to the actual list of tables and views.
-    for (auto&& [keyspace_name, sel] : affected_tables) {
-        if (sel.all_in_keyspace) {
-            // FIXME: Obtain from the database object
-            slogger.trace("Reading table list for keyspace {}", keyspace_name);
-            for (auto k : all_table_kinds) {
-                for (auto&& n : co_await read_table_names_of_keyspace(proxy, keyspace_name, get_table_holder(k))) {
-                    sel.add(k, std::move(n));
-                }
+        // notify about user functions and aggregates
+        for (const auto& func : _functions_batch.local().removed_functions) {
+            if (func.aggregate) {
+                co_await notifier.drop_aggregate(func.name, func.arg_types);
+            } else {
+                co_await notifier.drop_function(func.name, func.arg_types);
             }
         }
-        slogger.debug("Affected tables for keyspace {}: {}", keyspace_name, sel.tables);
-    }
+    });
+    co_return;
+}
 
-    // current state of the schema
-    auto&& old_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-    auto&& old_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
-    auto&& old_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
-    auto&& old_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& old_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
-    auto old_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-    auto old_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
-    auto old_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
+future<> schema_applier::destroy() {
+    co_await _affected_user_types.stop();
+    co_await _affected_tables_and_views.tables_and_views.stop();
+    co_await _affected_tables_and_views.new_token_metadata.destroy();
+    co_await _functions_batch.stop();
+}
 
+static future<> execute_do_merge_schema(distributed<service::storage_proxy>& proxy, schema_applier& ap, std::vector<mutation> mutations) {
+    co_await ap.prepare(mutations);
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
+    co_await ap.update();
+    try {
+        co_await ap.commit();
+    } catch (...) {
+        // We have no good way to recover from partial commit and continuing
+        // would mean that schema is in inconsistent state.
+        on_fatal_internal_error(slogger, format("schema commit failed: {}", std::current_exception()));
+    }
+    co_await ap.post_commit();
+}
 
-    // with new data applied
-    auto&& new_keyspaces = co_await read_schema_for_keyspaces(proxy, KEYSPACES, keyspaces);
-    auto&& new_scylla_keyspaces = co_await read_schema_for_keyspaces(proxy, SCYLLA_KEYSPACES, keyspaces);
-    auto&& new_column_families = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::table, affected_tables);
-    auto&& new_types = co_await read_schema_for_keyspaces(proxy, TYPES, keyspaces);
-    auto&& new_views = co_await read_tables_for_keyspaces(proxy, keyspaces, table_kind::view, affected_tables);
-    auto new_functions = co_await read_schema_for_keyspaces(proxy, FUNCTIONS, keyspaces);
-    auto new_aggregates = co_await read_schema_for_keyspaces(proxy, AGGREGATES, keyspaces);
-    auto new_scylla_aggregates = co_await read_schema_for_keyspaces(proxy, SCYLLA_AGGREGATES, keyspaces);
-
-    std::set<sstring> keyspaces_to_drop = co_await merge_keyspaces(proxy, std::move(old_keyspaces), std::move(new_keyspaces),
-                                                                   std::move(old_scylla_keyspaces), std::move(new_scylla_keyspaces));
-    auto types_to_drop = co_await merge_types(proxy, std::move(old_types), std::move(new_types));
-    co_await merge_tables_and_views(proxy, sys_ks,
-        std::move(old_column_families), std::move(new_column_families),
-        std::move(old_views), std::move(new_views), reload, std::move(tablet_hint));
-    co_await merge_functions(proxy, std::move(old_functions), std::move(new_functions));
-    co_await merge_aggregates(proxy, std::move(old_aggregates), std::move(new_aggregates), std::move(old_scylla_aggregates), std::move(new_scylla_aggregates));
-    co_await types_to_drop.drop();
-
-    auto& sharded_db = proxy.local().get_db();
-    // it is safe to drop a keyspace only when all nested ColumnFamilies where deleted
-    for (auto keyspace_to_drop : keyspaces_to_drop) {
-        co_await replica::database::drop_keyspace_on_all_shards(sharded_db, keyspace_to_drop);
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy,  distributed<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
+{
+    slogger.trace("do_merge_schema: {}", mutations);
+    schema_applier ap(proxy, ss, sys_ks, reload);
+    std::exception_ptr ex;
+    try {
+        co_await execute_do_merge_schema(proxy, ap, std::move(mutations));
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await ap.destroy();
+    if (ex) {
+        throw ex;
     }
 }
 
@@ -848,17 +1121,17 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, distributed<service::storage_service>& ss, gms::feature_service& feat, std::vector<mutation> mutations, bool reload)
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).
         co_await smp::submit_to(0, coroutine::lambda([&, fmuts = freeze(mutations)] () mutable -> future<> {
-            co_await merge_schema(sys_ks, proxy, feat, co_await unfreeze_gently(fmuts), reload);
+            co_await merge_schema(sys_ks, proxy, ss, feat, co_await unfreeze_gently(fmuts), reload);
         }));
         co_return;
     }
     co_await with_merge_lock([&] () mutable -> future<> {
-        co_await do_merge_schema(proxy, sys_ks, std::move(mutations), reload);
+        co_await do_merge_schema(proxy, ss, sys_ks, std::move(mutations), reload);
         auto version_from_group0 = co_await get_group0_schema_version(sys_ks.local());
         co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features(), version_from_group0);
     });

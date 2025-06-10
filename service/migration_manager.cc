@@ -51,7 +51,7 @@ const std::chrono::milliseconds migration_manager::migration_delay = 60000ms;
 static future<schema_ptr> get_schema_definition(table_schema_version v, locator::host_id dst, unsigned shard, netw::messaging_service& ms, service::storage_proxy& sp);
 
 migration_manager::migration_manager(migration_notifier& notifier, gms::feature_service& feat, netw::messaging_service& ms,
-            service::storage_proxy& storage_proxy, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
+            service::storage_proxy& storage_proxy, sharded<service::storage_service>& ss, gms::gossiper& gossiper, service::raft_group0_client& group0_client, sharded<db::system_keyspace>& sysks) :
           _notifier(notifier)
         , _group0_barrier(this_shard_id() == 0 ?
             std::function<future<>()>([this] () -> future<> {
@@ -66,7 +66,7 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
             })
         )
         , _background_tasks("migration_manager::background_tasks")
-        , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _gossiper(gossiper), _group0_client(group0_client)
+        , _feat(feat), _messaging(ms), _storage_proxy(storage_proxy), _ss(ss), _gossiper(gossiper), _group0_client(group0_client)
         , _sys_ks(sysks)
         , _schema_push([this] { return passive_announce(); })
         , _concurrent_ddl_retries{10}
@@ -400,13 +400,13 @@ future<> migration_manager::merge_schema_from(locator::host_id src, const std::v
         return make_exception_future<>(std::make_exception_ptr<std::runtime_error>(
                     std::runtime_error(fmt::format("Error while applying schema mutations: {}", e))));
     }
-    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _feat, std::move(mutations));
+    return db::schema_tables::merge_schema(_sys_ks, proxy.container(), _ss, _feat, std::move(mutations));
 }
 
 future<> migration_manager::reload_schema() {
     mlogger.info("Reloading schema");
     std::vector<mutation> mutations;
-    return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, std::move(mutations), true);
+    return db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _ss, _feat, std::move(mutations), true);
 }
 
 bool migration_manager::has_compatible_schema_tables_version(const locator::host_id& endpoint) {
@@ -436,12 +436,11 @@ future<> migration_notifier::on_schema_change(std::function<void(migration_liste
     });
 }
 
-future<> migration_notifier::create_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
-    const auto& name = ksm->name();
+future<> migration_notifier::create_keyspace(const sstring& ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
-        listener->on_create_keyspace(name);
+        listener->on_create_keyspace(ks_name);
     }, [&] (std::exception_ptr ex) {
-        return fmt::format("Create keyspace notification failed {}: {}", name, ex);
+        return fmt::format("Create keyspace notification failed {}: {}", ks_name, ex);
     });
 }
 
@@ -475,12 +474,11 @@ future<> migration_notifier::create_view(view_ptr view) {
     });
 }
 
-future<> migration_notifier::update_keyspace(lw_shared_ptr<keyspace_metadata> ksm) {
-    const auto& name = ksm->name();
+future<> migration_notifier::update_keyspace(const sstring& ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
-        listener->on_update_keyspace(name);
+        listener->on_update_keyspace(ks_name);
     }, [&] (std::exception_ptr ex) {
-        return fmt::format("Update keyspace notification failed {}: {}", name, ex);
+        return fmt::format("Update keyspace notification failed {}: {}", ks_name, ex);
     });
 }
 
@@ -514,15 +512,7 @@ future<> migration_notifier::update_view(view_ptr view, bool columns_changed) {
     });
 }
 
-future<> migration_notifier::update_tablet_metadata(locator::tablet_metadata_change_hint hint) {
-    return seastar::async([this, hint = std::move(hint)] {
-        _listeners.thread_for_each([&hint] (migration_listener* listener) {
-            listener->on_update_tablet_metadata(hint);
-        });
-    });
-}
-
-future<> migration_notifier::drop_keyspace(sstring ks_name) {
+future<> migration_notifier::drop_keyspace(const sstring& ks_name) {
     co_await on_schema_change([&] (migration_listener* listener) {
         listener->on_drop_keyspace(ks_name);
     }, [&] (std::exception_ptr ex) {
@@ -924,7 +914,7 @@ future<> migration_manager::announce_with_raft(std::vector<mutation> schema, gro
 }
 
 future<> migration_manager::announce_without_raft(std::vector<mutation> schema, group0_guard guard) {
-    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _feat, schema);
+    auto f = db::schema_tables::merge_schema(_sys_ks, _storage_proxy.container(), _ss, _feat, schema);
 
     try {
         using namespace std::placeholders;
