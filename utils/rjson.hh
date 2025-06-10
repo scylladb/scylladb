@@ -32,6 +32,7 @@
 #include <string_view>
 #include <type_traits>
 #include "utils/base64.hh"
+#include "utils/chunked_vector.hh"
 
 #include <seastar/core/future.hh>
 
@@ -157,6 +158,21 @@ std::string print(const rjson::value& value, size_t max_nested_level = default_m
 // until future resolves - i.e. the full json -> text conversion is done _before_ 
 // pushing fully to stream. I.e. it is valid to do `return print(rjson::value("... something..."), os);`
 seastar::future<> print(const rjson::value& value, seastar::output_stream<char>&, size_t max_nested_level = default_max_nested_level);
+
+// A variant of print() which prints a JSON object (it assumes the given
+// rjson::value is an object) but adds to it at the end an additional array.
+// That extra array is given a separate chunked_vector, to avoid putting it
+// inside the rjson::value because RapidJSON does contiguous allocations
+// for arrays, which we want to avoid for potentially long arrays (#23535).
+// We only have a streaming version of this function, as it is only used for
+// large arrays, and we want to yield while printing the JSON.
+// If we can ever fix RapidJSON to avoid contiguous allocations for arrays,
+// we can remove this function.
+future<> print_with_extra_array(const rjson::value& value,
+    std::string_view array_name,
+    const utils::chunked_vector<rjson::value>& array,
+    seastar::output_stream<char>& os,
+    size_t max_nested_level = default_max_nested_level);
 
 // Returns a string_view to the string held in a JSON value (which is
 // assumed to hold a string, i.e., v.IsString() == true). This is a view
