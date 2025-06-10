@@ -108,23 +108,26 @@ class rack_info {
         existing_dead_voters_remaining = 0;
         owns_alive_leader = false;
 
-        return nodes | std::views::transform([&alive_nodes_remaining, &existing_alive_voters_remaining, &existing_dead_voters_remaining, &owns_alive_leader](const auto& node_entry) {
-            const auto& [id, node] = node_entry;
-            if (node.get().is_alive) {
-                ++alive_nodes_remaining;
-                if (node.get().is_leader) {
-                    owns_alive_leader = true;
-                }
-            }
-            if (node.get().is_voter) {
-                if (node.get().is_alive) {
-                    ++existing_alive_voters_remaining;
-                } else {
-                    ++existing_dead_voters_remaining;
-                }
-            }
-            return std::make_tuple(node_priority::get_value(node), id, node);
-        }) | std::ranges::to<nodes_store_t>();
+        return nodes |
+               std::views::transform([&alive_nodes_remaining, &existing_alive_voters_remaining, &existing_dead_voters_remaining,
+                                             &owns_alive_leader](const auto& node_entry) {
+                   const auto& [id, node] = node_entry;
+                   if (node.get().is_alive) {
+                       ++alive_nodes_remaining;
+                       if (node.get().is_leader) {
+                           owns_alive_leader = true;
+                       }
+                   }
+                   if (node.get().is_voter) {
+                       if (node.get().is_alive) {
+                           ++existing_alive_voters_remaining;
+                       } else {
+                           ++existing_dead_voters_remaining;
+                       }
+                   }
+                   return std::make_tuple(node_priority::get_value(node), id);
+               }) |
+               std::ranges::to<nodes_store_t>();
     }
 
 public:
