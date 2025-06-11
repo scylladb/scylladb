@@ -241,10 +241,7 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
     , _logger{logger}
     , _gate("generic_server::server")
     , _conns_cpu_concurrency(cfg.uninitialized_connections_semaphore_cpu_concurrency)
-    , _prev_conns_cpu_concurrency(_conns_cpu_concurrency)
-    , _conns_cpu_concurrency_semaphore(_conns_cpu_concurrency, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
-{
-    _conns_cpu_concurrency.observe([this] (const uint32_t &concurrency) {
+    , _conns_cpu_concurrency_observer(_conns_cpu_concurrency.observe([this] (const uint32_t &concurrency) {
         if (concurrency == _prev_conns_cpu_concurrency) {
             return;
         }
@@ -254,7 +251,10 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
             _conns_cpu_concurrency_semaphore.consume(_prev_conns_cpu_concurrency - concurrency);
         }
         _prev_conns_cpu_concurrency = concurrency;
-    });
+    }))
+    , _prev_conns_cpu_concurrency(_conns_cpu_concurrency)
+    , _conns_cpu_concurrency_semaphore(_conns_cpu_concurrency, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
+{
 }
 
 server::~server()
