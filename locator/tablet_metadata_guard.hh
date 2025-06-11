@@ -56,11 +56,35 @@ public:
         return _erm->get_token_metadata_ptr();
     }
 
+    const effective_replication_map_ptr& get_erm() const {
+        return _erm;
+    }
+
     /// Returns tablet_map for the table of the tablet associated with this guard.
     /// The result is valid until the next deferring point.
     const locator::tablet_map& get_tablet_map() {
         return get_token_metadata()->tablets().get_tablet_map(_tablet.table);
     }
+};
+
+// A copyable and moveable handle for tablet_metadata_guard. If a table doesn't use tablets,
+// it falls back to using the effective_replication_map (erm).
+//
+// This handle is intended to be passed along during data plane request processing
+// to prevent tablet migrations. While this handle is alive global
+// topology barriers are blocked and all tablet movement operations will wait
+// for it to be released.
+//
+// Behavior depends on the table type:
+// - For tablet-based tables: locks only the tablet owning the specified token.
+// - For vnode-based tables: holds the entire erm, blocking topology operations on all tablets.
+class erm_handle {
+    using handle_type = std::variant<lw_shared_ptr<tablet_metadata_guard>, effective_replication_map_ptr>;
+    handle_type _handle;
+public:
+    erm_handle(replica::table& table, dht::token token);
+
+    const effective_replication_map_ptr& get_erm() const;
 };
 
 } // namespace locator
