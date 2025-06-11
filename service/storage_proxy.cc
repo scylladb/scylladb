@@ -1077,13 +1077,8 @@ private:
                 // an "Another global topology request is ongoing" error, we can wait for the already queued request to complete.
                 // Note that we can not do this for a truncate which the topology coordinator has already started processing,
                 // only for a truncate which is still waiting.
-                if (_topology_state_machine._topology.global_request || !_topology_state_machine._topology.global_requests_queue.empty()) {
-                    utils::UUID ongoing_global_request_id;
-                    if (!_topology_state_machine._topology.global_requests_queue.empty()) {
-                        ongoing_global_request_id = _topology_state_machine._topology.global_requests_queue[0];
-                    } else {
-                        ongoing_global_request_id = _topology_state_machine._topology.global_request_id.value();
-                    }
+                if (_topology_state_machine._topology.global_request) {
+                    utils::UUID ongoing_global_request_id = _topology_state_machine._topology.global_request_id.value();
                     const auto topology_requests_entry = co_await _sys_ks.local().get_topology_request_entry(ongoing_global_request_id, true);
                     auto global_request = std::get<service::global_topology_request>(topology_requests_entry.request_type);
                     if (global_request == global_topology_request::truncate_table) {
