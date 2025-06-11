@@ -1079,6 +1079,8 @@ tablet_metadata_guard::tablet_metadata_guard(replica::table& table, global_table
     }
 }
 
+tablet_metadata_guard::~tablet_metadata_guard() = default;
+
 void tablet_metadata_guard::subscribe() {
     _callback = _erm->get_validity_abort_source().subscribe([this] () noexcept {
         check();

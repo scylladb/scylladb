@@ -34,6 +34,13 @@ private:
     void check() noexcept;
 public:
     tablet_metadata_guard(replica::table& table, global_tablet_id tablet);
+    ~tablet_metadata_guard();
+
+    tablet_metadata_guard(tablet_metadata_guard&&) = delete;
+    tablet_metadata_guard(const tablet_metadata_guard&) = delete;
+
+    tablet_metadata_guard& operator=(tablet_metadata_guard&&) = delete;
+    tablet_metadata_guard& operator=(const tablet_metadata_guard&) = delete;
 
     /// Returns an abort_source which is signaled when effective_replication_map changes
     /// in a way which is relevant for the tablet associated with this guard.
