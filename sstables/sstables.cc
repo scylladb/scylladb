@@ -2449,7 +2449,7 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         integrity_check integrity, integrity_error_handler error_handler) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
-    options.read_ahead = 0;
+    options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
 
     file f = make_tracked_file(_data_file, permit);
@@ -2461,7 +2461,7 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     if (integrity == integrity_check::yes) {
         digest = get_digest();
     }
-    auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options)mutable ->future<input_stream<char>> {
+    auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
     if (_components->compression && raw == raw_stream::no) {
