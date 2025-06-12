@@ -49,6 +49,7 @@ struct redis_server_config {
     db::consistency_level _read_consistency_level;
     db::consistency_level _write_consistency_level;
     size_t _total_redis_db_count;
+    utils::updateable_value<uint32_t> _request_timeout_on_shutdown_in_seconds;
 };
 
 class redis_server : public generic_server::server {

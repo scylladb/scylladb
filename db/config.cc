@@ -906,6 +906,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The default timeout for other, miscellaneous operations.\n"
         "\n"
         "Related information: About hinted handoff writes")
+    , request_timeout_on_shutdown_in_seconds(this, "request_timeout_on_shutdown_in_seconds", value_status::Used, 30,
+        "Timeout for CQL server requests on shutdown. After this timeout the server will shutdown all connections.")
     /**
     * @Group Inter-node settings
     */

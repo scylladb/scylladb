@@ -118,6 +118,7 @@ struct cql_server_config {
     std::optional<uint16_t> shard_aware_transport_port_ssl;
     bool allow_shard_aware_drivers = true;
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
+    utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
 };
 
 /**
