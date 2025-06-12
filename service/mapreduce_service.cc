@@ -611,6 +611,7 @@ future<> mapreduce_service::dispatch_to_vnodes(schema_ptr schema, replica::colum
 
     co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
+        co_await utils::get_local_injector().inject("mapreduce_pause_parallel_dispatch", utils::wait_for_message(5min));
         locator::host_id addr = vnodes_with_addr.first;
         query::mapreduce_request req_with_modified_pr = req;
         req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
@@ -690,6 +691,8 @@ public:
     future<> dispatch_work_and_wait_to_finish() {
         while (_ranges_left.size() > 0) {
             co_await prepare_ranges_per_replica();
+
+            co_await utils::get_local_injector().inject("mapreduce_pause_parallel_dispatch", utils::wait_for_message(5min));
 
             co_await coroutine::parallel_for_each(get_processing_slots(),
                     [&] (locator::tablet_replica replica) -> future<> {
