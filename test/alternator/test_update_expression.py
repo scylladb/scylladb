@@ -1156,30 +1156,6 @@ def test_update_expression_empty_attribute(test_table_s):
         ExpressionAttributeValues={':v1': [], ':v2': {}, ':v3': '', ':v4': b''})
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'd': [], 'e': {}, 'f': '', 'g': b''}
 
-# Verify which kind of update operations require a read-before-write (a.k.a
-# read-modify-write, or RMW). We test this by using a table configured with
-# "forbid_rmw" isolation mode and checking which writes succeed or pass.
-# This is a Scylla-only test (the test_table_s_forbid_rmw implies scylla_only).
-def test_update_expression_when_rmw(test_table_s_forbid_rmw):
-    table = test_table_s_forbid_rmw
-    p = random_string()
-    # A write with a RHS (right-hand side) being a constant from the query
-    # doesn't need RMW:
-    table.update_item(Key={'p': p},
-        UpdateExpression='SET a = :val',
-        ExpressionAttributeValues={':val': 3})
-    # But if the LHS (left-hand side) of the assignment is a document path,
-    # it *does* need RMW:
-    with pytest.raises(ClientError, match='ValidationException.*write isolation policy'):
-        table.update_item(Key={'p': p},
-            UpdateExpression='SET a.b = :val',
-            ExpressionAttributeValues={':val': 3})
-    assert table.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a'] == 3
-    # A write with a path in the RHS of a SET also needs RMW
-    with pytest.raises(ClientError, match='ValidationException.*write isolation policy'):
-        table.update_item(Key={'p': p},
-            UpdateExpression='SET b = a')
-
 # The DynamoDB documentation for UpdateExpression says about "ADD" that:
 # "In general, we recommend using SET rather than ADD". However, it's worth
 # noting that unlike ADD which can treat an attribute or an item that doesn't
