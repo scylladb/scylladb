@@ -1219,141 +1219,402 @@ in the ``scylla.yaml`` file.
 Encrypt a Single Table
 -----------------------------
 
+ScyllaDB lets you configure encryption for individual tables using the
+``scylla_encryption_options`` in the table schema. This allows you to enable or
+disable encryption per table, or override default ``user_info_encryption``
+settings from ``scylla.yaml``, such as the key or key length.
+
+.. note:: The settings in ``scylla_encryption_options`` are treated as a
+   complete replacement of the defaults. They are never merged with or inherited
+   from ``user_info_encryption``.  Any option you omit will fall back to its own
+   built-in default, **not** to the value defined in ``user_info_encryption`` in
+   ``scylla.yaml``.
+
+Allow Per-Table Encryption
+==========================
+
+ScyllaDB offers the ``allow_per_table_encryption`` configuration option to
+enable or disable per-table encryption on a particular node. The default value
+is ``true``, i.e., per-table encryption is enabled.
+
+With per-table encryption disabled in your cluster:
+
+* ``CREATE TABLE`` and ``ALTER TABLE`` statements that include
+  ``scylla_encryption_options`` will be rejected.
+
+* ``scylla_encryption_options`` from existing tables will be ignored, falling
+  back to the ``user_info_encryption`` settings from ``scylla.yaml``, or leaving
+  the table unencrypted if no default encryption settings are provided in the
+  configuration.
+
+If you want to disable per-table encryption in your cluster, run the following
+commands on each node:
+
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` and set the option
+   to ``false``:
+
+   .. code-block:: yaml
+
+      allow_per_table_encryption: false
+
+#. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
+
+#. Restart the scylla-server service.
+
+   .. include:: /rst_include/scylla-commands-restart-index.rst
+
+Encrypt a New Table
+===================
+
 This procedure demonstrates how to encrypt a new table.
+
+.. note:: If you want to encrypt an existing table, follow the `Update Encryption Properties of Existing Tables`_ procedure.
 
 **Before you Begin**
 
-* Make sure to `Set the KMIP Host`_ if you are using KMIP, or the the :ref:`KMS Host
-  <encryption-at-rest-set-kms>` if you are using AWS KMS.
+.. tabs::
 
-* If you want to make your own key, use the procedure in `Create Encryption Keys`_
-  and skip to step 3. If you do not create your own key, ScyllaDB will create
-  one for you in the ``secret_key_file`` path. If you are not creating your own
-  key, start with step 1.
+   .. group-tab:: Local Key Provider
+
+      * If you want to create your own key, follow the procedure in
+        :ref:`Create Encryption Keys <ear-create-encryption-key>`.
+
+      * If you want to let Scylla create the key for you, run the following
+        commands on every node in the cluster to configure a directory for your
+        keys.
+
+        .. note:: Using the default location ``/etc/scylla/data_encryption_keys``
+           results in a known permission issue (scylladb/scylla-tools-java#94),
+           so it is recommended to use another location as described in the
+           example.
+
+        .. code-block:: none
+
+           sudo mkdir -p /etc/scylla/encryption_keys
+           sudo chown -R scylla:scylla /etc/scylla/encryption_keys
+           sudo chmod -R 700 /etc/scylla/encryption_keys
+
+   .. group-tab:: Replicated Key Provider
+
+      * Ensure you have a system key. The system key can be either a local key,
+        or a KMIP key. If you don't have a system key, create one by following
+        the procedure in :ref:`Create Encryption Keys <ear-create-encryption-key>`.
+
+      * Ensure the system key is properly configured in each node's configuration
+        file (``scylla.yaml``):
+
+        * If the system key is a local key, set the top-level option
+          ``system_key_directory: <path>`` in ``scylla.yaml`` to the directory
+          containing the system key.
+
+        * If the system key is a KMIP key, :ref:`set up a KMIP Host
+          <encryption-at-rest-set-kmip>`.
+
+      * Ensure you have a local secret key:
+
+        * If you want to create your own local secret key, follow the procedure
+          in :ref:`Create Encryption Keys <ear-create-encryption-key>`. Note
+          that you cannot reuse the same local key as both system key and secret
+          key; they must be different keys.
+
+        * If you want ScyllaDB to generate the local secret key for you, run the
+          following commands on every node in the cluster to configure a
+          directory for your keys:
+
+          .. note:: Using the default location ``/etc/scylla/data_encryption_keys``
+             results in a known permission issue (scylladb/scylla-tools-java#94),
+             so it is recommended to use another location as described in the
+             example.
+
+          .. code-block:: none
+
+             sudo mkdir -p /etc/scylla/encryption_keys
+             sudo chown -R scylla:scylla /etc/scylla/encryption_keys
+             sudo chmod -R 700 /etc/scylla/encryption_keys
+
+   .. group-tab:: KMIP Key Provider
+
+      * Make sure to :ref:`set up a KMIP Host <encryption-at-rest-set-kmip>`.
+
+   .. group-tab:: KMS Key Provider
+
+      * Make sure to :ref:`set up a KMS Host <encryption-at-rest-set-kms>`.
+
+   .. group-tab:: GCP Key Provider
+
+      * Make sure to :ref:`set up a GCP Host <encryption-at-rest-set-gcp>`.
+
+   .. group-tab:: Azure Key Provider
+
+      * Make sure to :ref:`set up an Azure Host <encryption-at-rest-set-azure>`.
 
 **Procedure**
 
-#. By default, the encryption key is located in the ``/etc/scylla/`` directory,
-   and the file is named ``data_encryption_keys``. If you want to save the key
-   in a different directory, create one. This example will create encryption
-   keys in a different directory (``/etc/scylla/encryption_keys``, for example),
-   which ensures that the owner of this directory is ``scylla`` and not another
-   user.
-
-   .. note:: Using the default location results in a known permission issue
-      (scylladb/scylla-tools-java#94), so it is recommended to use another
-      location as described in the example.
-
-   .. code-block:: none
-
-      sudo mkdir -p /etc/scylla/encryption_keys
-      sudo chown -R scylla:scylla /etc/scylla/encryption_keys
-      sudo chmod -R 700 /etc/scylla/encryption_keys
-
 #. Create the keyspace if it doesn’t exist.
 
-#. Create the table using the ``CREATE TABLE`` CQL statement, adding any
-   :ref:`additional options <create-table-statement>`. To encrypt the table, use
-   the options for encryption below, remembering to set the ``secret_key_file <path>``
-   to the same directory you created in step 1.
+#. Create the table using the following ``CREATE TABLE`` CQL statement, adding
+   any :ref:`additional options <create-table-statement>`.
 
-   .. code-block:: cql
+   .. tabs::
 
-      CREATE TABLE <keyspace>.<table_name> (...<columns>...) WITH
-        scylla_encryption_options = {
-          'cipher_algorithm' : <hash>,
-          'secret_key_strength' : <len>,
-          'key_provider': <provider>,
-          'secret_key_file': <path>
-        }
-      ;
+      .. group-tab:: Local Key Provider
 
-   Where:
+         .. code-block:: cql
 
-   * ``cipher_algorithm`` -  The hashing algorithm which is to be used to create the key. See `Cipher Algorithms`_ for more information.
-   * ``secret_key_strength`` - The length of the key in bytes. This is determined by the cipher you choose. See `Cipher Algorithms`_ for more information.
-   * ``key_provider`` is the name or type of key provider. Refer to `Key Providers`_ for more information.
-   * ``secret_key_file`` - the location that ScyllaDB will store the key it creates (if one does not exist in this location) or the location of the key. By
-     default the location is ``/etc/scylla/data_encryption_keys``.
+            CREATE TABLE <keyspace>.<table_name> (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': '<alg>',
+                'secret_key_strength': <len>,
+                'key_provider': 'LocalFileSystemKeyProviderFactory',
+                'secret_key_file': '<path>'
+              }
+            ;
 
-   **Example:**
+         Where:
 
-   Continuing the example from above, this command will instruct ScyllaDB to
-   encrypt the table and will save the key in the location created in step 1.
+         * ``cipher_algorithm`` -  One of the  :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithm <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the :ref:`key provider <ear-key-providers>`. Required.
+         * ``secret_key_file`` - The location of the key created by you in :ref:`Create Encryption Keys <ear-create-encryption-key>` or that will be created
+           by Scylla. If not provided, the default value is ``/etc/scylla/data_encryption_keys``.
 
-   .. code-block:: cql
+         **Example:**
 
-      CREATE TABLE data.atrest (pk text primary key, c0 int) WITH
-        scylla_encryption_options = {
-          'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
-          'secret_key_strength' : 128,
-          'key_provider': 'LocalFileSystemKeyProviderFactory',
-          'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
-        }
-      ;
+         Using the example directory configured in the "Before you Begin"
+         section, this command will instruct ScyllaDB to encrypt the table with
+         a key stored in ``/etc/scylla/encryption_keys/data_encryption_keys``.
 
-   **Example for KMS:**
+         .. code-block:: cql
 
-   .. code-block:: cql
+            CREATE TABLE myks.mytable (pk text primary key, c0 int) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': 'AES',
+                'secret_key_strength': 128,
+                'key_provider': 'LocalFileSystemKeyProviderFactory',
+                'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
+              }
+            ;
 
-      CREATE TABLE myks.mytable (...<columns>...) WITH
-        scylla_encryption_options = {
-          'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
-          'secret_key_strength' : 128,
-          'key_provider': 'KmsKeyProviderFactory',
-          'kms_host': 'my-kms1'
-        }
-      ;
+      .. group-tab:: Replicated Key Provider
 
-   You can skip ``cipher_algorithm`` and ``secret_key_strength`` (the
-   :ref:`defaults <ear-cipher-algorithms>` will be used):
+         .. code-block:: cql
 
-   .. code-block:: cql
+            CREATE TABLE <keyspace>.<table_name> (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': '<alg>',
+                'secret_key_strength': <len>,
+                'key_provider': 'ReplicatedKeyProviderFactory',
+                'system_key_file': '<<file_name>|kmip://<kmip_host>/<key_id>>',
+                'secret_key_file': '<secret_key>'
+              }
+            ;
 
-      CREATE TABLE myks.mytable (...<columns>...) WITH
-        scylla_encryption_options = {
-          'key_provider': 'KmsKeyProviderFactory',
-          'kms_host': 'my-kms1'
-        }
-      ;
+         Where:
 
-.. _ear-create-table-master-key-override:
+         * ``cipher_algorithm`` -  One of the  :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithm <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the :ref:`key provider <ear-key-providers>`. Required.
+         * ``system_key_file`` - The system key filename or KMIP URI.
 
-   You can specify a different master key than the one configured for ``kms_host``
-   in the ``scylla.yaml`` file:
+           - For a local system key, specify the filename of your key; ScyllaDB will attempt to load it from the directory set by ``system_key_directory`` in
+             ``scylla.yaml`` (default directory: ``/etc/scylla/conf/resources/system_keys/``).
+           - For a KMIP system key, use the URI format ``kmip://<kmip_host>/<key_id>``, where ``<kmip_host>`` is a KMIP host configured in ``scylla.yaml`` of
+             each node, and ``<key_id>`` is the key's unique identifier in the KMIP server.
 
-   .. code-block:: cql
+           If you omit this option, it defaults to ``system_key`` (i.e., the local system key: ``<system_key_directory>/system_key``).
+         * ``secret_key_file`` - The location of the local secret key. This can be either an absolute pathname, or a pathname relative to ScyllaDB's working
+           directory. Default value is ``/etc/scylla/data_encryption_keys``.
 
-      CREATE TABLE myks.mytable (...<columns>...) WITH
-        scylla_encryption_options = {
-          'key_provider': 'KmsKeyProviderFactory',
-          'kms_host': 'my-kms1',
-          'master_key':'myorg/SomeOtherKey'
-        }
-      ;
+         **Example with local system key:**
 
+         .. code-block:: cql
 
-#. From this point, every new SSTable created for the ``atrest`` table is
-   encrypted, using the ``data_encryption_keys`` key located in
-   ``/etc/scylla/encryption_keys/``. This table will remain encrypted with this
-   key until you either change the key, change the key properties, or disable
-   encryption.
+            CREATE TABLE myks.mytable (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
+                'secret_key_strength' : 128,
+                'key_provider': 'ReplicatedKeyProviderFactory',
+                'system_key_file': 'system_key',
+                'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
+              }
+            ;
 
-#. To ensure all SSTables for this table on every node are encrypted, run the
-   :doc:`Nodetool upgradesstables
-   </operating-scylla/nodetool-commands/upgradesstables>` command. If not, the
-   SSTables remain unencrypted until they are compacted or flushed from
-   MemTables.
+         **Example with KMIP system key:**
 
-   For Example:
+         .. code-block:: cql
 
-   .. code-block:: none
+            CREATE TABLE myks.mytable (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
+                'secret_key_strength' : 128,
+                'key_provider': 'ReplicatedKeyProviderFactory',
+                'system_key_file': 'kmip://my-kmip1/123e4567-e89b-12d3-a456-426655440000',
+                'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
+              }
+            ;
 
-      nodetool upgradesstables data atrest
+      .. group-tab:: KMIP Key Provider
 
-#. Your SSTables are encrypted. If you want to change the key at any point, use
-   the `Update Encryption Properties of Existing Tables`_ procedure. Always keep
-   your key in a safe location known to you. Do not lose it. See `When a Key is Lost`_.
+         .. code-block:: cql
+
+            CREATE TABLE <keyspace>.<table_name> (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': '<alg>',
+                'secret_key_strength': <len>,
+                'key_provider': 'KmipKeyProviderFactory',
+                'kmip_host': '<kmip_host>',
+                'template_name': '<template_name>',
+                'key_namespace': '<key_namespace>'
+              }
+            ;
+
+         Where:
+
+         * ``cipher_algorithm`` -  One of the  :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithm <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the :ref:`key provider <ear-key-providers>`. Required.
+         * ``kmip_host`` - The name of your :ref:`kmip_host <encryption-at-rest-set-kmip>` group. Required.
+         * ``template_name`` - The name of a KMIP template to use when creating new keys. Optional.
+         * ``key_namespace`` - A KMIP namespace. Using namespaces allows you to granularly manage keys on a per table or keyspace basis. Optional.
+
+         **Example:**
+
+         .. code-block:: cql
+
+            CREATE TABLE myks.mytable (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
+                'secret_key_strength' : 128,
+                'key_provider': 'KmipKeyProviderFactory',
+                'kmip_host': 'my-kmip1'
+              }
+            ;
+
+      .. group-tab:: KMS Key Provider
+
+         .. code-block:: cql
+
+            CREATE TABLE <keyspace>.<table_name> (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': '<alg>',
+                'secret_key_strength': <len>,
+                'key_provider': 'KmsKeyProviderFactory',
+                'kms_host': '<kms_host>',
+                'master_key': '<aws_kms_key>',
+                'aws_assume_role_arn': '<aws_assume_role_arn>'
+              }
+            ;
+
+         Where:
+
+         * ``cipher_algorithm`` -  One of the  :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithm <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the :ref:`key provider <ear-key-providers>`. Required.
+         * ``kms_host`` - The name of your :ref:`kms_host <encryption-at-rest-set-kms>` group. Required.
+         * ``master_key`` - The ID or alias of an AWS KMS key. It allows you to specify a different key than the one configured in the :ref:`kms_host
+           <encryption-at-rest-set-kms>`. Optional.
+         * ``aws_assume_role_arn`` - The ARN of an AWS role to assume before calling KMS. Optional.
+
+         **Example:**
+
+         .. code-block:: cql
+
+            CREATE TABLE myks.mytable (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
+                'secret_key_strength' : 128,
+                'key_provider': 'KmsKeyProviderFactory',
+                'kms_host': 'my-kms1'
+              }
+            ;
+
+      .. group-tab:: GCP Key Provider
+
+         .. code-block:: cql
+
+            CREATE TABLE <keyspace>.<table_name> (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': '<alg>',
+                'secret_key_strength': <len>,
+                'key_provider': 'GcpKeyProviderFactory',
+                'gcp_host': '<gcp_host>',
+                'master_key': '<gcp_kms_key>',
+                'gcp_impersonate_service_account': '<gcp_impersonate_service_account>'
+              }
+            ;
+
+         Where:
+
+         * ``cipher_algorithm`` -  One of the  :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithm <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the :ref:`key provider <ear-key-providers>`. Required.
+         * ``gcp_host`` - The name of your :ref:`gcp_host <encryption-at-rest-set-gcp>` group. Required.
+         * ``master_key`` - The <keyring>/<keyname> of a GCP KMS key. It allows you to specify a different key than the one configured in the :ref:`gcp_host
+           <encryption-at-rest-set-gcp>`. Optional.
+         * ``gcp_impersonate_service_account`` - The service account to impersonate when calling GCP APIs. Optional.
+
+         **Example:**
+
+         .. code-block:: cql
+
+            CREATE TABLE myks.mytable (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
+                'secret_key_strength' : 128,
+                'key_provider': 'GcpKeyProviderFactory',
+                'gcp_host': 'my-gcp1'
+              }
+            ;
+
+      .. group-tab:: Azure Key Provider
+
+         .. code-block:: cql
+
+            CREATE TABLE <keyspace>.<table_name> (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': '<alg>',
+                'secret_key_strength': <len>,
+                'key_provider': 'AzureKeyProviderFactory',
+                'azure_host': '<azure_host>',
+                'master_key': '<azure_vault_key>'
+              }
+            ;
+
+         Where:
+
+         * ``cipher_algorithm`` -  One of the  :ref:`cipher algorithms <ear-cipher-algorithms>`. If not provided, the default will be used.
+         * ``secret_key_strength`` - The length of the key in bits (determined by the :ref:`cipher algorithm <ear-cipher-algorithms>` you choose). If not
+           provided, the default will be used.
+         * ``key_provider`` - The name of the :ref:`key provider <ear-key-providers>`. Required.
+         * ``azure_host`` - The name of your :ref:`azure_host <encryption-at-rest-set-azure>` group. Required.
+         * ``master_key`` - The <vaultname>/<keyname> of an Azure Key Vault key. It allows you to specify a different key than the one configured in the
+           :ref:`azure_host <encryption-at-rest-set-azure>`. Optional.
+
+         **Example:**
+
+         .. code-block:: cql
+
+            CREATE TABLE myks.mytable (...<columns>...) WITH
+              scylla_encryption_options = {
+                'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
+                'secret_key_strength' : 128,
+                'key_provider': 'AzureKeyProviderFactory',
+                'azure_host': 'my-azure1'
+              }
+            ;
+
+#. From this point forward, every new SSTable created for the ``mytable`` table
+   will be encrypted using the provided key. The table will remain encrypted
+   with this key until you change the key, change the key properties, or disable
+   encryption. To perform any of these actions, follow the `Update Encryption
+   Properties of Existing Tables`_ procedure. Always keep your key in a safe
+   location known to you. Do not lose it. If the key is lost, refer to `When a
+   Key is Lost`_.
 
 .. _ear-alter-table:
 
@@ -1470,8 +1731,8 @@ To disable encryption on an encrypted table named test in keyspace ks:
 
 .. code-block:: cql
 
-   ALTER TABLE ks.test WITH
-      scylla_encryption_options =  { 'key_provider' : 'none’ };
+   ALTER TABLE myks.mytable WITH
+      scylla_encryption_options =  { 'key_provider' : 'none' };
 
 
 Encrypt System Resources
