@@ -52,6 +52,9 @@ class ScyllaCluster:
             for n, server in enumerate(self._sorted_nodes(self.manager.all_servers()), start=1)
         ]
 
+    def get_node_ip(self, nodeid: int) -> str:
+        return self.nodelist()[nodeid-1].address()
+
     def populate(self, nodes: int | list[int]) -> ScyllaCluster:
         if self._config_options.get("alternator_enforce_authorization"):
             self.manager.auth_provider = PlainTextAuthProvider(username="cassandra", password="cassandra")
@@ -69,6 +72,23 @@ class ScyllaCluster:
                         },
                         start=False,
                     )
+            case dict():
+                # Supported spec: {"dc1": {"rack1": 3, "rack2": 2}, "dc2": {"rack1": 2}}
+                for dc, dc_nodes in nodes.items():
+                    if not isinstance(dc_nodes, dict):
+                        raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                    for rack, rack_nodes in dc_nodes.items():
+                        if not isinstance(rack_nodes, int):
+                            raise RuntimeError(f"Unsupported topology specification: {nodes}")
+                        self.manager.servers_add(
+                            servers_num=rack_nodes,
+                            config=self._config_options,
+                            property_file={
+                                "dc": dc,
+                                "rack": rack,
+                            },
+                            start=False,
+                        )
             case _:
                 raise RuntimeError(f"Unsupported topology specification: {nodes}")
 
