@@ -1165,6 +1165,29 @@ struct apply_resume {
     }
 };
 
+[[noreturn]] void on_bad_row_key(const schema& s, position_in_partition_view pos, const char* reason);
+
+inline void check_row_key(const schema& s, const clustering_key& key, is_dummy dummy) {
+    if (!dummy && !key.is_full(s) && !s.is_compact_table()) {
+        on_bad_row_key(s, position_in_partition_view::for_key(key), "non-full or empty prefix key");
+    }
+}
+
+inline void check_row_key(const schema& s, position_in_partition_view pos, is_dummy dummy) {
+    if (!pos.has_clustering_key()) {
+        on_bad_row_key(s, pos, "non-clustering position");
+    }
+    if (dummy) {
+        return;
+    }
+    if (pos.get_bound_weight() != bound_weight::equal) {
+        on_bad_row_key(s, pos, "non-key position");
+    }
+    if (!s.is_compact_table() && !pos.key().is_full(s)) {
+        on_bad_row_key(s, pos, "non-full or empty prefix key");
+    }
+}
+
 // Represents a set of writes made to a single partition.
 //
 // The object is schema-dependent. Each instance is governed by some
