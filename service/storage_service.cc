@@ -3271,6 +3271,8 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
             auto& gc_state = db.get_compaction_manager().get_tombstone_gc_state();
             co_await gc_state.flush_pending_repair_time_update(db);
+
+            co_await db.get_compaction_manager().flush_pending_repaired_at(db);
         });
     } catch (...) {
         // applying the changes on all shards should never fail
@@ -6124,7 +6126,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
 
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
-        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, trinfo->session_id, std::move(replicas));
+        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, trinfo->session_id, std::move(replicas), trinfo->stage);
         co_return service::tablet_operation_repair_result{time};
     });
     if (std::holds_alternative<service::tablet_operation_repair_result>(result)) {

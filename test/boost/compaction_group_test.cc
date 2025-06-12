@@ -128,6 +128,8 @@ public:
     virtual const std::string get_group_id() const noexcept override { return "0"; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
+    int64_t get_sstables_repaired_at() const noexcept override { return 0; }
+    bool needs_repaired_compaction() const noexcept override { return false; }
 };
 
 SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
@@ -161,7 +163,8 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
                 return sstable_needs_split(sst) ? sst->bytes_on_disk() : size_t(0);
             }), int64_t(0), std::plus{});
 
-            auto ret = cm.perform_split_compaction(*compaction_group, sstables::compaction_type_options::split{classifier}, tasks::task_info{}).get();
+            auto tsv = make_unrepaired_table_state_view(compaction_group.get());
+            auto ret = cm.perform_split_compaction(tsv, sstables::compaction_type_options::split{classifier}, tasks::task_info{}).get();
             BOOST_REQUIRE_EQUAL(ret->start_size, expected_compaction_size);
 
             BOOST_REQUIRE(compaction_group->main_sstable_set().size() == expected_output);

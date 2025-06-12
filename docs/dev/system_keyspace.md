@@ -212,6 +212,7 @@ CREATE TABLE system.tablets (
     repair_scheduler_config frozen<repair_scheduler_config> static,
     repair_task_info frozen<tablet_task_info>,
     repair_time timestamp,
+    sstables_repaired_at bigint,
     PRIMARY KEY ((keyspace_name, table_id), last_token)
 )
 
@@ -250,6 +251,8 @@ Only tables which use tablet-based replication strategy have an entry here.
 ```
 
 `repair_time` is the last time the tablet has been repaired.
+
+`sstables_repaired_at` is the reapired_at number for the tablet. When repaired_at <= sstables_repaired_at (repaired_at is the on disk field of a SSTable), it means the sstable is repaired.
 
 `repair_task_info` contains the metadata for the task manager. It contains the following values:
   * `request_type` - The type of the request. It could be user_repair and auto_repair.

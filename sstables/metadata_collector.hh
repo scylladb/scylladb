@@ -141,6 +141,7 @@ private:
     double _compression_ratio = NO_COMPRESSION_RATIO;
     utils::streaming_histogram _estimated_tombstone_drop_time{TOMBSTONE_HISTOGRAM_BIN_SIZE};
     int _sstable_level = 0;
+    int64_t _repaired_at = 0;
     std::optional<position_in_partition> _min_clustering_pos;
     std::optional<position_in_partition> _max_clustering_pos;
     bool _has_legacy_counter_shards = false;
@@ -207,6 +208,10 @@ public:
         _sstable_level = sstable_level;
     }
 
+    void set_repaired_at(int64_t repaired_at) {
+        _repaired_at = repaired_at;
+    }
+
     void update_has_legacy_counter_shards(bool has_legacy_counter_shards) {
         _has_legacy_counter_shards = _has_legacy_counter_shards || has_legacy_counter_shards;
     }
@@ -246,6 +251,7 @@ public:
         m.compression_ratio = _compression_ratio;
         m.estimated_tombstone_drop_time = std::move(_estimated_tombstone_drop_time);
         m.sstable_level = _sstable_level;
+        m.repaired_at = _repaired_at;
         convert(m.min_column_names, _min_clustering_pos);
         convert(m.max_column_names, _max_clustering_pos);
         m.has_legacy_counter_shards = _has_legacy_counter_shards;
