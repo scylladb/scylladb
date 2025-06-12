@@ -1621,119 +1621,162 @@ This procedure demonstrates how to encrypt a new table.
 Update Encryption Properties of Existing Tables
 ==================================================
 
-You can encrypt any existing table or use this procedure to change the cipher
-algorithm, key location or key strength or even disable encryption on a table.
+ScyllaDB allows you to change the encryption properties of any existing table.
+This includes enabling encryption on an unencrypted table, disabling encryption
+on an encrypted table, or changing the cipher algorithm, key strength, or key
+location for an encrypted table.
+
+Encrypt an Existing Table
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To apply encryption to an existing table, repeat the steps from `Encrypt a Single
+Table`_, but replace the ``CREATE TABLE`` CQL statement with the ``ALTER TABLE``.
+
+**Example:**
+
+.. code-block:: cql
+
+   ALTER TABLE myks.mytable (pk text primary key, c0 int) WITH
+     scylla_encryption_options = {
+       'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
+       'secret_key_strength' : 192,
+       'key_provider': 'LocalFileSystemKeyProviderFactory',
+       'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
+     }
+   ;
+
+.. note::
+   Existing SSTables will remain unencrypted until the next compaction
+   re-creates them using the new encryption configuration. To encrypt them
+   immediately instead, run :doc:`nodetool upgradesstables
+   </operating-scylla/nodetool-commands/upgradesstables>` **on each node**:
+
+   .. code-block:: none
+
+      nodetool upgradesstables --include-all-sstables <keyspace> <table>
+
+   For example:
+
+   .. code-block:: none
+
+      nodetool upgradesstables --include-all-sstables myks mytable
+
+Change the Algorithm Descriptor or Key of an Existing Table
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Procedure**
 
-#. Edit the table properties to enable encryption of one table of your choosing.
-   Use the properties explained in `Encrypt a Single Table`_ if needed.
+#. Find the ``scylla_encryption_options`` of the table you want to change:
 
    .. code-block:: cql
 
-      ALTER TABLE <keyspace>.<table_name> (...<columns>...) WITH
-        scylla_encryption_options = {
-          'cipher_algorithm' : <hash>,
-          'secret_key_strength' : <len>,
-          'key_provider': <provider>,
-          'secret_key_file': <path>
-        }
-      ;
-
+      DESCRIBE <keyspace>.<table_name>;
 
    **Example:**
 
-   Continuing the example from above, this command will instruct ScyllaDB to
-   encrypt the table and will save the key in the location created in step 1.
+   .. code-block:: cql
+
+      DESCRIBE myks.mytable;
+
+   **Example output:**
 
    .. code-block:: cql
 
-      ALTER TABLE data.atrest (pk text primary key, c0 int) WITH
+       CREATE TABLE myks.mytable (
+         pk text PRIMARY KEY,
+         c0 int
+       ) WITH
+         scylla_encryption_options = {
+           'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
+           'secret_key_strength' : 128,
+           'key_provider': 'LocalFileSystemKeyProviderFactory',
+           'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
+         }
+       ;
+
+#. Run an ``ALTER TABLE`` statement using the same ``scylla_encryption_options``
+   found in the previous step, except for the properties you wish to change.
+
+   **Example for changing the Cipher Algorithm and Key Strength:**
+
+   .. code-block:: cql
+
+      ALTER TABLE myks.mytable (pk text primary key, c0 int) WITH
         scylla_encryption_options = {
-          'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
+          'cipher_algorithm' : 'AES/CBC/PKCS5Padding',
           'secret_key_strength' : 192,
           'key_provider': 'LocalFileSystemKeyProviderFactory',
           'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
         }
       ;
 
-   **Example for KMS:**
+   **Example for changing the KMS Master Key:**
 
    .. code-block:: cql
 
-      ALTER TABLE myks.mytable (...<columns>...) WITH
+      ALTER TABLE myks.mytable (pk text primary key, c0 int) WITH
         scylla_encryption_options = {
-          'cipher_algorithm' :  'AES/CBC/PKCS5Padding',
+          'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
           'secret_key_strength' : 128,
           'key_provider': 'KmsKeyProviderFactory',
-          'kms_host': 'my-kms1'
+          'master_key': 'myorg/MyNewKey'
         }
       ;
 
-#. If you want to make sure that SSTables that existed before this change are
-   also encrypted, you can either upgrade them using the ``nodetool upgradesstables``
-   command or wait until the next compaction. If you decide to wait, ScyllaDB
-   will still be able to read the old unencrypted tables. If you change the key
-   or remove encryption, ScyllaDB will still continue to read the old tables as
-   long as you still have the key. If your data is encrypted and you do not have
-   the key, your data is unreadable.
+.. note::
+   If you change the key, the SSTables that existed before this change will
+   remain encrypted with the old key until the next compaction automatically
+   re-encrypts them with the new key. In the meantime, ScyllaDB will still be
+   able to read them as long as the old key remains available. If the old key is
+   gone, the old data will be unreadable. If you don't want to wait for
+   compaction, run :doc:`nodetool upgradesstables
+   </operating-scylla/nodetool-commands/upgradesstables>` **on each node**:
 
-   * If you decide to upgrade all of your old SSTables run the :doc:`nodetool upgradesstables
-     </operating-scylla/nodetool-commands/upgradesstables>` command.
+   .. code-block:: none
 
-     .. code-block:: none
+      nodetool upgradesstables --include-all-sstables <keyspace> <table>
 
-         nodetool upgradesstables <keyspace> <table>
+   For example:
 
-     For example:
+   .. code-block:: none
 
-     .. code-block:: none
+      nodetool upgradesstables --include-all-sstables myks mytable
 
-         nodetool upgradesstables ks test
+Disable Encryption on Existing Table
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   * Repeat this command on all nodes as nodetool runs locally.
+To remove the ``scylla_encryption_options`` from a table, set the
+``key_provider`` to ``none``.
 
-#. If you want to change the key or disable encryption, repeat the `Update
-   Encryption Properties of Existing Tables`_ procedure using the examples below
-   as reference.
-
-**Examples**
-
-To encrypt an existing table named test in keyspace ks:
-
-.. code-block:: cql
-
-   ALTER TABLE ks.test WITH
-     scylla_encryption_options = {
-        'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
-        'secret_key_strength' : 128,
-        'key_provider': 'LocalFileSystemKeyProviderFactory',
-        'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
-     }
-   ;
-
-
-To change the cipher algorithm from AES/ECB/PKCS5Padding to AES/ECB/PKCS5Padding
-and to change the key strength from 128 to 192 on an existing table:
-
-.. code-block:: cql
-
-   ALTER TABLE ks.test WITH
-     scylla_encryption_options = {
-        'cipher_algorithm' : 'AES/ECB/PKCS5Padding',
-        'secret_key_strength' : 192,
-        'key_provider': 'LocalFileSystemKeyProviderFactory',
-        'secret_key_file': '/etc/scylla/encryption_keys/data_encryption_keys'
-     }
-   ;
-
-To disable encryption on an encrypted table named test in keyspace ks:
+**Example:**
 
 .. code-block:: cql
 
    ALTER TABLE myks.mytable WITH
       scylla_encryption_options =  { 'key_provider' : 'none' };
 
+The effect of this schema change is that subsequently written SSTables on each
+node will conform to the ``user_info_encryption`` defaults of this node. If no
+such defaults exist on a node, the newly written SSTables on that node will be
+unencrypted.
+
+.. note::
+   If you disable encryption, the SSTables that existed before this change will
+   remain encrypted until the next compaction. In the meantime, ScyllaDB will
+   still be able to read them as long as the key remains available. If the key
+   is gone, the old data will be unreadable. If you don't want to wait for
+   compaction, run :doc:`nodetool upgradesstables
+   </operating-scylla/nodetool-commands/upgradesstables>` **on each node**:
+
+   .. code-block:: none
+
+      nodetool upgradesstables --include-all-sstables <keyspace> <table>
+
+   For example:
+
+   .. code-block:: none
+
+      nodetool upgradesstables --include-all-sstables myks mytable
 
 Encrypt System Resources
 ---------------------------
