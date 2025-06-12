@@ -100,7 +100,7 @@ std::ostream& operator<<(std::ostream& out, const mapreduce_request& r) {
     if (r.shard_id_hint) {
         fmt::print(out, ", shard_id_hint={}", r.shard_id_hint.value());
     }
-    fmt::print(out, "cmd={}, pr={}, cl={}, timeout(ms)={}}}",
+    fmt::print(out, ", cmd={}, pr={}, cl={}, timeout(ms)={}}}",
                r.cmd, r.pr, r.cl, ms);
     return out;
 }
