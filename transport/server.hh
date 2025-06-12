@@ -119,6 +119,7 @@ struct cql_server_config {
     utils::updateable_value<uint32_t> max_concurrent_requests;
     utils::updateable_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
+    utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
 };
 
 /**
