@@ -817,6 +817,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
     for (const auto& gen_id : _topology_state_machine._topology.committed_cdc_generations) {
         rtlogger.trace("topology_state_load: process committed cdc generation {}", gen_id);
+        co_await utils::get_local_injector().inject("topology_state_load_before_update_cdc", [](auto& handler) -> future<> {
+            rtlogger.info("topology_state_load_before_update_cdc hit, wait for message");
+            co_await handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(5));
+        });
         co_await _cdc_gens.local().handle_cdc_generation(gen_id);
         if (gen_id == _topology_state_machine._topology.committed_cdc_generations.back()) {
             co_await _sys_ks.local().update_cdc_generation_id(gen_id);
@@ -4697,9 +4701,17 @@ future<> storage_service::drain() {
 }
 
 future<> storage_service::do_drain() {
+    // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
 
+    // group0 persistence relies on local storage, so we need to stop group0 first.
+    // This must be kept in sync with defer_verbose_shutdown for group0 in main.cc to
+    // handle the case when initialization fails before reaching drain_on_shutdown for ss.
+    _sl_controller.local().abort_group0_operations();
     co_await wait_for_group0_stop();
+    if (_group0) {
+        co_await _group0->abort();
+    }
 
     co_await tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown);
 
