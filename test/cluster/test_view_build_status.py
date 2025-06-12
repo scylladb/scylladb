@@ -17,6 +17,9 @@ from test.cluster.conftest import skip_mode
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
+from test.cluster.util import new_test_keyspace
+from test.cluster.test_view_building_coordinator import mark_all_servers, pause_view_building_tasks, \
+        unpause_view_building_tasks, wait_for_some_view_build_tasks_to_get_stuck, disable_tablet_load_balancing_on_all_servers
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +60,12 @@ async def wait_for_row_count(cql, table, n, host):
         cnt = (await cql.run_async(f"SELECT count(*) FROM {table}", host=host))[0].count
         return cnt == n or None
     await wait_for(row_count_is_n, time.time() + 60)
+
+async def wait_for_view_build_status(cql, ks_name, view_name, status, node_count):
+    async def view_build_status_is():
+        result = await cql.run_async(f"SELECT * FROM system.view_build_status_v2 WHERE keyspace_name='{ks_name}' AND view_name='{view_name}' AND status='{status}' ALLOW FILTERING")
+        return len(result) == node_count or None
+    await wait_for(view_build_status_is, time.time() + 60)
 
 # Verify a new cluster uses the view_build_status_v2 table.
 # Create a materialized view and check that the view's build status
@@ -574,3 +583,67 @@ async def test_view_build_status_with_synchronize_wait(manager: ManagerClient):
     await manager.api.message_injection(new_server.ip_addr, 'sleep_in_synchronize')
 
     await task
+
+# Test that when removing the view, its build status is cleaned from the status table
+@pytest.mark.asyncio
+async def test_view_build_status_cleanup_on_drop_view(manager: ManagerClient):
+    node_count = 4
+    servers = await manager.servers_add(node_count)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await create_table(cql, ks)
+        await create_mv(cql, ks, "vt1")
+
+        await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", node_count)
+        await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.vt1")
+        await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", 0)
+
+# Test that when removing the view, its build status is cleaned from the status table
+@pytest.mark.asyncio
+async def test_view_build_status_extended_on_added_node(manager: ManagerClient):
+    node_count = 4
+    servers = await manager.servers_add(node_count)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await create_table(cql, ks)
+        await create_mv(cql, ks, "vt1")
+
+        await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", node_count)
+        await manager.server_add()
+        await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", node_count+1)
+
+# Test that when removing the view, its build status is cleaned from the status table
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_view_build_status_marked_started_on_node_added_during_building(manager: ManagerClient):
+    node_count = 4
+    servers = await manager.servers_add(node_count, cmdline=[
+        '--logger-log-level', 'storage_service=debug',
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'view_building_coordinator=debug',
+        '--logger-log-level', 'view_building_worker=debug',
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    await disable_tablet_load_balancing_on_all_servers(manager)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}") as ks:
+        await create_table(cql, ks)
+        await pause_view_building_tasks(manager, pause_all=True)
+        marks = await mark_all_servers(manager)
+
+        await create_mv(cql, ks, "vt1")
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+
+        await wait_for_view_build_status(cql, ks, "vt1", "STARTED", node_count)
+        await manager.server_add(cmdline=[
+            '--logger-log-level', 'storage_service=debug',
+            '--logger-log-level', 'raft_topology=debug',
+            '--logger-log-level', 'view_building_coordinator=debug',
+            '--logger-log-level', 'view_building_worker=debug',
+        ])
+        await wait_for_view_build_status(cql, ks, "vt1", "STARTED", node_count+1)
+
+        await unpause_view_building_tasks(manager)
+        await wait_for_view_build_status(cql, ks, "vt1", "SUCCESS", node_count+1)
