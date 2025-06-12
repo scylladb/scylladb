@@ -65,7 +65,7 @@ def run_alternator_cmd(pid, dir):
     cmd += [
         '--alternator-address', ip,
         '--alternator-enforce-authorization', '1',
-        '--alternator-write-isolation', 'always_use_lwt',
+        '--alternator-write-isolation', 'only_rmw_uses_lwt',
         '--alternator-streams-time-window-s', '0',
         '--alternator-timeout-in-ms', '30000',
         '--alternator-ttl-period-in-seconds', '0.5',
