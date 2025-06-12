@@ -2566,16 +2566,21 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
         co_return flush_time;
     }
 
+    auto start = std::chrono::steady_clock::now();
+  // FIXME: fix indentation
+  auto flush_time = co_await container().invoke_on(*master_shard_id, [&keyspace_name, &table_name, table_id, master_shard_id = *master_shard_id, &range, &nodes, &shards, &replicas, id, global_tablet_repair_task_info, &table_names, topo_guard, skip_flush = rebuild_replicas.has_value()] (repair_service& rs) -> future<gc_clock::time_point> {
     std::vector<tablet_repair_task_meta> task_metas;
     auto ranges_parallelism = std::nullopt;
-    auto start = std::chrono::steady_clock::now();
-    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, rebuild_replicas.has_value());
+    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(rs._repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, skip_flush);
     task_impl_ptr->sched_by_scheduler = true;
-    auto task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
+    auto task = co_await rs._repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
     task->start();
     co_await task->done();
-    auto flush_time = task_impl_ptr->get_flush_time();
+    co_return task_impl_ptr->get_flush_time();
+  });
+
+
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
     if (delay) {
         rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
