@@ -13,6 +13,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/log.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -20,6 +21,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/config.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_proxy.hh"
 
@@ -65,6 +67,47 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             });
         });
     });
+}
+
+SEASTAR_TEST_CASE(test_batchlog_cleanup) {
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.db_config->batchlog_cleanup_with_memtable_rollover.set_value("false", utils::config_file::config_source::CommandLine);
+
+    return do_with_cql_env_thread([] (auto& e) {
+        auto& bm = e.batchlog_manager().local();
+
+        e.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
+
+        {
+            const uint64_t batch_count = 100000;
+            const auto before = lowres_clock::now();
+            testlog.info("inserting batches");
+
+            for (uint64_t i = 0; i != batch_count; ++i) {
+                auto q = format("BEGIN BATCH\n"
+                        "INSERT INTO tbl (pk, v) VALUES ({}, 'value');\n"
+                        "INSERT INTO tbl (pk, v) VALUES ({}, 'value');\n"
+                        "INSERT INTO tbl (pk, v) VALUES ({}, 'value');\n"
+                        "INSERT INTO tbl (pk, v) VALUES ({}, 'value');\n"
+                        "APPLY BATCH", i, i * 2, i * 3, i * 4);
+                e.execute_cql(q).get();
+            }
+
+            testlog.info("done inserting {} batches in {} milliseconds", batch_count,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - before).count());
+        }
+
+        // Make all tombstones purgeable.
+        sleep(std::chrono::seconds(1)).get();
+
+        {
+            const auto before = lowres_clock::now();
+            testlog.info("starting batchlog cleanup");
+            bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes).get();
+            testlog.info("done batchlog cleanup in {} milliseconds", std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - before).count());
+        }
+    }, cfg);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
