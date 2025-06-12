@@ -54,7 +54,6 @@ private:
 
     seastar::metrics::metric_groups _metrics;
 
-    size_t _total_batches_replayed = 0;
     cql3::query_processor& _qp;
     db::system_keyspace& _sys_ks;
     db_clock::duration _write_request_timeout;
@@ -83,9 +82,6 @@ public:
     future<> do_batch_log_replay(post_replay_cleanup cleanup);
 
     future<size_t> count_all_batches() const;
-    size_t get_total_batches_replayed() const {
-        return _total_batches_replayed;
-    }
     db_clock::duration get_batch_log_timeout() const;
     gc_clock::time_point get_last_replay() const {
         return _last_replay;
