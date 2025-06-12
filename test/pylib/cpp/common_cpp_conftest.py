@@ -16,6 +16,7 @@ from test.pylib.cpp.item import CppFile, coverage
 from test.pylib.util import get_modes_to_run
 
 
+TEST_CONFIG = 'test_config.yaml'
 DEFAULT_ARGS = [
     '--overprovisioned',
     '--unsafe-bypass-fsync 1',
@@ -71,13 +72,18 @@ def get_disabled_tests(config: dict, modes: list[str]) -> dict[str, set[str]]:
 
 def read_suite_config(directory: Path) -> dict[str, str]:
     """
-    Helper method that will return the configuration from the suite.yaml file
+    Helper method that returns the configuration from the test_config.yaml file.
+    It can be that there's no test_config.yaml that means there are no additional parameters for Scylla itself or no
+    filtering on what modes tests should be executed or skipped
     """
-    with open(directory / 'suite.yaml', 'r') as cfg_file:
-        cfg = yaml.safe_load(cfg_file.read())
+    config = directory / TEST_CONFIG
+    if config.exists() and config.stat().st_size:
+        cfg = yaml.safe_load(config.read_text(encoding='utf-8'))
         if not isinstance(cfg, dict):
-            raise RuntimeError('Failed to load tests: suite.yaml is empty')
+            raise ValueError(f"Invalid {TEST_CONFIG} format in {directory}. Expected a dictionary, got {type(cfg)}")
         return cfg
+    else:
+        return {}
 
 
 def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade) -> object:
