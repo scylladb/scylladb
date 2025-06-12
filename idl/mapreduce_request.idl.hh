@@ -39,6 +39,7 @@ struct mapreduce_request {
     lowres_system_clock::time_point timeout;
 
     std::optional<std::vector<query::mapreduce_request::aggregation_info>> aggregation_infos [[version 5.1]];
+    std::optional<shard_id> shard_id_hint [[version 2025.3]];
 };
 
 struct mapreduce_result {
