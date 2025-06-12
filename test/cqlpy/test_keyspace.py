@@ -39,14 +39,14 @@ def test_create_keyspace_missing_with(cql):
     with pytest.raises(SyntaxException):
         cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace")
 
-# The documentation states that "Keyspace names can have up to 48 alpha-
+# The documentation states that "Keyspace names can have up to 218 alpha-
 # numeric characters and contain underscores; only letters and numbers are
 # supported as the first character.". This is not accurate. Test what is actually
 # enforced:
 def test_create_keyspace_invalid_name(cql, this_dc):
     rep = " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }"
-    with pytest.raises(InvalidRequest, match='48'):
-        cql.execute('CREATE KEYSPACE ' + 'x'*49 + rep)
+    with pytest.raises(InvalidRequest, match='218'):
+        cql.execute('CREATE KEYSPACE ' + 'x'*219 + rep)
     # The name xyz!123, unquoted, is a syntax error. With quotes it's valid
     # syntax, but an illegal name.
     with pytest.raises(SyntaxException):
