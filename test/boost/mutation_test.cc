@@ -4128,3 +4128,174 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_sticky_max_purgeable) {
         assert_that(compact_and_expire(std::move(mut))).is_equal_to(mut_compacted);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_serialized_mutation_empty_and_nonfull_keys) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema(tests::random::get_int<uint32_t>(), *random_spec);
+
+    auto schema = random_schema.schema();
+
+    auto updated_schema = schema_builder(schema)
+        .remove_column(schema->regular_column_at(0).name())
+        .build();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    testlog.info("Random schema:\n{}", random_schema.cql());
+
+    const auto mutations = tests::generate_random_mutations(random_schema, 1).get();
+
+    {
+        const auto& mut = mutations.back();
+        frozen_mutation fm(mut);
+
+        assert_that(fm.unfreeze(schema)).is_equal_to(mut);
+    }
+
+    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] {
+        set_abort_on_internal_error(abort);
+    });
+
+    auto check = [&] (const clustering_key& ckey) {
+        testlog.info("Adding row with bad key: {}", ckey);
+
+        auto mut = mutations.back();
+
+        // Need to sneak in the bad key via the back-door, the mutation_partition
+        // will rejects it via the regular insert/update methods.
+        auto& rows = mut.partition().mutable_clustered_rows();
+        auto e = alloc_strategy_unique_ptr<rows_entry>(current_allocator().construct<rows_entry>(ckey, deletable_row(*schema, mut.partition().clustered_rows().begin()->row())));
+        rows.insert_before_hint(rows.end(), std::move(e), rows_entry::tri_compare(*schema));
+
+        frozen_mutation fm(mut);
+        BOOST_REQUIRE_THROW(fm.unfreeze(schema), std::runtime_error);
+        BOOST_REQUIRE_THROW(fm.unfreeze(updated_schema), std::runtime_error);
+
+        canonical_mutation cm(mut);
+        BOOST_REQUIRE_THROW(cm.to_mutation(schema), std::runtime_error);
+        BOOST_REQUIRE_THROW(cm.to_mutation(updated_schema), std::runtime_error);
+    };
+
+    check(clustering_key::make_empty());
+
+    if (schema->clustering_key_size() > 1) {
+        auto full_ckey = random_schema.make_ckey(0);
+        full_ckey.erase(full_ckey.end() - 1);
+        check(clustering_key::from_exploded(*schema, full_ckey));
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_empty_and_nonfull_keys) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+    auto random_schema = tests::random_schema(tests::random::get_int<uint32_t>(), *random_spec);
+
+    auto schema = random_schema.schema();
+
+    testlog.info("Random schema:\n{}", random_schema.cql());
+
+    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] {
+        set_abort_on_internal_error(abort);
+    });
+
+    auto check = [&] (const clustering_key& ckey) {
+        testlog.info("Adding row with bad key: {}", ckey);
+
+        mutation_partition mp(*schema);
+
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, ckey), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, clustering_key(ckey)), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, clustering_key_view(ckey)), std::runtime_error);
+
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::for_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::for_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::for_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    };
+
+    check(clustering_key::make_empty());
+
+    if (schema->clustering_key_size() > 1) {
+        auto full_ckey = random_schema.make_ckey(0);
+        full_ckey.erase(full_ckey.end() - 1);
+        check(clustering_key::from_exploded(*schema, full_ckey));
+    }
+
+    mutation_partition mp(*schema);
+    const auto ckey = clustering_key::from_exploded(*schema, random_schema.make_ckey(0));
+
+    BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::before_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::after_all_prefixed(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::for_static_row(), is_dummy::no, is_continuous::no), std::runtime_error);
+
+    BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::before_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::after_all_prefixed(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::for_static_row(), is_dummy::no, is_continuous::no), std::runtime_error);
+
+    BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::before_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::after_all_prefixed(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::for_static_row(), is_dummy::no, is_continuous::no), std::runtime_error);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_mutation_partition_v2_empty_and_nonfull_keys) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(1, 1),
+            std::uniform_int_distribution<size_t>(1, 1));
+    auto random_schema = tests::random_schema(tests::random::get_int<uint32_t>(), *random_spec);
+
+    auto schema = random_schema.schema();
+
+    testlog.info("Random schema:\n{}", random_schema.cql());
+
+    auto reset_abort = defer([abort = set_abort_on_internal_error(false)] {
+        set_abort_on_internal_error(abort);
+    });
+
+    auto check = [&] (const clustering_key& ckey) {
+        testlog.info("Adding row with bad key: {}", ckey);
+
+        mutation_partition_v2 mp(*schema);
+
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, ckey), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, clustering_key(ckey)), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, clustering_key_view(ckey)), std::runtime_error);
+
+        BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::for_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::for_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+        BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::for_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    };
+
+    check(clustering_key::make_empty());
+
+    if (schema->clustering_key_size() > 1) {
+        auto full_ckey = random_schema.make_ckey(0);
+        full_ckey.erase(full_ckey.end() - 1);
+        check(clustering_key::from_exploded(*schema, full_ckey));
+    }
+
+    mutation_partition_v2 mp(*schema);
+    const auto ckey = clustering_key::from_exploded(*schema, random_schema.make_ckey(0));
+
+    BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::before_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::after_all_prefixed(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_row(*schema, position_in_partition_view::for_static_row(), is_dummy::no, is_continuous::no), std::runtime_error);
+
+    BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::before_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::after_all_prefixed(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.clustered_rows_entry(*schema, position_in_partition_view::for_static_row(), is_dummy::no, is_continuous::no), std::runtime_error);
+
+    BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::before_key(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::after_all_prefixed(ckey), is_dummy::no, is_continuous::no), std::runtime_error);
+    BOOST_REQUIRE_THROW(mp.append_clustered_row(*schema, position_in_partition_view::for_static_row(), is_dummy::no, is_continuous::no), std::runtime_error);
+}
