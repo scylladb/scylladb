@@ -18,21 +18,21 @@ static logging::logger dlogger{"description"};
 
 namespace cql3 {
 
-std::vector<bytes_opt> description::serialize(bool serialize_create_statement) const {
-    std::vector<bytes_opt> result{};
+std::vector<managed_bytes_opt> description::serialize(bool serialize_create_statement) && {
+    std::vector<managed_bytes_opt> result{};
     result.reserve(serialize_create_statement ? 4 : 3);
 
     if (keyspace) {
-        result.push_back(to_bytes(cql3::util::maybe_quote(*keyspace)));
+        result.push_back(to_managed_bytes(cql3::util::maybe_quote(*keyspace)));
     } else {
-        result.push_back(data_value::make_null(utf8_type).serialize());
+        result.push_back(to_managed_bytes_opt(data_value::make_null(utf8_type).serialize()));
     }
 
-    result.push_back(to_bytes(type));
-    result.push_back(to_bytes(cql3::util::maybe_quote(name)));
+    result.push_back(to_managed_bytes(type));
+    result.push_back(to_managed_bytes(cql3::util::maybe_quote(name)));
 
     if (serialize_create_statement && create_statement) {
-        result.push_back(to_bytes(*create_statement));
+        result.push_back(std::move(create_statement.value()).as_managed_bytes());
     } else if (serialize_create_statement) {
         on_internal_error(dlogger, "create_statement field is empty");
     }

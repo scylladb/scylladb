@@ -849,7 +849,7 @@ schema_ptr build_random_schema(uint32_t seed, random_schema_specification& spec)
 
 sstring udt_to_str(const user_type_impl& udt) {
     auto udt_desc = udt.describe(cql3::with_create_statement::yes);
-    return *udt_desc.create_statement;
+    return udt_desc.create_statement.value().linearize();
 }
 
 struct udt_list {
@@ -1156,7 +1156,8 @@ future<> random_schema::create_with_cql(cql_test_env& env) {
                 replica::make_schema_describe_helper(_schema, db.as_data_dictionary()),
                 cql3::describe_option::STMTS);
 
-        env.execute_cql(*schema_desc.create_statement).get();
+        sstring create_statement = schema_desc.create_statement.value().linearize();
+        env.execute_cql(create_statement).get();
         auto& tbl = db.find_column_family(ks_name, tbl_name);
 
         _schema = tbl.schema();
