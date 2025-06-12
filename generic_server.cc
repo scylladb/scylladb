@@ -276,7 +276,6 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
 
 future<> server::stop() {
     co_await shutdown();
-    co_await std::exchange(_all_connections_stopped, make_ready_future<>());
 }
 
 future<> server::shutdown() {
@@ -291,6 +290,23 @@ future<> server::shutdown() {
         l.abort_accept();
         _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
+
+    // Shutdown RX side of the connections, so no new requests could be received.
+    // Leave the TX side so the responses to ongoing requests could be sent.
+    _logger.debug("Shutting down RX side of {} connections", _connections_list.size());
+    for (auto& connection : _connections_list) {
+        if (!connection.shutdown_input()) {
+            // If failed to shutdown the input side, then attempt to shutdown the output side which should do a complete shutdown of the connection.
+            connection.shutdown_output();
+        }
+    }
+    _abort_source.request_abort();
+
+    // Wait for the remaining requests to finish.
+    _logger.debug("Waiting for connections to stop");
+    co_await std::exchange(_all_connections_stopped, make_ready_future<>());
+
+    // Now do the full connections' shutdown.
     size_t nr_conn = 0;
     auto nr_conn_total = _connections_list.size();
     _logger.debug("shutdown connection nr_total={}", nr_conn_total);
@@ -299,7 +315,6 @@ future<> server::shutdown() {
         _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
     }
     co_await std::move(_listeners_stopped);
-    _abort_source.request_abort();
 }
 
 future<>
