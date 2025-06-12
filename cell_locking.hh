@@ -12,11 +12,14 @@
 
 #include <boost/intrusive/unordered_set.hpp>
 
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/future.hh>
+
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "mutation/mutation_partition.hh"
 #include "utils/xx_hasher.hh"
-
+#include "utils/composite_abort_source.hh"
 #include "db/timeout_clock.hh"
 #include "utils/log.hh"
 
@@ -160,8 +163,18 @@ private:
             return _address.position;
         }
 
-        future<> lock(db::timeout_clock::time_point _timeout) {
-            return _semaphore.wait(_timeout);
+        future<> wait_and_lock(db::timeout_clock::time_point timeout, abort_source& abort) {
+            utils::composite_abort_source composite_as;
+            abort_on_expiry<> expiry{timeout};
+            composite_as.add(expiry.abort_source());
+            composite_as.add(abort);
+            co_await _semaphore.wait(composite_as.abort_source());
+        }
+        future<> lock(db::timeout_clock::time_point timeout, abort_source& abort) {
+            if (_semaphore.available_units()) {
+                return _semaphore.wait();
+            }
+            return wait_and_lock(timeout, abort);
         }
         void unlock() {
             _semaphore.signal();
@@ -380,7 +393,7 @@ public:
 
     // partition_cells_range is required to be in cell_locker::schema()
     future<std::vector<locked_cell>> lock_cells(const dht::decorated_key& dk, partition_cells_range&& range,
-                                                db::timeout_clock::time_point timeout);
+                                                db::timeout_clock::time_point timeout, abort_source& abort);
 };
 
 
@@ -410,6 +423,7 @@ struct cell_locker::locker {
     cells_range::const_iterator _current_cell;
 
     db::timeout_clock::time_point _timeout;
+    abort_source& _abort;
     std::vector<locked_cell> _locks;
     cell_locker_stats& _stats;
 private:
@@ -423,13 +437,14 @@ private:
 
     bool is_done() const { return _current_ck == _range.end(); }
 public:
-    explicit locker(const ::schema& s, cell_locker_stats& st, partition_entry& pe, partition_cells_range&& range, db::timeout_clock::time_point timeout)
+    explicit locker(const ::schema& s, cell_locker_stats& st, partition_entry& pe, partition_cells_range&& range, db::timeout_clock::time_point timeout, abort_source& abort)
         : _hasher(s)
         , _eq_cmp(s)
         , _partition_entry(pe)
         , _range(std::move(range))
         , _current_ck(_range.begin())
         , _timeout(timeout)
+        , _abort(abort)
         , _stats(st)
     {
         update_ck();
@@ -451,7 +466,7 @@ public:
 };
 
 inline
-future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range, db::timeout_clock::time_point timeout) {
+future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_key& dk, partition_cells_range&& range, db::timeout_clock::time_point timeout, abort_source& abort) {
     partition_entry::hasher pe_hash;
     partition_entry::equal_compare pe_eq(*_schema);
 
@@ -487,7 +502,7 @@ future<std::vector<locked_cell>> cell_locker::lock_cells(const dht::decorated_ke
         return make_ready_future<std::vector<locked_cell>>(std::move(locks));
     }
 
-    auto l = std::make_unique<locker>(*_schema, _stats, *it, std::move(range), timeout);
+    auto l = std::make_unique<locker>(*_schema, _stats, *it, std::move(range), timeout, abort);
     auto f = l->lock_all();
     return f.then([l = std::move(l)] {
         return std::move(*l).get();
@@ -509,7 +524,7 @@ future<> cell_locker::locker::lock_next() {
         auto it = _partition_entry.cells().find(ca, _hasher, _eq_cmp);
         if (it != _partition_entry.cells().end()) {
             _stats.operations_waiting_for_lock++;
-            return it->lock(_timeout).then([this, ce = it->shared_from_this()] () mutable {
+            return it->lock(_timeout, _abort).then([this, ce = it->shared_from_this()] () mutable {
                 _stats.operations_waiting_for_lock--;
                 _stats.lock_acquisitions++;
                 _locks.emplace_back(std::move(ce));

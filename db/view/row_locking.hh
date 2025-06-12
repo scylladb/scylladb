@@ -91,7 +91,8 @@ private:
                 return clustering_key_prefix::less_compare(*locker->_schema)(k1, k2);
             }
         };
-        std::map<clustering_key_prefix, lock_type, clustering_key_prefix_less> _row_locks;
+        using row_locks_map = std::map<clustering_key_prefix, lock_type, clustering_key_prefix_less>;
+        row_locks_map _row_locks;
         two_level_lock(row_locker* locker)
             : _row_locks(locker) { }
     };
@@ -107,8 +108,12 @@ private:
             return k1.equal(*locker->_schema, k2);
         }
     };
-    std::unordered_map<dht::decorated_key, two_level_lock, decorated_key_hash, decorated_key_equals_comparator> _two_level_locks;
+    using two_level_lock_map = std::unordered_map<dht::decorated_key, two_level_lock, decorated_key_hash, decorated_key_equals_comparator>;
+    two_level_lock_map _two_level_locks;
     void unlock(const dht::decorated_key* pk, bool partition_exclusive, const clustering_key_prefix* cpk, bool row_exclusive);
+
+    future<lock_holder> wait_and_lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats);
+    future<lock_holder> wait_and_lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& ckp, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats);
 public:
     // row_locker needs to know the column_family's schema because key
     // comparisons needs the schema.
@@ -125,14 +130,14 @@ public:
     // The key is assumed to belong to the schema saved by row_locker. If you
     // got a schema with the key, and not sure it's not a new version of the
     // schema, call upgrade() before taking the lock.
-    future<lock_holder> lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats);
+    future<lock_holder> lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats);
 
     // Lock a clustering row with a shared or exclusive lock.
     // Also, first, takes a shared lock on the partition.
     // The key is assumed to belong to the schema saved by row_locker. If you
     // got a schema with the key, and not sure it's not a new version of the
     // schema, call upgrade() before taking the lock.
-    future<lock_holder> lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& ckp, bool exclusive, db::timeout_clock::time_point timeout, stats& stats);
+    future<lock_holder> lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& ckp, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats);
 
     bool empty() const { return _two_level_locks.empty(); }
 };
