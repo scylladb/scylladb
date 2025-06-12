@@ -82,9 +82,6 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
         fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
     }
-    if (!cfg.check_experimental(db::experimental_features_t::feature::VIEWS_WITH_TABLETS)) {
-        fcfg._disabled_features.insert("VIEWS_WITH_TABLETS"s);
-    }
     if (cfg.force_gossip_topology_changes()) {
         if (cfg.enable_tablets_by_default()) {
             throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled|enforced or --force-gossip-topology-changes, but not both.");
