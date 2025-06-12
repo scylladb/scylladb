@@ -23,7 +23,6 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="#24481")
 async def test_write_query_during_cql_server_shutdown(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     # Test when a query gets executed during cql connections shutdown.
     #
