@@ -206,7 +206,8 @@ enum class messaging_verb : int32_t {
     TABLE_LOAD_STATS = 77,
     ESTIMATE_SSTABLE_VOLUME = 78,
     SAMPLE_SSTABLES = 79,
-    LAST = 80,
+    TABLET_REPAIR_COLOCATED = 80,
+    LAST = 81,
 };
 
 } // namespace netw
