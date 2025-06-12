@@ -1020,14 +1020,18 @@ void view_updates::update_entry(data_dictionary::database db, const partition_ke
 
     const auto kind = update.column_kind();
     for (const auto& [r, action] : view_rows) {
-        if (auto rm = std::get_if<row_marker>(&action)) {
-            r->apply(*rm);
-        } else {
-            r->apply(update_marker);
+        auto diff = update.cells().difference(*_base, kind, existing.cells());
+        // If the update does not change any columns of the view, 
+        // then this record is a tombstone record and no row_marker should be added.
+        if (!diff.empty()) {
+            if (auto rm = std::get_if<row_marker>(&action)) {
+                r->apply(*rm);
+            } else {
+                r->apply(update_marker);
+            }
         }
         r->apply(update.tomb());
 
-        auto diff = update.cells().difference(*_base, kind, existing.cells());
         add_cells_to_view(*_base, *_view, kind, std::move(diff), r->cells());
     }
     _op_count += view_rows.size();
