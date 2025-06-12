@@ -20,7 +20,6 @@ from test.cluster.conftest import skip_mode
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="#24481")
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_write_query_during_cql_server_shutdown(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     """

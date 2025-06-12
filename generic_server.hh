@@ -39,6 +39,7 @@ class server;
 // member function to perform request processing. This base class provides a
 // `_read_buf` and a `_write_buf` for reading requests and writing responses.
 class connection : public boost::intrusive::list_base_hook<> {
+    friend class server;
 public:
     using connection_process_loop = noncopyable_function<future<> ()>;
     using execute_under_tenant_type = noncopyable_function<future<> (connection_process_loop)>;
@@ -84,6 +85,7 @@ public:
 
 struct config {
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
+    utils::updateable_value<uint32_t> shutdown_timeout_in_seconds;
 };
 
 // A generic TCP socket server.
@@ -127,6 +129,7 @@ private:
     utils::observer<uint32_t> _conns_cpu_concurrency_observer;
     uint32_t _prev_conns_cpu_concurrency;
     named_semaphore _conns_cpu_concurrency_semaphore;
+    std::chrono::seconds _shutdown_timeout;
 public:
     server(const sstring& server_name, logging::logger& logger, config cfg);
 

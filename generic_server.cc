@@ -8,7 +8,6 @@
 
 #include "generic_server.hh"
 
-
 #include <exception>
 #include <fmt/ranges.h>
 #include <seastar/core/when_all.hh>
@@ -273,6 +272,7 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
     }))
     , _prev_conns_cpu_concurrency(_conns_cpu_concurrency)
     , _conns_cpu_concurrency_semaphore(_conns_cpu_concurrency, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
+    , _shutdown_timeout(std::chrono::seconds{cfg.shutdown_timeout_in_seconds})
 {
 }
 
@@ -285,7 +285,11 @@ future<> server::shutdown() {
     if (_gate.is_closed()) {
         co_return;
     }
-    _all_connections_stopped = _gate.close();
+
+    shared_future<> connections_stopped{_gate.close()};
+    _all_connections_stopped = connections_stopped.get_future();
+
+     // Stop all listeners.
     size_t nr = 0;
     size_t nr_total = _listeners.size();
     _logger.debug("abort accept nr_total={}", nr_total);
@@ -293,14 +297,34 @@ future<> server::shutdown() {
         l.abort_accept();
         _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
+     co_await std::move(_listeners_stopped);
+
+    // Shutdown RX side of the connections, so no new requests could be received.
+    // Leave the TX side so the responses to ongoing requests could be sent.
+    _logger.debug("Shutting down RX side of {} connections", _connections_list.size());
+    co_await for_each_gently([](auto& connection) {
+        if (!connection.shutdown_input()) {
+            // If failed to shutdown the input side, then attempt to shutdown the output side which should do a complete shutdown of the connection.
+            connection.shutdown_output();
+        }
+    });
+
+    // Wait for the remaining requests to finish.
+    _logger.debug("Waiting for connections to stop");
+    try {
+        co_await connections_stopped.get_future(seastar::lowres_clock::now() + _shutdown_timeout);
+    } catch (const timed_out_error& _) {
+        _logger.info("Timed out waiting for connections shutdown.");
+    }
+
+    // Either all requests stopped or a timeout occurred, do the full shutdown of the connections.
     size_t nr_conn = 0;
     auto nr_conn_total = _connections_list.size();
     _logger.debug("shutdown connection nr_total={}", nr_conn_total);
-    co_await coroutine::parallel_for_each(_connections_list, [&] (auto&& c) -> future<> {
-        co_await c.shutdown();
+    co_await for_each_gently([&nr_conn, nr_conn_total, this](connection& c) {
+        c.shutdown().get();
         _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
     });
-    co_await std::move(_listeners_stopped);
 }
 
 future<>
