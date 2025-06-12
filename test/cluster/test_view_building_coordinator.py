@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 from test.pylib.manager_client import ManagerClient
- 
+
 import asyncio
 import pytest
 import time
@@ -54,12 +54,12 @@ async def unpause_view_build_coordinator(manager: ManagerClient):
     await asyncio.gather(*(manager.api.message_injection(s.ip_addr, VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP) for s in servers))
     await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP) for s in servers))
 
-async def pause_view_building_tasks(manager: ManagerClient, token: int | None = None):
+async def pause_view_building_tasks(manager: ManagerClient, token: int | None = None, pause_all: bool = True):
     servers = await manager.running_servers()
     params = {}
     if token is not None:
         params["token"] = token
-    await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK, one_shot=True, parameters=params) for s in servers))
+    await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK, one_shot=pause_all, parameters=params) for s in servers))
 
 async def unpause_view_building_tasks(manager: ManagerClient):
     servers = await manager.running_servers()
@@ -105,7 +105,7 @@ async def test_build_no_data(manager: ManagerClient):
     ])
     cql, _ = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
-        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))") 
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
                          "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
         await wait_for_view(cql, 'mv_cf_view', node_count)
@@ -123,7 +123,7 @@ async def test_build_one_view(manager: ManagerClient):
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
                          "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
         await wait_for_view(cql, 'mv_cf_view', node_count)
@@ -161,12 +161,12 @@ async def test_build_two_views(manager: ManagerClient):
         await populate_base_table(cql, ks, "tab")
 
         await pause_view_build_coordinator(manager)
-        
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view2 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-    
+
         await unpause_view_build_coordinator(manager)
 
         await wait_for_view(cql, 'mv_cf_view1', node_count)
@@ -189,20 +189,20 @@ async def test_add_view_while_build_in_progress(manager: ManagerClient):
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
- 
+
         marks = await mark_all_servers(manager)
         await pause_view_building_tasks(manager)
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-         
+
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view2 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
- 
+
         await unpause_view_building_tasks(manager)
- 
+
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await wait_for_view(cql, 'mv_cf_view2', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
@@ -219,21 +219,21 @@ async def test_remove_some_view_while_build_in_progress(manager: ManagerClient):
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
- 
+
         marks = await mark_all_servers(manager)
         await pause_view_building_tasks(manager)
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view2 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-         
+
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
- 
+
         await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.mv_cf_view2")
- 
+
         await unpause_view_building_tasks(manager)
- 
+
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
@@ -248,19 +248,19 @@ async def test_abort_building_by_remove_view(manager: ManagerClient):
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
- 
+
         marks = await mark_all_servers(manager)
         await pause_view_building_tasks(manager)
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-         
+
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
- 
+
         await cql.run_async(f"DROP MATERIALIZED VIEW {ks}.mv_cf_view")
- 
+
         await unpause_view_building_tasks(manager)
- 
+
         views = await cql.run_async(f"SELECT * FROM system_schema.views WHERE keyspace_name = '{ks}'")
         assert len(views) == 0
 
@@ -276,22 +276,22 @@ async def test_alter_base_schema_while_build_in_progress(manager: ManagerClient,
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
- 
+
         marks = await mark_all_servers(manager)
         await pause_view_building_tasks(manager)
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-         
+
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
- 
+
         if change == "add":
             await cql.run_async(f"ALTER TABLE {ks}.tab ADD u text")
         elif change == "rename":
             await cql.run_async(f"ALTER TABLE {ks}.tab RENAME c TO renamed_c")
- 
+
         await unpause_view_building_tasks(manager)
- 
+
         await wait_for_view(cql, 'mv_cf_view', node_count)
         if change == "add":
             await check_view_contents(cql, ks, "tab", "mv_cf_view")
@@ -319,7 +319,7 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
 
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-        
+
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
 
         new_rf = rf + 1 if change == "increase" else rf - 1
@@ -347,7 +347,7 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
         await pause_view_building_tasks(manager)
 
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
-                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")      
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
 
         if operation == "add":
@@ -364,7 +364,7 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
             await manager.server_stop_gracefully(servers[-1].server_id)
             replace_cfg = ReplaceConfig(replaced_id = servers[-1].server_id, reuse_ip_addr = False, use_host_id = True)
             await manager.server_add(replace_cfg, config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, cmdline=cmdline_loggers)
-            
+
         await unpause_view_building_tasks(manager)
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
@@ -385,21 +385,21 @@ async def test_leader_change_while_building(manager: ManagerClient):
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
- 
+
         marks = await mark_all_servers(manager)
         await pause_view_building_tasks(manager)
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-         
+
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
- 
+
         coord = await get_topology_coordinator(manager)
         coord_idx = host_ids.index(coord)
         await trigger_stepdown(manager, servers[coord_idx])
- 
+
         await unpause_view_building_tasks(manager)
- 
+
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
@@ -419,18 +419,18 @@ async def test_truncate_while_building(manager: ManagerClient):
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
- 
+
         marks = await mark_all_servers(manager)
         await pause_view_building_tasks(manager)
- 
+
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
                         "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
-         
+
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
- 
+
         await cql.run_async(f"TRUNCATE {ks}.tab")
- 
+
         await unpause_view_building_tasks(manager)
- 
+
         await wait_for_view(cql, 'mv_cf_view1', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
