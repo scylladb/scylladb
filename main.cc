@@ -40,6 +40,7 @@
 #include "service/migration_manager.hh"
 #include "service/tablet_allocator.hh"
 #include "service/load_meter.hh"
+#include "service/vector_store.hh"
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
@@ -740,6 +741,7 @@ sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::mapreduce_service> mapreduce_service;
     sharded<gms::gossiper> gossiper;
     sharded<locator::snitch_ptr> snitch;
+    sharded<service::vector_store> vector_store;
 
     // This worker wasn't designed to be used from multiple threads.
     // If you are attempting to do that, make sure you know what you are doing.
@@ -779,7 +781,8 @@ sharded<locator::shared_token_metadata> token_metadata;
         return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker] {
+                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker,
+                &vector_store] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -1318,6 +1321,9 @@ sharded<locator::shared_token_metadata> token_metadata;
             static sharded<cql3::cql_config> cql_config;
             cql_config.start(std::ref(*cfg)).get();
 
+            checkpoint(stop_signal, "starting a vector store service");
+            vector_store.start().get();
+
             checkpoint(stop_signal, "starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
             debug::the_query_processor = &qp;
@@ -1329,7 +1335,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(langman)).get();
+            qp.start(std::ref(proxy), std::move(local_data_dict), std::ref(mm_notifier), std::ref(vector_store), qp_mcfg, std::ref(cql_config), std::move(auth_prep_cache_config), std::ref(langman)).get();
 
             checkpoint(stop_signal, "starting lifecycle notifier");
             lifecycle_notifier.start().get();

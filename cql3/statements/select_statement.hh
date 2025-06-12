@@ -15,6 +15,7 @@
 #include "cql3/cql_statement.hh"
 #include "cql3/stats.hh"
 #include <seastar/core/shared_ptr.hh>
+#include <string_view>
 #include "transport/messages/result_message.hh"
 #include "index/secondary_index_manager.hh"
 #include "exceptions/coordinator_result.hh"
@@ -53,6 +54,7 @@ public:
     using coordinator_result = exceptions::coordinator_result<T>;
     using parameters = raw::select_statement::parameters;
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
+    using prepared_ann_ordering_type = raw::select_statement::prepared_ann_ordering_type;
     static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
     bool _may_use_token_aware_routing;
 protected:
@@ -182,11 +184,14 @@ class indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
     expr::expression _used_index_restrictions;
     schema_ptr _view_schema;
+    std::optional<prepared_ann_ordering_type>  _prepared_ann_ordering;
     noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
     noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
 public:
     static constexpr size_t max_base_table_query_concurrency = 4096;
-
+    static constexpr size_t max_ann_query_limit = 1000;
+    static constexpr std::string_view ann_custom_index_option = "vector_index";
+    
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db,
                                                                     schema_ptr schema,
                                                                     uint32_t bound_terms,
@@ -196,6 +201,7 @@ public:
                                                                     ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                                     bool is_reversed,
                                                                     ordering_comparator_type ordering_comparator,
+                                                                    std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                                                     std::optional<expr::expression> limit,
                                                                     std::optional<expr::expression> per_partition_limit,
                                                                     cql_stats &stats,
@@ -209,6 +215,7 @@ public:
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
+                                   std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                    std::optional<expr::expression> limit,
                                    std::optional<expr::expression> per_partition_limit,
                                    cql_stats &stats,
