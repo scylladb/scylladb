@@ -204,13 +204,20 @@ public:
 
     public:
         template <typename Clock, typename Duration>
-        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout) {
+        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout, abort_source* as = nullptr) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
+            auto abort = as ? as->subscribe([this] () noexcept {
+                _shared_data->received_message_cv.broadcast();
+            }) : optimized_optional<abort_source::subscription>{};
 
             try {
                 co_await _shared_data->received_message_cv.wait(timeout, [&] {
+                    if (as) {
+                        as->check();
+                    }
+
                     if (!_share_messages) {
                         bool wakes_up = _shared_data->shared_read_message_count < _shared_data->received_message_count;
                         if (wakes_up) {
@@ -222,6 +229,9 @@ public:
 
                     return _read_messages_counter < _shared_data->received_message_count;
                 });
+            }
+            catch (const abort_requested_exception&) {
+                throw;
             }
             catch (const std::exception& e) {
                 on_internal_error(errinj_logger, "Error injection wait_for_message timeout: " + std::string(e.what()));
