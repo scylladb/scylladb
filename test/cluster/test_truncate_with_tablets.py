@@ -254,9 +254,6 @@ async def test_truncate_while_truncate_already_waiting(manager: ManagerClient):
         # Run another truncate on the same table while the timedout one is still waiting
         truncate_future = cql.run_async(f'TRUNCATE TABLE {ks}.test', host=hosts[1])
 
-        # Make sure the second truncate re-used the existing global topology request
-        await s1_log.wait_for(f'Ongoing TRUNCATE for table {ks}.test')
-
         # Release streaming
         await manager.api.message_injection(servers[1].ip_addr, 'migration_streaming_wait')
 
@@ -302,3 +299,51 @@ async def test_replay_position_check_during_truncate(manager):
         await manager.api.message_injection(server.ip_addr, "database_truncate_wait")
         await s1_log.wait_for(f"database_truncate_wait: message received", from_mark=s1_mark)
         await truncate_task
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_parallel_truncate(manager: ManagerClient):
+
+    logger.info('Bootstrapping cluster')
+    cfg = { 'tablets_mode_for_new_keyspaces': 'enabled',
+            'error_injections_at_startup': ['migration_streaming_wait']
+            }
+
+    servers = []
+    servers.append(await manager.server_add(config=cfg))
+
+    cql = manager.get_cql()
+
+    # Create a keyspace with tablets and initial_tablets == 2, then insert data
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
+        await cql.run_async(f'CREATE TABLE {ks}.test1 (pk int PRIMARY KEY, c int);')
+
+        keys = range(1024)
+        await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});') for k in keys])
+        await asyncio.gather(*[cql.run_async(f'INSERT INTO {ks}.test1 (pk, c) VALUES ({k}, {k});') for k in keys])
+
+        # Add a node to the cluster. This will cause the load balancer to migrate one tablet to the new node
+        servers.append(await manager.server_add(config=cfg))
+
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        s1_log = await manager.server_open_log(servers[1].server_id)
+
+        # Wait for tablet streaming to start
+        await s1_log.wait_for('migration_streaming_wait: start')
+
+        tf1 = cql.run_async(SimpleStatement(f'TRUNCATE TABLE {ks}.test', retry_policy=FallthroughRetryPolicy()))
+        tf2 = cql.run_async(SimpleStatement(f'TRUNCATE TABLE {ks}.test1', retry_policy=FallthroughRetryPolicy()))
+
+        # Release streaming
+        await manager.api.message_injection(servers[1].ip_addr, 'migration_streaming_wait')
+
+        # Wait for the joined truncate to complete
+        await tf1
+        await tf2
+
+        # Check if we have any data
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == 0
+        row = await cql.run_async(SimpleStatement(f'SELECT COUNT(*) FROM {ks}.test1', consistency_level=ConsistencyLevel.ALL))
+        assert row[0].count == 0
