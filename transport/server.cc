@@ -257,7 +257,13 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket)
+<<<<<<< HEAD
     : server("CQLServer", clogger, generic_server::config{db_cfg.uninitialized_connections_semaphore_cpu_concurrency})
+||||||| parent of ea311be12b (generic_server: Two-step connection shutdown.)
+    : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency)})
+=======
+    : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency), config.request_timeout_on_shutdown_in_seconds})
+>>>>>>> ea311be12b (generic_server: Two-step connection shutdown.)
     , _query_processor(qp)
     , _config(std::move(config))
     , _max_request_size(_config.max_request_size)

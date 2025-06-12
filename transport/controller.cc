@@ -239,6 +239,17 @@ future<> controller::do_start_server() {
               .shard_aware_transport_port_ssl = shard_aware_transport_port_ssl,
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
+<<<<<<< HEAD
+||||||| parent of ea311be12b (generic_server: Two-step connection shutdown.)
+              .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
+              .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
+              .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
+=======
+              .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
+              .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
+              .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
+              .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds
+>>>>>>> ea311be12b (generic_server: Two-step connection shutdown.)
             };
         });
 

@@ -132,7 +132,12 @@ struct cql_server_config {
     utils::updateable_value<uint32_t> max_concurrent_requests;
     utils::updateable_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
+<<<<<<< HEAD
 >>>>>>> 7334bf36a4 (transport: consmetic change, remove extra blanks.)
+||||||| parent of ea311be12b (generic_server: Two-step connection shutdown.)
+=======
+    utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
+>>>>>>> ea311be12b (generic_server: Two-step connection shutdown.)
 };
 
 /**
