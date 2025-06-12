@@ -1634,12 +1634,12 @@ void repair_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         auto res = parse_keyspace_and_tables(client, vm, true);
         auto uses_tablets = keyspace_uses_tablets(client, res.keyspace);
         if (uses_tablets) {
-            fmt::print("WARNING: Do not use nodetool repair for tablet keyspaces! To repair tablet keyspaces use nodetool cluster repair.");
+            throw std::invalid_argument("nodetool repair repairs only vnode keyspaces! To repair tablet keyspaces use nodetool cluster repair.");
         }
         keyspaces.push_back(std::move(res.keyspace));
         tables = std::move(res.tables);
     } else {
-        keyspaces = get_keyspaces(client, "non_local_strategy");
+        keyspaces = get_keyspaces(client, "non_local_strategy", "vnodes");
         if (!get_keyspaces(client, "non_local_strategy", "tablets").empty()) {
             fmt::print("WARNING: Do not use nodetool repair for tablet keyspaces! To repair tablet keyspaces use nodetool cluster repair.");
         }
@@ -4207,7 +4207,8 @@ replicas until the master data subset is in-sync.
 To repair all of the data in the cluster, you need to run a repair on
 all of the nodes in the cluster, or let ScyllaDB Manager do it for you.
 
-To repair tablet keyspaces use nodetool cluster repair.
+Note that nodetool repair repairs only vnode keyspaces. To repair tablet
+keyspaces use nodetool cluster repair.
 
 For more information, see: {}"
 )", doc_link("operating-scylla/nodetool-commands/repair.html")),
