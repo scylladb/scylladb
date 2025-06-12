@@ -2312,16 +2312,19 @@ future<std::optional<double>> repair::legacy_tablet_repair_task_impl::expected_t
 }
 
 std::optional<double> repair::legacy_tablet_repair_task_impl::expected_children_number() const {
-    return std::make_optional<double>(1);
+    return std::make_optional<double>(smp::count);
 }
 
+// Repair all tablets that belong to this node for the given table.
 future<> repair::legacy_tablet_repair_task_impl::run() {
     auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = m->get_repair_service();
     auto id = get_repair_uniq_id();
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), _keyspace_name, _table_names);
     co_await m->run(id, [this, &rs, id] () {
-        rs.repair_tablets(id, _keyspace_name, _table_names, _primary_replica_only, _ranges_specified, _data_centers, _hosts, _ignore_nodes, _ranges_parallelism).get();
+        rs.container().invoke_on_all([&] (repair_service& rs) {
+            return rs.repair_tablets(id, _keyspace_name, _table_names, _primary_replica_only, _ranges_specified, _data_centers, _hosts, _ignore_nodes, _ranges_parallelism);
+        }).get();
     }).then([id, keyspace = _keyspace_name] () {
         rlogger.debug("repair[{}]: Repair tablet for keyspace={} status=succeeded", id.uuid(), keyspace);
     }).handle_exception([id, keyspace = _keyspace_name, &rs] (std::exception_ptr ep) {
@@ -2331,7 +2334,7 @@ future<> repair::legacy_tablet_repair_task_impl::run() {
     });
 }
 
-// Repair all tablets belong to this node for the given table
+// Repair all tablets that belong to this node for the given table on one shard.
 future<> repair_service::repair_tablets(repair_uniq_id parent_rid, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> hosts, std::unordered_set<locator::host_id> ignore_nodes, std::optional<int> ranges_parallelism) {
     repair_uniq_id rid{
         .id = parent_rid.id,
@@ -2409,7 +2412,7 @@ future<> repair_service::repair_tablets(repair_uniq_id parent_rid, sstring keysp
 
             if (primary_replica_only) {
                 const auto pr = select_primary_ranges_within_dc ? tmap.get_primary_replica_within_dc(id, erm->get_topology(), mydc) : tmap.get_primary_replica(id);
-                if (pr.host == myhostid) {
+                if (pr.host == myhostid && pr.shard == this_shard_id()) {
                     metas.push_back(repair_tablet_meta{id, range, myhostid, pr.shard, replicas});
                 }
                 return make_ready_future<>();
@@ -2419,7 +2422,7 @@ future<> repair_service::repair_tablets(repair_uniq_id parent_rid, sstring keysp
             shard_id master_shard_id;
             // Repair all tablets belong to this node
             for (auto& r : replicas) {
-                if (r.host == myhostid) {
+                if (r.host == myhostid && r.shard == this_shard_id()) {
                     master_shard_id = r.shard;
                     found = true;
                     break;
