@@ -136,3 +136,60 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
             with pytest.raises(Exception, match="Operation failed for"):
                 await query_future
 
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enable_tablets", [True, False])
+async def test_long_query_timeout_without_failure_erm(request, manager: ManagerClient, enable_tablets):
+    """
+    Test verifies that a long mapreduce query does not block ERM.
+    The query is long because it is blocked by an injected error
+    that pauses reads during dispatching. When enable_tablet is False,
+    old mapreduce algorithm blocks ERM, so topology changes are also blocked.
+    When enable_tablets is True, the ERM is not blocked.
+    """
+    servers = await manager.servers_add(3)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    logger.info("Create a table with enable_tablets=%s", enable_tablets)
+    random_tables = RandomTables(request.node.name, manager, "ks", replication_factor=1, enable_tablets=enable_tablets)
+    table = await random_tables.add_table(pks=1, columns=[
+        Column(name="key", ctype=IntType),
+        Column(name="value", ctype=IntType)
+    ])
+
+    logger.info(f"Created {table}, write some rows")
+    num_rows = 256
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {table} (key, value) VALUES ({i}, {i})") for i in range(num_rows)])
+
+    logger.info("Enable injected errors that stop read before storage_proxy takes ERM")
+    injected_handlers = {}
+    for server in servers:
+        injected_handlers[server.ip_addr] = await inject_error_one_shot(
+            manager.api, server.ip_addr, 'mapreduce_pause_parallel_dispatch')
+
+    query = "SELECT count(*) FROM {}".format(table)
+    query_timeout = 60
+    logger.info("Starting to execute query={query} with query_timeout={query_timeout}")
+    query_future = cql.run_async(f"{query} USING TIMEOUT {query_timeout}s", timeout=2*query_timeout)
+
+    logger.info("Confirm reads are waiting on the injected error")
+    log_found = False
+    for server in servers:
+        server_log = await manager.server_open_log(server.server_id)
+        try:
+            await server_log.wait_for("mapreduce_pause_parallel_dispatch: waiting for message", timeout=5)
+            log_found = True
+        except Exception:
+            pass
+    assert log_found
+
+    if enable_tablets:
+        logger.info("Add new node - ERM should not be blocked")
+        await manager.server_add()
+
+    logger.info("Unblock reads")
+    for server in servers:
+        await injected_handlers[server.ip_addr].message()
+
+    res = await query_future
+    assert res[0][0] == num_rows
