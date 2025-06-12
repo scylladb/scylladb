@@ -3278,3 +3278,63 @@ SEASTAR_TEST_CASE(sstable_identifier_correctness) {
         BOOST_REQUIRE_EQUAL(sst->sstable_identifier()->uuid(), sst->generation().as_uuid());
     });
 }
+
+SEASTAR_TEST_CASE(test_non_full_and_empty_row_keys) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+                get_name(),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema(tests::random::get_int<uint32_t>(), *random_spec);
+
+        auto schema = random_schema.schema();
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        const api::timestamp_type max_ts = 99999;
+
+        auto timestamp_generator = [] (std::mt19937& engine, tests::timestamp_destination, api::timestamp_type min_timestamp) {
+            return api::timestamp_type(std::uniform_int_distribution<api::timestamp_type>(min_timestamp, max_ts)(engine));
+        };
+        auto mutations = tests::generate_random_mutations(random_schema, timestamp_generator).get();
+
+        auto mutation_description = random_schema.new_mutation(0);
+        auto engine = std::mt19937(tests::random::get_int<uint32_t>());
+        random_schema.add_row(engine, mutation_description, 0, [] (std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
+            switch (destination) {
+            case tests::timestamp_destination::partition_tombstone:
+            case tests::timestamp_destination::row_tombstone:
+            case tests::timestamp_destination::collection_tombstone:
+            case tests::timestamp_destination::range_tombstone:
+                return api::missing_timestamp;
+            default:
+                return max_ts;
+            }
+        });
+
+        const auto source_mutation = mutation_description.build(schema);
+
+        auto add_row_with_patched_key = [&] (const clustering_key& ckey) {
+            testlog.info("Adding row with patched key: {}", ckey);
+            clustering_row row(ckey, deletable_row(*schema, source_mutation.partition().clustered_rows().begin()->row()));
+            mutations.back().apply(mutation_fragment(*schema, env.make_reader_permit(), std::move(row)));
+        };
+
+        add_row_with_patched_key(clustering_key::make_empty());
+
+        if (schema->clustering_key_size() > 1) {
+            auto full_ckey = random_schema.make_ckey(0);
+            full_ckey.erase(full_ckey.end() - 1);
+            add_row_with_patched_key(clustering_key::from_exploded(*schema, full_ckey));
+        }
+
+        auto sst = make_sstable_containing(env.make_sstable(schema), mutations);
+
+        testlog.info("mutations written to : {}", sst->get_filename());
+
+        assert_that(sst->make_reader(schema, env.make_reader_permit(), query::full_partition_range, schema->full_slice()))
+            .produces(mutations);
+    });
+}

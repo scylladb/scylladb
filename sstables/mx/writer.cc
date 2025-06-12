@@ -1291,7 +1291,19 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
         write(_sst.get_version(), *_data_writer, ext_flags);
     }
 
-    write_clustering_prefix(_sst.get_version(), *_data_writer, _schema, clustered_row.key(), ephemerally_full_prefix{_schema.is_compact_table()});
+    ephemerally_full_prefix is_ephemerally_full{_schema.is_compact_table()};
+    const auto& ckey = clustered_row.key();
+    if (!is_ephemerally_full && !ckey.is_full(_schema)) {
+        slogger.warn("writing non-full clustering key {} to partition {} in sstable {} of non-compact table {}.{}",
+                ckey,
+                _partition_key->to_partition_key(_schema),
+                _sst.get_filename(),
+                _schema.ks_name(),
+                _schema.cf_name());
+        // Force ephemerally_full_prefix because this is the only way non-full prefixes can be parsed back.
+        is_ephemerally_full = ephemerally_full_prefix::yes;
+    }
+    write_clustering_prefix(_sst.get_version(), *_data_writer, _schema, clustered_row.key(), is_ephemerally_full);
 
     write_vint(_tmp_bufs, prev_row_size);
     write_row_body(_tmp_bufs, clustered_row, has_complex_deletion);
