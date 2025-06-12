@@ -242,6 +242,7 @@ future<> controller::do_start_server() {
               .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
               .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
               .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
+              .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds
             };
         });
 

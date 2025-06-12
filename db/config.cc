@@ -942,6 +942,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The default timeout for other, miscellaneous operations.\n"
         "\n"
         "Related information: About hinted handoff writes")
+    , request_timeout_on_shutdown_in_seconds(this, "request_timeout_on_shutdown_in_seconds", value_status::Used, 30,
+        "Timeout for CQL server requests on shutdown. After this timeout the server will shutdown all connections.")
     , group0_raft_op_timeout_in_ms(this, "group0_raft_op_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 60000,
             "The time in milliseconds that group0 allows a Raft operation to complete.")
     /**
