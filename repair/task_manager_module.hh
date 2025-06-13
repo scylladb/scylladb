@@ -106,6 +106,42 @@ protected:
     virtual std::optional<double> expected_children_number() const override;
 };
 
+class legacy_tablet_repair_task_impl : public repair_task_impl {
+private:
+    sstring _keyspace_name;
+    std::vector<sstring> _table_names;
+    bool _primary_replica_only;
+    dht::token_range_vector _ranges_specified;
+    std::vector<sstring> _data_centers;
+    std::unordered_set<locator::host_id> _hosts;
+    std::unordered_set<locator::host_id> _ignore_nodes;
+    std::optional<int> _ranges_parallelism;
+public:
+    legacy_tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, std::vector<sstring> tables, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> hosts, std::unordered_set<locator::host_id> ignore_nodes, std::optional<int> ranges_parallelism, streaming::stream_reason reason)
+        : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", tasks::task_id::create_null_id(), reason)
+        , _keyspace_name(std::move(keyspace))
+        , _table_names(std::move(tables))
+        , _primary_replica_only(primary_replica_only)
+        , _ranges_specified(std::move(ranges_specified))
+        , _data_centers(std::move(data_centers))
+        , _hosts(std::move(hosts))
+        , _ignore_nodes(std::move(ignore_nodes))
+        , _ranges_parallelism(ranges_parallelism)
+    {}
+
+    virtual tasks::is_abortable is_abortable() const noexcept override {
+        return tasks::is_abortable::yes;
+    }
+
+    tasks::is_user_task is_user_task() const noexcept override;
+    virtual future<> release_resources() noexcept override;
+protected:
+    future<> run() override;
+
+    virtual future<std::optional<double>> expected_total_workload() const override;
+    virtual std::optional<double> expected_children_number() const override;
+};
+
 class tablet_repair_task_impl : public repair_task_impl {
 private:
     sstring _keyspace;
