@@ -402,13 +402,13 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
     request->add_row_update(*this, std::move(ranges), std::move(json_cache), options);
 
     auto token = request->key()[0].start()->value().as_decorated_key().token();
+    auto&& table = s->table();
 
+    locator::erm_handle erm_handle(table, token);
     auto shard = service::storage_proxy::cas_shard(*s, token);
-
     if (utils::get_local_injector().is_enabled("forced_bounce_to_shard_counter")) {
         return process_forced_rebounce(shard, qp, options);
     }
-
     if (shard != this_shard_id()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
@@ -417,13 +417,12 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
 
     std::optional<locator::tablet_routing_info> tablet_info = locator::tablet_routing_info{locator::tablet_replica_set(), std::pair<dht::token, dht::token>()};
 
-    auto&& table = s->table();
     if (_may_use_token_aware_routing && table.uses_tablets() && qs.get_client_state().is_protocol_extension_set(cql_transport::cql_protocol_extension::TABLETS_ROUTING_V1)) {
         auto erm = table.get_effective_replication_map();
         tablet_info = erm->check_locality(token);
     }
 
-    return qp.proxy().cas(s, std::nullopt, request, request->read_command(qp), request->key(),
+    return qp.proxy().cas(s, std::move(erm_handle), request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request, tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
