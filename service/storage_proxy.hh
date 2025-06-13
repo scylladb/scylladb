@@ -417,7 +417,7 @@ private:
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
         coordinator_query_options optional_params,
-        std::optional<locator::erm_handle> erm_handle);
+        locator::erm_handle erm_handle);
     template<typename Range, typename CreateWriteHandler>
     future<result<unique_response_handler_vector>> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler handler);
     template<typename Range>
@@ -696,7 +696,7 @@ public:
         clock_type::time_point timeout,
         tracing::trace_state_ptr trace_state = nullptr);
 
-    future<bool> cas(schema_ptr schema, std::optional<locator::erm_handle> erm_handle, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+    future<bool> cas(schema_ptr schema, locator::erm_handle erm_handle, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);

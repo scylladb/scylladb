@@ -6325,8 +6325,11 @@ storage_proxy::do_query(schema_ptr s,
     }
 
     if (db::is_serial_consistency(cl)) {
+        if (!erm_handle) {
+            on_internal_error(slogger, "erm_handle must be provided for do_query_with_paxos");
+        }
         auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, 
-            std::move(query_options), std::move(erm_handle));
+            std::move(query_options), std::move(*erm_handle));
         return utils::then_ok_result<result<storage_proxy::coordinator_query_result>>(std::move(f));
     } else {
         utils::latency_counter lc;
@@ -6363,15 +6366,12 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options,
-    std::optional<locator::erm_handle> erm_handle) {
+    locator::erm_handle erm_handle) {
     if (partition_ranges.size() != 1 || !query::is_single_partition(partition_ranges[0])) {
         return make_exception_future<storage_proxy::coordinator_query_result>(
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
 
-    if (cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        return make_exception_future<storage_proxy::coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
-    }
     // All cas networking operations run with query provided timeout
     db::timeout_clock::time_point timeout = query_options.timeout(*this);
     // When to give up due to contention
@@ -6455,7 +6455,7 @@ static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read
  *
  * WARNING: the function should be called on a shard that owns the key cas() operates on
  */
-future<bool> storage_proxy::cas(schema_ptr schema, std::optional<locator::erm_handle> erm_handle, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+future<bool> storage_proxy::cas(schema_ptr schema, locator::erm_handle erm_handle, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
         clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write) {
@@ -6473,7 +6473,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, std::optional<locator::erm_ha
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
     if (cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        co_await coroutine::return_exception(std::logic_error("storage_proxy::cas called on a wrong shard"));
+        on_internal_error(paxos::paxos_state::logger, "storage_proxy::cas called on a wrong shard");
     }
 
     // In case a nullptr is passed to this function (i.e. the caller isn't interested in
@@ -6486,11 +6486,8 @@ future<bool> storage_proxy::cas(schema_ptr schema, std::optional<locator::erm_ha
 
     shared_ptr<paxos_response_handler> handler;
     try {
-        if (!erm_handle) {
-            erm_handle.emplace(schema->table(), partition_ranges[0].start()->value().as_decorated_key().token());
-        }
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
-                std::move(*erm_handle),
+                std::move(erm_handle),
                 query_options.trace_state, query_options.permit,
                 partition_ranges[0].start()->value().as_decorated_key(),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
