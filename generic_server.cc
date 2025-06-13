@@ -228,11 +228,8 @@ void connection::on_connection_ready()
 
 future<> connection::shutdown()
 {
-    try {
-        _fd.shutdown_input();
-        _fd.shutdown_output();
-    } catch (...) {
-    }
+    shutdown_input();
+    shutdown_output();
     return make_ready_future<>();
 }
 
