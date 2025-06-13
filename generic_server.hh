@@ -110,7 +110,7 @@ protected:
 public:
     server(const sstring& server_name, logging::logger& logger);
 
-    virtual ~server();
+    virtual ~server() = default;
 
     // Makes sure listening sockets no longer generate new connections and aborts the
     // connected sockets, so that new requests are not served and existing requests don't
