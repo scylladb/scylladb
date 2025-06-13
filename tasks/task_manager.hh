@@ -262,6 +262,7 @@ public:
         bool is_complete() const noexcept;
         future<std::vector<task_essentials>> get_failed_children() const;
         void set_virtual_parent() noexcept;
+        future<std::optional<double>> expected_total_workload() const;
 
         friend class test_task;
         friend class ::repair::task_manager_module;

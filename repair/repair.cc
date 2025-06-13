@@ -23,6 +23,7 @@
 #include "service/storage_service.hh"
 #include "sstables/sstables.hh"
 #include "partition_range_compat.hh"
+#include "tasks/types.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 
@@ -33,6 +34,7 @@
 
 #include <fmt/ranges.h>
 
+#include <optional>
 #include <seastar/core/gate.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -1232,7 +1234,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
 
             bool primary_replica_only = options.primary_range;
             auto ranges_parallelism = options.ranges_parallelism == -1 ? std::nullopt : std::optional<int>(options.ranges_parallelism);
-            co_await repair_tablets(id, keyspace, cfs, primary_replica_only, options.ranges, options.data_centers, hosts, ignore_nodes, ranges_parallelism);
+            auto task = co_await _repair_module->make_and_start_task<repair::legacy_tablet_repair_task_impl>({}, id, std::move(keyspace), std::move(cfs), primary_replica_only, std::move(options.ranges), std::move(options.data_centers), std::move(hosts), std::move(ignore_nodes), ranges_parallelism, streaming::stream_reason::repair);
             co_return id.id;
         }
     }
@@ -2267,8 +2269,74 @@ static std::unordered_set<locator::host_id> get_token_owners_in_dcs(std::vector<
     return dc_endpoints;
 }
 
+tasks::is_user_task repair::legacy_tablet_repair_task_impl::is_user_task() const noexcept {
+    return tasks::is_user_task::yes;
+}
+
+future<> repair::legacy_tablet_repair_task_impl::release_resources() noexcept {
+    _keyspace_name = {};
+    _table_names = {};
+    _ranges_specified = {};
+    _data_centers = {};
+    _hosts = {};
+    _ignore_nodes = {};
+    _ranges_parallelism = {};
+    return make_ready_future();
+}
+
+future<std::optional<double>> repair::legacy_tablet_repair_task_impl::expected_total_workload() const {
+    auto expected_children = expected_children_number();
+    if (!expected_children || expected_children.value() != _children.size()) {
+        co_return std::nullopt;
+    }
+
+    std::optional<double> workload = std::make_optional<double>(0.0);
+    co_await _children.for_each_task([&workload_ = workload] (const tasks::task_manager::foreign_task_ptr& child) -> future<> {
+        auto& workload = workload_;
+        if (workload.has_value()) {
+            auto child_workload = co_await smp::submit_to(child.get_owner_shard(), [&child] () {
+                return child->expected_total_workload();
+            });
+            workload = child_workload.transform([workload = workload.value()] (double res) {
+                return workload + res;
+            });
+        }
+    }, [&workload] (const tasks::task_manager::task::task_essentials& child) {
+        if (workload.has_value()) {
+            workload = workload.value() + child.task_progress.completed;
+        }
+        return make_ready_future();
+    });
+
+    co_return workload;
+}
+
+std::optional<double> repair::legacy_tablet_repair_task_impl::expected_children_number() const {
+    return std::make_optional<double>(1);
+}
+
+future<> repair::legacy_tablet_repair_task_impl::run() {
+    auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
+    auto& rs = m->get_repair_service();
+    auto id = get_repair_uniq_id();
+    rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), _keyspace_name, _table_names);
+    co_await m->run(id, [this, &rs, id] () {
+        rs.repair_tablets(id, _keyspace_name, _table_names, _primary_replica_only, _ranges_specified, _data_centers, _hosts, _ignore_nodes, _ranges_parallelism).get();
+    }).then([id, keyspace = _keyspace_name] () {
+        rlogger.debug("repair[{}]: Repair tablet for keyspace={} status=succeeded", id.uuid(), keyspace);
+    }).handle_exception([id, keyspace = _keyspace_name, &rs] (std::exception_ptr ep) {
+        rlogger.warn("repair[{}]: Repair tablet for keyspace={} status=failed: {}", id.uuid(), keyspace,  ep);
+        rs.get_repair_module().check_in_shutdown();
+        return make_exception_future<>(ep);
+    });
+}
+
 // Repair all tablets belong to this node for the given table
-future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> hosts, std::unordered_set<locator::host_id> ignore_nodes, std::optional<int> ranges_parallelism) {
+future<> repair_service::repair_tablets(repair_uniq_id parent_rid, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> hosts, std::unordered_set<locator::host_id> ignore_nodes, std::optional<int> ranges_parallelism) {
+    repair_uniq_id rid{
+        .id = parent_rid.id,
+        .task_info = tasks::task_info{tasks::task_id::create_random_id(), this_shard_id()},
+    };
     std::vector<tablet_repair_task_meta> task_metas;
     for (auto& table_name : table_names) {
         lw_shared_ptr<replica::table> t;
@@ -2435,7 +2503,8 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
             }
         }
     }
-    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, tasks::task_id::create_null_id(), table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, service::default_session_id);
+    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>(parent_rid.task_info, rid, keyspace_name, parent_rid.uuid(), table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, service::default_session_id);
+    co_await task->done();
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
@@ -2534,6 +2603,7 @@ future<> repair::tablet_repair_task_impl::run() {
     auto m = dynamic_pointer_cast<repair::task_manager_module>(_module);
     auto& rs = m->get_repair_service();
     auto id = get_repair_uniq_id();
+  if (sched_by_scheduler) {
     auto keyspace = _keyspace;
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), _keyspace, _tables);
     co_await m->run(id, [this, &rs] () {
@@ -2545,6 +2615,13 @@ future<> repair::tablet_repair_task_impl::run() {
         rs.get_repair_module().check_in_shutdown();
         return make_exception_future<>(ep);
     });
+  } else {
+    // Repair that isn't scheduled by the scheduler has legacy_tablet_repair_task_impl as a root task.
+    // That task is responsible for recording the repair in repair module.
+    co_await seastar::async([this, &rs] () {
+        run_helper(rs);
+    });
+  }
 }
 
 // Needs to run inside a seastar thread.
