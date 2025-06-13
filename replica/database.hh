@@ -1385,8 +1385,6 @@ public:
 
     void apply(keyspace_change kc);
 
-    future<> init_storage();
-
     /** Note: return by shared pointer value, since the meta data is
      * semi-volatile. I.e. we could do alter keyspace at any time, and
      * boom, it is replaced.

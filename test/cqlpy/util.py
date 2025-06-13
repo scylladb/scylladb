@@ -108,13 +108,27 @@ def keyspace_has_tablets(cql, keyspace):
 #   with new_test_keyspace(cql, '...') as keyspace:
 # This is not a fixture - see those in conftest.py.
 @contextmanager
-def new_test_keyspace(cql, opts):
-    keyspace = unique_name()
-    cql.execute("CREATE KEYSPACE " + keyspace + " " + opts)
+def new_test_keyspace(cql, opts, name=unique_name()):
+    cql.execute("CREATE KEYSPACE " + name + " " + opts)
     try:
-        yield keyspace
+        yield name
     finally:
-        cql.execute("DROP KEYSPACE " + keyspace)
+        cql.execute("DROP KEYSPACE " + name)
+
+# A utility function for creating a new temporary table with a given schema and name.
+# It can be used in a "with", as:
+#   with new_named_test_table('...') as table:
+# This is useful when you need a table with a specific name for your test.
+# If a specific table name is not required in the test case,
+# prefer using new_test_table() to avoid name collisions.
+@contextmanager
+def new_named_test_table(cql, ks_name, tbl_name, schema, extra=""):
+    qualified_table_name = ks_name + "." + tbl_name
+    cql.execute("CREATE TABLE " + qualified_table_name + "(" + schema + ")" + extra)
+    try:
+        yield qualified_table_name
+    finally:
+        cql.execute("DROP TABLE " + qualified_table_name)
 
 # A utility function for creating a new temporary table with a given schema.
 # Because Scylla becomes slower when a huge number of uniquely-named tables
@@ -130,13 +144,11 @@ def new_test_table(cql, keyspace, schema, extra=""):
     if not previously_used_table_names:
         previously_used_table_names.append(unique_name())
     table_name = previously_used_table_names.pop()
-    table = keyspace + "." + table_name
-    cql.execute("CREATE TABLE " + table + "(" + schema + ")" + extra)
-    try:
-        yield table
-    finally:
-        cql.execute("DROP TABLE " + table)
-        previously_used_table_names.append(table_name)
+    with new_named_test_table(cql, keyspace, table_name, schema, extra) as table:
+        try:
+            yield table
+        finally:
+            previously_used_table_names.append(table_name)
 
 # A utility function for creating a new temporary user-defined type.
 @contextmanager
@@ -174,10 +186,12 @@ def new_aggregate(cql, keyspace, body):
 # A utility function for creating a new temporary materialized view in
 # an existing table.
 @contextmanager
-def new_materialized_view(cql, table, select, pk, where, extra=""):
-    keyspace = table.split('.')[0]
-    mv = keyspace + "." + unique_name()
-    cql.execute(f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk}) {extra}")
+def new_materialized_view(cql, table, select, pk, where, extra="", name=unique_name()):
+    keyspace = table.split(".")[0]
+    mv = keyspace + "." + name
+    cql.execute(
+        f"CREATE MATERIALIZED VIEW {mv} AS SELECT {select} FROM {table} WHERE {where} PRIMARY KEY ({pk}) {extra}"
+    )
     try:
         yield mv
     finally:

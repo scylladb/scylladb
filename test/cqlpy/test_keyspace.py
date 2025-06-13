@@ -39,36 +39,6 @@ def test_create_keyspace_missing_with(cql):
     with pytest.raises(SyntaxException):
         cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace")
 
-# The documentation states that "Keyspace names can have up to 48 alpha-
-# numeric characters and contain underscores; only letters and numbers are
-# supported as the first character.". This is not accurate. Test what is actually
-# enforced:
-def test_create_keyspace_invalid_name(cql, this_dc):
-    rep = " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }"
-    with pytest.raises(InvalidRequest, match='48'):
-        cql.execute('CREATE KEYSPACE ' + 'x'*49 + rep)
-    # The name xyz!123, unquoted, is a syntax error. With quotes it's valid
-    # syntax, but an illegal name.
-    with pytest.raises(SyntaxException):
-        cql.execute('CREATE KEYSPACE xyz!123' + rep)
-    with pytest.raises(InvalidRequest, match='name'):
-        cql.execute('CREATE KEYSPACE "xyz!123"' + rep)
-    # The documentation claims that only letters and numbers - i.e., not
-    # underscores - are allowed as the first character of a table name.
-    # This is not, in fact, true... Although an unquoted name beginning
-    # with an underscore results in a syntax error in the parser, it quotes
-    # such names *are* allowed:
-    with pytest.raises(SyntaxException):
-        cql.execute('CREATE KEYSPACE _xyz' + rep)
-    cql.execute('CREATE KEYSPACE "_xyz"' + rep)
-    cql.execute('DROP KEYSPACE "_xyz"')
-    # As the documentation states, a keyspace name may begin with a number.
-    # But such a name is not allowed by the parser, so it needs to be quoted:
-    with pytest.raises(SyntaxException):
-        cql.execute('CREATE KEYSPACE 123' + rep)
-    cql.execute('CREATE KEYSPACE "123"' + rep)
-    cql.execute('DROP KEYSPACE "123"')
-
 # Test trying to ALTER a keyspace with invalid options.
 # Reproduces #7595.
 def test_create_keyspace_nonexistent_dc(cql):
