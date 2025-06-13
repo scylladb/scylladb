@@ -75,7 +75,6 @@ packages=(
 
 bcp "${packages[@]}" packages/
 
-bcp dist/docker/etc etc/
 bcp dist/docker/scylla-housekeeping-service.sh /scylla-housekeeping-service.sh
 
 bcp dist/docker/scyllasetup.py /scyllasetup.py
@@ -88,9 +87,8 @@ bcp LICENSE-ScyllaDB-Source-Available.md /licenses/
 
 run microdnf clean all
 run microdnf --setopt=tsflags=nodocs -y update
-run microdnf --setopt=tsflags=nodocs -y install hostname python3 python3-pip kmod
+run microdnf --setopt=tsflags=nodocs -y install hostname python3 kmod
 run microdnf clean all
-run pip3 install --no-cache-dir --prefix /usr supervisor
 run bash -ec "echo LANG=C.UTF-8 > /etc/locale.conf"
 run bash -ec "rpm -ivh packages/*.rpm"
 run bash -ec "cat /scylla_bashrc >> /etc/bash.bashrc"
@@ -98,11 +96,7 @@ run mkdir -p /var/log/scylla
 run chown -R scylla:scylla /var/lib/scylla
 run sed -i -e 's/^SCYLLA_ARGS=".*"$/SCYLLA_ARGS="--log-to-syslog 0 --log-to-stdout 1 --network-stack posix"/' /etc/sysconfig/scylla-server
 
-run mkdir -p /opt/scylladb/supervisor
 run touch /opt/scylladb/SCYLLA-CONTAINER-FILE
-bcp dist/common/supervisor/scylla-server.sh /opt/scylladb/supervisor/scylla-server.sh
-bcp dist/common/supervisor/scylla-node-exporter.sh /opt/scylladb/supervisor/scylla-node-exporter.sh
-bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.sh
 
 # XXX: This is required to run setup scripts in root-mode with non-root user
 run chown -R scylla:scylla /etc/scylla.d
