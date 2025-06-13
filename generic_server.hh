@@ -39,6 +39,7 @@ class server;
 // member function to perform request processing. This base class provides a
 // `_read_buf` and a `_write_buf` for reading requests and writing responses.
 class connection : public boost::intrusive::list_base_hook<> {
+    friend class server;
 public:
     using connection_process_loop = noncopyable_function<future<> ()>;
     using execute_under_tenant_type = noncopyable_function<future<> (connection_process_loop)>;
@@ -61,6 +62,8 @@ protected:
 
 private:
     future<> process_until_tenant_switch();
+    [[maybe_unused]] bool shutdown_rx();
+    [[maybe_unused]] bool shutdown_tx();
 public:
     connection(server& server, connected_socket&& fd, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units);
     virtual ~connection();
@@ -128,7 +131,7 @@ private:
 public:
     server(const sstring& server_name, logging::logger& logger, config cfg);
 
-    virtual ~server();
+    virtual ~server() = default;
 
     // Makes sure listening sockets no longer generate new connections and aborts the
     // connected sockets, so that new requests are not served and existing requests don't
