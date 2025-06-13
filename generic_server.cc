@@ -229,11 +229,8 @@ void connection::on_connection_ready()
 
 void connection::shutdown()
 {
-    try {
-        _fd.shutdown_input();
-        _fd.shutdown_output();
-    } catch (...) {
-    }
+    shutdown_input();
+    shutdown_output();
 }
 
 bool connection::shutdown_input() {
