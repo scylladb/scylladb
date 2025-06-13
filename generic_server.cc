@@ -276,10 +276,6 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
 {
 }
 
-server::~server()
-{
-}
-
 future<> server::stop() {
     co_await shutdown();
     co_await std::exchange(_all_connections_stopped, make_ready_future<>());
