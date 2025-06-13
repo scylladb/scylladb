@@ -27,6 +27,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "service/vector_store.hh"
 #include "utils/hashers.hh"
 #include "utils/error_injection.hh"
 #include "service/migration_manager.hh"
@@ -68,11 +69,12 @@ static service::query_state query_state_for_internal_call() {
     return {service::client_state::for_internal_calls(), empty_service_permit()};
 }
 
-query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm)
+query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, service::vector_store& vs, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm)
         : _migration_subscriber{std::make_unique<migration_subscriber>(this)}
         , _proxy(proxy)
         , _db(db)
         , _mnotifier(mn)
+        , _vector_store(vs)
         , _mcfg(mcfg)
         , _cql_config(cql_cfg)
         , _prepared_cache(prep_cache_log, _mcfg.prepared_statment_cache_size)
