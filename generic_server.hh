@@ -61,6 +61,8 @@ protected:
 
 private:
     future<> process_until_tenant_switch();
+    [[maybe_unused]] bool shutdown_rx();
+    [[maybe_unused]] bool shutdown_tx();
 public:
     connection(server& server, connected_socket&& fd, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units);
     virtual ~connection();

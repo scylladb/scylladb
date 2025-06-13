@@ -236,6 +236,26 @@ void connection::shutdown()
     }
 }
 
+bool connection::shutdown_rx() {
+    try {
+        _fd.shutdown_input();
+    } catch (const std::exception& e) {
+        _server._logger.warn("Error closing RX side of a connection, error message {}", e.what());
+        return false;
+    }
+    return true;
+}
+
+bool connection::shutdown_tx() {
+    try {
+        _fd.shutdown_output();
+    } catch (const std::exception& e) {
+        _server._logger.warn("Error closing TX side of a connection, error message {}", e.what());
+        return false;
+    }
+    return true;
+}
+
 server::server(const sstring& server_name, logging::logger& logger, config cfg)
     : _server_name{server_name}
     , _logger{logger}
