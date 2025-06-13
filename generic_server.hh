@@ -52,6 +52,8 @@ protected:
 
 private:
     future<> process_until_tenant_switch();
+    bool shutdown_input();
+    bool shutdown_output();
 public:
     connection(server& server, connected_socket&& fd);
     virtual ~connection();
