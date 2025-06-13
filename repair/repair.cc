@@ -2536,10 +2536,23 @@ future<> repair::tablet_repair_task_impl::run() {
     auto id = get_repair_uniq_id();
     auto keyspace = _keyspace;
     rlogger.debug("repair[{}]: Repair tablet for keyspace={} tables={} status=started", id.uuid(), _keyspace, _tables);
-    co_await m->run(id, [this, &rs, id] () mutable {
-        // This runs inside a seastar thread
+    co_await m->run(id, [this, &rs] () {
+        run_helper(rs);
+    }).then([id, keyspace] {
+        rlogger.debug("repair[{}]: Repair tablet for keyspace={} status=succeeded", id.uuid(), keyspace);
+    }).handle_exception([id, keyspace, &rs] (std::exception_ptr ep) {
+        rlogger.warn("repair[{}]: Repair tablet for keyspace={} status=failed: {}", id.uuid(), keyspace,  ep);
+        rs.get_repair_module().check_in_shutdown();
+        return make_exception_future<>(ep);
+    });
+}
+
+// Needs to run inside a seastar thread.
+void repair::tablet_repair_task_impl::run_helper(repair_service& rs) {
+        // FIXME: fix indentation
+        auto id = get_repair_uniq_id();
         auto start_time = std::chrono::steady_clock::now();
-        auto parent_data = get_repair_uniq_id().task_info;
+        auto parent_data = id.task_info;
         std::atomic<int> idx{1};
 
         // Start the off strategy updater
@@ -2663,13 +2676,6 @@ future<> repair::tablet_repair_task_impl::run() {
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for tablet keyspace={} tables={} repair_id={} tablets_repaired={} duration={}",
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);
-    }).then([id, keyspace] {
-        rlogger.debug("repair[{}]: Repair tablet for keyspace={} status=succeeded", id.uuid(), keyspace);
-    }).handle_exception([id, keyspace, &rs] (std::exception_ptr ep) {
-        rlogger.warn("repair[{}]: Repair tablet for keyspace={} status=failed: {}", id.uuid(), keyspace,  ep);
-        rs.get_repair_module().check_in_shutdown();
-        return make_exception_future<>(ep);
-    });
 }
 
 future<std::optional<double>> repair::tablet_repair_task_impl::expected_total_workload() const {

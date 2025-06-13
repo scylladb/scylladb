@@ -141,6 +141,7 @@ public:
     virtual future<> release_resources() noexcept override;
 private:
     size_t get_metas_size() const noexcept;
+    void run_helper(repair_service& rs);
 protected:
     future<> run() override;
 
