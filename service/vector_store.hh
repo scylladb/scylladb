@@ -11,7 +11,16 @@
 #include "seastarx.hh"
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/http/reply.hh>
+#include <seastar/net/socket_defs.hh>
 #include <seastar/net/inet_address.hh>
+#include <expected>
+
+class schema;
+
+namespace cql3::statements {
+class primary_key;
+}
 
 namespace db {
 class config;
@@ -27,8 +36,16 @@ namespace service {
 class vector_store final {
 public:
     using config = db::config;
+    using embedding = std::vector<float>;
     using host_name = sstring;
+    using index_name = sstring;
+    using keyspace_name = sstring;
+    using limit = std::size_t;
     using port_number = std::uint16_t;
+    using primary_key = cql3::statements::primary_key;
+    using primary_keys = std::vector<primary_key>;
+    using schema_ptr = lw_shared_ptr<schema const>;
+    using status_type = http::reply::status_type;
     using time_point = lowres_system_clock::time_point;
 
 private:
@@ -43,6 +60,25 @@ private:
     time_point _last_dns_refresh;                    ///< The last time the DNS service was refreshed to get the vector-store service address.
 
 public:
+    /// The vector-store service is disabled.
+    struct disabled {};
+
+    /// The vector-store addr is unavailable (not possible to get an addr from the dns service).
+    struct addr_unavailable {};
+
+    /// The vector-store service is unavailable.
+    struct service_unavailable {};
+
+    /// The error from the vector-store service.
+    struct service_error {
+        status_type status; ///< The HTTP status code from the vector-store service.
+    };
+
+    /// An unsupported reply format from the vector-store service.
+    struct service_reply_format_error {};
+
+    using ann_error = std::variant<disabled, addr_unavailable, service_unavailable, service_error, service_reply_format_error>;
+
     explicit vector_store(config const& cfg);
     ~vector_store();
 
@@ -60,6 +96,9 @@ public:
     [[nodiscard]] auto port() const {
         return _port;
     }
+
+    /// Request the vector store service for the primary keys of the nearest neighbors
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit) -> future<std::expected<primary_keys, ann_error>>;
 
 private:
     /// Refresh the vector store service IP address from the dns name. Returns true if the address was refreshed.
