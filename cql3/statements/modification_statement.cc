@@ -423,7 +423,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
         tablet_info = erm->check_locality(token);
     }
 
-    return qp.proxy().cas(s, request, request->read_command(qp), request->key(),
+    return qp.proxy().cas(s, std::nullopt, request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request, tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);

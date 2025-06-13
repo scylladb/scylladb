@@ -2491,7 +2491,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     auto read_command = needs_read_before_write ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
-    return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
+    return proxy.cas(schema(), std::nullopt, shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command, &wcu_total] (bool is_applied) mutable {
         if (!is_applied) {
@@ -2800,7 +2800,7 @@ static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht:
         service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
     auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
-    return proxy.cas(schema, op, nullptr, to_partition_ranges(dk),
+    return proxy.cas(schema, std::nullopt, op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout).discard_result();
