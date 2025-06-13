@@ -142,6 +142,26 @@ future<> connection::shutdown()
     return make_ready_future<>();
 }
 
+bool connection::shutdown_input() {
+    try {
+        _fd.shutdown_input();
+    } catch (...) {
+        _server._logger.warn("Error shutting down input side of connection {}->{}, exception: {}", _fd.remote_address(), _fd.local_address(), std::current_exception());
+        return false;
+    }
+    return true;
+}
+
+bool connection::shutdown_output() {
+    try {
+        _fd.shutdown_output();
+    } catch (...) {
+        _server._logger.warn("Error shutting down output side of connection {}->{}, exception: {}", _fd.remote_address(), _fd.local_address(), std::current_exception());
+        return false;
+    }
+    return true;
+}
+
 server::server(const sstring& server_name, logging::logger& logger)
     : _server_name{server_name}
     , _logger{logger}
