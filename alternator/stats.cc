@@ -40,17 +40,18 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
     bool has_table = table.length();
     std::vector<seastar::metrics::label> aggregate_labels;
     std::vector<seastar::metrics::label_instance> labels = {alternator_label};
+    sstring group_name = (has_table)? "alternator_table" : "alternator";
     if (has_table) {
         labels.push_back(column_family_label(table));
         labels.push_back(keyspace_label(ks));
         aggregate_labels.push_back(seastar::metrics::shard_label);
     }
-    metrics.add_group((has_table)? "alternator_table" : "alternator", {
+    metrics.add_group(group_name, {
 #define OPERATION(name, CamelCaseName) \
                 seastar::metrics::make_total_operations("operation", stats.api_operations.name, \
                         seastar::metrics::description("number of operations via Alternator API"), labels)(basic_level)(op(CamelCaseName)).aggregate(aggregate_labels).set_skip_when_empty(),
 #define OPERATION_LATENCY(name, CamelCaseName) \
-		metrics.add_group((has_table)? "alternator_table" : "alternator", { \
+		metrics.add_group(group_name, { \
                 seastar::metrics::make_histogram("op_latency", \
                         seastar::metrics::description("Latency histogram of an operation via Alternator API"), labels, [&stats]{return to_metrics_histogram(stats.api_operations.name.histogram());})(op(CamelCaseName))(basic_level).aggregate({seastar::metrics::shard_label}).set_skip_when_empty()}); \
             if (!has_table) {\
@@ -114,7 +115,7 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
 
         });
     }
-    metrics.add_group((has_table)? "alternator_table" : "alternator", {
+    metrics.add_group(group_name, {
             seastar::metrics::make_total_operations("unsupported_operations", stats.unsupported_operations,
                     seastar::metrics::description("number of unsupported operations via Alternator API"), labels).set_skip_when_empty(),
             seastar::metrics::make_total_operations("total_operations", stats.total_operations,
