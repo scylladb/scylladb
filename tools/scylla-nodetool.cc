@@ -420,6 +420,7 @@ void backup_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     if (vm.contains("snapshot")) {
         params["snapshot"] = vm["snapshot"].as<sstring>();
     }
+    params["move_files"] = vm.contains("move-files") ? "true" : "false";
     const auto backup_res = client.post("/storage_service/backup", std::move(params));
     const auto task_id = rjson::to_string_view(backup_res);
     if (vm.contains("nowait")) {
@@ -3577,6 +3578,7 @@ For more information, see: {}"
                     typed_option<sstring>("endpoint", "ID of the configured object storage endpoint to copy SSTables to"),
                     typed_option<sstring>("bucket", "Name of the bucket to backup SSTables to"),
                     typed_option<sstring>("prefix", "The prefix to backup SSTables under"),
+                    typed_option<>("move-files", "Move the SSTable files instead of copying them"),
                     typed_option<>("nowait", "Don't wait on the backup process"),
                 },
             },
