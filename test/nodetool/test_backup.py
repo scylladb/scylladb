@@ -29,10 +29,10 @@ def test_statusbackup(nodetool):
     assert res.stdout == "running\n"
 
 
-@pytest.mark.parametrize("nowait,task_state,task_error", [(False, "failed", "error"),
-                                                          (False, "done", ""),
-                                                          (True, "", "")])
-def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
+@pytest.mark.parametrize("nowait,task_state,task_error,move_files", [(False, "failed", "error", False),
+                                                          (False, "done", "", True),
+                                                          (True, "", "", True)])
+def test_backup(nodetool, scylla_only, nowait, task_state, task_error, move_files):
     endpoint = "s3.us-east-2.amazonaws.com"
     bucket = "bucket-foo"
     prefix = "foo/bar/baz"
@@ -44,7 +44,8 @@ def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
               "prefix": prefix,
               "keyspace": keyspace,
               "table": table,
-              "snapshot": snapshot}
+              "snapshot": snapshot,
+              "move_files": "true" if move_files else "false"}
     task_id = "2c4a3e5f"
     start_time = "2024-08-08T14:29:25Z"
     end_time = "2024-08-08T14:30:42Z"
@@ -78,6 +79,8 @@ def test_backup(nodetool, scylla_only, nowait, task_state, task_error):
             "--keyspace", keyspace,
             "--table", table,
             "--snapshot", snapshot]
+    if move_files:
+        args.append("--move-files")
     if nowait:
         args.append("--nowait")
         res = nodetool(*args, expected_requests=expected_requests)
