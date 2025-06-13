@@ -1,9 +1,9 @@
 # ScyllaDB Documentation
 
-This repository contains the source files for ScyllaDB Open Source documentation.
+This repository contains the source files for ScyllaDB documentation.
 
 - The `dev` folder contains developer-oriented documentation related to the ScyllaDB code base. It is not published and is only available via GitHub.
-- All other folders and files contain user-oriented documentation related to ScyllaDB Open Source and are sources for [opensource.docs.scylladb.com](https://opensource.docs.scylladb.com/).
+- All other folders and files contain user-oriented documentation related to ScyllaDB and are sources for [docs.scylladb.com/manual](https://docs.scylladb.com/manual/).
 
 To report a documentation bug or suggest an improvement, open an issue in [GitHub issues](https://github.com/scylladb/scylla/issues) for this project.
 
