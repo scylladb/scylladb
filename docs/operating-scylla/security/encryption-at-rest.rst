@@ -2034,6 +2034,261 @@ Once this encryption is enabled, it is used for all system data.
 
    .. wasn't able to test this successfully
 
+Rotate Encryption Keys
+----------------------
+
+Key rotation is the process of replacing an existing encryption key with a new
+one. This might be necessary when a key is compromised, or, more commonly, to
+comply with regulatory requirements. The key rotation procedure in ScyllaDB
+varies depending on the key provider you are using.
+
+.. tabs::
+
+   .. group-tab:: Local Key Provider
+
+      **Procedure**
+
+      #. Generate a new encryption key.
+
+         * If you want to provide your own key, follow the procedure in
+           :ref:`Create Encryption Keys <ear-create-encryption-key>`.
+
+         * If you want to let ScyllaDB generate a key for you, select a name and
+           location for the key file and make sure that the ``scylla`` user has
+           Read, Write, and Execute permissions over the parent directory.
+
+         .. warning:: Do not overwrite the existing key file. Select a different
+            name or location for the new key file. For example, use the current
+            date as a suffix: ``/etc/scylla/encryption_keys/secret_key_20250613``.
+
+      #. If the key is used in the default encryption configuration:
+
+         #. Update your ``scylla.yaml`` configuration to point to the new key file.
+
+            **Example:**
+
+            .. code-block:: yaml
+
+               user_info_encryption:
+               # or
+               system_info_encryption:
+                 enabled: true
+                 cipher_algorithm: AES/CBC/PKCS5Padding
+                 secret_key_strength: 128
+                 key_provider: LocalFileSystemKeyProviderFactory
+                 secret_key_file: /etc/scylla/encryption_keys/secret_key_20250613
+
+         #. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
+
+         #. Restart the scylla-server service to load the updated configuration.
+
+            .. include:: /rst_include/scylla-commands-restart-index.rst
+
+         #. Repeat on all nodes.
+
+      #. In the schema of any desired table, point the ``secret_key_file``
+         inside ``scylla_encryption_options`` to the new key file, using the
+         ``ALTER TABLE`` CQL statement. Use the ``DESCRIBE`` CQL statement first,
+         for retrieving the current ``scylla_encryption_options``. Repeat all
+         entries from ``scylla_encryption_options`` identically, apart from
+         ``secret_key_file``, in the ``ALTER TABLE`` statement.
+
+         **Example:**
+
+         .. code-block:: cql
+
+            ALTER TABLE myks.mytable WITH
+              scylla_encryption_options = {
+                'cipher_algorithm': 'AES/CBC/PKCS5Padding',
+                'secret_key_strength': 128,
+                'key_provider': 'LocalFileSystemKeyProviderFactory',
+                'secret_key_file': '/etc/scylla/encryption_keys/secret_key_20250613'
+              }
+            ;
+
+      #. Optionally, force the upgrade of all SSTables by running :doc:`nodetool upgradesstables
+         </operating-scylla/nodetool-commands/upgradesstables>` on each node.
+         This will re-encrypt old SSTables with the new key. If you do not run
+         this command, old SSTables will remain encrypted with the old key until
+         they are naturally compacted.
+
+         .. code-block:: none
+
+            nodetool upgradesstables --include-all-sstables
+
+      .. warning::
+         Do not delete the old key if there are still system artifacts
+         (commitlog segments, hints) and/or SSTables that are encrypted with it.
+         In any case, it is advised to always maintain a backup of your old keys.
+         Refer to `When a Key is Lost`_ for more information.
+
+   .. group-tab:: Replicated Key Provider
+
+      The Replicated Key Provider does not support key rotation. If you need to
+      rotate keys, you must migrate to a different key provider.
+
+   .. group-tab:: KMIP Key Provider
+
+      .. DSE docs: https://docs.datastax.com/en/dse/6.9/securing/configure-kmip-encryption.html?#secRekeyKMIP
+
+      **Procedure**
+
+      #. Create a new key by following the procedure in :ref:`Create Encryption
+         Keys <ear-create-encryption-key>`.
+
+      #. Revoke the old key using the ``Superseded`` revocation reason (or any
+         reason other than ``Compromised``). This will transition the key to a
+         ``Deactivated`` state, preventing ScyllaDB from selecting it for future
+         encryption operations when refreshing its key cache. However, ScyllaDB
+         will still be able to use this key to decrypt old data.
+
+      #. Clear the old key from the key cache:
+
+         * You can choose to wait for the KMIP host's ``key_cache_expiry``
+           interval (default is 30 seconds), after which ScyllaDB will
+           automatically clear the key cache, or
+
+         * You can clear the key cache of each node manually by draining the node
+           with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`
+           and then restarting the scylla-server service:
+
+           .. include:: /rst_include/scylla-commands-restart-index.rst
+
+      #. Optionally, force the upgrade of all SSTables by running :doc:`nodetool upgradesstables
+         </operating-scylla/nodetool-commands/upgradesstables>` on each node.
+         This will re-encrypt old SSTables with the new key. If you do not run
+         this command, old SSTables will remain encrypted with the old key until
+         they are naturally compacted.
+
+         .. code-block:: none
+
+            nodetool upgradesstables --include-all-sstables
+
+      .. warning::
+         Do not delete the old key if there are still system artifacts
+         (commitlog segments, hints) and/or SSTables that are encrypted with it.
+         In any case, it is advised to always maintain a backup of your old keys.
+         Refer to `When a Key is Lost`_ for more information.
+
+   .. group-tab:: KMS Key Provider
+
+      For the KMS Key Provider, key rotation must be configured and performed in
+      AWS KMS. It is recommended to enable automatic key rotation with a
+      rotation period of one year. For more information, see the `AWS KMS
+      documentation <https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html>`_.
+
+      No additional configuration is required for ScyllaDB. ScyllaDB will
+      automatically use the latest version of the key when encrypting new data,
+      and the AWS KMS will detect and use the appropriate key version when
+      decrypting old data.
+
+      When a key is rotated, previously written out system artifacts and
+      SSTables are not affected, meaning that they remain encrypted with the old
+      key version. Additionally, for a few minutes after the rotation, ScyllaDB
+      may be generating new system artifacts and SSTables with the old key
+      version, due to cached data encryption keys created before the rotation
+      (keys are cached for 10 minutes by default, depending on the
+      ``key_cache_expiry`` option). Eventually, the cached data encryption keys
+      will be evicted and the old SSTables will be re-encrypted with the new key
+      version when they are naturally compacted. If you prefer not to wait for
+      this process to complete on its own, you can run the following steps on
+      each node:
+
+      #. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
+
+      #. Restart the scylla-server service to discard any cached data encryption
+         keys wrapped with the old key version:
+
+         .. include:: /rst_include/scylla-commands-restart-index.rst
+
+      #. Force the upgrade of all SSTables with :doc:`nodetool upgradesstables
+         </operating-scylla/nodetool-commands/upgradesstables>` to re-encrypt
+         them with the new key version:
+
+         .. code-block:: none
+
+            nodetool upgradesstables --include-all-sstables
+
+   .. group-tab:: GCP Key Provider
+
+      For the GCP Key Provider, key rotation must be configured and performed in
+      Google Cloud KMS. It is recommended to enable automatic key rotation with
+      a rotation period of one year. For more information, see the `Google Cloud
+      KMS documentation <https://cloud.google.com/kms/docs/key-rotation>`_.
+
+      No additional configuration is required for ScyllaDB. ScyllaDB will
+      automatically use the primary version of the key when encrypting new data,
+      and the Google Cloud KMS will detect and use the appropriate key version
+      when decrypting old data.
+
+      When a key is rotated, previously written out system artifacts and
+      SSTables are not affected, meaning that they remain encrypted with the old
+      key version. Additionally, for a few minutes after the rotation, ScyllaDB
+      may be generating new system artifacts and SSTables with the old key
+      version, due to cached data encryption keys created before the rotation
+      (keys are cached for 10 minutes by default, depending on the
+      ``key_cache_expiry`` option). Eventually, the cached data encryption keys
+      will be evicted and the old SSTables will be re-encrypted with the new key
+      version when they are naturally compacted. If you prefer not to wait for
+      this process to complete on its own, you can run the following steps on
+      each node:
+
+      #. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
+
+      #. Restart the scylla-server service to discard any cached data encryption
+         keys wrapped with the old key version:
+
+         .. include:: /rst_include/scylla-commands-restart-index.rst
+
+      #. Force the upgrade of all SSTables with :doc:`nodetool upgradesstables
+         </operating-scylla/nodetool-commands/upgradesstables>` to re-encrypt
+         them with the new key version:
+
+         .. code-block:: none
+
+            nodetool upgradesstables --include-all-sstables
+
+   .. group-tab:: Azure Key Provider
+
+      For the Azure Key Provider, key rotation must be configured and performed
+      in Azure Key Vault. It is recommended to enable automatic key rotation
+      with a rotation period of one year. For more information, see the `Azure
+      Key Vault documentation <https://learn.microsoft.com/en-us/azure/key-vault/keys/how-to-configure-key-rotation>`_.
+
+      No additional configuration is required for ScyllaDB. ScyllaDB will
+      automatically use the latest version of the key when encrypting new data,
+      and the appropriate key version when decrypting old data. ScyllaDB stores
+      the key version along with the encrypted data encryption key in the
+      SSTable and commitlog metadata, which allows it to track the exact version
+      used for encryption.
+
+      When a key is rotated, previously written out system artifacts and
+      SSTables are not affected, meaning that they remain encrypted with the old
+      key version. Additionally, for a few minutes after the rotation, ScyllaDB
+      may be generating new system artifacts and SSTables with the old key
+      version, due to cached data encryption keys created before the rotation
+      (keys are cached for 10 minutes by default, depending on the
+      ``key_cache_expiry`` option). Eventually, the cached data encryption keys
+      will be evicted and the old SSTables will be re-encrypted with the new key
+      version when they are naturally compacted. If you prefer not to wait for
+      this process to complete on its own, you can run the following steps on
+      each node:
+
+      #. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`.
+
+      #. Restart the scylla-server service to discard any cached data encryption
+         keys wrapped with the old key version:
+
+         .. include:: /rst_include/scylla-commands-restart-index.rst
+
+      #. Force the upgrade of all SSTables with :doc:`nodetool upgradesstables
+         </operating-scylla/nodetool-commands/upgradesstables>` to re-encrypt
+         them with the new key version:
+
+         .. code-block:: none
+
+            nodetool upgradesstables --include-all-sstables
+
 When a Key is Lost
 ----------------------
 
