@@ -1072,6 +1072,11 @@ void rmw_operation::set_default_write_isolation(std::string_view value) {
     default_write_isolation = parse_write_isolation(value);
 }
 
+locator::erm_handle rmw_operation::get_erm_handle() const {
+    const auto token = dht::get_token(*_schema, _pk);
+    return {_schema->table(), token};
+}
+
 // Alternator uses tags whose keys start with the "system:" prefix for
 // internal purposes. Those should not be readable by ListTagsOfResource,
 // nor writable with TagResource or UntagResource (see #24098).
@@ -2391,7 +2396,7 @@ rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(sch
 // a read-before-write, but not just on it - depending on configuration,
 // execute() may unconditionally use cas() for every write. Unfortunately,
 // this requires duplicating here a bit of logic from execute().
-std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_write) {
+std::optional<shard_id> rmw_operation::shard_for_execute(locator::erm_handle, bool needs_read_before_write) {
     if (_write_isolation == write_isolation::FORBID_RMW ||
         (_write_isolation == write_isolation::LWT_RMW_ONLY && !needs_read_before_write) ||
         _write_isolation == write_isolation::UNSAFE_RMW) {
@@ -2449,6 +2454,7 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
 }
 
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
+        locator::erm_handle handle,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
         service_permit permit,
@@ -2491,7 +2497,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     auto read_command = needs_read_before_write ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
-    return proxy.cas(schema(), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
+    return proxy.cas(schema(), std::move(handle), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command, &wcu_total] (bool is_applied) mutable {
         if (!is_applied) {
@@ -2616,7 +2622,9 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
 
     co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
 
-    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
+    auto handle = op->get_erm_handle();
+
+    if (auto shard = op->shard_for_execute(handle, needs_read_before_write); shard) {
         _stats.api_operations.put_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(*shard, _ssg,
@@ -2624,10 +2632,9 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
                                      (service::client_state& client_state) mutable {
-                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
-                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
-                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
-                // so that it's destructed only after all background operations are finished as well.
+                //FIXME: Instead of passing empty_service_permit() to the background operation,
+                // the current permit's lifetime should be prolonged, so that it's destructed
+                // only after all background operations are finished as well.
                 return e.put_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
             });
         });
@@ -2635,7 +2642,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.put_item++;
     uint64_t wcu_total = 0;
-    auto res = co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    auto res = co_await op->execute(_proxy, std::move(handle), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
     per_table_stats->wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -2718,7 +2725,9 @@ future<executor::request_return_type> executor::delete_item(client_state& client
 
     co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
 
-    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
+    auto handle = op->get_erm_handle();
+
+    if (auto shard = op->shard_for_execute(handle, needs_read_before_write); shard) {
         _stats.api_operations.delete_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
         per_table_stats->shard_bounce_for_lwt++;
@@ -2727,17 +2736,16 @@ future<executor::request_return_type> executor::delete_item(client_state& client
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
                                      (service::client_state& client_state) mutable {
-                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
-                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
-                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
-                // so that it's destructed only after all background operations are finished as well.
+                //FIXME: Instead of passing  empty_service_permit() to the background operation,
+                // the current permit's lifetime should be prolonged, so that it's destructed
+                // only after all background operations are finished as well.
                 return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
             });
         });
     }
     per_table_stats->api_operations.delete_item++;
     uint64_t wcu_total = 0;
-    auto res = co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    auto res = co_await op->execute(_proxy, std::move(handle), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
     per_table_stats->wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -2796,11 +2804,11 @@ public:
     }
 };
 
-static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
+static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, locator::erm_handle handle, dht::decorated_key dk, std::vector<put_or_delete_item>&& mutation_builders,
         service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit) {
     auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
-    return proxy.cas(schema, op, nullptr, to_partition_ranges(dk),
+    return proxy.cas(schema, std::move(handle), op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
             db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM,
             timeout, timeout).discard_result();
@@ -2872,9 +2880,10 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         }
         return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (auto& e) {
             stats.write_using_lwt++;
+            locator::erm_handle handle(e.first.schema->table(), e.first.dk.token());
             auto desired_shard = service::storage_proxy::cas_shard(*e.first.schema, e.first.dk.token());
             if (desired_shard == this_shard_id()) {
-                return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state, permit);
+                return cas_write(proxy, e.first.schema, std::move(handle), e.first.dk, std::move(e.second), client_state, trace_state, permit);
             } else {
                 stats.shard_bounce_for_lwt++;
                 return proxy.container().invoke_on(desired_shard, ssg,
@@ -2890,13 +2899,13 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                                               trace_state = tracing::trace_state_ptr(gt)]
                                               (service::client_state& client_state) mutable {
                         auto schema = proxy.data_dictionary().find_schema(ks, cf);
-                        //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
-                        // to another shard - once it is solved, this place can use a similar solution. Instead of passing
-                        // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
-                        // so that it's destructed only after all background operations are finished as well.
-                        return cas_write(proxy, schema, dk, std::move(mb), client_state, std::move(trace_state), empty_service_permit());
+                        //FIXME: Instead of passing empty_service_permit() to the background operation,
+                        // the current permit's lifetime should be prolonged, so that it's destructed
+                        // only after all background operations are finished as well.
+                        locator::erm_handle h(schema->table(), dk.token());
+                        return cas_write(proxy, schema, std::move(h), dk, std::move(mb), client_state, std::move(trace_state), empty_service_permit());
                     });
-                });
+                }).finally([handle = std::move(handle)]{});
             }
         });
     }
@@ -4141,7 +4150,9 @@ future<executor::request_return_type> executor::update_item(client_state& client
 
     co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
 
-    if (auto shard = op->shard_for_execute(needs_read_before_write); shard) {
+    auto handle = op->get_erm_handle();
+
+    if (auto shard = op->shard_for_execute(handle, needs_read_before_write); shard) {
         _stats.api_operations.update_item--; // uncount on this shard, will be counted in other shard
         _stats.shard_bounce_for_lwt++;
         co_return co_await container().invoke_on(*shard, _ssg,
@@ -4149,10 +4160,9 @@ future<executor::request_return_type> executor::update_item(client_state& client
                 (executor& e) mutable {
             return do_with(cs.get(), [&e, request = std::move(request), trace_state = tracing::trace_state_ptr(gt)]
                                      (service::client_state& client_state) mutable {
-                //FIXME: A corresponding FIXME can be found in transport/server.cc when a message must be bounced
-                // to another shard - once it is solved, this place can use a similar solution. Instead of passing
-                // empty_service_permit() to the background operation, the current permit's lifetime should be prolonged,
-                // so that it's destructed only after all background operations are finished as well.
+                //FIXME: Instead of passing empty_service_permit() to the background operation,
+                // the current permit's lifetime should be prolonged, so that it's destructed
+                // only after all background operations are finished as well.
                 return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request));
             });
         });
@@ -4160,7 +4170,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
-    auto res = co_await op->execute(_proxy, client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    auto res = co_await op->execute(_proxy, std::move(handle), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
     per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);

@@ -367,14 +367,16 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::exe
         throw exceptions::invalid_request_exception(format("Unrestricted partition key in a conditional BATCH"));
     }
 
-    auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, request->key()[0].start()->value().as_decorated_key().token());
+    const auto token = request->key()[0].start()->value().as_decorated_key().token();
+    locator::erm_handle erm_handle(schema->table(), token);
+    auto shard = service::storage_proxy::cas_shard(*_statements[0].statement->s, token);
     if (shard != this_shard_id()) {
         return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
                 qp.bounce_to_shard(shard, std::move(cached_fn_calls))
             );
     }
 
-    return qp.proxy().cas(schema, request, request->read_command(qp), request->key(),
+    return qp.proxy().cas(schema, std::move(erm_handle), request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
             cl_for_paxos, cl_for_learn, batch_timeout, cas_timeout).then([this, request] (bool is_applied) {
         return request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
