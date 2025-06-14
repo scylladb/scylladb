@@ -58,6 +58,8 @@ public:
 public:
     static void set_default_write_isolation(std::string_view mode);
 
+    locator::erm_handle get_erm_handle() const;
+
 protected:
     // The full request JSON
     rjson::value _request;
@@ -114,6 +116,7 @@ public:
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
     future<executor::request_return_type> execute(service::storage_proxy& proxy,
+            locator::erm_handle handle,
             service::client_state& client_state,
             tracing::trace_state_ptr trace_state,
             service_permit permit,
@@ -121,7 +124,7 @@ public:
             stats& global_stats,
             stats& per_table_stats,
             uint64_t& wcu_total);
-    std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
+    std::optional<shard_id> shard_for_execute(locator::erm_handle, bool needs_read_before_write);
 };
 
 } // namespace alternator
