@@ -496,3 +496,137 @@ BOOST_AUTO_TEST_CASE(test_before_interval) {
         check(i, r::make(b{1, false}, b{10, false}), true);
     }
 }
+namespace {
+
+struct exploded {};
+
+// Interval payload which will explode if used incorrectly (in debug mode),
+// and detects use of moved-from objects. It simulates exceptions thrown where
+// A regular interval payload would throw, and this can be controlled to
+// exhaustively test the logical timing of the exception.
+class maybe_throwing_interval_payload {
+public:
+    static inline thread_local unsigned s_throw_countdown_counter = 0;
+    static inline thread_local unsigned s_live_objects = 0;
+private:
+    // The pointer is always engaged, even from moved-from objects, to
+    // detect move-from-uninitialized.
+    std::unique_ptr<unsigned> _payload = std::make_unique<unsigned>(-1);
+public:
+    maybe_throwing_interval_payload(unsigned value) {
+        *_payload = value;
+        ++s_live_objects;
+    }
+
+    maybe_throwing_interval_payload(const maybe_throwing_interval_payload& o) {
+        *_payload = *o._payload;
+        if (s_throw_countdown_counter-- == 0) {
+            throw exploded();
+        }
+        ++s_live_objects;
+    }
+
+    // We ignore bad_alloc, won't happen for the test
+    maybe_throwing_interval_payload(maybe_throwing_interval_payload&& o) noexcept {
+        // Overwrite `o` to simulate destructive move
+        *_payload = std::exchange(*o._payload, -1u);
+        ++s_live_objects;
+    }
+
+    ~maybe_throwing_interval_payload() {
+        --s_live_objects;
+    }
+
+    maybe_throwing_interval_payload& operator=(const maybe_throwing_interval_payload& o) {
+        if (this != &o) {
+            *_payload = *o._payload;
+            if (s_throw_countdown_counter-- == 0) {
+                throw exploded();
+            }
+        }
+        return *this;
+    }
+
+    maybe_throwing_interval_payload& operator=(maybe_throwing_interval_payload&&) = default;
+
+    unsigned value() const {
+        if (*_payload == -1u) {
+            throw std::logic_error("maybe_throwing_interval_payload: accessing moved-from object");
+        }
+        return *_payload;
+    }
+
+    std::strong_ordering operator<=>(const maybe_throwing_interval_payload& other) const {
+        return *_payload <=> * other._payload;
+    }
+};
+
+using exploding_interval = wrapping_interval<maybe_throwing_interval_payload>;
+
+}
+
+static
+void
+test_with_exploding_payload(std::function<void (exploding_interval)> test_func) {
+    for (unsigned ctr = 0; ctr < 20; ++ctr) {
+        for (unsigned bounds_selection = 0; bounds_selection <= 4; ++bounds_selection) {
+            bool has_left = bounds_selection & 1;
+            bool has_right = bounds_selection & 2;
+            bool singular = bounds_selection == 4;
+            maybe_throwing_interval_payload::s_throw_countdown_counter = ctr;
+            maybe_throwing_interval_payload::s_live_objects = 0;
+            try {
+                auto make_bound = [] (bool has, unsigned val) -> std::optional<exploding_interval::bound> {
+                    if (has) {
+                        return exploding_interval::bound(val);
+                    } else {
+                        return std::nullopt;
+                    }
+                };
+                auto input = singular
+                     ? exploding_interval(make_bound(true, 5), std::nullopt, true)
+                     : exploding_interval(make_bound(has_left, 4), make_bound(has_right, 9));
+                test_func(std::move(input));
+            } catch (exploded&) {
+                // expected
+            }
+            BOOST_REQUIRE_EQUAL(maybe_throwing_interval_payload::s_live_objects, 0);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_copy_ctor_exploding) {
+    test_with_exploding_payload([] (exploding_interval i1) {
+        auto i2 = exploding_interval(i1);
+    });
+}
+
+BOOST_AUTO_TEST_CASE(test_copy_assign_exploding) {
+    test_with_exploding_payload([] (exploding_interval i1) {
+        auto i2 = exploding_interval(i1);
+        i1 = i2;
+    });
+}
+
+BOOST_AUTO_TEST_CASE(test_reverse_exploding) {
+    test_with_exploding_payload([] (exploding_interval i1) {
+        i1.reverse();
+    });
+}
+
+BOOST_AUTO_TEST_CASE(test_transorm_rvalue_exploding) {
+    test_with_exploding_payload([] (exploding_interval i1) {
+        auto copy = i1;
+        auto xformed = std::move(i1).transform([] (maybe_throwing_interval_payload p) {
+            return maybe_throwing_interval_payload(p.value() + 1);
+        });
+        BOOST_REQUIRE_EQUAL(bool(copy.start()), bool(xformed.start()));
+        if (copy.start()) {
+            BOOST_REQUIRE_EQUAL(copy.start().value().value().value() + 1, xformed.start().value().value().value());
+        }
+        BOOST_REQUIRE_EQUAL(bool(copy.end()), bool(xformed.end()));
+        if (copy.end()) {
+            BOOST_REQUIRE_EQUAL(copy.end().value().value().value() + 1, xformed.end().value().value().value());
+        }
+    });
+}
