@@ -177,9 +177,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_simple_empty_directory_scan) {
 
         with_sstable_directory(env, [] (sharded<sstables::sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
-            auto max_generation_seen = sstables::highest_generation_seen(sstdir).get();
-            // No generation found on empty directory.
-            BOOST_REQUIRE(!max_generation_seen);
+            sstdir.invoke_on_all([] (sstables::sstable_directory& d) {
+                BOOST_REQUIRE(d.empty());
+            }).get();
         });
     });
 }
