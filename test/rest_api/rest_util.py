@@ -77,7 +77,7 @@ def new_test_task(rest_api, args):
 
 @contextmanager
 def set_tmp_task_ttl(rest_api, seconds):
-    resp = rest_api.send("POST", "task_manager/ttl", { "ttl" : seconds })
+    resp = rest_api.send("OST", "task_manager/ttl", { "ttl" : seconds })
     resp.raise_for_status()
     old_ttl = resp.json()
     try:

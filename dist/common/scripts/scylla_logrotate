@@ -10,7 +10,7 @@
 from pathlib import Path
 from datetime import datetime
 from scylla_util import *
-
+print('1211')
 if __name__ == '__main__':
     log = scylladir_p() / 'scylla-server.log'
     if log.exists() and log.stat().st_size > 0:
