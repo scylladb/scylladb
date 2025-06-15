@@ -165,7 +165,7 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
 static future<std::pair<sstable_ptr, sstable_ptr>> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
     auto sst = co_await env.reusable_sst(std::move(schema), load_dir, generation);
     sstable_generation_generator gen;
-    auto sst2 = co_await sstables::test(sst).store(write_dir, gen(uuid_identifiers::yes));
+    auto sst2 = co_await sstables::test(sst).store(write_dir, gen());
     co_return std::make_pair(sst, sst2);
 }
 

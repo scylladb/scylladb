@@ -218,7 +218,7 @@ struct test_env::impl {
     impl(const impl&) = delete;
 
     sstables::generation_type new_generation() noexcept {
-        return gen(uuid_identifiers::yes);
+        return gen();
     }
 };
 
