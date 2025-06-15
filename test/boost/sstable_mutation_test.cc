@@ -349,7 +349,7 @@ SEASTAR_TEST_CASE(read_partial_range_2) {
 
 static
 mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, std::vector<mutation> mutations,
-        sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
+        sstables::sstable::version_types version, db_clock::time_point query_time = db_clock::now()) {
     return make_sstable_easy(env, make_memtable(s, mutations), env.manager().configure_writer(), version, mutations.size(), query_time)->as_mutation_source();
 }
 
