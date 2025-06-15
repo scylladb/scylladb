@@ -1097,9 +1097,8 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     struct claimed_buffer {
         temporary_buffer<char> _buffer;
         semaphore_units<> _claimed_memory;
-        s3_clock::duration _consumption_time;
-        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory, s3_clock::duration consumption_time)
-            : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)), _consumption_time(consumption_time) {}
+        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory)
+            : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
     };
     struct content_range {
         uint64_t start;
@@ -1148,7 +1147,10 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 range current_range;
                 if (!_range) {
                     current_range = {0, _max_buffers_size};
-                    s3l.trace("No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}-{}", _object_name, current_range.off, current_range.len);
+                    s3l.trace("No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}-{}",
+                              _object_name,
+                              current_range.off,
+                              current_range.len);
                 } else if (_is_contiguous_mode) {
                     s3l.trace("Setting contiguous download mode for '{}'", _object_name);
                     current_range = *_range;
@@ -1161,7 +1163,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 s3l.trace("Fiber for object '{}' will make HTTP request within range {}-{}", _object_name, current_range.off, current_range.len);
                 co_await _client->make_request(
                     std::move(req),
-                    [this](const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+                    [this](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
@@ -1169,7 +1171,10 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         if (!_range) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
-                            s3l.trace("No range for object '{}' was provided. Setting the range to {}-{} form the Content-Range header", _object_name, _range->off, _range->len);
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {}-{} form the Content-Range header",
+                                      _object_name,
+                                      _range->off,
+                                      _range->len);
                         }
                         auto in = std::move(in_);
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
@@ -1177,12 +1182,13 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("Fiber for object '{}' will try to read within range {}-{}", _object_name, _range->off, _range->len);
                             auto buf = co_await in.read();
                             auto buff_size = buf.size();
+                            gc.read_stats.update(buff_size, s3_clock::now() - start);
                             _range->off += buff_size;
                             _range->len -= buff_size;
                             _buffers_size += buff_size;
                             if (buff_size == 0 && _range->len == 0) {
                                 s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size), s3_clock::now() - start);
+                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                                 _is_finished = true;
                                 break;
                             }
@@ -1191,7 +1197,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 break;
                             }
                             s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                            _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size), s3_clock::now() - start);
+                            _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                             _get_cv.signal();
                         }
                         co_await in.close();
@@ -1225,8 +1231,6 @@ public:
                     _bg_fiber_cv.signal();
                 }
                 s3l.trace("get() for object '{}' popped buffer of {} bytes", _object_name, claimed_buff._buffer.size());
-                // Report the time it took to consume the buffer here and not in the fiber, otherwise our read amplification checks will go haywire
-                _client->find_or_create_client().read_stats.update(claimed_buff._buffer.size(), claimed_buff._consumption_time);
                 co_return std::move(claimed_buff._buffer);
             }
             _bg_fiber_cv.signal();
