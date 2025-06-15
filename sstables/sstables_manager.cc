@@ -151,7 +151,7 @@ locator::host_id sstables_manager::get_local_host_id() const {
 }
 
 bool sstables_manager::uuid_sstable_identifiers() const {
-    return _features.uuid_sstable_identifiers;
+    return true;
 }
 
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
