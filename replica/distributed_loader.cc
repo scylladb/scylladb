@@ -111,16 +111,6 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
     });
 }
 
-future<sstables::generation_type>
-highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
-    co_return co_await directory.map_reduce0(
-        std::mem_fn(&sstables::sstable_directory::highest_generation_seen),
-        sstables::generation_type{},
-        [] (sstables::generation_type a, sstables::generation_type b) {
-            return std::max(a, b);
-        });
-}
-
 future<>
 distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
         sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
@@ -192,8 +182,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         process_sstable_dir(directory, flags).get();
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        auto highest_generation = highest_generation_seen(directory).get();
-        sharded_gen.start(highest_generation ? highest_generation.as_int() : 0).get();
+        sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         auto make_sstable = [&] (shard_id shard) {
@@ -294,7 +283,6 @@ class table_populator {
     global_table_ptr& _global_table;
     std::vector<lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
-    sstables::generation_type _highest_generation;
 
 public:
     table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf)
@@ -334,7 +322,6 @@ future<> table_populator::start() {
     }
 
     co_await smp::invoke_on_all([this] {
-        _global_table->update_sstables_known_generation(_highest_generation);
         return _global_table->disable_auto_compaction();
     });
 
@@ -397,10 +384,8 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
     // format than the one we see then we use that.
     auto sys_format = _global_table->get_sstables_manager().get_highest_supported_format();
     auto sst_version = co_await highest_version_seen(directory, sys_format);
-    auto generation = co_await highest_generation_seen(directory);
 
     _highest_version = std::max(sst_version, _highest_version);
-    _highest_generation = std::max(generation, _highest_generation);
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {

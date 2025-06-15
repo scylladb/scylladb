@@ -765,4 +765,14 @@ future<> sstable_directory::filesystem_components_lister::handle_sstables_pendin
     co_await when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
+future<sstables::generation_type>
+highest_generation_seen(sharded<sstables::sstable_directory>& directory) {
+    co_return co_await directory.map_reduce0(
+        std::mem_fn(&sstables::sstable_directory::highest_generation_seen),
+        sstables::generation_type{},
+        [] (sstables::generation_type a, sstables::generation_type b) {
+            return std::max(a, b);
+        });
+}
+
 }
