@@ -177,7 +177,6 @@ private:
     std::unique_ptr<dht::sharder> _sharder_ptr;
     const dht::sharder& _sharder;
 
-    generation_type _max_generation_seen;
     sstables::sstable_version_types _max_version_seen = sstables::sstable_version_types::ka;
 
     // SSTables that are unshared and belong to this shard. They are already stored as an
@@ -243,13 +242,14 @@ public:
         return _unsorted_sstables;
     }
 
+    bool empty() const noexcept {
+        return _unshared_local_sstables.empty() && _shared_sstable_info.empty() && _unsorted_sstables.empty();
+    }
+
     future<shared_sstable> load_foreign_sstable(foreign_sstable_open_info& info);
 
     // moves unshared SSTables that don't belong to this shard to the right shards.
     future<> move_foreign_sstables(sharded<sstable_directory>& source_directory);
-
-    // returns what is the highest generation seen in this directory.
-    generation_type highest_generation_seen() const;
 
     // returns what is the highest version seen in this directory.
     sstables::sstable_version_types highest_version_seen() const;
@@ -321,7 +321,5 @@ public:
     static bool compare_sstable_storage_prefix(const sstring& a, const sstring& b) noexcept;
     sstable_state state() const noexcept { return _state; }
 };
-
-future<sstables::generation_type> highest_generation_seen(sharded<sstables::sstable_directory>& directory);
 
 }
