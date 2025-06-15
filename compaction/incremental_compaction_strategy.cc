@@ -274,7 +274,7 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::t
         // the SSTable, containing garbage, on every GC round.
         float actual_threshold = satisfy_staleness ? _tombstone_threshold : std::clamp(_tombstone_threshold * 2, 0.5f, 1.0f);
 
-        return run.estimate_droppable_tombstone_ratio(compaction_time, t.get_tombstone_gc_state(), t.schema()) >= actual_threshold;
+        return run.estimate_droppable_tombstone_ratio(compaction_time, t.get_tombstone_gc_before_getter(), t.schema()) >= actual_threshold;
     };
     auto compaction_time = gc_clock::now();
     auto can_garbage_collect = [&] (const size_bucket_t& bucket) {
