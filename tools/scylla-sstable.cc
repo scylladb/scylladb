@@ -948,7 +948,7 @@ public:
         , _tombstone_gc_state(nullptr)
         , _backlog_tracker(std::make_unique<dummy_compaction_backlog_tracker>())
         , _group_id("dummy-group")
-        , _generation_generator(0)
+        , _generation_generator()
     { }
     virtual dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     virtual const schema_ptr& schema() const noexcept override { return _schema; }

@@ -339,7 +339,7 @@ future<> verify_that_all_sstables_are_local(sharded<sstable_directory>& sstdir, 
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_generations) {
     sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        sharded_gen.start(0).get();
+        sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (shard_id i = 0; i < smp::count; ++i) {
@@ -365,7 +365,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_matched_gene
 SEASTAR_THREAD_TEST_CASE(sstable_directory_unshared_sstables_sanity_unmatched_generations) {
     sstables::test_env::do_with_sharded_async([] (sharded<test_env>& env) {
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        sharded_gen.start(0).get();
+        sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (shard_id i = 0; i < smp::count; ++i) {
@@ -513,7 +513,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly) {
         unsigned num_sstables = 10 * smp::count;
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        sharded_gen.start(0).get();
+        sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
@@ -564,7 +564,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_correctly_with_owned
         unsigned num_sstables = 10 * smp::count;
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        sharded_gen.start(0).get();
+        sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
@@ -616,7 +616,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_distributes_well_eve
         unsigned num_sstables = 10 * smp::count;
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        sharded_gen.start(0).get();
+        sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {
@@ -667,7 +667,7 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
         unsigned num_sstables = (cf.schema()->max_compaction_threshold() + 1) * smp::count;
 
         sharded<sstables::sstable_generation_generator> sharded_gen;
-        sharded_gen.start(0).get();
+        sharded_gen.start().get();
         auto stop_generator = deferred_stop(sharded_gen);
 
         for (unsigned nr = 0; nr < num_sstables; ++nr) {

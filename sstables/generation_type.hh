@@ -135,7 +135,7 @@ class sstable_generation_generator {
         return highest_generation - highest_generation % seastar::smp::count + seastar::this_shard_id();
     }
 public:
-    explicit sstable_generation_generator(int64_t last_generation)
+    explicit sstable_generation_generator(int64_t last_generation = 0)
         : _last_generation(base_generation(last_generation)) {}
     void update_known_generation(int64_t generation) {
         if (generation > _last_generation) {
