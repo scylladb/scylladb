@@ -199,7 +199,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         auto make_sstable = [&] (shard_id shard) {
             auto& sstm = global_table->get_sstables_manager();
             auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
-                return gen(sstables::uuid_identifiers::yes);
+                return gen();
             }).get();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
                                      generation, sstables::sstable_state::upload, sstm.get_highest_supported_format(),
