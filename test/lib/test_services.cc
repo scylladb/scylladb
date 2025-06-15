@@ -23,6 +23,7 @@
 #include <iostream>
 #include <fmt/ranges.h>
 #include <seastar/util/defer.hh>
+#include "sstables/generation_type.hh"
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
@@ -206,7 +207,6 @@ struct test_env::impl {
     std::unique_ptr<test_env_compaction_manager> cmgr;
     reader_concurrency_semaphore semaphore;
     sstables::sstable_generation_generator gen{0};
-    sstables::uuid_identifiers use_uuid;
     data_dictionary::storage_options storage;
     abort_source abort;
 
@@ -215,7 +215,7 @@ struct test_env::impl {
     impl(const impl&) = delete;
 
     sstables::generation_type new_generation() noexcept {
-        return gen(use_uuid);
+        return gen(uuid_identifiers::yes);
     }
 };
 
@@ -230,16 +230,9 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
         feature_service, cache_tracker, cfg.available_memory, dir_sem,
         [host_id = locator::host_id::create_random_id()]{ return host_id; }, scf, abort, current_scheduling_group(), sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
-    , use_uuid(cfg.use_uuid)
     , storage(std::move(cfg.storage))
 {
-    if (cfg.use_uuid) {
-        feature_service.uuid_sstable_identifiers.enable();
-    }
-    if (!storage.is_local_type()) {
-        // remote storage requires uuid-based identifier for naming sstables
-        SCYLLA_ASSERT(use_uuid == uuid_identifiers::yes);
-    }
+    feature_service.uuid_sstable_identifiers.enable();
 }
 
 test_env::test_env(test_env_config cfg, sstable_compressor_factory& scf, sstables::storage_manager* sstm, tmpdir* tmp)
