@@ -82,6 +82,10 @@ static std::map<sstring, sstring> prepare_options(
         sstring val;
         size_t nr_racks = std::stol(rf);
         if (nr_racks > dc_racks.size()) {
+            if (tm.get_topology().get_config().force_rack_valid_keyspaces) {
+                throw exceptions::configuration_exception(fmt::format(
+                        "Replication factor {} exceeds the number of racks ({}) in dc {}", nr_racks, dc_racks.size(), dc));
+            }
             logger.warn("Cannot expand rf={}: dc_racks={}", rf, fmt::join(dc_racks | std::views::keys, ","));
             val = rf;
         } else {
