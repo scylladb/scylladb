@@ -2709,20 +2709,24 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
         lw_shared_ptr<sstables::sstable_set> compound = make_lw_shared(sstables::make_compound_sstable_set(s, {set1, set2}));
 
         const auto keys = tests::generate_partition_keys(2, s);
-        set1->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
-        set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
-        set2->insert(sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0));
+        std::array<sstables::shared_sstable, 3> sstables_for_overlapping_test = {
+            sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0),
+            sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0),
+            sstable_for_overlapping_test(env, s, keys[0].key(), keys[1].key(), 0)
+        };
+        set1->insert(sstables_for_overlapping_test[0]);
+        set2->insert(sstables_for_overlapping_test[1]);
+        set2->insert(sstables_for_overlapping_test[2]);
 
-        BOOST_REQUIRE(std::ranges::fold_left(*compound->all() | std::views::transform([] (const sstables::shared_sstable& sst) { return sst->generation().as_int(); }), unsigned(0), std::plus{}) == 6);
-        {
-            unsigned found = 0;
-            for (auto sstables = compound->all(); [[maybe_unused]] auto& sst : *sstables) {
-                found++;
-            }
-            size_t compound_size = compound->all()->size();
-            BOOST_REQUIRE(compound_size == 3);
-            BOOST_REQUIRE(compound_size == found);
+        std::unordered_set<utils::UUID> expected_generations;
+        for (const auto& sst : sstables_for_overlapping_test) {
+            expected_generations.insert(sst->generation().as_uuid());
         }
+        std::unordered_set<utils::UUID> found_generations;
+        for (const auto& sst : *compound->all()) {
+            found_generations.insert(sst->generation().as_uuid());
+        }
+        BOOST_REQUIRE(found_generations == expected_generations);
 
         {
             auto cloned_compound = *compound;
@@ -2740,7 +2744,7 @@ SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
             BOOST_REQUIRE(compound_size == 1);
             BOOST_REQUIRE(compound_size == found);
         }
-    }, test_env_config{ .use_uuid = false });
+    });
 }
 
 SEASTAR_TEST_CASE(sstable_reader_with_timeout) {
