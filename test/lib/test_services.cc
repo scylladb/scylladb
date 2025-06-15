@@ -206,7 +206,7 @@ struct test_env::impl {
     test_env_sstables_manager mgr;
     std::unique_ptr<test_env_compaction_manager> cmgr;
     reader_concurrency_semaphore semaphore;
-    sstables::sstable_generation_generator gen{0};
+    sstables::sstable_generation_generator gen;
     data_dictionary::storage_options storage;
     abort_source abort;
 

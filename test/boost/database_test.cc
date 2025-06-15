@@ -496,7 +496,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
 
     const sstring toc_text = "TOC.txt\nData.db\n";
 
-    sstables::sstable_generation_generator gen_generator(0);
+    sstables::sstable_generation_generator gen_generator;
     std::vector<sstables::generation_type> gen;
     constexpr size_t num_gens = 9;
     std::generate_n(std::back_inserter(gen), num_gens, [&] {
