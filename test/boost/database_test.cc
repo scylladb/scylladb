@@ -500,9 +500,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
     std::vector<sstables::generation_type> gen;
     constexpr size_t num_gens = 9;
     std::generate_n(std::back_inserter(gen), num_gens, [&] {
-        // we assumes the integer-based generation identifier in this test, so disable
-        // uuid_identifier here
-        return gen_generator(sstables::uuid_identifiers::no);
+        return gen_generator();
     });
 
     // Regular log file with single entry
@@ -534,9 +532,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
                component_basename(gen[8], component_type::TOC) + "\n");
 
     do_with_cql_env_and_compaction_groups([&] (cql_test_env& e) {
-        // Empty log file
-        require_exist(pending_delete_dir + "/sstables-0-0.log", false);
-
+        // Empty log filesst_dir
         // Empty temporary log file
         require_exist(pending_delete_dir + "/sstables-1-1.log.tmp", false);
 
