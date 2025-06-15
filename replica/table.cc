@@ -88,7 +88,7 @@ void table::update_sstables_known_generation(sstables::generation_type generatio
 sstables::generation_type table::calculate_generation_for_new_table() {
     SCYLLA_ASSERT(_sstable_generation_generator);
     auto ret = std::invoke(*_sstable_generation_generator,
-                           sstables::uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
+                           sstables::uuid_identifiers::yes);
     tlogger.debug("{}.{} new sstable generation {}", schema()->ks_name(), schema()->cf_name(), ret);
     return ret;
 }

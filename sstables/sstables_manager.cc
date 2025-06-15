@@ -150,10 +150,6 @@ locator::host_id sstables_manager::get_local_host_id() const {
     return _resolve_host_id();
 }
 
-bool sstables_manager::uuid_sstable_identifiers() const {
-    return true;
-}
-
 shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         const data_dictionary::storage_options& storage,
         generation_type generation,
