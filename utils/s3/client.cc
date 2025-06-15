@@ -1183,6 +1183,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             if (buff_size == 0 && _range->len == 0) {
                                 s3l.trace("Fiber for object '{}' signals EOS", _object_name);
                                 _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size), s3_clock::now() - start);
+                                _get_cv.signal();
                                 _is_finished = true;
                                 break;
                             }
