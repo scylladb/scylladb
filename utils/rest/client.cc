@@ -7,11 +7,14 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <boost/regex.hpp>
+
 #include <seastar/net/tls.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/util/short_streams.hh>
 
 #include "client.hh"
+#include "utils/http.hh"
 
 using namespace seastar;
 
@@ -119,6 +122,90 @@ void rest::httpclient::content(std::string_view content) {
 
 void rest::httpclient::target(std::string_view s) {
     _req._url = sstring(s);
+}
+
+rest::unexpected_status_error::unexpected_status_error(seastar::http::reply::status_type status, key_values headers)
+    : httpd::unexpected_status_error(status)
+    , _headers(headers.begin(), headers.end())
+{}
+
+future<rjson::value> rest::send_request(std::string_view uri
+    , seastar::shared_ptr<seastar::tls::certificate_credentials> creds
+    , const rjson::value& body
+    , httpclient::method_type op
+    , key_values headers)
+{
+    return send_request(uri, std::move(creds), rjson::print(body), "application/json", op, std::move(headers));
+}
+
+future<rjson::value> rest::send_request(std::string_view uri
+    , seastar::shared_ptr<seastar::tls::certificate_credentials> creds
+    , std::string body
+    , std::string_view content_type
+    , httpclient::method_type op
+    , key_values headers)
+{
+    rjson::value v;
+    co_await send_request(uri, std::move(creds), std::move(body), content_type, [&](const http::reply& rep, std::string_view s) {
+        if (rep._status != http::reply::status_type::ok) {
+            std::vector<key_value> tmp(rep._headers.begin(), rep._headers.end());
+            throw unexpected_status_error(rep._status, tmp);
+        }
+        v = rjson::parse(s); 
+    }, op, std::move(headers));
+    co_return v;
+}
+
+future<> rest::send_request(std::string_view uri
+    , seastar::shared_ptr<seastar::tls::certificate_credentials> creds
+    , std::string body
+    , std::string_view content_type
+    , const std::function<void(const http::reply&, std::string_view)>& handler
+    , httpd::operation_type op
+    , key_values headers)
+{
+    // Extremely simplified URI parsing. Does not handle any params etc. But we do not expect such here.
+    static boost::regex simple_url(R"foo((https?):\/\/([^\/:]+)(:\d+)?(\/.*)?)foo");
+
+    boost::smatch m;
+    std::string tmp(uri);
+    if (!boost::regex_match(tmp, m, simple_url)) {
+        throw std::invalid_argument(fmt::format("Could not parse URI {}", uri));
+    }
+
+    auto scheme = m[1].str();
+    auto host = m[2].str();
+    auto port = m[3].str();
+    auto path = m[4].str();
+
+    if (scheme != "https") {
+        creds = nullptr;
+    } else if (!creds) {
+        creds = co_await utils::http::system_trust_credentials();
+    }
+
+    uint16_t pi = port.empty() ? (creds ? 443 : 80) : uint16_t(std::stoi(port.substr(1)));
+
+    httpclient client(host, pi, std::move(creds));
+
+    client.target(path);
+    client.method(op);
+
+    for (auto& [k, v] : headers) {
+        client.add_header(k, v);
+    }
+
+    if (!body.empty()) {
+        if (content_type.empty()) {
+            content_type = "application/x-www-form-urlencoded";
+        }
+        client.content(std::move(body));
+        client.add_header(httpclient::CONTENT_TYPE_HEADER, content_type);
+    }
+
+    co_await client.send([&] (const http::reply& rep, std::string_view result) {
+        handler(rep, result);
+    });
 }
 
 constexpr auto linesep = '\n';
