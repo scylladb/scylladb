@@ -1827,21 +1827,24 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             };
 
-            auth::service_config maintenance_auth_config;
-            maintenance_auth_config.authorizer_java_name = sstring{auth::allow_all_authorizer_name};
-            maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
-            maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
-
-            maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
-
-            cql_transport::controller cql_maintenance_server_ctl(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
-
+            std::optional<cql_transport::controller> cql_maintenance_server_ctl;
             std::any stop_maintenance_auth_service;
             std::any stop_maintenance_cql;
 
             if (cfg->maintenance_socket() != "ignore") {
+                startlog.info("starting maintenance auth service");
+                stop_signal.wait().get();
+                auth::service_config maintenance_auth_config;
+                maintenance_auth_config.authorizer_java_name = sstring{auth::allow_all_authorizer_name};
+                maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
+                maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
+
+                maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes).get();
+
+                cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
+
                 start_auth_service(maintenance_auth_service, stop_maintenance_auth_service, "maintenance auth service");
-                start_cql(cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
+                start_cql(*cql_maintenance_server_ctl, stop_maintenance_cql, "maintenance native server");
             }
 
             db::snapshot_ctl::config snap_cfg = {
