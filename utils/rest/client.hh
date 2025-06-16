@@ -12,6 +12,9 @@
 #include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/reply.hh>
+#include <seastar/http/exception.hh>
+
+#include "utils/rjson.hh"
 
 namespace rest {
 
@@ -30,6 +33,7 @@ public:
 
     using reply_status = seastar::http::reply::status_type;
     using request_type = seastar::http::request;
+    using reply_type = seastar::http::reply;
 
     struct result_type {
         seastar::http::reply reply;
@@ -74,6 +78,43 @@ private:
     seastar::tls::tls_options _tls_options;
     request_type _req;
 };
+
+using key_value = std::pair<std::string_view, std::string_view>;
+using key_values = std::span<const key_value>;
+
+class unexpected_status_error : public seastar::httpd::unexpected_status_error {
+    std::vector<std::pair<std::string, std::string>> _headers;
+public:
+    unexpected_status_error(seastar::http::reply::status_type, key_values);
+
+    const auto& headers() const {
+        return _headers;
+    }
+};
+
+future<rjson::value> send_request(std::string_view uri
+    , seastar::shared_ptr<seastar::tls::certificate_credentials>
+    , const rjson::value& body
+    , httpclient::method_type op
+    , key_values headers = {}
+);
+
+future<rjson::value> send_request(std::string_view uri
+    , seastar::shared_ptr<seastar::tls::certificate_credentials>
+    , std::string body
+    , std::string_view content_type
+    , httpclient::method_type op
+    , key_values headers = {}
+);
+
+future<> send_request(std::string_view uri
+    , seastar::shared_ptr<seastar::tls::certificate_credentials>
+    , std::string body
+    , std::string_view content_type
+    , const std::function<void(const httpclient::reply_type&, std::string_view)>& handler
+    , httpclient::method_type op
+    , key_values headers = {}
+);
 
 }
 
