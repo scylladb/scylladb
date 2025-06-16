@@ -6888,6 +6888,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
     auto this_host = _db.local().get_token_metadata().get_my_id();
     load_stats.capacity[this_host] = _disk_space_monitor->space().capacity;
+    load_stats.critical_disk_utilization[this_host] = get_database().is_in_critical_disk_utilization_mode();
 
     co_return std::move(load_stats);
 }

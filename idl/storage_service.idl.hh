@@ -31,6 +31,7 @@ struct load_stats_v1 final {
 struct load_stats {
     std::unordered_map<::table_id, locator::table_load_stats> tables;
     std::unordered_map<locator::host_id, uint64_t> capacity;
+    std::unordered_map<locator::host_id, bool> critical_disk_utilization [[version 2025.3]];
 };
 
 }
