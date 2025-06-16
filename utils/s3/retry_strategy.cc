@@ -10,11 +10,14 @@
 #include "aws_error.hh"
 #include "utils/log.hh"
 
+namespace seastar::http::experimental {
+extern logging::logger rs_logger;
+}
+
 using namespace std::chrono_literals;
+using namespace seastar::http::experimental;
 
 namespace aws {
-
-static logging::logger rs_logger("default_retry_strategy");
 
 default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, unsigned scale_factor) : _max_retries(max_retries), _scale_factor(scale_factor) {
 }
