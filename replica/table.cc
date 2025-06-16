@@ -1333,7 +1333,7 @@ future<>
 table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_sstable sst, sstables::offstrategy offstrategy,
                                        bool trigger_compaction) {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
-    co_return co_await get_row_cache().invalidate(row_cache::external_updater([&] () noexcept {
+    auto updater = row_cache::external_updater([&] () noexcept {
         // FIXME: this is not really noexcept, but we need to provide strong exception guarantees.
         // atomically load all opened sstables into column family.
         if (!offstrategy) {
@@ -1345,7 +1345,8 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
         if (trigger_compaction) {
             try_trigger_compaction(cg);
         }
-    }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
+    });
+    co_return co_await get_row_cache().invalidate(updater, dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
 }
 
 future<>
@@ -1380,6 +1381,7 @@ table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>
 
 future<>
 table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts) {
+  try {
     auto permit = co_await seastar::get_units(_sstable_set_mutation_sem, 1);
     mutation_source_opt ms_opt;
     if (ssts.size() == 1) {
@@ -1392,20 +1394,34 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         }
         ms_opt = make_combined_mutation_source(std::move(sources));
     }
-    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), new_ssts_ms = std::move(*ms_opt), &cg] () mutable {
+    auto adder = row_cache::external_updater([this, m, ssts = std::move(ssts), ms_opt = std::move(ms_opt), &cg] () mutable {
         // FIXME: the following isn't exception safe.
-        for (auto& sst : ssts) {
+        for (auto& i : ssts) {
+          if (auto sst = std::move(i)) {
             add_sstable(cg, sst);
             update_stats_for_new_sstable(sst);
+          }
         }
-        m->mark_flushed(std::move(new_ssts_ms));
+        if (auto new_ssts_ms = std::move(ms_opt)) {
+            m->mark_flushed(std::move(*new_ssts_ms));
+        }
         try_trigger_compaction(cg);
     });
     if (cache_enabled()) {
-        co_return co_await _cache.update(std::move(adder), *m);
-    } else {
-        co_return co_await _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
+      try {
+        co_return co_await _cache.update(adder, *m);
+      } catch (...) {
+        // Just report the exception, as invalidating the cache is fine as fallback.
+        tlogger.warn("Failed to update the row cache: {}: invalidating instead", std::current_exception());
+      }
     }
+    co_await _cache.invalidate(adder);
+    co_await m->clear_gently();
+  } catch (...) {
+    std::invoke([&] () noexcept {
+        on_fatal_internal_error(tlogger, fmt::format("failed to update the row cache: {}", std::current_exception()));
+    });
+  }
 }
 
 // Handles permit management only, used for situations where we don't want to inform
@@ -1745,10 +1761,11 @@ table::stop() {
     co_await _pending_flushes_phaser.close();
     co_await _sstable_deletion_gate.close();
     co_await std::move(gate_closed_fut);
-    co_await get_row_cache().invalidate(row_cache::external_updater([this] {
+    auto updater = row_cache::external_updater([this] {
         _sg_manager->clear_storage_groups();
         _sstables = make_compound_sstable_set();
-    }));
+    });
+    co_await get_row_cache().invalidate(updater);
     _cache.refresh_snapshot();
 }
 static seastar::metrics::label_instance node_table_metrics("__per_table", "node");
@@ -2088,7 +2105,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(sstables::compact
     auto updater = row_cache::external_updater(sstable_list_updater::make(*this, builder, desc));
     auto& cache = _t.get_row_cache();
 
-    co_await cache.invalidate(std::move(updater), std::move(desc.ranges_for_cache_invalidation));
+    co_await cache.invalidate(updater, std::move(desc.ranges_for_cache_invalidation));
 
     // refresh underlying data source in row cache to prevent it from holding reference
     // to sstables files that are about to be deleted.
@@ -3158,8 +3175,7 @@ future<> table::clear() {
     auto permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
 
     co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::clear_memtables));
-
-    co_await _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
+    co_await _cache.invalidate();
 }
 
 bool storage_group::compaction_disabled() const {
@@ -3199,7 +3215,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
 
     auto permit = co_await get_sstable_list_permit();
 
-    co_await _cache.invalidate(row_cache::external_updater([this, &rp, &remove, truncated_at] {
+    auto updater = row_cache::external_updater([this, &rp, &remove, truncated_at] {
         // FIXME: the following isn't exception safe.
         for_each_compaction_group([&] (compaction_group& cg) {
 
@@ -3228,7 +3244,8 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
         });
         refresh_compound_sstable_set();
         tlogger.debug("cleaning out row cache");
-    }));
+    });
+    co_await _cache.invalidate(updater);
     rebuild_statistics();
 
     std::vector<sstables::shared_sstable> del;
@@ -4047,7 +4064,7 @@ future<> compaction_group::cleanup() {
     tlogger.debug("Invalidating range {} for compaction group {} of table {} during cleanup.",
                   p_range, group_id(), _t.schema()->ks_name(), _t.schema()->cf_name());
     // Since permit is still held, all actions below will be executed atomically:
-    co_await _t._cache.invalidate(std::move(updater), p_range);
+    co_await _t._cache.invalidate(updater, p_range);
     _t._cache.refresh_snapshot();
 
     co_await _t.delete_sstables_atomically(permit, _sstables_compacted_but_not_deleted);
