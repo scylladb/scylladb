@@ -7525,7 +7525,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
     } else {
         unwrapped.emplace_back(std::move(range));
     }
-    tokens.push_back(std::move(unwrapped[0].start().value_or(range_type::bound(dht::minimum_token()))).value());
+    tokens.push_back(std::move(unwrapped[0].start_copy().value_or(range_type::bound(dht::minimum_token()))).value());
     for (auto&& r : unwrapped) {
         std::vector<dht::token> range_tokens;
         for (auto &&sst : *sstables) {
@@ -7536,7 +7536,7 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
         std::sort(range_tokens.begin(), range_tokens.end());
         std::move(range_tokens.begin(), range_tokens.end(), std::back_inserter(tokens));
     }
-    tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end().value_or(range_type::bound(dht::maximum_token()))).value());
+    tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end_copy().value_or(range_type::bound(dht::maximum_token()))).value());
 
     // split_count should be much smaller than number of key samples, to avoid huge sampling error
     constexpr uint32_t min_samples_per_split = 4;

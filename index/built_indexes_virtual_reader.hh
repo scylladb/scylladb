@@ -53,8 +53,8 @@ class built_indexes_virtual_reader {
                 const schema& built_indexes_schema)
         {
             bool singular = range.is_singular();
-            auto start = range.start();
-            auto end = range.end();
+            auto start = range.start_copy();
+            auto end = range.end_copy();
             if (start) {
                 *start = query::clustering_range::bound(
                     index_name_to_view_name(start->value(), built_views_schema, built_indexes_schema),

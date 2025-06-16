@@ -193,7 +193,7 @@ ring_position_range_sharder::next(const schema& s) {
     if ((!_range.end() || shard_boundary.less_compare(s, _range.end()->value()))
             && !shard_boundary_token.is_maximum()) {
         // split the range at end_of_shard
-        auto start = _range.start();
+        auto start = _range.start_copy();
         auto end = interval_bound<ring_position>(shard_boundary, false);
         _range = dht::partition_range(
                 interval_bound<ring_position>(std::move(shard_boundary), true),
@@ -232,7 +232,7 @@ future<utils::chunked_vector<partition_range>>
 split_range_to_single_shard(const schema& s, const static_sharder& sharder, const partition_range& pr, shard_id shard) {
     auto start_token = pr.start() ? pr.start()->value().token() : minimum_token();
     auto start_shard = sharder.shard_of(start_token);
-    auto start_boundary = start_shard == shard ? pr.start() : interval_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));
+    auto start_boundary = start_shard == shard ? pr.start_copy() : interval_bound<ring_position>(ring_position::starting_at(sharder.token_for_next_shard(start_token, shard)));
     start_token = start_shard == shard ? start_token : sharder.token_for_next_shard(start_token, shard);
     return repeat_until_value([&sharder,
             &pr,

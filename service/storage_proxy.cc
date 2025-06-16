@@ -6131,7 +6131,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                     }
 
                     // If we get there, merge this range and the next one
-                    range = dht::partition_range(range.start(), next_range.end());
+                    range = dht::partition_range(range.start(), next_range.end());  
                     live_endpoints = std::move(merged);
                     merged_preferred_replicas = std::move(current_merged_preferred_replicas);
                     filtered_endpoints = std::move(filtered_merged);

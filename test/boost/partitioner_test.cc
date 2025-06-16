@@ -363,11 +363,11 @@ SEASTAR_THREAD_TEST_CASE(test_murmur3_sharding_with_ignorebits) {
 static
 dht::partition_range
 normalize(dht::partition_range pr) {
-    auto start = pr.start();
+    auto start = pr.start_copy();
     if (start && start->value().token() == dht::minimum_token()) {
         start = std::nullopt;
     }
-    auto end = pr.end();
+    auto end = pr.end_copy();
     if (end && end->value().token() == dht::maximum_token()) {
         end = std::nullopt;
     }

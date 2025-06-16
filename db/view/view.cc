@@ -3197,7 +3197,7 @@ public:
 
             // before going back to the minimum token, advance current_key to the end
             // and check for built views in that range.
-            _step.current_key = {_step.prange.end().value_or(dht::ring_position::max()).value().token(), partition_key::make_empty()};
+            _step.current_key = { _step.prange.end().value_or(dht::ring_position::max()).value().token(), partition_key::make_empty()};
             check_for_built_views();
 
             _step.current_key = {dht::minimum_token(), partition_key::make_empty()};

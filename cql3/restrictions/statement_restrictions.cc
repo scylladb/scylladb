@@ -2315,7 +2315,7 @@ std::vector<query::clustering_range> get_single_column_clustering_bounds(
                 // For example, the expression `c1=1 AND c2=2 AND c3>3` makes lower CK bound (1,2,3) exclusive and
                 // upper CK bound (1,2) inclusive.
                 ck_ranges.reserve(product_size);
-                const auto extra_lb = last_range->start(), extra_ub = last_range->end();
+                const auto extra_lb = last_range->start_copy(), extra_ub = last_range->end_copy();
                 for (auto& b : cartesian_product(prior_column_values)) {
                     auto new_lb = b, new_ub = b;
                     if (extra_lb) {
