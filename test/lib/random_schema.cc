@@ -1152,9 +1152,8 @@ future<> random_schema::create_with_cql(cql_test_env& env) {
 
         auto& db = env.local_db();
 
-        auto schema_desc = _schema->describe(
-                replica::make_schema_describe_helper(_schema, db.as_data_dictionary()),
-                cql3::describe_option::STMTS);
+        replica::schema_describe_helper describe_helper{db.as_data_dictionary()};
+        auto schema_desc = _schema->describe(describe_helper, cql3::describe_option::STMTS);
 
         env.execute_cql(*schema_desc.create_statement).get();
         auto& tbl = db.find_column_family(ks_name, tbl_name);

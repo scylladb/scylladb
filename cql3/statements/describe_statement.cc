@@ -210,7 +210,8 @@ description view(const data_dictionary::database& db, const sstring& ks, const s
         throw exceptions::invalid_request_exception(format("Materialized view '{}' not found in keyspace '{}'", name, ks));
     }
 
-    return view->schema()->describe(replica::make_schema_describe_helper(view->schema(), db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    replica::schema_describe_helper describe_helper{db};
+    return view->schema()->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
 }
 
 description index(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
@@ -228,7 +229,8 @@ description index(const data_dictionary::database& db, const sstring& ks, const 
         }
     }
 
-    return (**idx).describe(replica::make_schema_describe_helper(*idx, db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    replica::schema_describe_helper describe_helper{db};
+    return (**idx).describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
 }
 
 // `base_name` should be a table with enabled cdc
@@ -241,7 +243,7 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
 
     std::ostringstream os;
     auto schema = table->schema();
-    auto describe_helper = replica::make_schema_describe_helper(schema, db);
+    replica::schema_describe_helper describe_helper{db};
     schema->describe_alter_with_properties(describe_helper, os);
 
     auto schema_desc = schema->describe(describe_helper, describe_option::NO_STMTS);
@@ -266,7 +268,8 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     std::vector<description> result;
 
     // table
-    auto table_desc = schema->describe(replica::make_schema_describe_helper(schema, db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    replica::schema_describe_helper describe_helper{db};
+    auto table_desc = schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
     if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
         // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
         // This way, the user learns about the internals of the table, but they're also told not to execute it.
@@ -325,8 +328,9 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
         co_return result;
     }
 
-    co_return tables | std::views::transform([&db] (auto&& t) {
-        return t->describe(replica::make_schema_describe_helper(t, db), describe_option::NO_STMTS);
+    replica::schema_describe_helper describe_helper{db};
+    co_return tables | std::views::transform([&describe_helper] (auto&& t) {
+        return t->describe(describe_helper, describe_option::NO_STMTS);
     }) | std::ranges::to<std::vector>();
 }
 

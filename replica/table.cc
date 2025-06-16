@@ -2906,10 +2906,9 @@ table::seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets) 
     co_await io_check(sync_directory, std::move(jsondir));
 }
 
-future<> table::write_schema_as_cql(const global_table_ptr& table_shards, sstring dir) const {
-    auto schema_desc = schema()->describe(
-            replica::make_schema_describe_helper(table_shards),
-            cql3::describe_option::STMTS);
+future<> table::write_schema_as_cql(database& db, sstring dir) const {
+    replica::schema_describe_helper describe_helper{db.as_data_dictionary()};
+    auto schema_desc = this->schema()->describe(describe_helper, cql3::describe_option::STMTS);
 
     auto schema_description = std::move(*schema_desc.create_statement);
     auto schema_file_name = dir + "/schema.cql";
@@ -2959,7 +2958,7 @@ future<> table::snapshot_on_all_shards(sharded<database>& sharded_db, const glob
         });
         co_await io_check(sync_directory, jsondir);
 
-        co_await t.finalize_snapshot(table_shards, std::move(jsondir), std::move(file_sets));
+        co_await t.finalize_snapshot(sharded_db.local(), std::move(jsondir), std::move(file_sets));
     });
 }
 
@@ -2980,11 +2979,11 @@ future<table::snapshot_file_set> table::take_snapshot(sstring jsondir) {
     co_return make_foreign(std::move(table_names));
 }
 
-future<> table::finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
+future<> table::finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets) {
     std::exception_ptr ex;
 
     tlogger.debug("snapshot {}: writing schema.cql", jsondir);
-    co_await write_schema_as_cql(table_shards, jsondir).handle_exception([&] (std::exception_ptr ptr) {
+    co_await write_schema_as_cql(db, jsondir).handle_exception([&] (std::exception_ptr ptr) {
         tlogger.error("Failed writing schema file in snapshot in {} with exception {}", jsondir, ptr);
         ex = std::move(ptr);
     });

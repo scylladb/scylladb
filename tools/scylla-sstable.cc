@@ -2977,7 +2977,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
 
         const auto table_name = schema->cf_name();
 
-        schema_describe_helper describe_helper = replica::make_schema_describe_helper(schema, db.as_data_dictionary());
+        replica::schema_describe_helper describe_helper{db.as_data_dictionary()};
 
         const auto original_schema_description = sstable_schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
         const auto schema_description = schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);

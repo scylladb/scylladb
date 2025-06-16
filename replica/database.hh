@@ -15,8 +15,6 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/when_all.hh>
-#include "replica/global_table_ptr.hh"
-#include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
 #include "db_clock.hh"
@@ -70,7 +68,6 @@
 #include "compaction/compaction_fwd.hh"
 #include "compaction_group.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
-#include "replica/tables_metadata_lock.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -1015,7 +1012,7 @@ private:
 
     future<snapshot_file_set> take_snapshot(sstring jsondir);
     // Writes the table schema and the manifest of all files in the snapshot directory.
-    future<> finalize_snapshot(const global_table_ptr& table_shards, sstring jsondir, std::vector<snapshot_file_set> file_sets);
+    future<> finalize_snapshot(database& db, sstring jsondir, std::vector<snapshot_file_set> file_sets);
     static future<> seal_snapshot(sstring jsondir, std::vector<snapshot_file_set> file_sets);
 public:
     static future<> snapshot_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name);
@@ -1039,7 +1036,7 @@ public:
      * CREATE INDEX command.
      * The same is true for local index and MATERIALIZED VIEW.
      */
-    future<> write_schema_as_cql(const global_table_ptr& table_shards, sstring dir) const;
+    future<> write_schema_as_cql(database& db, sstring dir) const;
 
     bool incremental_backups_enabled() const {
         return _config.enable_incremental_backups;
@@ -1334,17 +1331,6 @@ using user_types_metadata = data_dictionary::user_types_metadata;
 
 using keyspace_metadata = data_dictionary::keyspace_metadata;
 
-// Encapsulates objects needed to update keyspace schema
-struct keyspace_change {
-    lw_shared_ptr<keyspace_metadata> metadata;
-    locator::replication_strategy_ptr strategy;
-    locator::vnode_effective_replication_map_ptr erm;
-
-    const sstring& keyspace_name() const {
-        return metadata->name();
-    }
-};
-
 class keyspace {
 public:
     struct config {
@@ -1376,14 +1362,14 @@ private:
     locator::effective_replication_map_factory& _erm_factory;
 
 public:
-    explicit keyspace(config cfg, locator::effective_replication_map_factory& erm_factory);
+    explicit keyspace(lw_shared_ptr<keyspace_metadata> metadata, config cfg, locator::effective_replication_map_factory& erm_factory);
     keyspace(const keyspace&) = delete;
     void operator=(const keyspace&) = delete;
     keyspace(keyspace&&) = default;
 
     future<> shutdown() noexcept;
 
-    void apply(keyspace_change kc);
+    future<> update_from(const locator::shared_token_metadata& stm, lw_shared_ptr<keyspace_metadata>);
 
     future<> init_storage();
 
@@ -1392,12 +1378,7 @@ public:
      * boom, it is replaced.
      */
     lw_shared_ptr<keyspace_metadata> metadata() const;
-
-    static locator::replication_strategy_ptr create_replication_strategy(
-            lw_shared_ptr<keyspace_metadata> metadata);
-    future<locator::vnode_effective_replication_map_ptr> create_effective_replication_map(
-            locator::replication_strategy_ptr strategy,
-            const locator::shared_token_metadata& stm) const;
+    future<> create_replication_strategy(const locator::shared_token_metadata& stm);
     void update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm);
 
     /**
@@ -1494,11 +1475,8 @@ public:
     public:
         size_t size() const noexcept;
 
-        // write lock is needed during adding or removing table
-        future<rwlock::holder> hold_write_lock();
-        void add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
-        void remove_table(database& db, table& cf) noexcept;
-
+        future<> add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
+        future<> remove_table(database& db, table& cf) noexcept;
         table& get_table(table_id id) const;
         table_id get_table_id(const std::pair<std::string_view, std::string_view>& kscf) const;
         lw_shared_ptr<table> get_table_if_exists(table_id id) const;
@@ -1661,7 +1639,7 @@ private:
     future<> flush_system_column_families();
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
-    future<std::unique_ptr<keyspace>> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
     reader_concurrency_semaphore& read_concurrency_sem();
@@ -1679,18 +1657,15 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
-    future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
-    void remove(table&) noexcept;
-    future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const;
-    static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func);
+    future<> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<> remove(table&) noexcept;
+    void drop_keyspace(const sstring& name);
+    future<> update_keyspace(const keyspace_metadata& tmp_ksm);
+    static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func, std::function<future<>(replica::database&)> notifier);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
     friend class ::sigquit_handler; // wants access to all semaphores to dump diagnostics
 public:
-    void insert_keyspace(std::unique_ptr<keyspace> ks);
-    void update_keyspace(std::unique_ptr<keyspace_change> change);
-    void drop_keyspace(const sstring& name);
-
     static table_schema_version empty_version;
 
     query::result_memory_limiter& get_result_memory_limiter() {
@@ -1760,33 +1735,27 @@ public:
             schema_ptr table, bool write_in_user_memory, locator::effective_replication_map_factory&);
 
     void init_schema_commitlog();
-
     using is_new_cf = bool_class<struct is_new_cf_tag>;
-    void add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata = nullptr);
-    future<> make_column_family_directory(schema_ptr schema);
     future<> add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new);
-
 
     /* throws no_such_column_family if missing */
     table_id find_uuid(std::string_view ks, std::string_view cf) const;
     table_id find_uuid(const schema_ptr&) const;
-
-    using created_keyspace_per_shard = std::vector<seastar::foreign_ptr<std::unique_ptr<keyspace>>>;
-    using keyspace_change_per_shard = std::vector<seastar::foreign_ptr<std::unique_ptr<keyspace_change>>>;
 
     /**
      * Creates a keyspace for a given metadata if it still doesn't exist.
      *
      * @return ready future when the operation is complete
      */
-    static future<created_keyspace_per_shard> prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
+    static future<> create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(std::string_view name);
     const keyspace& find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
-    static future<keyspace_change_per_shard> prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
+    static future<> update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
+    static future<> drop_keyspace_on_all_shards(sharded<database>& sharded_db, const sstring& name);
     std::vector<sstring> get_non_system_keyspaces() const;
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
@@ -1945,31 +1914,20 @@ public:
     bool update_column_family(schema_ptr s);
 private:
     keyspace::config make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_system);
+    future<> add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new);
+    future<> detach_column_family(table& cf);
+
     struct table_truncate_state;
 
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, const global_table_ptr&, std::optional<db_clock::time_point> truncated_at_opt, bool with_snapshot, std::optional<sstring> snapshot_name_opt);
-    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, std::vector<lw_shared_ptr<replica::table>>& views, const table_truncate_state&);
+    future<> truncate(db::system_keyspace& sys_ks, column_family& cf, const table_truncate_state&);
 public:
     /** Truncates the given column family */
     // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
 
-    static future<tables_metadata_lock_on_all_shards> prepare_tables_metadata_change_on_all_shards(sharded<database>& sharded_db);
-
-    // Drops the table and removes the table directory if there are no snapshots,
-    // it's executed in 3 steps: prepare, drop and cleanup so that the middle step
-    // (actual drop) could be atomic.
-    static future<global_table_ptr> prepare_drop_table_on_all_shards(sharded<database>& sharded_db, table_id uuid);
-    // drop_table should be called on all shards
-    static void drop_table(sharded<database>& sharded_db,
-            sstring ks_name, sstring cf_name,
-            bool with_snapshot, global_table_ptr& table_shards);
-    static future<> cleanup_drop_table_on_all_shards(sharded<database>& sharded_db,
-            sharded<db::system_keyspace>& sys_ks,
-            bool with_snapshot, global_table_ptr& table_shards);
-    static future<> legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
-            sstring ks_name, sstring cf_name,
-            bool with_snapshot = true);
+    // drops the table on all shards and removes the table directory if there are no snapshots
+    static future<> drop_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, bool with_snapshot = true);
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();

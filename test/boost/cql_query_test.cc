@@ -4354,10 +4354,11 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
             "country_code int,"
             "number text)"
         ).get();
+        replica::schema_describe_helper describe_helper{e.data_dictionary()};
         for (auto &&ct : cql_create_tables) {
             e.execute_cql(ct.second).get();
             auto schema = e.local_db().find_schema("ks", ct.first);
-            auto schema_desc = schema->describe(replica::make_schema_describe_helper(schema, e.data_dictionary()), cql3::describe_option::STMTS);
+            auto schema_desc = schema->describe(describe_helper, cql3::describe_option::STMTS);
 
             BOOST_CHECK_EQUAL(normalize_white_space(*schema_desc.create_statement), normalize_white_space(ct.second));
         }
@@ -4420,15 +4421,18 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
 
         e.execute_cql("CREATE KEYSPACE \"KS\" WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}").get();
         e.execute_cql(base_table).get();
+
+        replica::schema_describe_helper describe_helper{e.data_dictionary()};
+
         for (auto &&ct : cql_create_tables) {
             e.execute_cql(ct.second).get();
             auto schema = e.local_db().find_schema("KS", ct.first);
-            auto schema_desc = schema->describe(replica::make_schema_describe_helper(schema, e.data_dictionary()), cql3::describe_option::STMTS);
+            auto schema_desc = schema->describe(describe_helper, cql3::describe_option::STMTS);
 
             BOOST_CHECK_EQUAL(normalize_white_space(*schema_desc.create_statement), normalize_white_space(ct.second));
 
             auto base_schema = e.local_db().find_schema("KS", "cF");
-            auto base_schema_desc = base_schema->describe(replica::make_schema_describe_helper(base_schema, e.data_dictionary()), cql3::describe_option::STMTS);
+            auto base_schema_desc = base_schema->describe(describe_helper, cql3::describe_option::STMTS);
 
             BOOST_CHECK_EQUAL(normalize_white_space(*base_schema_desc.create_statement), normalize_white_space(base_table));
         }
