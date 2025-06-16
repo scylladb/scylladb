@@ -1802,7 +1802,8 @@ sharded<locator::shared_token_metadata> token_metadata;
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
                 std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*disk_space_monitor_shard0)
+                only_on_shard0(&*disk_space_monitor_shard0),
+                only_on_shard0(&*out_of_space_controller_shard0)
             ).get();
 
             ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
