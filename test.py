@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import collections
+import shlex
 from random import randint
+
+from types import SimpleNamespace
 
 import colorama
 import glob
@@ -28,13 +30,13 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, TOP_SRC_DIR, path_to
+from test import ALL_MODES, TOP_SRC_DIR, path_to, TEST_DIR
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
     Test,
@@ -45,13 +47,13 @@ from test.pylib.suite.base import (
     prepare_dirs,
     start_3rd_party_services,
 )
-from test.pylib.suite.boost import BoostTest
-from test.pylib.resource_gather import setup_cgroup, run_resource_watcher
+from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja
 
 if TYPE_CHECKING:
     from typing import List
 
+PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit']
 
 launch_time = time.monotonic()
 
@@ -254,15 +256,6 @@ def parse_cmd_line() -> argparse.Namespace:
     args.tmpdir = os.path.abspath(args.tmpdir)
     prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics)
 
-    # Get the list of tests configured by configure.py
-    try:
-        out = ninja('unit_test_list')
-        # [1/1] List configured unit tests
-        args.tests = set(re.sub(r'.* List configured unit tests\n(.*)\n', r'\1', out, count=1, flags=re.DOTALL).split("\n"))
-    except Exception:
-        print(palette.fail("Failed to read output of `ninja unit_test_list`: please run ./configure.py first"))
-        raise
-
     if args.extra_scylla_cmdline_options:
         args.extra_scylla_cmdline_options = args.extra_scylla_cmdline_options.split()
 
@@ -277,20 +270,119 @@ async def find_tests(options: argparse.Namespace) -> None:
                 suite = TestSuite.opt_create(f, options, mode)
                 await suite.add_test_list()
 
-    if not TestSuite.test_count():
-        if len(options.name):
-            print("Test {} not found".format(palette.path(options.name[0])))
-            sys.exit(1)
+
+def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[SimpleNamespace]]:
+    failed_tests = []
+    temp_dir = pathlib.Path(options.tmpdir).absolute()
+    report_dir =  temp_dir / 'report'
+    junit_output_file = report_dir / f'pytest_cpp_{run_id}.xml'
+    files_to_run = []
+    test_names = []
+    for name in options.name:
+        file_name = name
+        if '::' in name:
+            file_name, _ = name.split('::', maxsplit=1)
+        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
+            files_to_run.append(name)
+    if not options.name:
+        files_to_run = [str(directory) for directory in PYTEST_RUNNER_DIRECTORIES]
+    if not files_to_run:
+        logging.info(f'No boost found. Skipping pytest execution for boost tests.')
+        return 0, []
+    expression = ' or '.join(test_names)
+    if options.skip_patterns:
+        expression += f'{"and not ".join(options.skip_patterns)}'
+    modes = ' '.join(f'--mode={mode}' for mode in options.modes)
+    args = [
+        'pytest',
+        "-s",  # don't capture print() output inside pytest
+        '--color=yes',
+        modes,
+    ]
+    if options.list_tests:
+        args.extend(['--collect-only', '--quiet'])
+    else:
+        args.extend([
+            "--log-level=DEBUG",  # Capture logs
+            f'--junit-xml={junit_output_file}',
+            "-rf",
+            f'-n{int(options.jobs)}',
+            f'--tmpdir={temp_dir}',
+            f'--run_id={run_id}',
+            f'--maxfail={options.max_failures}',
+            f'--alluredir={report_dir / "allure"}',
+            '-v' if options.verbose else '-q',
+        ])
+    if options.gather_metrics:
+        args.append('--gather-metrics')
+    if len(expression) > 1:
+        args.extend(['-k', expression])
+    if not options.save_log_on_success:
+        args.append('--allure-no-capture')
+    if options.markers:
+        args.append(f"-m={options.markers}")
+    args.extend(files_to_run)
+
+    args = shlex.split(' '.join(args))
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+    try:
+        # Read output from pytest and print it to the console
+        if options.verbose:
+            for line in p.stdout:
+                print(line, end='', flush=True)
         else:
-            print(palette.warn("No tests found. Please enable tests in ./configure.py first."))
-            sys.exit(0)
+            # without verbose, pytest output only one line, so to have live progress, need to read it by char,
+            # because each char is a test result
+            while True:
+                char = p.stdout.read(1)
+                if char == '' and p.poll() is not None:
+                    break
+                if char:
+                    print(char, end='', flush=True)
 
-    logging.info("Found %d tests, repeat count is %d, starting %d concurrent jobs",
-                 TestSuite.test_count(), options.repeat, options.jobs)
-    print("Found {} tests.".format(TestSuite.test_count()))
+        # Wait for pytest to finish and get its return code
+        p.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        print('Timeout reached')
+        p.kill()
+    except KeyboardInterrupt:
+        p.kill()
+        raise
+
+    if options.list_tests:
+        return 0, []
+
+    suite = ET.parse(junit_output_file).getroot().find('testsuite')
+    total_tests = int(suite.get('tests'))
+
+    # Find failed tests in the pytest XML output, create a SimpleNamespace for each to mimic the Test class to be able
+    # to print the summary later
+    for test_case in suite.findall('testcase'):
+        if test_case.find('error') is not None or test_case.find('failure') is not None:
+            classname = test_case.get('classname')
+            if classname.endswith('.cc'):
+                file_path, extension = test_case.get('classname').rsplit('.', 1)
+            else:
+                extension = 'py'
+                file_path = '/'.join(x for x in test_case.get('classname').split('.') if x.islower())
+            # get the test name without mode name
+            test_name = test_case.get('name').split('.')[0]
+            test = SimpleNamespace()
+
+            test.name = f"test/{file_path.replace('.', '/')}.{extension}::{test_name}"
+            # print_summary used to print additional information about the failed test that is called in verbose mode
+            # This is needed to mimic the Test class and not fail the run summary output
+            test.print_summary = Test.print_summary
+
+            failed_tests.append(test)
+
+    return total_tests, failed_tests
 
 
-async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> None:
+
+async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) -> tuple[int | Any, list[
+    SimpleNamespace]] | None:
+    failed_tests = []
     console = TabularConsoleOutput(options.verbose, TestSuite.test_count())
     signaled_task = asyncio.create_task(signaled.wait())
     pending = {signaled_task}
@@ -317,11 +409,15 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         return failed
 
     await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
-
-    console.print_start_blurb()
+    total_tests = 0
     max_failures = options.max_failures
     failed = 0
     try:
+        for i in range(1, options.repeat + 1):
+            result = run_pytest(options, run_id=i)
+            total_tests += result[0]
+            failed_tests.extend(result[1])
+        console.print_start_blurb()
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.all_tests():
             # +1 for 'signaled' event
@@ -347,181 +443,27 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         await TestSuite.artifacts.cleanup_before_exit()
 
     console.print_end_blurb()
+    return total_tests, failed_tests
 
 
-def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: argparse.Namespace) -> None:
+def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: argparse.Namespace, failed_pytest_tests: list[SimpleNamespace], total_tests_pytest: int) -> None:
     rusage = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu_used = rusage.ru_stime + rusage.ru_utime
     cpu_available = (time.monotonic() - launch_time) * multiprocessing.cpu_count()
     utilization = cpu_used / cpu_available
     print(f"CPU utilization: {utilization*100:.1f}%")
-    if failed_tests:
-        print("The following test(s) have failed: {}".format(
-            palette.path(" ".join([t.name for t in failed_tests]))))
+    if failed_tests or failed_pytest_tests:
+        all_fails = [*failed_tests, *failed_pytest_tests]
+        total_tests = TestSuite.test_count() + total_tests_pytest
+        print(f'The following test(s) have failed: {" ".join(t.name for t in all_fails)}')
         if options.verbose:
             for test in failed_tests:
                 test.print_summary()
                 print("-"*78)
         if cancelled_tests > 0:
-            print(f"Summary: {len(failed_tests)} of the total {TestSuite.test_count()} tests failed, {cancelled_tests} cancelled")
+            print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed, {cancelled_tests} cancelled")
         else:
-            print(f"Summary: {len(failed_tests)} of the total {TestSuite.test_count()} tests failed")
-
-
-def summarize_boost_tests(tests):
-    # in case we run a certain test multiple times
-    # - if any of the runs failed, the test is considered failed, and
-    #   the last failed run is returned.
-    # - otherwise, the last successful run is returned
-    failed_test = None
-    passed_test = None
-    num_failed_tests = collections.defaultdict(int)
-    num_passed_tests = collections.defaultdict(int)
-    for test in tests:
-        error = None
-        for tag in ['Error', 'FatalError', 'Exception']:
-            error = test.find(tag)
-            if error is not None:
-                break
-        mode = test.attrib['mode']
-        if error is None:
-            passed_test = test
-            num_passed_tests[mode] += 1
-        else:
-            failed_test = test
-            num_failed_tests[mode] += 1
-
-    if failed_test is not None:
-        test = failed_test
-    else:
-        test = passed_test
-
-    num_failed = sum(num_failed_tests.values())
-    num_passed = sum(num_passed_tests.values())
-    num_total = num_failed + num_passed
-    if num_total == 1:
-        return test
-    if num_failed == 0:
-        return test
-    # we repeated this test for multiple times.
-    #
-    # Boost::test's XML logger schema does not allow us to put text directly in a
-    # TestCase tag, so create a dummy Message tag in the TestCase for carrying the
-    # summary. and the schema requires that the tags should be listed in following order:
-    # 1. TestSuite
-    # 2. Info
-    # 3. Error
-    # 3. FatalError
-    # 4. Message
-    # 5. Exception
-    # 6. Warning
-    # and both "file" and "line" are required in an "Info" tag, so appease it. assuming
-    # there is no TestSuite under tag TestCase, we always add Info as the first subelements
-    if num_passed == 0:
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        message.text = f'The test failed {num_failed}/{num_total} times'
-        test.insert(0, message)
-    else:
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        modes = ', '.join(f'{mode}={n}' for mode, n in num_failed_tests.items())
-        message.text = f'failed: {modes}'
-        test.insert(0, message)
-
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        modes = ', '.join(f'{mode}={n}' for mode, n in num_passed_tests.items())
-        message.text = f'passed: {modes}'
-        test.insert(0, message)
-
-        message = ET.Element('Info', file=test.attrib['file'], line=test.attrib['line'])
-        message.text = f'{num_failed} out of {num_total} times failed.'
-        test.insert(0, message)
-    return test
-
-
-def write_consolidated_boost_junit_xml(tmpdir: str, mode: str) -> str:
-    # collects all boost tests sorted by their full names
-    boost_tests = itertools.chain.from_iterable(suite.boost_tests()
-                                                for suite in TestSuite.suites.values())
-    test_cases = itertools.chain.from_iterable(test.get_test_cases()
-                                               for test in boost_tests)
-    test_cases = sorted(test_cases, key=BoostTest.test_path_of_element)
-
-    xml = ET.Element("TestLog")
-    for full_path, tests in itertools.groupby(
-            test_cases,
-            key=BoostTest.test_path_of_element):
-        # dedup the tests with the same name, so only the representative one is
-        # preserved
-        test_case = summarize_boost_tests(tests)
-        test_case.attrib.pop('path')
-        test_case.attrib.pop('mode')
-
-        suite_name, test_name, _ = full_path
-        suite = xml.find(f"./TestSuite[@name='{suite_name}']")
-        if suite is None:
-            suite = ET.SubElement(xml, 'TestSuite', name=suite_name)
-        test = suite.find(f"./TestSuite[@name='{test_name}']")
-        if test is None:
-            test = ET.SubElement(suite, 'TestSuite', name=test_name)
-        test.append(test_case)
-    et = ET.ElementTree(xml)
-    xunit_file = f'{tmpdir}/{mode}/xml/boost.xunit.xml'
-    et.write(xunit_file, encoding='unicode')
-    return xunit_file
-
-
-def boost_to_junit(boost_xml, junit_xml):
-    boost_root = ET.parse(boost_xml).getroot()
-    junit_root = ET.Element('testsuites')
-
-    def parse_tag_output(test_case_element: ET.Element, tag_output: str) -> str:
-        text_template = '''
-            [{level}] - {level_message}
-            [FILE] - {file_name}
-            [LINE] - {line_number}
-            '''
-        text = ''
-        tag_outputs = test_case_element.findall(tag_output)
-        if tag_outputs:
-            for tag_output in tag_outputs:
-                text += text_template.format(level='Info', level_message=tag_output.text,
-                                             file_name=tag_output.get('file'), line_number=tag_output.get('line'))
-        return text
-
-    # report produced {write_consolidated_boost_junit_xml} have the nested structure suite_boost -> [suite1, suite2, ...]
-    # so we are excluding the upper suite with name boost
-    for test_suite in boost_root.findall('./TestSuite/TestSuite'):
-        suite_time = 0.0
-        suite_test_total = 0
-        suite_test_fails_number = 0
-
-        junit_test_suite = ET.SubElement(junit_root, 'testsuite')
-        junit_test_suite.attrib['name'] = test_suite.attrib['name']
-
-        test_cases = test_suite.findall('TestCase')
-        for test_case in test_cases:
-            # convert the testing time: boost uses microseconds and Junit uses seconds
-            test_case_time = int(test_case.find('TestingTime').text) / 1_000_000
-            suite_time += test_case_time
-            suite_test_total += 1
-
-            junit_test_case = ET.SubElement(junit_test_suite, 'testcase')
-            junit_test_case.set('name', test_case.get('name'))
-            junit_test_case.set('time', str(test_case_time))
-            junit_test_case.set('file', test_case.get('file'))
-            junit_test_case.set('line', test_case.get('line'))
-
-            system_out = ET.SubElement(junit_test_case, 'system-out')
-            system_out.text = ''
-            for tag in ['Info', 'Message', 'Exception']:
-                output = parse_tag_output(test_case, tag)
-                if output:
-                    system_out.text += output
-
-        junit_test_suite.set('tests', str(suite_test_total))
-        junit_test_suite.set('time', str(suite_time))
-        junit_test_suite.set('failures', str(suite_test_fails_number))
-    ET.ElementTree(junit_root).write(junit_xml, encoding='UTF-8')
+            print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed")
 
 
 def open_log(tmpdir: str, log_file_name: str, log_level: str) -> None:
@@ -548,6 +490,7 @@ async def main() -> int:
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
+        run_pytest(options, run_id=1)
         return 0
 
     if options.manual_execution and TestSuite.test_count() > 1:
@@ -563,7 +506,7 @@ async def main() -> int:
 
     try:
         logging.info('running all tests')
-        await run_all_tests(signaled, options)
+        total_tests_pytest, failed_pytest_tests = await run_all_tests(signaled, options)
         logging.info('after running all tests')
         stop_event.set()
         async with asyncio.timeout(5):
@@ -578,12 +521,7 @@ async def main() -> int:
     failed_tests = [test for test in TestSuite.all_tests() if test.failed]
     cancelled_tests = sum(1 for test in TestSuite.all_tests() if test.did_not_run)
 
-    print_summary(failed_tests, cancelled_tests, options)
-
-    for mode in options.modes:
-        junit_file = f"{options.tmpdir}/{mode}/allure/boost.junit.xml"
-        xunit_file = write_consolidated_boost_junit_xml(options.tmpdir, mode)
-        boost_to_junit(xunit_file, junit_file)
+    print_summary(failed_tests, cancelled_tests, options, failed_pytest_tests, total_tests_pytest)
 
     if 'coverage' in options.modes:
         coverage.generate_coverage_report(path_to("coverage", "tests"))
