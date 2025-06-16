@@ -20,6 +20,8 @@
 
 namespace utils::http {
 
+future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
+
 class dns_connection_factory : public seastar::http::experimental::connection_factory {
 protected:
     std::string _host;
@@ -32,8 +34,6 @@ protected:
     };
     lw_shared_ptr<state> _state;
     shared_future<> _done;
-
-    static future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
 
     // This method can out-live the factory instance, in case `make()` is never called before the instance is destroyed.
     static future<> initialize(lw_shared_ptr<state> state, std::string host, int port, bool use_https, logging::logger& logger) {
