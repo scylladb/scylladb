@@ -616,7 +616,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     });
     auto files = std::list<stream_blob_info>();
 
-    sstables::sstable_generation_generator sst_gen;
+    auto& sst_gen = table.get_sstable_generation_generator();
 
     for (auto& sst_snapshot : sstables) {
         auto& sst = sst_snapshot.sst;
