@@ -1230,6 +1230,10 @@ public:
         return _sstables_manager;
     }
 
+    sstables::sstable_generation_generator& get_sstable_generation_generator() {
+        return _sstable_generation_generator;
+    }
+
     reader_concurrency_semaphore& streaming_read_concurrency_semaphore() {
         return *_config.streaming_read_concurrency_semaphore;
     }
