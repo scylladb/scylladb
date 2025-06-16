@@ -2638,7 +2638,7 @@ void repair::tablet_repair_task_impl::run_helper(repair_service& rs) {
         auto id = get_repair_uniq_id();
         auto start_time = std::chrono::steady_clock::now();
         auto parent_data = id.task_info;
-        std::atomic<int> idx{1};
+        int idx = 1;
 
         // Start the off strategy updater
         std::unordered_set<locator::host_id> participants;
@@ -2687,26 +2687,22 @@ void repair::tablet_repair_task_impl::run_helper(repair_service& rs) {
         });
 
         auto parent_shard = this_shard_id();
-        std::vector<gc_clock::time_point> flush_times(smp::count);
-        rs.container().invoke_on_all([&idx, &flush_times, id, metas = _metas, parent_data, reason = _reason, tables = _tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<> {
+        gc_clock::time_point flush_time_sum;
             std::exception_ptr error;
-            for (auto& m : metas) {
-                if (m.master_shard_id != this_shard_id()) {
-                    continue;
-                }
-                auto nr = idx.fetch_add(1);
+            for (auto& m : _metas) {
+                auto nr = idx++;
                 rlogger.info("repair[{}] Repair {} out of {} tablets: table={}.{} range={} replicas={}",
-                    id.uuid(), nr, metas.size(), m.keyspace_name, m.table_name, m.range, m.replicas);
+                    id.uuid(), nr, _metas.size(), m.keyspace_name, m.table_name, m.range, m.replicas);
                 lw_shared_ptr<replica::table> t = rs._db.local().get_tables_metadata().get_table_if_exists(m.tid);
                 if (!t) {
                     rlogger.debug("repair[{}] Table {}.{} does not exist anymore", id.uuid(), m.keyspace_name, m.table_name);
                     continue;
                 }
-                if (co_await rs.get_repair_module().is_aborted(id.uuid(), parent_shard)) {
+                if (rs.get_repair_module().is_aborted(id.uuid(), parent_shard).get()) {
                     throw abort_requested_exception();
                 }
 
-                co_await utils::get_local_injector().inject("repair_tablet_repair_task_impl_run", utils::wait_for_message(10s));
+                utils::get_local_injector().inject("repair_tablet_repair_task_impl_run", utils::wait_for_message(10s)).get();
 
                 std::unordered_map<dht::token_range, repair_neighbors> neighbors;
                 neighbors[m.range] = m.neighbors;
@@ -2718,23 +2714,22 @@ void repair::tablet_repair_task_impl::run_helper(repair_service& rs) {
                 std::unordered_set<locator::host_id> ignore_nodes;;
                 bool hints_batchlog_flushed = false;
                 gc_clock::time_point flush_time;
-                if (!skip_flush) {
-                    std::tie(hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes);
+                if (!_skip_flush) {
+                    std::tie(hints_batchlog_flushed, flush_time) = rs.flush_hints(id, m.keyspace_name, _tables, ignore_nodes).get();
                 }
                 bool small_table_optimization = false;
 
                 auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
                         m.keyspace_name, rs, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
-                        std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, topo_guard, sched_by_scheduler);
+                        std::move(ignore_nodes), _reason, hints_batchlog_flushed, small_table_optimization, _ranges_parallelism, flush_time, _topo_guard, sched_by_scheduler);
                 task_impl_ptr->neighbors = std::move(neighbors);
-                auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
+                auto task = rs._repair_module->make_task(task_impl_ptr, parent_data).get();
                 task->start();
-                auto res = co_await coroutine::as_future(task->done());
-                if (res.failed()) {
-                    auto ep = res.get_exception();
-                    sstring ignore_msg;
+                task->done().then_wrapped([&rs, &m, &error, id] (auto f) {
+                if (f.failed()) {
                     // Ignore the error if the keyspace and/or table were dropped
-                    auto ignore = co_await streaming::table_sync_and_check(rs.get_db().local(), rs.get_migration_manager(), m.tid);
+                  return streaming::table_sync_and_check(rs.get_db().local(), rs.get_migration_manager(), m.tid).then([&rs, &m, &error, id, ep = f.get_exception()] (auto ignore) {
+                    sstring ignore_msg;
                     if (ignore) {
                         ignore_msg = format("{} does not exist any more, ignoring it, ",
                                 rs.get_db().local().has_keyspace(m.keyspace_name) ? "table" : "keyspace");
@@ -2744,20 +2739,19 @@ void repair::tablet_repair_task_impl::run_helper(repair_service& rs) {
                     if (!ignore) {
                         error = std::move(ep);
                     }
+                  });
                 }
-                auto current = flush_times[this_shard_id()];
+                return make_ready_future();
+                }).get();
                 auto time = task_impl_ptr->get_flush_time();
-                flush_times[this_shard_id()] = current == gc_clock::time_point() ? time : std::min(current, time);
+                flush_time_sum = flush_time_sum == gc_clock::time_point() ? time : std::min(flush_time_sum, time);
             }
             if (error) {
-                co_await coroutine::return_exception_ptr(std::move(error));
+                throw error;
             }
-        }).get();
-        for (auto& time : flush_times) {
-            if (time != gc_clock::time_point()) {
-                _flush_time = _flush_time == gc_clock::time_point() ? time : std::min(_flush_time, time);
+            if (flush_time_sum != gc_clock::time_point()) {
+                _flush_time = _flush_time == gc_clock::time_point() ? flush_time_sum : std::min(_flush_time, flush_time_sum);
             }
-        }
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for tablet keyspace={} tables={} repair_id={} tablets_repaired={} duration={}",
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);
