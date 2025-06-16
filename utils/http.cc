@@ -8,7 +8,7 @@
 
 #include "http.hh"
 
-future<shared_ptr<tls::certificate_credentials>> utils::http::dns_connection_factory::system_trust_credentials() {
+future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_credentials() {
     static thread_local shared_ptr<tls::certificate_credentials> system_trust_credentials;
     if (!system_trust_credentials) {
         // can race, and overwrite the object. that is fine.
