@@ -308,6 +308,47 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
         await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0}}")
 
 
+@pytest.mark.asyncio
+async def test_multi_rf_change(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
+    config = {"endpoint_snitch": "GossipingPropertyFileSnitch", "tablets_mode_for_new_keyspaces": "enabled"}
+
+    logger.info("Creating a new cluster of 2 nodes in 1st DC and 2 nodes in 2nd DC")
+    # we have to have at least 2 nodes in each DC if we want to try setting RF to 2 in each DC
+    await manager.server_add(config=config, property_file={'dc': f'dc1', 'rack': 'r1'})
+    await manager.server_add(config=config, property_file={'dc': f'dc1', 'rack': 'r2'})
+    await manager.server_add(config=config, property_file={'dc': f'dc1', 'rack': 'r3'})
+    await manager.server_add(config=config, property_file={'dc': f'dc2', 'rack': 'r1'})
+    await manager.server_add(config=config, property_file={'dc': f'dc2', 'rack': 'r2'})
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}") as ks:
+        # need to create a table to not change only the schema, but also tablets replicas
+        await cql.run_async(f"create table {ks}.t (pk int primary key)")
+
+        # Add a new dc with rf = 2.
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': 2}}")             # dc1: 1, dc2: 2
+
+        # Increase rf by 2.
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 3}}")             # dc1: 3, dc2: 2
+
+        # Decrease rf by 2.
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}}")             # dc1: 1, dc2: 2
+
+        # Increase rf by 2 in dc1 and decrease rf by 1 in dc2.
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 3, 'dc2': 1}}")   # dc1: 3, dc2: 1
+
+        # Remove dc1.
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0}}")             # dc1: 0, dc2: 1
+
+        # Add dc1 with rf = 2 and remove dc2.
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 0}}")   # dc1: 2, dc2: 0
+
+        # rf > #racks
+        with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
+            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': 3}}")
+
+
+
 # Reproducer for https://github.com/scylladb/scylladb/issues/18110
 # Check that an existing cached read, will be cleaned up when the tablet it reads
 # from is migrated away.
