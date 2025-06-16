@@ -560,6 +560,8 @@ public:
 
     named_value<uint32_t> service_levels_interval;
 
+    named_value<uint32_t> backup_throughput_mb_per_sec;
+
     named_value<sstring> audit;
     named_value<sstring> audit_categories;
     named_value<sstring> audit_tables;

@@ -55,6 +55,7 @@ public:
 
     struct config {
         seastar::scheduling_group backup_sched_group;
+        uint32_t backup_io_throughput_mbs = 0;
     };
 
     using db_snapshot_details = std::vector<table_snapshot_details_ext>;

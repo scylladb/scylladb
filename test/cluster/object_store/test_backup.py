@@ -728,3 +728,12 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_serv
     print(f'Status: {status}')
     assert 'state' in status and status['state'] == 'failed'
     assert 'error' in status and 'Not Found' in status['error']
+
+
+@pytest.mark.asyncio
+async def test_backup_bandwidth_limit_configured(manager: ManagerClient):
+    cmd = ['--backup-throughput-mb-per-sec=1000']
+    server = await manager.server_add(cmdline=cmd)
+    log = await manager.server_open_log(server.server_id)
+    res = await log.wait_for(r'INFO.*Set backup bandwidth to 1000MB/s')
+    assert len(res) > 1 and len(res[1]) == 1
