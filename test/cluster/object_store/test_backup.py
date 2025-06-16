@@ -87,7 +87,7 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
     # Check that task runs in the streaming sched group
     log = await manager.server_open_log(server.server_id)
     res = await log.grep(r'INFO.*\[shard [0-9]:([a-z]+)\] .* Backup sstables from .* to')
-    assert len(res) == 1 and res[0][1].group(1) == 'strm'
+    assert len(res) == 1 and res[0][1].group(1) == 'bckp'
 
 
 @pytest.mark.asyncio

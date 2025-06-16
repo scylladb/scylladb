@@ -2046,8 +2046,9 @@ sharded<locator::shared_token_metadata> token_metadata;
             }
 
             checkpoint(stop_signal, "starting REST API");
+
             db::snapshot_ctl::config snap_cfg = {
-                .backup_sched_group = dbcfg.streaming_scheduling_group,
+                .backup_sched_group = make_sched_group("backup", "bckp", 200),
             };
             snapshot_ctl.start(std::ref(db), std::ref(task_manager), std::ref(sstm), snap_cfg).get();
             auto stop_snapshot_ctl = defer_verbose_shutdown("snapshots", [&snapshot_ctl] {
