@@ -929,7 +929,8 @@ private:
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*_disk_space_monitor_shard0)
+                only_on_shard0(&*_disk_space_monitor_shard0),
+                _out_of_space_controller
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
