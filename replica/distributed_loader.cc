@@ -181,15 +181,10 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         };
         process_sstable_dir(directory, flags).get();
 
-        sharded<sstables::sstable_generation_generator> sharded_gen;
-        sharded_gen.start().get();
-        auto stop_generator = deferred_stop(sharded_gen);
-
         auto make_sstable = [&] (shard_id shard) {
             auto& sstm = global_table->get_sstables_manager();
-            auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
-                return gen();
-            }).get();
+            auto& gen = global_table->get_sstable_generation_generator();
+            auto generation = gen();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
                                      generation, sstables::sstable_state::upload, sstm.get_highest_supported_format(),
                                      sstables::sstable_format_types::big, db_clock::now(), &error_handler_gen_for_upload_dir);
