@@ -92,7 +92,7 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
        in the wrong scheduling group. We can assume this because we don't
        run multiple tests in parallel on the same cluster.
     """
-    servers = await manager.servers_add(3, config=alternator_config)
+    servers = await manager.servers_add(3, config=alternator_config, auto_rack_dc='dc1')
     alternator = get_alternator(servers[0].ip_addr)
     table = alternator.create_table(TableName=unique_table_name(),
         BillingMode='PAY_PER_REQUEST',

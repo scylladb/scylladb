@@ -127,7 +127,7 @@ async def test_schema_versioning_with_recovery(manager: ManagerClient):
            'force_gossip_topology_changes': True,
            'tablets_mode_for_new_keyspaces': 'disabled'}
     logger.info("Booting cluster")
-    servers = [await manager.server_add(config=cfg) for _ in range(3)]
+    servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc1')
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -297,7 +297,7 @@ async def test_upgrade(manager: ManagerClient):
            'force_gossip_topology_changes': True,
            'tablets_mode_for_new_keyspaces': 'disabled'}
     logger.info("Booting cluster")
-    servers = [await manager.server_add(config=cfg) for _ in range(2)]
+    servers = await manager.servers_add(2, config=cfg, auto_rack_dc='dc1')
     cql = manager.get_cql()
 
     logging.info("Waiting until driver connects to every server")
