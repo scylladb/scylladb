@@ -95,6 +95,7 @@ def run_cassandra_cmd(pid, dir):
     env = { 'CASSANDRA_CONF': confdir,
             'CASSANDRA_LOG_DIR': logsdir,
             'CASSANDRA_INCLUDE': '',
+            'CASSANDRA_HOME': '',
             # Unfortunately, Cassandra's JMX cannot listen only on a specific
             # interface. To allow tests to use JMX (nodetool), we need to
             # have it listen on 0.0.0.0 :-( This is insecure, but arguably
