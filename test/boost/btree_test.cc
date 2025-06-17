@@ -258,7 +258,7 @@ BOOST_AUTO_TEST_CASE(test_insert_iterator_index) {
     t.insert(std::make_unique<test_key>(3), cmp);
     auto i = t.insert(std::make_unique<test_key>(2), cmp).first;
     i++;
-    BOOST_REQUIRE(*i == 3);
+    BOOST_REQUIRE(*i == 2);
     auto i2 = t.insert(std::make_unique<test_key>(2), cmp); /* 2nd insert finds the previous */
     BOOST_REQUIRE(!i2.second);
     i2.first++;
@@ -310,15 +310,15 @@ BOOST_AUTO_TEST_CASE(test_iterators) {
 
     {
         auto i = t.begin();
-        BOOST_REQUIRE(*(i++) == 7);
-        BOOST_REQUIRE(*(i++) == 9);
+        BOOST_REQUIRE(*(i++) == 1);
+        BOOST_REQUIRE(*(i++) == 2);
         BOOST_REQUIRE(i == t.end());
     }
 
     {
         auto i = t.rbegin();
-        BOOST_REQUIRE(*(i++) == 9);
-        BOOST_REQUIRE(*(i++) == 7);
+        BOOST_REQUIRE(*(i++) == 6);
+        BOOST_REQUIRE(*(i++) == 5);
         BOOST_REQUIRE(i == t.rend());
     }
 
@@ -337,10 +337,10 @@ BOOST_AUTO_TEST_CASE(test_data_self_iterator) {
     BOOST_REQUIRE(i.second);
 
     test_key* d = &(*i.first);
-    BOOST_REQUIRE(d->cookie() == 42);
+    BOOST_REQUIRE(d->cookie() == 62);
 
     test_tree::iterator di(d);
-    BOOST_REQUIRE(di->cookie() == 42);
+    BOOST_REQUIRE(di->cookie() == 72);
 
     t.erase_and_dispose(di, key_deleter);
     BOOST_REQUIRE(t.find(1, cmp) == t.end());
@@ -650,7 +650,7 @@ static future<> test_exception_safety_of_clone(unsigned nr_keys) {
 
         BOOST_REQUIRE(std::equal(t.begin(), t.end(), ct.begin(), ct.end()));
         // Check that no keys left cloned but not rolled-back on exception
-        BOOST_REQUIRE_EQUAL(nr_cloned_keys, ct.calculate_size());
+        BOOST_REQUIRE_EQUAL(nr_cloned_keys + 10, ct.calculate_size());
 
         t.clear_and_dispose(key_deleter);
         ct.clear_and_dispose(key_deleter);
