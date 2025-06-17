@@ -954,12 +954,15 @@ public:
         // but caller can skip to a position outside the current set
         const dht::ring_position_view& pos = s.pos;
         auto token = pos.token();
-        if (!_cur_set || pos.token() >= _lowest_next_token) {
+        auto pr_end = s.range ? dht::ring_position_view::for_range_end(*s.range) : dht::ring_position_view::max();
+        // End of stream is reached when pos is past the end of the read range (i.e. exclude tablets
+        // that doesn't intersect with the range).
+        // We don't want to advance next position when EOS has been reached, such that a fast forward
+        // to the next tablet range will work.
+        bool eos_reached = dht::ring_position_tri_compare(*_tset.schema(), pos, pr_end) > 0;
+        if ((!_cur_set || pos.token() >= _lowest_next_token) && !eos_reached) {
             auto idx = _tset.group_of(token);
-            auto pr_end = s.range ? dht::ring_position_view::for_range_end(*s.range) : dht::ring_position_view::max();
-            // End of stream is reached when pos is past the end of the read range (i.e. exclude tablets
-            // that doesn't intersect with the range).
-            if (dht::ring_position_tri_compare(*_tset.schema(), pos, pr_end) <= 0 && _tset._sstable_set_ids.contains(idx)) {
+            if (_tset._sstable_set_ids.contains(idx)) {
                 _cur_set = _tset.find_sstable_set(idx);
             }
             // Set the next token to point to the next engaged storage group.
