@@ -105,6 +105,20 @@ thread_local utils::updateable_value<bool> global_cache_index_pages(true);
 
 logging::logger sstlog("sstable");
 
+[[noreturn]] void on_parse_error(sstring message, std::optional<component_name> filename) {
+    auto make_exception = [&] {
+        if (message.empty()) {
+            message = "parse_assert() failed";
+        }
+        if (filename) {
+            return malformed_sstable_exception(message, *filename);
+        }
+        return malformed_sstable_exception(message);
+    };
+    auto ex = std::make_exception_ptr(make_exception());
+    on_internal_error(sstlog, std::move(ex));
+}
+
 template <typename T>
 const char* nullsafe_typename(T* x) noexcept {
     try {
