@@ -6,9 +6,9 @@
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
-from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info
 from test.topology.conftest import skip_mode
-from test.topology.util import wait_for_cql_and_get_hosts
+from test.topology.util import wait_for_cql_and_get_hosts, wait_for
 import time
 import pytest
 import logging
@@ -289,3 +289,69 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
     await assert_rows(2)
     await cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({3}, {3});")
     await assert_rows(3)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, migration_stage_and_injection):
+    """
+    Migrate a tablet from one node to another, and while in some migration
+    cleanup stage, either before or after the tablet is cleaned, restart the
+    leaving replica. Then trigger a tablet merge.
+
+    This reproduces issue #23481: when the leaving replica is restarted in
+    end_migration, after the SSTables are cleaned, it starts and allocates the
+    state for the tablet in the storage group manager, even though it was
+    cleaned already. The resulting state causes the following merge process to
+    fail with an assert.
+    """
+    stage, injection = migration_stage_and_injection
+    ks = 'ks'
+
+    cfg = {'enable_tablets': True}
+    servers = await manager.servers_add(2, config=cfg)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+    total_keys = 10
+    for pk in range(total_keys):
+        await cql.run_async(f"INSERT INTO {ks}.test(pk, c) VALUES({pk}, {pk+1})")
+    await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+    tablet_token = 0
+
+    s0_host_id = await manager.get_host_id(servers[0].server_id)
+    s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+    # Find which server holds the tablet
+    replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+    logger.info(f"Tablet is on [{replicas}]")
+    assert len(replicas) == 1 and len(replicas[0].replicas) == 1
+    replica = replicas[0].replicas[0]
+    if replica[0] == s0_host_id:
+        src_server, dst_host_id = servers[0], s1_host_id
+    else:
+        src_server, dst_host_id = servers[1], s0_host_id
+
+    # Injection for waiting in cleanup stage
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, injection, one_shot=False) for s in servers])
+
+    # Start migration - move tablet to other node
+    move_task = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, 'test', replica[0], replica[1], dst_host_id, 0, tablet_token))
+
+    # Wait for the tablet to reach cleanup stage
+    async def tablet_stage_is_cleanup():
+        tinfo = await get_tablet_info(manager, servers[0], ks, 'test', tablet_token)
+        if tinfo.stage == stage:
+            return True
+    await wait_for(tablet_stage_is_cleanup, time.time() + 60)
+
+    # Restart the leaving replica (src_server)
+    await manager.server_restart(src_server.server_id)
+
+    await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
+    await manager.api.quiesce_topology(servers[0].ip_addr)
