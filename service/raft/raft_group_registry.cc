@@ -441,12 +441,12 @@ raft_server_with_timeouts::run_with_timeout(Op&& op, const char* op_name,
         co_return co_await op(as);
     }
     if (!timeout->value) {
-        if (!_group_server.default_op_timeout) {
+        if (!_group_server.default_op_timeout_in_ms) {
             on_internal_error(rslog, ::format("raft operation [{}], timeout requested at [{}],"
                                               "but no value for it has been defined",
                 op_name, fmt_loc(timeout->loc)));
         }
-        timeout->value = lowres_clock::now() + _group_server.default_op_timeout.value();
+        timeout->value = lowres_clock::now() + std::chrono::milliseconds(_group_server.default_op_timeout_in_ms->get());
     }
     utils::composite_abort_source composite_as;
 
