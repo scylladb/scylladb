@@ -5960,14 +5960,19 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
         }
     }
 
-    int endpoint_count = gossiper.num_endpoints();
-    int rf = 3;
-    if (endpoint_count < rf) {
-        rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                     keyspace_name, rf, endpoint_count);
+    locator::replication_strategy_config_options opts;
+    if (sp.local_db().get_config().rf_rack_valid_keyspaces() && initial_tablets) {
+        // Don't set any option, this means we will allocate one replica in every rack.
+    } else {
+        int endpoint_count = gossiper.num_endpoints();
+        int rf = 3;
+        if (endpoint_count < rf) {
+            rf = 1;
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                         keyspace_name, rf, endpoint_count);
+        }
+        opts = get_network_topology_options(sp, gossiper, rf);
     }
-    auto opts = get_network_topology_options(sp, gossiper, rf);
     cql3::statements::ks_prop_defs props;
     opts["class"] = sstring("NetworkTopologyStrategy");
     props.add_property(cql3::statements::ks_prop_defs::KW_REPLICATION, opts);
