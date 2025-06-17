@@ -108,7 +108,7 @@ future<> audit_syslog_storage_helper::write(const audit_info* audit_info,
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     tm time;
     localtime_r(&now, &time);
-    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}" category="{}" cl="{}" error="{}" keyspace="{}" query="{}" client_ip="{}" table="{}" username="{}")",
+    sstring msg = seastar::format(R"(<{}>{:%h %e %T} scylla-audit: node="{}", category="{}", cl="{}", error="{}", keyspace="{}", query="{}", client_ip="{}", table="{}", username="{}")",
                                     LOG_NOTICE | LOG_USER,
                                     time,
                                     node_ip,
