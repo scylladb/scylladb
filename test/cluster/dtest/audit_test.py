@@ -14,6 +14,7 @@ import os.path
 import socketserver
 import tempfile
 import threading
+import time
 import uuid
 from collections import namedtuple
 from contextlib import contextmanager
@@ -173,9 +174,9 @@ class AuditBackendTable(AuditBackend):
 class UnixSockerListener:
     class UnixDatagramHandler(socketserver.BaseRequestHandler):
         def handle(self):
-            data = self.request[0].decode("utf-8").strip()
-            if data != "Initializing syslog audit backend.":
-                with self.server.mutex:
+            with self.server.mutex:
+                data = self.request[0].decode("utf-8").strip()
+                if data != "Initializing syslog audit backend.":
                     self.server.parent_instance.lines.append(data)
 
     class UnixDatagramServer(socketserver.ThreadingUnixDatagramServer):
@@ -194,7 +195,10 @@ class UnixSockerListener:
         self.thread.start()
 
     def get_lines(self):
-        return self.lines
+        # Make sure all in-progress handle() calls are finished
+        time.sleep(0.1) # Sleep to yield
+        with self.server.mutex:
+            return copy.deepcopy(self.lines)
 
     def shutdown(self):
         self.server.shutdown()
