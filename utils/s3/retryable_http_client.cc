@@ -22,8 +22,8 @@ using namespace seastar;
 retryable_http_client::retryable_http_client(std::unique_ptr<http::experimental::connection_factory>&& factory,
                                              unsigned max_conn,
                                              error_handler error_func,
-                                             http::experimental::client::retry_requests should_retry,
-                                             const aws::retry_strategy& retry_strategy)
+                                             http::experimental::retry_requests should_retry,
+                                             const default_aws_retry_strategy& retry_strategy)
     : http(std::move(factory), max_conn, should_retry), _retry_strategy(retry_strategy), _error_handler(std::move(error_func)) {
     assert(_error_handler);
 }

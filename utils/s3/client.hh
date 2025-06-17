@@ -127,14 +127,14 @@ class client : public enable_shared_from_this<client> {
         io_stats read_stats;
         io_stats write_stats;
         seastar::metrics::metric_groups metrics;
-        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy);
+        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::default_aws_retry_strategy& retry_strategy);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     semaphore& _memory;
-    std::unique_ptr<aws::retry_strategy> _retry_strategy;
+    std::unique_ptr<aws::default_aws_retry_strategy> _retry_strategy;
 
     struct private_tag {};
 
@@ -149,7 +149,7 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs = nullptr);
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::default_aws_retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);

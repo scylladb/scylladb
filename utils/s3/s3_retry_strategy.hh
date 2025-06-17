@@ -13,7 +13,7 @@ namespace aws {
 
 class aws_error;
 
-class s3_retry_strategy : public default_retry_strategy {
+class s3_retry_strategy : public default_aws_retry_strategy {
 public:
     using credentials_refresher = std::function<seastar::future<>()>;
     s3_retry_strategy(credentials_refresher creds_refresher, unsigned max_retries = 10, unsigned scale_factor = 25);
