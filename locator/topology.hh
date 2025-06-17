@@ -189,6 +189,9 @@ public:
         host_id this_host_id;
         endpoint_dc_rack local_dc_rack;
         bool disable_proximity_sorting = false;
+
+        // If true then this topology only contains keyspaces which are rf-rack-valid.
+        // This also means that all keyspaces are using rack-list based replication factor.
         bool force_rack_valid_keyspaces = true;
 
         bool operator==(const config&) const = default;
