@@ -1662,7 +1662,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             });
 
             checkpoint(stop_signal, "starting mapreduce service");
-            mapreduce_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(token_metadata), std::ref(stop_signal.as_sharded_abort_source())).get();
+            mapreduce_service.start(std::ref(messaging), std::ref(proxy), std::ref(db), std::ref(stop_signal.as_sharded_abort_source())).get();
             auto stop_mapreduce_service_handlers = defer_verbose_shutdown("mapreduce service", [&mapreduce_service] {
                 mapreduce_service.stop().get();
             });

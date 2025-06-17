@@ -124,7 +124,6 @@ class mapreduce_service : public seastar::peering_sharded_service<mapreduce_serv
     netw::messaging_service& _messaging;
     service::storage_proxy& _proxy;
     distributed<replica::database>& _db;
-    const locator::shared_token_metadata& _shared_token_metadata;
     abort_source _abort_outgoing_tasks;
 
     struct stats {
@@ -139,11 +138,10 @@ class mapreduce_service : public seastar::peering_sharded_service<mapreduce_serv
 
 public:
     mapreduce_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
-        const locator::shared_token_metadata& stm, abort_source& as)
+        abort_source& as)
         : _messaging(ms)
         , _proxy(p)
         , _db(db)
-        , _shared_token_metadata(stm)
         , _early_abort_subscription(as.subscribe([this] () noexcept {
             _shutdown = true;
             _abort_outgoing_tasks.request_abort();
@@ -167,8 +165,6 @@ private:
     future<query::mapreduce_result> dispatch_to_shards(query::mapreduce_request req, std::optional<tracing::trace_info> tr_info);
     // Used to execute a `mapreduce_request` on a shard.
     future<query::mapreduce_result> execute_on_this_shard(query::mapreduce_request req, std::optional<tracing::trace_info> tr_info);
-
-    locator::token_metadata_ptr get_token_metadata_ptr() const noexcept;
 
     void register_metrics();
     void init_messaging_service();

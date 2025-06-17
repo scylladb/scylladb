@@ -865,7 +865,7 @@ private:
                 return fs.enable(fs.supported_feature_set());
             }).get();
 
-            _mapreduce_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(_token_metadata), std::ref(abort_sources)).get();
+            _mapreduce_service.start(std::ref(_ms), std::ref(_proxy), std::ref(_db), std::ref(abort_sources)).get();
             auto stop_mapreduce_service =  defer_verbose_shutdown("mapreduce service", [this] { _mapreduce_service.stop().get(); });
 
             // gropu0 client exists only on shard 0
