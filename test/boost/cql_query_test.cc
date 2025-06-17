@@ -3879,6 +3879,12 @@ SEASTAR_TEST_CASE(test_rf_expand) {
     constexpr static auto simple = "org.apache.cassandra.locator.SimpleStrategy";
     constexpr static auto network_topology = "org.apache.cassandra.locator.NetworkTopologyStrategy";
 
+    cql_test_config cfg;
+
+    // FIXME: Auto-expand with rack-valid keyspaces requires constructing a proper topology where
+    // it can be done, but we don't have infrastructure to do that yet. The default datacenter1 has one rack.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto get_replication = [&] (const sstring& ks) {
             auto msg = e.execute_cql(
@@ -3939,7 +3945,7 @@ SEASTAR_TEST_CASE(test_rf_expand) {
             {"class", network_topology},
             {"datacenter1", "2"}
         });
-    });
+    }, std::move(cfg));
 }
 
 SEASTAR_TEST_CASE(test_int_sum_overflow) {
@@ -4374,6 +4380,12 @@ SEASTAR_TEST_CASE(test_describe_simple_schema) {
 }
 
 SEASTAR_TEST_CASE(test_describe_view_schema) {
+    cql_test_config cfg = describe_test_config();
+
+    // FIXME: Auto-expand with rack-valid keyspaces requires constructing a proper topology where
+    // it can be done, but we don't have infrastructure to do that yet. The default datacenter1 has one rack.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
     return do_with_cql_env_thread([] (cql_test_env& e) {
         std::string base_table = "CREATE TABLE \"KS\".\"cF\" (\n"
                 "    pk blob,\n"
@@ -4441,7 +4453,7 @@ SEASTAR_TEST_CASE(test_describe_view_schema) {
 
             BOOST_CHECK_EQUAL(normalize_white_space(base_schema_desc.create_statement.value().linearize()), normalize_white_space(base_table));
         }
-    }, describe_test_config());
+    }, std::move(cfg));
 }
 
 shared_ptr<cql_transport::messages::result_message> cql_func_require_nofail(
