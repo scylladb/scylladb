@@ -311,10 +311,6 @@ public:
     }
 };
 
-locator::token_metadata_ptr mapreduce_service::get_token_metadata_ptr() const noexcept {
-    return _shared_token_metadata.get();
-}
-
 future<> mapreduce_service::stop() {
     return uninit_messaging_service();
 }
@@ -590,7 +586,7 @@ future<> mapreduce_service::dispatch_to_vnodes(schema_ptr schema, replica::colum
     auto erm = cf.get_effective_replication_map();
     // Group vnodes by assigned endpoint.
     std::map<locator::host_id, dht::partition_range_vector> vnodes_per_addr;
-    const auto& topo = get_token_metadata_ptr()->get_topology();
+    const auto& topo = erm->get_topology();
     auto generator = query_ranges_to_vnodes_generator(erm->make_splitter(), schema, req.pr);
     while (std::optional<dht::partition_range> vnode = get_next_partition_range(generator)) {
         host_id_vector_replica_set live_endpoints = _proxy.get_live_endpoints(*erm, end_token(*vnode));
