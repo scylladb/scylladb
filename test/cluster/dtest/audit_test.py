@@ -11,6 +11,7 @@ import enum
 import itertools
 import logging
 import os.path
+import socket
 import socketserver
 import tempfile
 import threading
@@ -174,10 +175,15 @@ class AuditBackendTable(AuditBackend):
 
 class UnixSockerListener:
     class UnixDatagramHandler(socketserver.BaseRequestHandler):
+
         def handle(self):
-            data = self.request[0].decode("utf-8").strip()
-            if data != "Initializing syslog audit backend.":
-                with self.server.mutex:
+            with self.server.parent_instance.condition:
+                data = self.request[0].decode("utf-8").strip()
+                if data.startswith(self.server.parent_instance.notification_msg):
+                    received_id = int(data[len(self.server.parent_instance.notification_msg):])
+                    self.server.parent_instance.notification_id = received_id
+                    self.server.parent_instance.condition.notify_all()
+                elif data != "Initializing syslog audit backend.":
                     self.server.parent_instance.lines.append(data)
 
     class UnixDatagramServer(socketserver.ThreadingUnixDatagramServer):
@@ -192,15 +198,31 @@ class UnixSockerListener:
         self.server = self.UnixDatagramServer(socket_path, self.UnixDatagramHandler, self, threading.Lock())
         self.server.server_activate()
 
+        self.notification_msg = "Notifying syslog server with id: "
+        self.notification_id = 0
+        self.condition = threading.Condition(self.server.mutex)
+
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
 
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+
+    def wait_for_newer_notification_id(self):
+        with self.condition:
+            expected_id = self.notification_id + 1
+            self.sock.sendto(bytes(self.notification_msg + str(expected_id), 'utf-8'), self.socket_path)
+            self.condition.wait_for(lambda: self.notification_id == expected_id)
+
     def get_lines(self):
-        return self.lines
+        # Make sure all in-progress handle() calls are finished
+        self.wait_for_newer_notification_id()
+        return copy.deepcopy(self.lines)
 
     def shutdown(self):
         self.server.shutdown()
         self.thread.join()
+        self.server.server_close()
+        self.sock.close()
 
 
 class AuditBackendSyslog(AuditBackend):
