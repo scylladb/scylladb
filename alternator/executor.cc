@@ -5695,14 +5695,33 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
-    int endpoint_count = gossiper.num_endpoints();
-    int rf = 3;
-    if (endpoint_count < rf) {
-        rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                keyspace_name, rf, endpoint_count);
+    auto& topo = sp.get_token_metadata_ptr()->get_topology();
+    std::map<sstring, sstring> opts;
+    if (topo.get_config().force_rack_valid_keyspaces) {
+        for (const auto& [dc, hosts_by_rack] : topo.get_datacenter_racks()) {
+            auto racks = hosts_by_rack | std::views::keys | std::ranges::to<std::vector>();
+            if (racks.size() > 3) {
+                static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
+                std::shuffle(racks.begin(), racks.end(), rnd_engine);
+                racks.resize(3);
+                elogger.warn("Creating keyspace '{}' for Alternator on a subset of racks in dc {} (has {} racks): {}",
+                             keyspace_name, dc, hosts_by_rack.size(), racks);
+            } else if (racks.size() < 3) {
+                elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} in dc {} because it has this many racks.",
+                             keyspace_name, racks.size(), dc);
+            }
+            opts.emplace(dc, fmt::format("{}", fmt::join(racks, ",")));
+        }
+    } else {
+        int endpoint_count = gossiper.num_endpoints();
+        int rf = 3;
+        if (endpoint_count < rf) {
+            rf = 1;
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                         keyspace_name, rf, endpoint_count);
+        }
+        opts = get_network_topology_options(sp, gossiper, rf);
     }
-    auto opts = get_network_topology_options(sp, gossiper, rf);
 
     // Even if the "tablets" experimental feature is available, we currently
     // do not enable tablets by default on Alternator tables because LWT is
