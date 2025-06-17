@@ -360,7 +360,7 @@ public:
     }
     virtual future<temporary_buffer<char>> get() override {
         if (_pos >= _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         auto addr = _compression_metadata->locate(_pos, _offsets);
         // Uncompress the next chunk. We need to skip part of the first
@@ -371,7 +371,7 @@ public:
         if (!addr.chunk_len) {
             throw sstables::malformed_sstable_exception(format("compressed chunk_len must be greater than zero, chunk_start={}", addr.chunk_start));
         }
-        return _input_stream->read_exactly(addr.chunk_len).then([this, addr](temporary_buffer<char> buf) {
+        co_return co_await _input_stream->read_exactly(addr.chunk_len).then([this, addr](temporary_buffer<char> buf) {
             if (buf.size() != addr.chunk_len) {
                 throw sstables::malformed_sstable_exception(format("compressed reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _underlying_pos, addr.chunk_len, buf.size()));
             }
@@ -444,13 +444,13 @@ public:
         }
         _pos += n;
         if (_pos == _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         auto addr = _compression_metadata->locate(_pos, _offsets);
         auto underlying_n = addr.chunk_start - _underlying_pos;
         _underlying_pos = addr.chunk_start;
         _beg_pos = _pos;
-        return _input_stream->skip(underlying_n).then([] {
+        co_return co_await _input_stream->skip(underlying_n).then([] {
             return make_ready_future<temporary_buffer<char>>();
         });
     }

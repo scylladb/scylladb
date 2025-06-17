@@ -94,7 +94,7 @@ public:
     virtual future<temporary_buffer<char>> get() override {
         uint64_t chunk_size = _checksum.chunk_size;
         if (_pos >= _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         // Read the next chunk. We need to skip part of the first
         // chunk, but then continue to read from beginning of chunks.
@@ -103,7 +103,7 @@ public:
         if (_pos != _beg_pos && (_pos & (chunk_size - 1)) != 0) {
             throw std::runtime_error(format("Checksummed reader not aligned to chunk boundary: pos={}, chunk_size={}", _pos, chunk_size));
         }
-        return _input_stream->read_exactly(chunk_size).then([this, chunk_size](temporary_buffer<char> buf) {
+        co_return co_await _input_stream->read_exactly(chunk_size).then([this, chunk_size](temporary_buffer<char> buf) {
             uint32_t chunk_index = _pos >> _chunk_size_trailing_zeros;
             if (buf.size() != chunk_size) {
                 auto actual_end = _underlying_pos + buf.size();
@@ -166,12 +166,12 @@ public:
         }
         _pos += n;
         if (_pos == _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         auto underlying_n = align_down(_pos, chunk_size) - _underlying_pos;
         _beg_pos = _pos;
         _underlying_pos += underlying_n;
-        return _input_stream->skip(underlying_n).then([] {
+        co_return co_await _input_stream->skip(underlying_n).then([] {
             return make_ready_future<temporary_buffer<char>>();
         });
     }
