@@ -64,14 +64,12 @@ class ScyllaCluster:
                 self.manager.servers_add(servers_num=nodes, config=self._config_options, start=False, auto_rack_dc="dc1")
             case list():
                 for dc, n_nodes in enumerate(nodes, start=1):
+                    dc_name = f"dc{dc}"
                     self.manager.servers_add(
                         servers_num=n_nodes,
                         config=self._config_options,
-                        property_file={
-                            "dc": f"dc{dc}",
-                            "rack": "RAC1",
-                        },
                         start=False,
+                        auto_rack_dc=dc_name
                     )
             case dict():
                 # Supported spec: {"dc1": {"rack1": 3, "rack2": 2}, "dc2": {"rack1": 2}}
