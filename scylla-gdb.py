@@ -529,6 +529,25 @@ class std_vector:
     def external_memory_footprint(self):
         return int(self.ref['_M_impl']['_M_end_of_storage']) - int(self.ref['_M_impl']['_M_start'])
 
+# In libstdc++ 14 and below, hashtable nodes look like _M_storage._M_storage.__data.
+# In libstdc++ 15 and above, they look like _M_storage._M_storage. Default to True since we
+# don't know yet, and correct later.
+libcpp_hashtables_nodes_have_data_member = True
+
+def deref_libcpp_hashtable_nodes_data_member(ptr):
+    """
+    Dereference a libstdc++ hashtable node pointer, with structure like
+    _M_storage._M_storage.__data or _M_storage._M_storage, depending on the version of libstdc++.
+    """
+    global libcpp_hashtables_nodes_have_data_member
+    if libcpp_hashtables_nodes_have_data_member:
+        try:
+            return ptr['_M_storage']['_M_storage']['__data']
+        except gdb.error:
+            # If we get here, it means that the nodes do not have a __data member.
+            # This is the case in libstdc++ 15 and above. Remember for next time.
+            libcpp_hashtables_nodes_have_data_member = False
+    return ptr['_M_storage']['_M_storage']
 
 class std_unordered_set:
     def __init__(self, ref):
@@ -545,7 +564,9 @@ class std_unordered_set:
     def __iter__(self):
         p = self.ht['_M_before_begin']['_M_nxt']
         while p:
-            pc = p.cast(self.node_ptr_type)['_M_storage']['_M_storage']['__data'].cast(self.value_ptr_type)
+            pc = p.cast(self.node_ptr_type)
+            pc = deref_libcpp_hashtable_nodes_data_member(pc)
+            pc = p.cast(self.value_ptr_type)
             yield pc.dereference()
             p = p['_M_nxt']
 
@@ -573,7 +594,9 @@ class std_unordered_map:
     def __iter__(self):
         p = self.ht['_M_before_begin']['_M_nxt']
         while p:
-            pc = p.cast(self.node_ptr_type)['_M_storage']['_M_storage']['__data'].cast(self.value_ptr_type)
+            pc = p.cast(self.node_ptr_type)
+            pc = deref_libcpp_hashtable_nodes_data_member(pc)
+            pc = pc.cast(self.value_ptr_type)
             yield (pc['first'], pc['second'])
             p = p['_M_nxt']
 
