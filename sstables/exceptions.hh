@@ -28,6 +28,23 @@ public:
     }
 };
 
+[[noreturn]] void on_parse_error(sstring message, std::optional<component_name> filename);
+
+// Use this instead of SCYLLA_ASSERT() or assert() in code that is used while parsing SSTables.
+// SSTables can be corrupted either by ScyllaDB itself or by a freak accident like cosmic background
+// radiation hitting the disk the wrong way. Either way a corrupt SSTable should not bring down the
+// whole server. This method will call on_internal_error() if the condition is false.
+// The exception will include a complete backtrace, so no need to add call-site identifiers to the message.
+inline void parse_assert(bool condition, const char* message = nullptr, std::optional<component_name> filename = {}) {
+    if (!condition) [[unlikely]] {
+        on_parse_error(message, filename);
+    }
+}
+
+inline void parse_assert(bool condition, component_name filename) {
+    parse_assert(condition, nullptr, filename);
+}
+
 struct bufsize_mismatch_exception : malformed_sstable_exception {
     bufsize_mismatch_exception(size_t size, size_t expected) :
         malformed_sstable_exception(format("Buffer improperly sized to hold requested data. Got: {:d}. Expected: {:d}", size, expected))
