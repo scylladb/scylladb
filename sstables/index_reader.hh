@@ -7,7 +7,6 @@
  */
 
 #pragma once
-#include "utils/assert.hh"
 #include "sstables.hh"
 #include "consumer.hh"
 #include "downsampling.hh"
@@ -521,7 +520,7 @@ private:
     // Must be called for non-decreasing summary_idx.
     future<> advance_to_page(index_bound& bound, uint64_t summary_idx) {
         sstlog.trace("index {}: advance_to_page({}), bound {}", fmt::ptr(this), summary_idx, fmt::ptr(&bound));
-        SCYLLA_ASSERT(!bound.current_list || bound.current_summary_idx <= summary_idx);
+        parse_assert(!bound.current_list || bound.current_summary_idx <= summary_idx, _sstable->index_filename());
         if (bound.current_list && bound.current_summary_idx == summary_idx) {
             sstlog.trace("index {}: same page", fmt::ptr(this));
             return make_ready_future<>();
@@ -627,7 +626,7 @@ private:
 
     // Valid if partition_data_ready(bound)
     index_entry& current_partition_entry(index_bound& bound) {
-        SCYLLA_ASSERT(bound.current_list);
+        parse_assert(bool(bound.current_list), _sstable->index_filename());
         return *bound.current_list->_entries[bound.current_index_idx];
     }
 
@@ -692,7 +691,7 @@ private:
         // is no G in that bucket so we read the following one to get the
         // position (see the advance_to_page() call below). After we've got it, it's time to
         // get J] position. Again, summary points us to the first bucket and we
-        // hit an SCYLLA_ASSERT since the reader is already at the second bucket and we
+        // hit an parse_assert since the reader is already at the second bucket and we
         // cannot go backward.
         // The solution is this condition above. If our lookup requires reading
         // the previous bucket we assume that the entry doesn't exist and return
@@ -740,7 +739,7 @@ private:
         // So need to make sure first that it is read
         if (!partition_data_ready(_lower_bound)) {
             return read_partition_data().then([this, pos] {
-                SCYLLA_ASSERT(partition_data_ready());
+                parse_assert(partition_data_ready(), _sstable->index_filename());
                 return advance_upper_past(pos);
             });
         }
@@ -817,12 +816,12 @@ public:
     // Ensures that partition_data_ready() returns true.
     // Can be called only when !eof()
     future<> read_partition_data() {
-        SCYLLA_ASSERT(!eof());
+        parse_assert(!eof(), _sstable->index_filename());
         if (partition_data_ready(_lower_bound)) {
             return make_ready_future<>();
         }
         // The only case when _current_list may be missing is when the cursor is at the beginning
-        SCYLLA_ASSERT(_lower_bound.current_summary_idx == 0);
+        parse_assert(_lower_bound.current_summary_idx == 0, _sstable->index_filename());
         return advance_to_page(_lower_bound, 0);
     }
 
@@ -921,7 +920,7 @@ public:
         if (!partition_data_ready()) {
             return read_partition_data().then([this, pos] {
                 sstlog.trace("index {}: page done", fmt::ptr(this));
-                SCYLLA_ASSERT(partition_data_ready(_lower_bound));
+                parse_assert(partition_data_ready(_lower_bound), _sstable->index_filename());
                 return advance_to(pos);
             });
         }
@@ -1009,7 +1008,7 @@ public:
         // so need to make sure first that the lower bound partition data is in memory.
         if (!partition_data_ready(_lower_bound)) {
             return read_partition_data().then([this, pos] {
-                SCYLLA_ASSERT(partition_data_ready());
+                parse_assert(partition_data_ready(), _sstable->index_filename());
                 return advance_reverse(pos);
             });
         }
@@ -1054,7 +1053,7 @@ public:
     //
     // Preconditions: sstable version >= mc, partition_data_ready().
     future<std::optional<uint64_t>> last_block_offset() {
-        SCYLLA_ASSERT(partition_data_ready());
+        parse_assert(partition_data_ready(), _sstable->index_filename());
 
         auto cur = current_clustered_cursor();
         if (!cur) {

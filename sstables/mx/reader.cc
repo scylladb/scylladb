@@ -14,7 +14,6 @@
 #include "sstables/m_format_read_helpers.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/processing_result_generator.hh"
-#include "utils/assert.hh"
 #include "utils/to_string.hh"
 #include "utils/value_or_reference.hh"
 
@@ -518,7 +517,7 @@ public:
             return consume_range_tombstone_boundary(std::move(pos), end_tombstone, start_tombstone);
         }
         default:
-            SCYLLA_ASSERT(false && "Invalid boundary type");
+            on_parse_error(format("Invalid boundary type", static_cast<std::underlying_type<sstables::bound_kind_m>::type>(kind)), _sst->get_filename());
         }
     }
 
@@ -1316,7 +1315,7 @@ public:
                         " partition range: {}", pr));
             }
             // FIXME: if only the defaults were better...
-            //SCYLLA_ASSERT(fwd_mr == mutation_reader::forwarding::no);
+            //parse_assert(fwd_mr == mutation_reader::forwarding::no);
         }
     }
 
@@ -1361,7 +1360,7 @@ private:
                 _read_enabled = false;
                 return make_ready_future<>();
             }
-            SCYLLA_ASSERT(_index_reader->element_kind() == indexable_element::partition);
+            parse_assert(_index_reader->element_kind() == indexable_element::partition, _sst->get_filename());
             return skip_to(_index_reader->element_kind(), start).then([this] {
                 _sst->get_stats().on_partition_seek();
             });
@@ -1441,7 +1440,7 @@ private:
         if (!pos || pos->is_before_all_fragments(*_schema)) {
             return make_ready_future<>();
         }
-        SCYLLA_ASSERT (_current_partition_key);
+        parse_assert(bool(_current_partition_key), _sst->get_filename());
         return [this] {
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
@@ -1459,7 +1458,7 @@ private:
                     // The reversing data source will notice the skip and update the data ranges
                     // from which it prepares the data given to us.
 
-                    SCYLLA_ASSERT(_reversed_read_sstable_position);
+                    parse_assert(_reversed_read_sstable_position, _sst->get_filename());
                     auto ip = _index_reader->data_file_positions();
                     if (ip.end >= *_reversed_read_sstable_position) {
                         // The reversing data source was already ahead (in reverse - its position was smaller)
@@ -1528,7 +1527,7 @@ private:
         }
 
         auto [begin, end] = _index_reader->data_file_positions();
-        SCYLLA_ASSERT(end);
+        parse_assert(bool(end), _sst->get_filename());
 
         if (_single_partition_read) {
             _read_enabled = (begin != *end);
@@ -1587,11 +1586,11 @@ public:
                 _partition_finished = true;
                 _before_partition = true;
                 _end_of_stream = false;
-                SCYLLA_ASSERT(_index_reader);
+                parse_assert(bool(_index_reader), _sst->get_filename());
                 auto f1 = _index_reader->advance_to(pr);
                 return f1.then([this] {
                     auto [start, end] = _index_reader->data_file_positions();
-                    SCYLLA_ASSERT(end);
+                    parse_assert(bool(end), _sst->get_filename());
                     if (start != *end) {
                         _read_enabled = true;
                         _index_in_current_partition = true;
@@ -2006,7 +2005,7 @@ public:
         case bound_kind_m::excl_end_incl_start:
             return consume_range_tombstone(ecp, bound_kind::incl_start, start_tombstone);
         default:
-            SCYLLA_ASSERT(false && "Invalid boundary type");
+            on_parse_error(format("Invalid boundary type", static_cast<std::underlying_type_t<bound_kind_m>>(kind)), {});
         }
     }
 
