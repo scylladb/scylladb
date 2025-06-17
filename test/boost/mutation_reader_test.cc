@@ -1108,7 +1108,8 @@ SEASTAR_TEST_CASE(test_fast_forwarding_combined_reader_is_consistent_with_slicin
         };
 
         check_next_partition(combined[0]);
-        rd.fast_forward_to(dht::partition_range::make_singular(keys[2])).get();
+        auto prange = dht::partition_range::make_singular(keys[2]);
+        rd.fast_forward_to(prange).get();
         check_next_partition(combined[2]);
     });
 }
