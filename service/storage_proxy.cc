@@ -1377,7 +1377,7 @@ public:
 class paxos_response_handler : public enable_shared_from_this<paxos_response_handler> {
 private:
     shared_ptr<storage_proxy> _proxy;
-    locator::effective_replication_map_ptr _effective_replication_map_ptr;
+    locator::token_metadata_guard _token_guard;
     // The schema for the table the operation works upon.
     schema_ptr _schema;
     // Read command used by this CAS request.
@@ -1417,8 +1417,8 @@ public:
     tracing::trace_state_ptr tr_state;
 
 public:
-    paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
-        service_permit permit_arg,
+    paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, locator::token_metadata_guard token_guard_arg,
+        tracing::trace_state_ptr tr_state_arg, service_permit permit_arg,
         dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
         db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
         storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg);
@@ -1459,7 +1459,7 @@ public:
     bool learned(locator::host_id ep);
 
     const locator::effective_replication_map_ptr& get_effective_replication_map() const noexcept {
-        return _effective_replication_map_ptr;
+        return _token_guard.get_erm();
     }
 };
 
@@ -1986,12 +1986,13 @@ static future<> sleep_approx_50ms() {
     return seastar::sleep(std::chrono::milliseconds(dist(re)));
 }
 
-paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, tracing::trace_state_ptr tr_state_arg,
-        service_permit permit_arg,
+paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_arg, locator::token_metadata_guard token_guard_arg,
+        tracing::trace_state_ptr tr_state_arg, service_permit permit_arg,
         dht::decorated_key key_arg, schema_ptr schema_arg, lw_shared_ptr<query::read_command> cmd_arg,
         db::consistency_level cl_for_paxos_arg, db::consistency_level cl_for_learn_arg,
         storage_proxy::clock_type::time_point timeout_arg, storage_proxy::clock_type::time_point cas_timeout_arg)
         : _proxy(proxy_arg)
+        , _token_guard(std::move(token_guard_arg))
         , _schema(std::move(schema_arg))
         , _cmd(cmd_arg)
         , _cl_for_paxos(cl_for_paxos_arg)
@@ -2002,9 +2003,8 @@ paxos_response_handler::paxos_response_handler(shared_ptr<storage_proxy> proxy_a
         , _permit(std::move(permit_arg))
         , tr_state(tr_state_arg) {
     auto ks_name = _schema->ks_name();
-    replica::table& table = _proxy->_db.local().find_column_family(_schema->id());
-    _effective_replication_map_ptr = table.get_effective_replication_map();
-    storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(ks_name, *_effective_replication_map_ptr, _key.token(), _cl_for_paxos);
+    storage_proxy::paxos_participants pp = _proxy->get_paxos_participants(ks_name, 
+        *get_effective_replication_map(), _key.token(), _cl_for_paxos);
     _live_endpoints = std::move(pp.endpoints);
     _required_participants = pp.required_participants;
     tracing::trace(tr_state, "Create paxos_response_handler for token {} with live: {} and required participants: {}",
@@ -2172,7 +2172,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 // sends query result content while other replicas send digests needed to check consistency.
                 bool only_digest = peer != _live_endpoints[0];
                 auto da = digest_algorithm(*_proxy);
-                const auto& topo = _effective_replication_map_ptr->get_topology();
+                const auto& topo = get_effective_replication_map()->get_topology();
                 if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
                     response = co_await paxos::paxos_state::prepare(*_proxy, _proxy->remote().system_keyspace(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
@@ -2330,7 +2330,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
         auto handle_one_msg = [this, &request_tracker, timeout_if_partially_accepted, proposal = std::move(proposal)] (locator::host_id peer) mutable -> future<> {
             bool is_timeout = false;
             std::optional<bool> accepted;
-            const auto& topo = _effective_replication_map_ptr->get_topology();
+            const auto& topo = get_effective_replication_map()->get_topology();
 
             try {
                 if (topo.is_me(peer)) {
@@ -2491,7 +2491,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
     }
      _proxy->get_stats().cas_now_pruning++;
     _proxy->get_stats().cas_prune++;
-    auto erm = _effective_replication_map_ptr;
+    auto erm = get_effective_replication_map();
     auto my_address = _proxy->my_host_id(*erm);
     // running in the background, but the amount of the bg job is limited by pruning_limit
     // it is waited by holding shared pointer to storage_proxy which guaranties
@@ -6278,14 +6278,15 @@ storage_proxy::query_result(schema_ptr query_schema,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
-    storage_proxy::coordinator_query_options query_options)
+    storage_proxy::coordinator_query_options query_options,
+    std::optional<cas_shard> shard)
 {
     if (slogger.is_enabled(logging::log_level::trace) || qlogger.is_enabled(logging::log_level::trace)) {
         static thread_local int next_id = 0;
         auto query_id = next_id++;
 
         slogger.trace("query {}.{} cmd={}, ranges={}, id={}", query_schema->ks_name(), query_schema->cf_name(), *cmd, partition_ranges, query_id);
-        return do_query(query_schema, cmd, std::move(partition_ranges), cl, std::move(query_options)).then_wrapped([query_id, cmd, query_schema] (future<result<coordinator_query_result>> f) -> result<coordinator_query_result> {
+        return do_query(query_schema, cmd, std::move(partition_ranges), cl, std::move(query_options), std::move(shard)).then_wrapped([query_id, cmd, query_schema] (future<result<coordinator_query_result>> f) -> result<coordinator_query_result> {
             auto rres = utils::result_try([&] {
                 return f.get();
             },  utils::result_catch_dots([&] (auto&& handle) {
@@ -6308,7 +6309,7 @@ storage_proxy::query_result(schema_ptr query_schema,
         });
     }
 
-    return do_query(query_schema, cmd, std::move(partition_ranges), cl, std::move(query_options));
+    return do_query(query_schema, cmd, std::move(partition_ranges), cl, std::move(query_options), std::move(shard));
 }
 
 future<result<storage_proxy::coordinator_query_result>>
@@ -6316,7 +6317,8 @@ storage_proxy::do_query(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
-    storage_proxy::coordinator_query_options query_options)
+    storage_proxy::coordinator_query_options query_options,
+    std::optional<cas_shard> cas_shard)
 {
     static auto make_empty = [] {
         return make_ready_future<result<coordinator_query_result>>(make_foreign(make_lw_shared<query::result>()));
@@ -6329,7 +6331,7 @@ storage_proxy::do_query(schema_ptr s,
     }
 
     if (db::is_serial_consistency(cl)) {
-        auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options));
+        auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options), std::move(cas_shard));
         return utils::then_ok_result<result<storage_proxy::coordinator_query_result>>(std::move(f));
     } else {
         utils::latency_counter lc;
@@ -6365,7 +6367,8 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     lw_shared_ptr<query::read_command> cmd,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
-    storage_proxy::coordinator_query_options query_options) {
+    storage_proxy::coordinator_query_options query_options,
+    std::optional<cas_shard> cas_shard) {
     if (partition_ranges.size() != 1 || !query::is_single_partition(partition_ranges[0])) {
         return make_exception_future<storage_proxy::coordinator_query_result>(
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
@@ -6388,7 +6391,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
 
     auto request = seastar::make_shared<read_cas_request>();
 
-    return cas(std::move(s), request, cmd, std::move(partition_ranges), std::move(query_options),
+    return cas(std::move(s), std::move(cas_shard), request, cmd, std::move(partition_ranges), std::move(query_options),
             cl, db::consistency_level::ANY, timeout, cas_timeout, false).then([request] (bool is_applied) mutable {
         return make_ready_future<coordinator_query_result>(std::move(request->res));
     });
@@ -6452,9 +6455,11 @@ static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read
  * NOTE: `cmd` argument can be nullptr, in which case it's guaranteed that this function would not perform
  * any reads of committed values (in case user of the function is not interested in them).
  *
- * WARNING: the function should be called on a shard that owns the key cas() operates on
+ * WARNING: the function must be called on a shard that owns the key cas() operates on.
+ * The cas_shard must be created *before* selecting the shard, to protect against
+ * concurrent tablet migrations.
  */
-future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+future<bool> storage_proxy::cas(schema_ptr schema, std::optional<cas_shard> cas_shard, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
         clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write) {
@@ -6485,7 +6490,11 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
 
     shared_ptr<paxos_response_handler> handler;
     try {
+        if (!cas_shard) {
+            cas_shard.emplace(*schema, partition_ranges[0].start()->value().as_decorated_key().token());
+        }
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
+                std::move(*cas_shard).token_guard(),
                 query_options.trace_state, query_options.permit,
                 partition_ranges[0].start()->value().as_decorated_key(),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
