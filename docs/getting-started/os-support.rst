@@ -4,9 +4,6 @@ OS Support by Linux Distributions and Version
 The following matrix shows which Linux distributions, containers, and images
 are :ref:`supported <os-support-definition>` with which versions of ScyllaDB.
 
-Note that support for Ubuntu 20.04 is deprecated and will be removed in
-a future release.
-
 .. datatemplate:json:: /_static/data/os-support.json
   :template: platforms.tmpl
 
