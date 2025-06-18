@@ -111,7 +111,7 @@ Logging output example (drop table):
 
 .. code-block:: shell
 
-   Mar 18 09:53:52 ip-10-143-2-108 scylla-audit[28387]: "10.143.2.108", "DDL", "ONE", "team_roster", "nba", "DROP TABLE nba.team_roster ;", "127.0.0.1", "anonymous", "false"
+   Mar 18 09:53:52 ip-10-143-2-108 scylla-audit[28387]: node="10.143.2.108", category="DDL", cl="ONE", error="false", keyspace="nba", query="DROP TABLE nba.team_roster ;", client_ip="127.0.0.1", table="team_roster", username="anonymous"
 
 To redirect the Syslog output to a file, follow the steps below (available only for CentOS) :
 
