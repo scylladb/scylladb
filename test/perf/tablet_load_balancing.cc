@@ -231,8 +231,6 @@ struct params {
     int nodes;
     std::optional<int> tablets1;
     std::optional<int> tablets2;
-    int rf1;
-    int rf2;
     int shards;
     int scale1 = 1;
     int scale2 = 1;
@@ -281,13 +279,13 @@ template<>
 struct fmt::formatter<params> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const params& p, FormatContext& ctx) const {
-        auto tablets1_per_shard = double(p.tablets1.value_or(0)) * p.rf1 / (p.nodes * p.shards);
-        auto tablets2_per_shard = double(p.tablets2.value_or(0)) * p.rf2 / (p.nodes * p.shards);
-        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}, seed={}, capacities={}, high_tablet_size_variability={}}}",
+        auto tablets1_per_shard = double(p.tablets1.value_or(0)) / (p.nodes * p.shards);
+        auto tablets2_per_shard = double(p.tablets2.value_or(0)) / (p.nodes * p.shards);
+        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), shards={}, seed={}, capacities={}, high_tablet_size_variability={}}}",
                          p.iterations, p.nodes,
                          p.tablets1.value_or(0), tablets1_per_shard,
                          p.tablets2.value_or(0), tablets2_per_shard,
-                         p.rf1, p.rf2, p.shards,
+                         p.shards,
                          p.seed, p.capacities, p.high_tablet_size_variability);
     }
 };
@@ -374,8 +372,8 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             stats->tablet_stats.erase(host);
         };
 
-        auto ks1 = add_keyspace(e, {{topo.dc(), p.rf1}}, p.tablets1.value_or(1));
-        auto ks2 = add_keyspace(e, {{topo.dc(), p.rf2}}, p.tablets2.value_or(1));
+        auto ks1 = add_keyspace(e, {{topo.dc(), 1}}, p.tablets1.value_or(1));
+        auto ks2 = add_keyspace(e, {{topo.dc(), 1}}, p.tablets2.value_or(1));
         auto id1 = add_table(e, ks1).get();
         auto id2 = add_table(e, ks2).get();
         schema_ptr s1 = e.local_db().find_schema(id1);
@@ -481,7 +479,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 future<> run_simulation(const params& p, const sstring& name = "") {
     testlog.info("[run {}] params: {}", name, p);
 
-    auto total_tablet_count = p.tablets1.value_or(0) * p.rf1 + p.tablets2.value_or(0) * p.rf2;
+    auto total_tablet_count = p.tablets1.value_or(0) + p.tablets2.value_or(0);
     testlog.info("[run {}] tablet count: {}", name, total_tablet_count);
     testlog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
 
@@ -517,18 +515,14 @@ future<> run_simulation(const params& p, const sstring& name = "") {
 future<> run_simulations(const boost::program_options::variables_map& app_cfg, unsigned seed) {
     for (auto i = 0; i < app_cfg["runs"].as<int>(); i++) {
         auto shards = 1 << tests::random::get_int(0, 8);
-        auto rf1 = tests::random::get_int(1, 3);
-        auto rf2 = tests::random::get_int(1, 3);
         auto scale1 = 1 << tests::random::get_int(0, 5);
         auto scale2 = 1 << tests::random::get_int(0, 5);
         auto nodes = tests::random::get_int(3, 6);
         params p {
             .iterations = app_cfg["iterations"].as<int>(),
             .nodes = nodes,
-            .tablets1 = std::bit_ceil<size_t>(div_ceil(shards * nodes, rf1) * scale1),
-            .tablets2 = std::bit_ceil<size_t>(div_ceil(shards * nodes, rf2) * scale2),
-            .rf1 = rf1,
-            .rf2 = rf2,
+            .tablets1 = std::bit_ceil<size_t>(shards * nodes * scale1),
+            .tablets2 = std::bit_ceil<size_t>(shards * nodes * scale2),
             .shards = shards,
             .scale1 = scale1,
             .scale2 = scale2,
@@ -551,8 +545,6 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
             ("nodes", bpo::value<int>(), "Number of nodes in the cluster.")
             ("tablets1", bpo::value<int>(), "Number of tablets for the first table.")
             ("tablets2", bpo::value<int>(), "Number of tablets for the second table.")
-            ("rf1", bpo::value<int>(), "Replication factor for the first table.")
-            ("rf2", bpo::value<int>(), "Replication factor for the second table.")
             ("shards", bpo::value<int>(), "Number of shards per node.")
             ("seed", bpo::value<unsigned>(), "Tablet size random generator seed.")
             ("capacities", bpo::value<std::vector<unsigned>>()->multitoken(), "Disk capacity per shard in GB; can have muiltiple values.")
@@ -588,8 +580,6 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
                         .nodes = app.configuration()["nodes"].as<int>(),
                         .tablets1 = app.configuration()["tablets1"].as<int>(),
                         .tablets2 = app.configuration()["tablets2"].as<int>(),
-                        .rf1 = app.configuration()["rf1"].as<int>(),
-                        .rf2 = app.configuration()["rf2"].as<int>(),
                         .shards = app.configuration()["shards"].as<int>(),
                         .seed = seed,
                     };
