@@ -245,6 +245,8 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
         if (concurrency == _prev_conns_cpu_concurrency) {
             return;
         }
+        _logger.info("Updating uninitialized_connections_semaphore_cpu_concurrency from {} to {} due to config update", _prev_conns_cpu_concurrency, concurrency);
+
         if (concurrency > _prev_conns_cpu_concurrency) {
             _conns_cpu_concurrency_semaphore.signal(concurrency - _prev_conns_cpu_concurrency);
         } else {
