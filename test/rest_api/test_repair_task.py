@@ -96,10 +96,11 @@ def test_repair_task_progress(cql, this_dc, rest_api):
                         sequence_number = resp.json()
 
                         # Get all repairs.
-                        statuses = [get_task_status(rest_api, task["task_id"]) for task in list_tasks(rest_api, "repair") if task["sequence_number"] == sequence_number]
+                        statuses = []
+                        while not statuses or "children_ids" not in statuses[0]:
+                            statuses = [get_task_status(rest_api, task["task_id"]) for task in list_tasks(rest_api, "repair") if task["sequence_number"] == sequence_number]
                         assert len(statuses) == 1, "Wrong number of internal repair tasks"
                         status = statuses[0]
-                        assert "children_ids" in status, "No child tasks created"
 
                         for child_ident in status["children_ids"]:
                             # Check if task state is correct.
