@@ -389,10 +389,14 @@ class TesterAlternator(BaseAlternator):
         To reproduce this contention, we need to start (at least) two nodes,
         and connect to them concurrently from two threads.
         """
-        self.prepare_dynamodb_cluster(num_of_nodes=2)
-        [node1, node2] = self.cluster.nodelist()
+        # Create table with 1 node cluster so that it gets RF=1.
+        # Otherwise, with RF=2 the contention will cause write timeouts.
+        # With rf_rack_valid_keyspaces being enabled by default, RF is equal to number of nodes.
+        # Prior to that, if number of nodes is smaller than 3, alternator creates the keyspace with RF=1.
+        self.prepare_dynamodb_cluster(num_of_nodes=1)
+        [node1] = self.cluster.nodelist()
         node1_resource = self.get_dynamodb_api(node=node1).resource
-        node2_resource = self.get_dynamodb_api(node=node2).resource
+
         # Create the table, access it through the two connections, r1 and r2:
         table_name = "test_putitem_contention_table"
         table_r1 = node1_resource.create_table(
@@ -403,6 +407,10 @@ class TesterAlternator(BaseAlternator):
         )
         waiter = node1_resource.meta.client.get_waiter("table_exists")
         waiter.wait(TableName=table_name)
+
+        node2 = new_node(self.cluster, bootstrap=True)
+        node2.start(wait_for_binary_proto=True, wait_other_notice=True)
+        node2_resource = self.get_dynamodb_api(node=node2).resource
         table_r2 = node2_resource.Table(table_name)
 
         def writes(tab, rang):
