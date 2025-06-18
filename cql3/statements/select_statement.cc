@@ -449,15 +449,18 @@ select_statement::do_execute(query_processor& qp,
         }
     }
 
+    std::optional<service::cas_shard> cas_shard;
+
     if (db::is_serial_consistency(options.get_consistency())) {
         if (key_ranges.size() != 1 || !query::is_single_partition(key_ranges.front())) {
              throw exceptions::invalid_request_exception(
                      "SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time");
         }
-        unsigned shard = table.shard_for_reads(key_ranges[0].start()->value().as_decorated_key().token());
-        if (this_shard_id() != shard) {
+        const auto token = key_ranges[0].start()->value().as_decorated_key().token();
+        cas_shard.emplace(*_schema, token);
+        if (!cas_shard->this_shard()) {
             return make_ready_future<shared_ptr<cql_transport::messages::result_message>>(
-                    qp.bounce_to_shard(shard, std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
+                    qp.bounce_to_shard(cas_shard->shard(), std::move(const_cast<cql3::query_options&>(options).take_cached_pk_function_calls()))
                 );
         }
     }
@@ -467,11 +470,11 @@ select_statement::do_execute(query_processor& qp,
     if (!aggregate && !_restrictions_need_filtering && (page_size <= 0
             || !service::pager::query_pagers::may_need_paging(*_query_schema, page_size,
                     *command, key_ranges))) {
-        f = execute_without_checking_exception_message_non_aggregate_unpaged(qp, command, std::move(key_ranges), state, options, now);
+        f = execute_without_checking_exception_message_non_aggregate_unpaged(qp, command, std::move(key_ranges), state, options, now, std::move(cas_shard));
     } else {
         f = execute_without_checking_exception_message_aggregate_or_paged(qp, command,
             std::move(key_ranges), state, options, now, page_size, aggregate,
-            nonpaged_filtering, parsed_limit);
+            nonpaged_filtering, parsed_limit, std::move(cas_shard));
     }
 
     if (!tablet_info.has_value()) {
@@ -488,12 +491,12 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 select_statement::execute_without_checking_exception_message_aggregate_or_paged(query_processor& qp,
         lw_shared_ptr<query::read_command> command, dht::partition_range_vector&& key_ranges, service::query_state& state,
         const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering,
-        uint64_t limit) const {
+        uint64_t limit, std::optional<service::cas_shard> cas_shard) const {
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
     auto timeout = db::timeout_clock::now() + timeout_duration;
     auto p = service::pager::query_pagers::pager(qp.proxy(), _query_schema, _selection,
-            state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr);
+            state, options, command, std::move(key_ranges), _restrictions_need_filtering ? _restrictions : nullptr, std::move(cas_shard));
 
     auto per_partition_limit = get_limit(options, _per_partition_limit, true);
 
@@ -834,7 +837,7 @@ select_statement::execute_non_aggregate_unpaged(query_processor& qp,
                           const query_options& options,
                           gc_clock::time_point now) const
 {
-    return execute_without_checking_exception_message_non_aggregate_unpaged(qp, std::move(cmd), std::move(partition_ranges), state, options, now)
+    return execute_without_checking_exception_message_non_aggregate_unpaged(qp, std::move(cmd), std::move(partition_ranges), state, options, now, {})
             .then(cql_transport::messages::propagate_exception_as_future<shared_ptr<cql_transport::messages::result_message>>);
 }
 
@@ -844,7 +847,8 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
                           dht::partition_range_vector&& partition_ranges,
                           service::query_state& state,
                           const query_options& options,
-                          gc_clock::time_point now) const
+                          gc_clock::time_point now,
+                          std::optional<service::cas_shard> cas_shard) const
 {
     // If this is a query with IN on partition key, ORDER BY clause and LIMIT
     // is specified we need to get "limit" rows from each partition since there
@@ -852,17 +856,18 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
     // doing post-query ordering.
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
     if (needs_post_query_ordering() && _limit) {
-        return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &qp, &state, &options, cmd, timeout](auto& prs) {
+        return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &qp, &state, &options, cmd, timeout, cas_shard = std::move(cas_shard)](auto& prs) {
             SCYLLA_ASSERT(cmd->partition_limit == query::max_partitions);
             query::result_merger merger(cmd->get_row_limit() * prs.size(), query::max_partitions);
-            return utils::result_map_reduce(prs.begin(), prs.end(), [this, &qp, &state, &options, cmd, timeout] (auto& pr) {
+            return utils::result_map_reduce(prs.begin(), prs.end(), [this, &qp, &state, &options, cmd, timeout, cas_shard = std::move(cas_shard)] (auto& pr) {
                 dht::partition_range_vector prange { pr };
                 auto command = ::make_lw_shared<query::read_command>(*cmd);
                 return qp.proxy().query_result(_query_schema,
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()}).then(utils::result_wrap([] (service::storage_proxy::coordinator_query_result qr) {
+                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()},
+                        cas_shard).then(utils::result_wrap([] (service::storage_proxy::coordinator_query_result qr) {
                     return make_ready_future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>>(std::move(qr.query_result));
                 }));
             }, std::move(merger));
@@ -870,7 +875,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
             return this->process_results(std::move(result), cmd, options, now);
         }));
     } else {
-        return qp.proxy().query_result(_query_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
+        return qp.proxy().query_result(_query_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()}, std::move(cas_shard))
             .then(wrap_result_to_error_message([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             }));
@@ -1857,8 +1862,9 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             command,
             std::move(key_ranges),
             _restrictions_need_filtering ? _restrictions : nullptr,
+            std::nullopt,
             [this, erm_keepalive, this_node] (service::storage_proxy& sp, schema_ptr schema, lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector partition_ranges,
-                    db::consistency_level cl, service::storage_proxy_coordinator_query_options optional_params) mutable {
+                    db::consistency_level cl, service::storage_proxy_coordinator_query_options optional_params, std::optional<service::cas_shard>) mutable {
                 return do_query(std::move(erm_keepalive), this_node, sp, std::move(schema), std::move(cmd), std::move(partition_ranges), cl, std::move(optional_params));
             });
 
