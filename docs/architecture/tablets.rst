@@ -150,7 +150,6 @@ The following ScyllaDB features are not supported if a keyspace has tablets
 enabled:
 
 * Counters
-* Change Data Capture (CDC)
 * Lightweight Transactions (LWT)
 * Alternator (as it uses LWT)
 

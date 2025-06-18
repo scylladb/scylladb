@@ -765,6 +765,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                     [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
+                case topology::transition_state::commit_cdc_streams:
+                    [[fallthrough]];
+                case topology::transition_state::close_cdc_streams:
+                    [[fallthrough]];
                 case topology::transition_state::tablet_draining:
                     [[fallthrough]];
                 case topology::transition_state::write_both_read_old:
@@ -916,6 +920,14 @@ future<> storage_service::compression_dictionary_updated_callback_all() {
 future<> storage_service::compression_dictionary_updated_callback(std::string_view name) {
     assert(this_shard_id() == 0);
     return _compression_dictionary_updated_callback(name);
+}
+
+future<> storage_service::load_cdc_streams() {
+    co_await _cdc_gens.local().load_cdc_tablet_streams();
+}
+
+future<> storage_service::load_cdc_streams(std::unordered_set<table_id> changed_tables) {
+    co_await _cdc_gens.local().load_cdc_tablet_streams(std::move(changed_tables));
 }
 
 // Moves the coroutine lambda onto the heap and extends its
@@ -1132,6 +1144,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
+                    _cdc_gens.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service);
@@ -7289,6 +7302,13 @@ void storage_service::init_messaging_service() {
             return ss.raft_topology_cmd_handler(term, cmd_index, cmd);
         });
     });
+    ser::storage_service_rpc_verbs::register_barrier_and_get_time_cmd(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft::term_t term, uint64_t cmd_index) {
+        return handle_raft_rpc(dst_id, [term, cmd_index] (auto& ss) {
+            return ss.raft_topology_cmd_handler(term, cmd_index, raft_topology_cmd::command::barrier).then([] (auto result) {
+                return barrier_and_get_time_result { result, db_clock::now() };
+            });
+        });
+    });
     ser::storage_service_rpc_verbs::register_raft_pull_snapshot(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, raft_snapshot_pull_params params) {
         return handle_raft_rpc(dst_id, [params = std::move(params)] (storage_service& ss) -> future<raft_snapshot> {
             check_raft_rpc_scheduling_group(ss._db.local(), ss._feature_service, "raft_pull_snapshot");
@@ -7314,6 +7334,11 @@ void storage_service::init_messaging_service() {
                 }
                 if (ss._feature_service.compression_dicts) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
+                }
+                if (ss._feature_service.cdc_with_tablets) {
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_pending_streams()->id());
                 }
             }
 
@@ -7928,6 +7953,10 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
     if (start_instantly) {
         co_await server.start_server();
     }
+}
+
+const cdc::metadata& storage_service::get_cdc_metadata() const noexcept {
+    return _cdc_gens.local().get_cdc_metadata();
 }
 
 } // namespace service

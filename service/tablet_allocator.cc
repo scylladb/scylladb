@@ -3147,6 +3147,7 @@ public:
             auto tablet_count = table_plan.target_tablet_count_aligned;
             auto map = tablet_rs->allocate_tablets_for_new_table(s.shared_from_this(), tm, tablet_count).get();
             muts.emplace_back(tablet_map_to_mutation(map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
+            _db.get_notifier().before_allocate_tablet_map(map, s, muts, ts);
         }
     }
 
