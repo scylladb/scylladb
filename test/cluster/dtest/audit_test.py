@@ -238,11 +238,13 @@ class AuditBackendSyslog(AuditBackend):
     def get_audit_log_list(self, session, consistency_level):
         lines = self.unix_socket_listener.get_lines()
         entries = []
+        idx = 0
         for line in lines:
-            entries.append(self.line_to_row(line))
+            entries.append(self.line_to_row(line, idx))
+            idx += 1
         return entries
 
-    def line_to_row(self, line):
+    def line_to_row(self, line, idx):
         metadata, data = line.split(": ", 1)
         data = data.replace("\n", "")        
         fields = ["node", "category", "cl", "error", "keyspace", "query", "client_ip", "table", "username"]
@@ -258,7 +260,7 @@ class AuditBackendSyslog(AuditBackend):
         node = match.group("node").split(":")[0]
         statement = match.group("query").replace("\\", "") 
         source = match.group("client_ip").split(":")[0]
-        event_time = uuid.UUID("2e4bc246-fea1-11ee-b73f-51b0926539af")
+        event_time = uuid.UUID(int=idx)
         t = self.named_tuple_factory(date, node, event_time, match.group("category"), match.group("cl"), match.group("error") == "true", match.group("keyspace"), statement, source, match.group("table"), match.group("username"))
         return t
 
