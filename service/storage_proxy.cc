@@ -1148,6 +1148,12 @@ unsigned storage_proxy::get_cas_shard(const schema& s, dht::token token) {
     return s.table().shard_for_reads(token);
 }
 
+cas_shard::cas_shard(const schema& s, dht::token token)
+    : _token_guard(s.table(), token)
+    , _shard(storage_proxy::get_cas_shard(s, token))
+{
+}
+
 static uint32_t random_variable_for_rate_limit() {
     static thread_local std::default_random_engine re{std::random_device{}()};
     static thread_local std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF);
