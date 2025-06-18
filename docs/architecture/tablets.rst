@@ -147,24 +147,19 @@ Limitations and Unsupported Features
     performance problems, or other issues.
 
 The following ScyllaDB features are not supported if a keyspace has tablets
-enabled:
+enabled. If you plan to use any of the features listed below, CREATE your keyspace
+:ref:`with tablets disabled <tablets-enable-tablets>`.
 
 * Counters
 * Change Data Capture (CDC)
 * Lightweight Transactions (LWT)
 * Alternator (as it uses LWT)
+* Materialized Views (MV) ``*``
+* Secondary indexes (SI, as it depends on MV) ``*``
 
-If you plan to use any of the above features, CREATE your keyspace
-:ref:`with tablets disabled <tablets-enable-tablets>`.
-
-The following ScyllaDB features are disabled by default when used with a keyspace
-that has tablets enabled:
-
-* Materialized Views (MV)
-* Secondary indexes (SI, as it depends on MV)
-
-To enable MV and SI for tablet keyspaces, use the `--experimental-features=views-with-tablets`
-configuration option.  See :ref:`Views with tablets <admin-views-with-tablets>` for details.
+``*`` You can enable experimental support for MV and SI using
+the ``--experimental-features=views-with-tablets`` configuration option. 
+See :ref:`Views with tablets <admin-views-with-tablets>` for details.
 
 Resharding in keyspaces with tablets enabled has the following limitations:
 
