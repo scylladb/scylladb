@@ -1089,7 +1089,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     struct claimed_buffer {
         temporary_buffer<char> _buffer;
         semaphore_units<> _claimed_memory;
-        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory)
+        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory) noexcept
             : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
     };
     struct content_range {
