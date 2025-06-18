@@ -155,7 +155,7 @@ public:
         });
     }
 
-    future<> emit_ring(result_collector& result, const dht::decorated_key& dk, const sstring& table_name, std::vector<dht::token_range_endpoints> ranges) {
+    future<> emit_ring(result_collector& result, const dht::decorated_key& dk, const sstring& table_name, utils::chunked_vector<dht::token_range_endpoints> ranges) {
 
         co_await result.emit_partition_start(dk);
         std::ranges::sort(ranges, std::ranges::less(), std::mem_fn(&dht::token_range_endpoints::_start_token));
@@ -209,11 +209,11 @@ public:
                         co_return;
                     }
                     const auto& table_name = table->schema()->cf_name();
-                    std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring_for_table(e.name, table_name);
+                    utils::chunked_vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring_for_table(e.name, table_name);
                     co_await emit_ring(result, e.key, table_name, std::move(ranges));
                 });
             } else {
-                std::vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
+                utils::chunked_vector<dht::token_range_endpoints> ranges = co_await _ss.describe_ring(e.name);
                 co_await emit_ring(result, e.key, "<ALL>", std::move(ranges));
             }
         }
