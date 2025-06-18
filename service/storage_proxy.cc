@@ -6963,7 +6963,7 @@ locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexce
     return _shared_token_metadata.get();
 }
 
-future<std::vector<dht::token_range_endpoints>> storage_proxy::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
+future<utils::chunked_vector<dht::token_range_endpoints>> storage_proxy::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
     return locator::describe_ring(_db.local(), _remote->gossiper(), keyspace, include_only_local_dc);
 }
 
