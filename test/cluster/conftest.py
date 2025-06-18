@@ -59,6 +59,8 @@ def pytest_addoption(parser):
     parser.addoption('--manager-api', action='store',
                      help='Manager unix socket path')
     add_cql_connection_options(parser)
+    parser.addoption('--skip-internet-dependent-tests', action='store_true',
+                     help='Skip tests which depend on artifacts from the internet')
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
                           'with logs')
