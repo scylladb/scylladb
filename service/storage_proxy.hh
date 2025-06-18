@@ -411,12 +411,14 @@ private:
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        coordinator_query_options optional_params);
+        coordinator_query_options optional_params,
+        std::optional<cas_shard> cas_shard);
     future<coordinator_query_result> do_query_with_paxos(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        coordinator_query_options optional_params);
+        coordinator_query_options optional_params,
+        std::optional<cas_shard> cas_shard);
     template<typename Range, typename CreateWriteHandler>
     future<result<unique_response_handler_vector>> mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler handler);
     template<typename Range>
@@ -681,7 +683,8 @@ public:
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        coordinator_query_options optional_params);
+        coordinator_query_options optional_params,
+        std::optional<cas_shard> cas_shard = {});
 
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_locally(
         schema_ptr, lw_shared_ptr<query::read_command> cmd, const dht::partition_range&,
@@ -694,7 +697,7 @@ public:
         clock_type::time_point timeout,
         tracing::trace_state_ptr trace_state = nullptr);
 
-    future<bool> cas(schema_ptr schema, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+    future<bool> cas(schema_ptr schema, std::optional<cas_shard> cas_shard, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
