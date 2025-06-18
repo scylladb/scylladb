@@ -333,7 +333,7 @@ class TestCQLAudit(AuditTester):
         error=False,
     ):
         self.assert_audit_row_fields(row)
-        assert row.node == self.cluster.get_node_ip(1)
+        assert row.node in map(lambda x: x.address(), self.cluster.nodelist())
         assert row.category == category
         assert row.consistency == cl
         assert row.error == error
