@@ -1144,13 +1144,13 @@ const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-unsigned storage_proxy::get_cas_shard(const schema& s, dht::token token) {
+static unsigned get_cas_shard(const schema& s, dht::token token) {
     return s.table().shard_for_reads(token);
 }
 
 cas_shard::cas_shard(const schema& s, dht::token token)
     : _token_guard(s.table(), token)
-    , _shard(storage_proxy::get_cas_shard(s, token))
+    , _shard(get_cas_shard(s, token))
 {
 }
 
@@ -6331,7 +6331,10 @@ storage_proxy::do_query(schema_ptr s,
     }
 
     if (db::is_serial_consistency(cl)) {
-        auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options), std::move(cas_shard));
+        if (!cas_shard) {
+            on_internal_error(slogger, "cas_shard must be provided for do_query_with_paxos");
+        }
+        auto f = do_query_with_paxos(std::move(s), std::move(cmd), std::move(partition_ranges), cl, std::move(query_options), std::move(*cas_shard));
         return utils::then_ok_result<result<storage_proxy::coordinator_query_result>>(std::move(f));
     } else {
         utils::latency_counter lc;
@@ -6368,7 +6371,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     dht::partition_range_vector&& partition_ranges,
     db::consistency_level cl,
     storage_proxy::coordinator_query_options query_options,
-    std::optional<cas_shard> cas_shard) {
+    cas_shard cas_shard) {
     if (partition_ranges.size() != 1 || !query::is_single_partition(partition_ranges[0])) {
         return make_exception_future<storage_proxy::coordinator_query_result>(
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
@@ -6459,7 +6462,7 @@ static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read
  * The cas_shard must be created *before* selecting the shard, to protect against
  * concurrent tablet migrations.
  */
-future<bool> storage_proxy::cas(schema_ptr schema, std::optional<cas_shard> cas_shard, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
+future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
         clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write) {
@@ -6477,7 +6480,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, std::optional<cas_shard> cas_
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
     if (get_cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        co_await coroutine::return_exception(std::logic_error("storage_proxy::cas called on a wrong shard"));
+        on_internal_error(paxos::paxos_state::logger, "storage_proxy::cas called on a wrong shard");
     }
 
     // In case a nullptr is passed to this function (i.e. the caller isn't interested in
@@ -6490,11 +6493,8 @@ future<bool> storage_proxy::cas(schema_ptr schema, std::optional<cas_shard> cas_
 
     shared_ptr<paxos_response_handler> handler;
     try {
-        if (!cas_shard) {
-            cas_shard.emplace(*schema, partition_ranges[0].start()->value().as_decorated_key().token());
-        }
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
-                std::move(*cas_shard).token_guard(),
+                std::move(cas_shard).token_guard(),
                 query_options.trace_state, query_options.permit,
                 partition_ranges[0].start()->value().as_decorated_key(),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
