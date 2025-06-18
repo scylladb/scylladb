@@ -6371,9 +6371,6 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
 
-    if (get_cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
-        return make_exception_future<storage_proxy::coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
-    }
     // All cas networking operations run with query provided timeout
     db::timeout_clock::time_point timeout = query_options.timeout(*this);
     // When to give up due to contention
