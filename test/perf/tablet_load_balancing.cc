@@ -321,7 +321,7 @@ struct tablet_size_generator {
     }
 };
 
-future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware) {
+future<results> test_load_balancing_with_many_tables(params p) {
     auto cfg = tablet_cql_test_config();
     results global_res;
     co_await do_with_cql_env_thread([&] (auto& e) {
@@ -457,8 +457,6 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         testlog.debug("tablet metadata: {}", stm.get()->tablets());
 
-        e.get_tablet_allocator().local().set_use_table_aware_balancing(tablet_aware);
-
         check_balance();
 
         rebalance_tablets(e, stats);
@@ -483,7 +481,7 @@ future<> run_simulation(const params& p, const sstring& name = "") {
     testlog.info("[run {}] tablet count: {}", name, total_tablet_count);
     testlog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
 
-    auto res = co_await test_load_balancing_with_many_tables(p, true);
+    auto res = co_await test_load_balancing_with_many_tables(p);
     testlog.info("[run {}] Overcommit       : init : {}", name, res.init);
     testlog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
     testlog.info("[run {}] Overcommit       : last : {}", name, res.last);
@@ -494,17 +492,7 @@ future<> run_simulation(const params& p, const sstring& name = "") {
         testlog.warn("[run {}] Scheduling took longer than 1s!", name);
     }
 
-    auto old_res = co_await test_load_balancing_with_many_tables(p, false);
-    testlog.info("[run {}] Overcommit (old) : init : {}", name, old_res.init);
-    testlog.info("[run {}] Overcommit (old) : worst: {}", name, old_res.worst);
-    testlog.info("[run {}] Overcommit (old) : last : {}", name, old_res.last);
-    testlog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
-                 old_res.stats.elapsed_time.count(), old_res.stats.max_rebalance_time.count(), old_res.stats.rebalance_count);
-
     for (int i = 0; i < nr_tables; ++i) {
-        if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
-            testlog.warn("[run {}] table{} shard overcommit worse!", name, i + 1);
-        }
         auto overcommit = res.worst.tables[i].shard_overcommit;
         if (overcommit > 1.2) {
             testlog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
