@@ -545,7 +545,7 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_using_non_existent_keyspace(self, helper_class):
         """
         Test tha using a non-existent keyspace generates an audit entry with an
@@ -661,22 +661,22 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings=AuditTester.audit_default_settings, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace_extra_parameter(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,DML,DDL,DCL", "audit_keyspaces": "ks", "extra_parameter": "new"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace_many_ks(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "a,b,c,ks"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace_table_not_exists(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "DML,DDL", "audit_keyspaces": "ks", "audit_tables": "ks.fake"}, helper=helper)
@@ -789,20 +789,20 @@ class TestCQLAudit(AuditTester):
         self.verify_table(audit_settings={"audit": "table", "audit_categories": "AUTH,QUERY,DDL"}, table_prefix="test_audit_categories_part1", overwrite_audit_tables=True)
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_categories_part2(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH,DCL", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part2")
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_categories_part3(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part3")
 
     PasswordMaskingCase = namedtuple("PasswordMaskingCase", ["name", "password", "new_password"])
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_user_password_masking(self, helper_class):
         """
         CREATE USER, ALTER USER, DROP USER statements
@@ -919,7 +919,7 @@ class TestCQLAudit(AuditTester):
         with self.assert_entries_were_added(session, [expected_entry]):
             assert_invalid(session, stmt, expected=Unavailable)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_role_password_masking(self, helper_class):
         """
         CREATE ROLE, ALTER ROLE, DROP ROLE statements
@@ -1100,7 +1100,7 @@ class TestCQLAudit(AuditTester):
                 assert len(rows_without_error) == 1
                 break
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_prepare(self, helper_class):
         """Test prepare statement"""
         with helper_class() as helper:
@@ -1128,7 +1128,7 @@ class TestCQLAudit(AuditTester):
                 table="cf",
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_permissions(self, helper_class):
         """Test user permissions"""
 
@@ -1160,7 +1160,7 @@ class TestCQLAudit(AuditTester):
                 expected_error=Unauthorized,
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_batch(self, helper_class):
         """
         BATCH statement
@@ -1296,7 +1296,7 @@ class TestCQLAudit(AuditTester):
                     self.verify_change(node, param, settings[param], mark, expected_result)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_config_liveupdate(self, helper_class, audit_config_changer):
         """
         Test liveupdate config changes in audit.
@@ -1357,7 +1357,7 @@ class TestCQLAudit(AuditTester):
                 session.execute(auditted_query)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
