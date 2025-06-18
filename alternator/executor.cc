@@ -2386,7 +2386,7 @@ rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(sch
 // shard_for_execute() checks whether execute() must be called on a specific
 // other shard. Running execute() on a specific shard is necessary only if it
 // will use LWT (storage_proxy::cas()). This is because cas() can only be
-// called on the specific shard owning (as per cas_shard()) _pk's token.
+// called on the specific shard owning (as per get_cas_shard()) _pk's token.
 // Knowing if execute() will call cas() or not may depend on whether there is
 // a read-before-write, but not just on it - depending on configuration,
 // execute() may unconditionally use cas() for every write. Unfortunately,
@@ -2400,7 +2400,7 @@ std::optional<shard_id> rmw_operation::shard_for_execute(bool needs_read_before_
     // If we're still here, cas() *will* be called by execute(), so let's
     // find the appropriate shard to run it on:
     auto token = dht::get_token(*_schema, _pk);
-    auto desired_shard = service::storage_proxy::cas_shard(*_schema, token);
+    auto desired_shard = service::storage_proxy::get_cas_shard(*_schema, token);
     if (desired_shard == this_shard_id()) {
         return {};
     }
@@ -2872,7 +2872,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         }
         return parallel_for_each(std::move(key_builders), [&proxy, &client_state, &stats, trace_state, ssg, permit = std::move(permit)] (auto& e) {
             stats.write_using_lwt++;
-            auto desired_shard = service::storage_proxy::cas_shard(*e.first.schema, e.first.dk.token());
+            auto desired_shard = service::storage_proxy::get_cas_shard(*e.first.schema, e.first.dk.token());
             if (desired_shard == this_shard_id()) {
                 return cas_write(proxy, e.first.schema, e.first.dk, std::move(e.second), client_state, trace_state, permit);
             } else {

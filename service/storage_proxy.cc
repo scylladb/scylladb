@@ -1144,7 +1144,7 @@ const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-unsigned storage_proxy::cas_shard(const schema& s, dht::token token) {
+unsigned storage_proxy::get_cas_shard(const schema& s, dht::token token) {
     return s.table().shard_for_reads(token);
 }
 
@@ -6365,7 +6365,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
                 exceptions::invalid_request_exception("SERIAL/LOCAL_SERIAL consistency may only be requested for one partition at a time"));
     }
 
-    if (cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
+    if (get_cas_shard(*s, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
         return make_exception_future<storage_proxy::coordinator_query_result>(std::logic_error("storage_proxy::do_query_with_paxos called on a wrong shard"));
     }
     // All cas networking operations run with query provided timeout
@@ -6468,7 +6468,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, shared_ptr<cas_request> reque
     db::validate_for_cas(cl_for_paxos);
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
-    if (cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
+    if (get_cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
         co_await coroutine::return_exception(std::logic_error("storage_proxy::cas called on a wrong shard"));
     }
 

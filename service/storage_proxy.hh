@@ -735,7 +735,7 @@ public:
         return _stats_key;
     }
 
-    static unsigned cas_shard(const schema& s, dht::token token);
+    static unsigned get_cas_shard(const schema& s, dht::token token);
 
     future<> await_pending_writes() noexcept {
         return _pending_writes_phaser.advance_and_await();

@@ -403,7 +403,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
 
     auto token = request->key()[0].start()->value().as_decorated_key().token();
 
-    auto shard = service::storage_proxy::cas_shard(*s, token);
+    auto shard = service::storage_proxy::get_cas_shard(*s, token);
 
     if (utils::get_local_injector().is_enabled("forced_bounce_to_shard_counter")) {
         return process_forced_rebounce(shard, qp, options);
