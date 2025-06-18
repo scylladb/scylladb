@@ -5261,7 +5261,7 @@ future<> storage_service::move(token new_token) {
     });
 }
 
-future<std::vector<storage_service::token_range_endpoints>>
+future<utils::chunked_vector<storage_service::token_range_endpoints>>
 storage_service::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
     if (_db.local().find_keyspace(keyspace).uses_tablets()) {
         throw std::runtime_error(fmt::format("The keyspace {} has tablet table. Query describe_ring with the table parameter!", keyspace));
@@ -5269,7 +5269,7 @@ storage_service::describe_ring(const sstring& keyspace, bool include_only_local_
     co_return co_await locator::describe_ring(_db.local(), _gossiper, keyspace, include_only_local_dc);
 }
 
-future<std::vector<dht::token_range_endpoints>>
+future<utils::chunked_vector<dht::token_range_endpoints>>
 storage_service::describe_ring_for_table(const sstring& keyspace_name, const sstring& table_name) const {
     slogger.debug("describe_ring for table {}.{}", keyspace_name, table_name);
     auto& t = _db.local().find_column_family(keyspace_name, table_name);
@@ -5281,7 +5281,7 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
     auto erm = t.get_effective_replication_map();
     auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
     const auto& topology = erm->get_topology();
-    std::vector<dht::token_range_endpoints> ranges;
+    utils::chunked_vector<dht::token_range_endpoints> ranges;
     co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
         auto range = tmap.get_token_range(id);
         auto& replicas = info.replicas;

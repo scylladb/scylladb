@@ -246,7 +246,7 @@ public:
     // using gossip and by passing the information in each MUTATION_DONE rpc call response.
     db::view::update_backlog get_backlog_of(locator::host_id) const;
 
-    future<std::vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
+    future<utils::chunked_vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
 private:
     distributed<replica::database>& _db;
