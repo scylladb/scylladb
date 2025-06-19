@@ -27,6 +27,7 @@ target_sources(db
     extensions.cc
     heat_load_balance.cc
     large_data_handler.cc
+    corrupt_data_handler.cc
     marshal/type_parser.cc
     batchlog_manager.cc
     tags/utils.cc
