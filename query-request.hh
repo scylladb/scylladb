@@ -499,6 +499,7 @@ struct mapreduce_request {
     db::consistency_level cl;
     lowres_system_clock::time_point timeout;
     std::optional<std::vector<aggregation_info>> aggregation_infos;
+    std::optional<shard_id> shard_id_hint;
 };
 
 std::ostream& operator<<(std::ostream& out, const mapreduce_request& r);
