@@ -59,6 +59,7 @@
 
 #include "db/timeout_clock.hh"
 #include "db/large_data_handler.hh"
+#include "db/corrupt_data_handler.hh"
 #include "db/data_listeners.hh"
 
 #include "data_dictionary/user_types_metadata.hh"
@@ -418,8 +419,10 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
               _cfg.compaction_rows_count_warning_threshold,
               _cfg.compaction_collection_elements_count_warning_threshold))
     , _nop_large_data_handler(std::make_unique<db::nop_large_data_handler>())
-    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, abort, dbcfg.streaming_scheduling_group, &sstm))
-    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, abort, dbcfg.streaming_scheduling_group))
+    , _corrupt_data_handler(std::make_unique<db::system_table_corrupt_data_handler>(db::system_table_corrupt_data_handler::config{.entry_ttl = std::chrono::days(10)}, db::corrupt_data_handler::register_metrics::yes))
+    , _nop_corrupt_data_handler(std::make_unique<db::nop_corrupt_data_handler>(db::corrupt_data_handler::register_metrics::no))
+    , _user_sstables_manager(std::make_unique<sstables::sstables_manager>("user", *_large_data_handler, *_corrupt_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, abort, dbcfg.streaming_scheduling_group, &sstm))
+    , _system_sstables_manager(std::make_unique<sstables::sstables_manager>("system", *_nop_large_data_handler, *_nop_corrupt_data_handler, _cfg, feat, _row_cache_tracker, dbcfg.available_memory, sst_dir_sem, [&stm]{ return stm.get()->get_my_id(); }, abort, dbcfg.streaming_scheduling_group))
     , _result_memory_limiter(dbcfg.available_memory / 10)
     , _data_listeners(std::make_unique<db::data_listeners>())
     , _mnotifier(mn)
@@ -2336,6 +2339,7 @@ future<> database::shutdown() {
     co_await close_tables(database::table_kind::user);
     co_await close_tables(database::table_kind::system);
     co_await _large_data_handler->stop();
+    co_await _corrupt_data_handler->stop();
     // Don't shutdown the keyspaces just yet,
     // since they are needed during shutdown.
     // FIXME: restore when https://github.com/scylladb/scylla/issues/8995
@@ -3054,6 +3058,7 @@ database::as_data_dictionary() const {
 void database::plug_system_keyspace(db::system_keyspace& sys_ks) noexcept {
     _compaction_manager.plug_system_keyspace(sys_ks);
     _large_data_handler->plug_system_keyspace(sys_ks);
+    _corrupt_data_handler->plug_system_keyspace(sys_ks);
     _user_sstables_manager->plug_sstables_registry(std::make_unique<db::system_keyspace_sstables_registry>(sys_ks));
 }
 
@@ -3061,6 +3066,7 @@ void database::unplug_system_keyspace() noexcept {
     _user_sstables_manager->unplug_sstables_registry();
     _compaction_manager.unplug_system_keyspace();
     _large_data_handler->unplug_system_keyspace();
+    _corrupt_data_handler->unplug_system_keyspace();
 }
 
 void database::plug_view_update_generator(db::view::view_update_generator& generator) noexcept {
