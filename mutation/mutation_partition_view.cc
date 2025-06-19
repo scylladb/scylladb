@@ -518,3 +518,31 @@ mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s, reader_per
         }
     );
 }
+
+mutation_fragment_v2 frozen_mutation_fragment_v2::unfreeze(const schema& s, reader_permit permit)
+{
+    auto in = ser::as_input_stream(_bytes);
+    auto view = ser::deserialize(in, std::type_identity<ser::mutation_fragment_v2_view>());
+    return seastar::visit(view.fragment(),
+        [&] (ser::clustering_row_view crv) {
+            return mutation_fragment_v2(s, permit, read_clustered_row(s, crv));
+        },
+        [&] (ser::static_row_view sr) {
+            return mutation_fragment_v2(s, permit, read_static_row(s, sr));
+        },
+        [&] (ser::range_tombstone_change_view rtc) {
+            auto pos = position_in_partition(partition_region::clustered, rtc.weight(), rtc.key());
+            return mutation_fragment_v2(s, permit, range_tombstone_change(std::move(pos), rtc.tomb()));
+        },
+        [&] (ser::partition_start_view ps) {
+            auto dkey = dht::decorate_key(s, ps.key());
+            return mutation_fragment_v2(s, permit, partition_start(std::move(dkey), ps.partition_tombstone()));
+        },
+        [&] (partition_end) {
+            return mutation_fragment_v2(s, permit, partition_end());
+        },
+        [] (ser::unknown_variant_type) -> mutation_fragment_v2 {
+            throw std::runtime_error("Trying to deserialize unknown mutation fragment type");
+        }
+    );
+}

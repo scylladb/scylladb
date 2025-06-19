@@ -280,3 +280,37 @@ frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf)
     )).end_mutation_fragment();
     return frozen_mutation_fragment(std::move(out));
 }
+
+frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& mf) {
+    bytes_ostream out;
+    ser::writer_of_mutation_fragment_v2<bytes_ostream> writer(out);
+    mf.visit(seastar::make_visitor(
+        [&] (const clustering_row& cr) {
+            return write_row(std::move(writer).start_fragment_clustering_row().start_row(), s, cr.key(), cr.cells(), cr.marker(), cr.tomb())
+                    .end_row()
+                .end_clustering_row();
+        },
+        [&] (const static_row& sr) {
+            return write_row_cells(std::move(writer).start_fragment_static_row().start_cells(), sr.cells(), s, column_kind::static_column)
+                    .end_cells()
+                .end_static_row();
+        },
+        [&] (const range_tombstone_change& rtc) {
+            return std::move(writer).start_fragment_range_tombstone_change()
+                .write_key(rtc.position().key())
+                .write_weight(rtc.position().get_bound_weight())
+                .write_tomb(rtc.tombstone())
+                .end_range_tombstone_change();
+        },
+        [&] (const partition_start& ps) {
+            return std::move(writer).start_fragment_partition_start()
+                    .write_key(ps.key().key())
+                    .write_partition_tombstone(ps.partition_tombstone())
+                .end_partition_start();
+        },
+        [&] (const partition_end& pe) {
+            return std::move(writer).write_fragment_partition_end(pe);
+        }
+    )).end_mutation_fragment_v2();
+    return frozen_mutation_fragment_v2(std::move(out));
+}
