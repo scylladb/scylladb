@@ -763,6 +763,35 @@ schema_ptr system_keyspace::large_cells() {
     return large_cells;
 }
 
+schema_ptr system_keyspace::corrupt_data() {
+    static thread_local auto corrupt_data = [] {
+        auto id = generate_legacy_id(NAME, CORRUPT_DATA);
+        return schema_builder(NAME, CORRUPT_DATA, id)
+                // partition key
+                .with_column("keyspace_name", utf8_type, column_kind::partition_key)
+                .with_column("table_name", utf8_type, column_kind::partition_key)
+                // clustering key
+                .with_column("id", timeuuid_type, column_kind::clustering_key)
+                // regular rows
+                // Storing keys as bytes: having a corrupt key might be the reason
+                // to record the row as corrupt, so we just dump what we have and
+                // leave interpreting to the lucky person investigating the disaster.
+                .with_column("partition_key", bytes_type)
+                .with_column("clustering_key", bytes_type)
+                // Note: mutation-fragment v2
+                .with_column("mutation_fragment_kind", utf8_type)
+                .with_column("frozen_mutation_fragment", bytes_type)
+                .with_column("origin", utf8_type)
+                .with_column("sstable_name", utf8_type)
+                // options
+                .set_comment("mutation-fragments found to be corrupted")
+                .set_gc_grace_seconds(0)
+                .with_hash_version()
+                .build();
+    }();
+    return corrupt_data;
+}
+
 static constexpr auto schema_gc_grace = std::chrono::duration_cast<std::chrono::seconds>(days(7)).count();
 
 /*static*/ schema_ptr system_keyspace::scylla_local() {
@@ -2306,6 +2335,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     peers(), peer_events(), range_xfers(),
                     compactions_in_progress(), compaction_history(),
                     sstable_activity(), size_estimates(), large_partitions(), large_rows(), large_cells(),
+                    corrupt_data(),
                     scylla_local(), db::schema_tables::scylla_table_schema_history(),
                     repair_history(),
                     v3::views_builds_in_progress(), v3::built_views(),

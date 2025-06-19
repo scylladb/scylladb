@@ -141,6 +141,7 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     static schema_ptr large_partitions();
     static schema_ptr large_rows();
     static schema_ptr large_cells();
+    static schema_ptr corrupt_data();
     static schema_ptr scylla_local();
     future<> force_blocking_flush(sstring cfname);
     // This function is called when the system.peers table is read,
@@ -173,6 +174,7 @@ public:
     static constexpr auto LARGE_PARTITIONS = "large_partitions";
     static constexpr auto LARGE_ROWS = "large_rows";
     static constexpr auto LARGE_CELLS = "large_cells";
+    static constexpr auto CORRUPT_DATA = "corrupt_data";
     static constexpr auto SCYLLA_LOCAL = "scylla_local";
     static constexpr auto RAFT = "raft";
     static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
