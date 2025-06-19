@@ -36,7 +36,7 @@
 
 static logging::logger blogger("batchlog_manager");
 
-const uint32_t db::batchlog_manager::replay_interval;
+const std::chrono::seconds db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
 
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, batchlog_manager_config config)
@@ -116,7 +116,8 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
         } catch (...) {
             blogger.error("Exception in batch replay: {}", std::current_exception());
         }
-        delay = std::chrono::milliseconds(replay_interval);
+        delay = utils::get_local_injector().is_enabled("short_batchlog_manager_replay_interval") ?
+                std::chrono::seconds(1) : replay_interval;
     }
 }
 
@@ -172,6 +173,11 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         auto timeout = get_batch_log_timeout();
         if (db_clock::now() < written_at + timeout) {
             blogger.debug("Skipping replay of {}, too fresh", id);
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        }
+
+        if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
+            blogger.debug("Skipping batch replay due to skip_batch_replay injection");
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
 
