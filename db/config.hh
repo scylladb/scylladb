@@ -366,6 +366,7 @@ public:
     named_value<uint32_t> max_hints_delivery_threads;
     named_value<uint32_t> batchlog_replay_throttle_in_kb;
     named_value<uint32_t> batchlog_replay_cleanup_after_replays;
+    named_value<bool> batchlog_cleanup_with_memtable_rollover;
     named_value<sstring> request_scheduler;
     named_value<sstring> request_scheduler_id;
     named_value<string_map> request_scheduler_options;

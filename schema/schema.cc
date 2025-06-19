@@ -588,6 +588,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._min_index_interval == y._raw._min_index_interval
         && x._raw._max_index_interval == y._raw._max_index_interval
         && x._raw._memtable_flush_period == y._raw._memtable_flush_period
+        && x._raw._memtable_compact_flushed_data == y._raw._memtable_compact_flushed_data
         && x._raw._speculative_retry == y._raw._speculative_retry
         && x._raw._compaction_strategy == y._raw._compaction_strategy
         && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
@@ -674,6 +675,7 @@ table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
     feed_hash(h, r._min_index_interval);
     feed_hash(h, r._max_index_interval);
     feed_hash(h, r._memtable_flush_period);
+    feed_hash(h, r._memtable_compact_flushed_data);
     feed_hash(h, r._speculative_retry.to_sstring());
     feed_hash(h, r._compaction_strategy);
     feed_hash(h, r._compaction_strategy_options);
@@ -854,6 +856,9 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
 
     out = fmt::format_to(out, ",bloomFilterFpChance={}", s._raw._bloom_filter_fp_chance);
     out = fmt::format_to(out, ",memtableFlushPeriod={}", s._raw._memtable_flush_period);
+    if (s._raw._memtable_compact_flushed_data) {
+        out = fmt::format_to(out, ",memtableCompactFlushedData={}", *s._raw._memtable_compact_flushed_data);
+    }
     out = fmt::format_to(out, ",caching={}", s._raw._caching_options.to_sstring());
     out = fmt::format_to(out, ",cdc={}", s.cdc_options().to_sstring());
     out = fmt::format_to(out, ",defaultTimeToLive={}", s._raw._default_time_to_live.count());
@@ -1177,6 +1182,9 @@ std::ostream& schema::schema_properties(const schema_describe_helper& helper, st
     os << "\n    AND gc_grace_seconds = " << gc_grace_seconds().count();
     os << "\n    AND max_index_interval = " << max_index_interval();
     os << "\n    AND memtable_flush_period_in_ms = " << memtable_flush_period();
+    if (_raw._memtable_compact_flushed_data) {
+        os << "\n    AND memtable_compact_flushed_data = " << fmt::to_string(*_raw._memtable_compact_flushed_data);
+    }
     os << "\n    AND min_index_interval = " << min_index_interval();
     os << "\n    AND speculative_retry = '" << speculative_retry().to_sstring() << "'";
 
@@ -1721,6 +1729,11 @@ schema_builder& schema_builder::set_paxos_grace_seconds(int32_t seconds) {
 
 schema_builder& schema_builder::set_tablet_options(std::map<sstring, sstring>&& hints) {
     _raw._tablet_options = std::move(hints);
+    return *this;
+}
+
+schema_builder& schema_builder::set_memtable_compact_flushed_data(bool memtable_compact_flushed_data) {
+    _raw._memtable_compact_flushed_data = memtable_compact_flushed_data;
     return *this;
 }
 
