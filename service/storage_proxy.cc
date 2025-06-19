@@ -4064,6 +4064,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         };
         future<> async_remove_from_batchlog() {
             // delete batch
+            utils::get_local_injector().inject("storage_proxy_fail_remove_from_batchlog", [] { throw std::runtime_error("Error injection: failing remove from batchlog"); });
             auto key = partition_key::from_exploded(*_schema, {uuid_type->decompose(_batch_uuid)});
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
             mutation m(_schema, key);
