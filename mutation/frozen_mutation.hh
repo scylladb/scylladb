@@ -281,6 +281,22 @@ public:
 
 frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf);
 
+class frozen_mutation_fragment_v2 {
+    bytes_ostream _bytes;
+public:
+    explicit frozen_mutation_fragment_v2(bytes_ostream bytes) : _bytes(std::move(bytes)) { }
+    const bytes_ostream& representation() const { return _bytes; }
+    bytes_ostream&& representation() && { return std::move(_bytes); }
+
+    mutation_fragment_v2 unfreeze(const schema& s, reader_permit permit);
+
+    future<> clear_gently() noexcept {
+        return _bytes.clear_gently();
+    }
+};
+
+frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& mf);
+
 template<FlattenedConsumerV2 Consumer>
 auto frozen_mutation::consume(schema_ptr s, frozen_mutation_consumer_adaptor<Consumer>& adaptor) const -> frozen_mutation_consume_result<decltype(adaptor.consumer().consume_end_of_stream())> {
     check_schema_version(schema_version(), *s);
