@@ -134,6 +134,8 @@ class extensions;
 class rp_handle;
 class data_listeners;
 class large_data_handler;
+class system_table_corrupt_data_handler;
+class nop_corrupt_data_handler;
 class system_keyspace;
 
 namespace view {
@@ -1569,6 +1571,9 @@ private:
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;
+
+    std::unique_ptr<db::system_table_corrupt_data_handler> _corrupt_data_handler;
+    std::unique_ptr<db::nop_corrupt_data_handler> _nop_corrupt_data_handler;
 
     std::unique_ptr<sstables::sstables_manager> _user_sstables_manager;
     std::unique_ptr<sstables::sstables_manager> _system_sstables_manager;
