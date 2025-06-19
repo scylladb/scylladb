@@ -36,6 +36,7 @@
 #include "db/schema_tables.hh"
 #include "gms/generation-number.hh"
 #include "service/storage_service.hh"
+#include "service/storage_proxy.hh"
 #include "service/paxos/paxos_state.hh"
 #include "query-result-set.hh"
 #include "idl/frozen_mutation.dist.hh"
@@ -3556,6 +3557,14 @@ future<> system_keyspace::shutdown() {
 
 future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql(const sstring& query_string, const data_value_list& values) {
     return _qp.execute_internal(query_string, values, cql3::query_processor::cache_internal::yes);
+}
+
+future<> system_keyspace::apply_mutation(mutation m) {
+    if (m.schema()->ks_name() != NAME) {
+        on_internal_error(slogger, fmt::format("system_keyspace::apply_mutation(): attempted to apply mutation belonging to table {}.{}", m.schema()->cf_name(), m.schema()->ks_name()));
+    }
+
+    return _qp.proxy().mutate_locally(m, {}, db::commitlog::force_sync(m.schema()->static_props().wait_for_sync_to_commitlog), db::no_timeout);
 }
 
 } // namespace db
