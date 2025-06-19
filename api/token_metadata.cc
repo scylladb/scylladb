@@ -74,6 +74,9 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     ss::get_host_id_map.set(r, [&tm, &g](const_req req) {
+        if (!g.local().is_enabled()) {
+            throw std::runtime_error("The gossiper is not ready yet");
+        }
         std::vector<ss::mapper> res;
         auto map = tm.local().get()->get_host_ids() |
             std::views::transform([&g] (locator::host_id id) { return std::make_pair(g.local().get_address_map().get(id), id); }) |
