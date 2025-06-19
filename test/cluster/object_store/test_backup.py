@@ -87,7 +87,7 @@ async def test_simple_backup(manager: ManagerClient, s3_server):
     # Check that task runs in the streaming sched group
     log = await manager.server_open_log(server.server_id)
     res = await log.grep(r'INFO.*\[shard [0-9]:([a-z]+)\] .* Backup sstables from .* to')
-    assert len(res) == 1 and res[0][1].group(1) == 'strm'
+    assert len(res) == 1 and res[0][1].group(1) == 'bckp'
 
 
 @pytest.mark.asyncio
@@ -728,3 +728,12 @@ async def test_restore_with_non_existing_sstable(manager: ManagerClient, s3_serv
     print(f'Status: {status}')
     assert 'state' in status and status['state'] == 'failed'
     assert 'error' in status and 'Not Found' in status['error']
+
+
+@pytest.mark.asyncio
+async def test_backup_bandwidth_limit_configured(manager: ManagerClient):
+    cmd = ['--backup-throughput-mb-per-sec=1000']
+    server = await manager.server_add(cmdline=cmd)
+    log = await manager.server_open_log(server.server_id)
+    res = await log.wait_for(r'INFO.*Set backup bandwidth to 1000MB/s')
+    assert len(res) > 1 and len(res[1]) == 1
