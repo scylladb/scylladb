@@ -26,6 +26,7 @@ namespace netw { class messaging_service; }
 namespace db {
 namespace view {
 class view_builder;
+class view_building_worker;
 }
 }
 
@@ -67,6 +68,7 @@ private:
     sharded<replica::database>& _db;
     netw::messaging_service& _messaging;
     sharded<db::view::view_builder>& _view_builder;
+    sharded<db::view::view_building_worker>& _view_building_worker;
     shared_ptr<task_manager_module> _task_manager_module;
     sstables::storage_manager& _storage_manager;
     seastar::scheduling_group _sched_group;
@@ -88,6 +90,7 @@ public:
     sstables_loader(sharded<replica::database>& db,
             netw::messaging_service& messaging,
             sharded<db::view::view_builder>& vb,
+            sharded<db::view::view_building_worker>& vbw,
             tasks::task_manager& tm,
             sstables::storage_manager& sstm,
             seastar::scheduling_group sg);
