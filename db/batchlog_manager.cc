@@ -36,7 +36,7 @@
 
 static logging::logger blogger("batchlog_manager");
 
-const uint32_t db::batchlog_manager::replay_interval;
+const std::chrono::seconds db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
 
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, batchlog_manager_config config)
@@ -116,7 +116,8 @@ future<> db::batchlog_manager::batchlog_replay_loop() {
         } catch (...) {
             blogger.error("Exception in batch replay: {}", std::current_exception());
         }
-        delay = std::chrono::milliseconds(replay_interval);
+        delay = utils::get_local_injector().is_enabled("short_batchlog_manager_replay_interval") ?
+                std::chrono::seconds(1) : replay_interval;
     }
 }
 
