@@ -1091,10 +1091,33 @@ tablet_metadata_guard::tablet_metadata_guard(replica::table& table, global_table
     }
 }
 
+tablet_metadata_guard::~tablet_metadata_guard() = default;
+
 void tablet_metadata_guard::subscribe() {
     _callback = _erm->get_validity_abort_source().subscribe([this] () noexcept {
         check();
     });
+}
+
+token_metadata_guard::token_metadata_guard(replica::table& table, dht::token token)
+    : _guard(std::invoke([&] -> guard_type {
+        auto erm = table.get_effective_replication_map();
+        if (!table.uses_tablets()) {
+            return std::move(erm);
+        }
+        const auto table_id = table.schema()->id();
+        const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(table_id);
+        return make_lw_shared<tablet_metadata_guard>(table, global_tablet_id {
+            .table = table_id,
+            .tablet = tablet_map.get_tablet_id(token)
+        });
+    }))
+{
+}
+
+const effective_replication_map_ptr& token_metadata_guard::get_erm() const {
+    const auto* g = get_if<lw_shared_ptr<tablet_metadata_guard>>(&_guard);
+    return g ? (**g).get_erm() : get<effective_replication_map_ptr>(_guard);
 }
 
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
