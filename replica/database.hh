@@ -1993,6 +1993,13 @@ public:
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`
     //   must contain a complete list of racks and data centers in the cluster.
     void check_rf_rack_validity(const locator::token_metadata_ptr) const;
+
+    // Verify that if there's a materialized view or a secondary index using tablets,
+    // then `rf_rack_valid_keyspaces` is enabled.
+    //
+    // If that condition is not satisfied, the function throws an exception. The exception will
+    // have a message that can be passed to the user, but there are no guarantees about its type.
+    void check_tablet_mvs_indexes() const;
 private:
     // SSTable sampling might require considerable amounts of memory,
     // so we want to limit the number of concurrent sampling operations.

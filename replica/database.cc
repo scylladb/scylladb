@@ -3233,6 +3233,21 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     }
 }
 
+void database::check_tablet_mvs_indexes() const {
+    if (!get_config().rf_rack_valid_keyspaces()) {
+        for (const auto& view : get_views()) {
+            dblog.debug("[check_tablet_mvs_indexes]: Checking '{}.{}'", view->ks_name(), view->cf_name());
+
+            if (view->table().uses_tablets()) {
+                throw std::runtime_error(std::format(
+                        "Materialized views/secondary indexes with tablets can only be used with the option `rf_rack_valid_keyspaces` "
+                        "enabled. That condition is violated for `{}.{}` because the option is disabled.",
+                        std::string_view(view->ks_name()), std::string_view(view->cf_name())));
+            }
+        }
+    }
+}
+
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
     static thread_local std::minstd_rand rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist(0, max_value);
