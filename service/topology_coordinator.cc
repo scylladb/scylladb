@@ -61,6 +61,8 @@
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
 #include "idl/storage_proxy.dist.hh"
+#include "repair/repair.hh"
+#include "idl/repair.dist.hh"
 
 #include "service/topology_coordinator.hh"
 
@@ -1094,9 +1096,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         background_action_holder rebuild_repair;
         background_action_holder cleanup;
         background_action_holder repair;
+        background_action_holder repair_compaction_ctrl;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Record the repair_time returned by the repair_tablet rpc call
         db_clock::time_point repair_time;
+        service::session_id session_id;
     };
 
     std::unordered_map<locator::global_tablet_id, tablet_migration_state> _tablets;
@@ -1553,6 +1557,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             rtlogger.info("Skipping tablet repair for tablet={} which is cancelled by user", gid);
                             co_return;
                         }
+                        auto* trinfo = tmap.get_tablet_transition_info(gid.tablet);
+                        if (trinfo) {
+                            tablet_state.session_id = trinfo->session_id;
+                        }
                         auto sched_time = tinfo.repair_task_info.sched_time;
                         auto tablet = gid;
                         auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
@@ -1592,9 +1600,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         if (valid && is_filter_off) {
                             auto sched_time = tinfo.repair_task_info.sched_time;
                             auto time = tablet_state.repair_time;
-                            rtlogger.debug("Set tablet repair time sched_time={} return_time={} set_time={}",
-                                    sched_time, tablet_state.repair_time, time);
                             update.set_repair_time(last_token, time);
+                            auto repaired_at = sstring("None");
+                            if (_feature_service.tablet_incremental_repair) {
+                                auto sstables_repaired_at = tinfo.sstables_repaired_at + 1;
+                                update.set_sstables_repair_at(last_token, sstables_repaired_at);
+                                repaired_at = seastar::format("{}", sstables_repaired_at);
+                            }
+                            rtlogger.debug("Set tablet repair time sched_time={} repair_time={} sstables_repaired_at={}",
+                                    sched_time, time, repaired_at);
                         }
                         updates.emplace_back(update.build());
                     }
@@ -1602,10 +1616,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     break;
                 case locator::tablet_transition_stage::end_repair: {
                     if (do_barrier()) {
-                        _tablets.erase(gid);
-                        updates.emplace_back(get_mutation_builder()
-                            .del_transition(last_token)
-                            .build());
+                        if (action_failed(tablet_state.repair_compaction_ctrl)) {
+                            rtlogger.warn("Failed to perfrom repair_compaction_ctrl for tablet repair tablet_id={}", gid);
+                            _tablets.erase(gid);
+                            updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
+                            break;
+                        }
+                        bool feature = _feature_service.tablet_incremental_repair;
+                        if (advance_in_background(gid, tablet_state.repair_compaction_ctrl, "repair_compaction_ctrl", [ms = &_messaging,
+                                    gid = gid, sid = tablet_state.session_id, _replicas = tmap.get_tablet_info(gid.tablet).replicas, feature] () -> future<> {
+                            if (feature) {
+                                auto replicas = std::move(_replicas);
+                                co_await coroutine::parallel_for_each(replicas, [replicas, ms, gid, sid] (locator::tablet_replica& r) -> future<> {
+                                        co_await ser::repair_rpc_verbs::send_repair_compaction_ctrl(ms, r.host, gid, sid);
+                                });
+                            }
+                        })) {
+                            _tablets.erase(gid);
+                            updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
+                        }
                     }
                 }
                     break;

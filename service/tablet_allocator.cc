@@ -933,7 +933,7 @@ public:
 
             // Sibling tablets cannot be considered co-located if their tablet info is temporarily unmergeable.
             // It can happen either has active repair task for example.
-            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info));
+            all_colocated &= bool(merge_tablet_info(*t1.info, *t2.info, t1.tid, t2.tid));
             return make_ready_future<>();
         });
         if (all_colocated) {
@@ -1283,6 +1283,13 @@ public:
                 // can only increase the count above it, but decreasing may go against the true target count
                 // if tablet_count_from_size would demand more tablets.
                 maybe_apply({table_plan.current_tablet_count, "current count"});
+            }
+
+            if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {
+                target_tablet_count = {tablet_count * 2, "force_tablet_count_increase"};
+            } else if (utils::get_local_injector().enter("tablet_force_tablet_count_decrease")) {
+                auto size = std::max(size_t(1), tablet_count / 2);
+                target_tablet_count = {size, "force_tablet_count_decrease"};
             }
 
             table_plan.target_tablet_count = target_tablet_count.tablet_count;
@@ -3234,7 +3241,7 @@ private:
                 throw std::runtime_error(format("Sibling tablets {} (r: {}) and {} (r: {}) are not colocated.",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
             }
-            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info);
+            auto merged_tablet_info = locator::merge_tablet_info(left_tablet_info, right_tablet_info, old_left_tid, old_right_tid);
             if (!merged_tablet_info) {
                 throw std::runtime_error(format("Unable to merge tablet info of sibling tablets {} (r: {}) and {} (r: {}).",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));

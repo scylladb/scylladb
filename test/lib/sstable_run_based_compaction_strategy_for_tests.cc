@@ -14,8 +14,9 @@ namespace sstables {
 
 sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_strategy_for_tests() = default;
 
-compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state_view tsv, strategy_control& control) {
     // Get unique runs from all uncompacting sstables
+    auto& table_s = tsv.as_table_state();
     std::vector<frozen_sstable_run> runs = table_s.main_sstable_set().all_sstable_runs();
 
     // Group similar sized runs into a bucket.
