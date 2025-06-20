@@ -76,6 +76,7 @@
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 #include "utils/labels.hh"
+#include "tracing/trace_keyspace_helper.hh"
 
 #include <algorithm>
 
@@ -109,6 +110,12 @@ future<> keyspace::shutdown() noexcept {
 
 lw_shared_ptr<keyspace_metadata> keyspace::metadata() const {
     return _metadata;
+}
+
+data_dictionary::keyspace
+keyspace::as_data_dictionary() const {
+    static constinit data_dictionary_impl _impl;
+    return _impl.wrap(*this);
 }
 
 void keyspace::add_or_update_column_family(const schema_ptr& s) {
@@ -601,6 +608,9 @@ database::setup_metrics() {
         sm::make_counter("total_writes_rate_limited", _stats->total_writes_rate_limited,
                        sm::description("Counts write operations which were rejected on the replica side because the per-partition limit was reached."))(basic_level),
 
+        sm::make_counter("total_writes_rejected_due_to_out_of_space_prevention", _stats->total_writes_rejected_due_to_out_of_space_prevention,
+                       sm::description("Counts write operations which were rejected due to disabled user tables writes."))(basic_level),
+
         sm::make_counter("total_reads_rate_limited", _stats->total_reads_rate_limited,
                        sm::description("Counts read operations which were rejected on the replica side because the per-partition limit was reached.")),
 
@@ -731,6 +741,22 @@ do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring
             co_await func(v);
         } catch (...) {
             dblog.error("Skipping: {}. Exception occurred when loading system table {}: {}", v.first, cf_name, std::current_exception());
+        }
+    });
+}
+
+future<> database::set_in_critical_disk_utilization_mode(sharded<database>& sharded_db, bool enabled)
+{
+    return sharded_db.invoke_on_all([enabled] (replica::database& db) {
+        dblog.info("Setting critical disk utilization mode: {}", enabled);
+        if (enabled) {
+            ++db._critical_disk_utilization_mode_count;
+        } else if (db._critical_disk_utilization_mode_count > 0) {
+            --db._critical_disk_utilization_mode_count;
+            if (db._critical_disk_utilization_mode_count > 0) {
+                dblog.debug("Database is still in critical disk utilization mode, requires {} more call(s) to disable it",
+                            db._critical_disk_utilization_mode_count);
+            }
         }
     });
 }
@@ -1850,13 +1876,18 @@ future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutat
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
+
+    auto& cf = find_column_family(m.column_family_id());
+    if (is_in_critical_disk_utilization_mode() && cf.is_eligible_to_write_rejection_on_critical_disk_utilization()) {
+        update_write_metrics_for_rejected_writes();
+        return make_exception_future<mutation>(replica::critical_disk_utilization_exception{"rejected counter update mutation"});
+    }
   return update_write_metrics(seastar::futurize_invoke([&] {
     if (!s->is_synced()) {
         throw std::runtime_error(format("attempted to mutate using not synced schema of {}.{}, version={}",
                                         s->ks_name(), s->cf_name(), s->version()));
     }
     try {
-        auto& cf = find_column_family(m.column_family_id());
         return do_apply_counter_update(cf, m, s, timeout, std::move(trace_state));
     } catch (no_such_column_family&) {
         dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
@@ -1995,6 +2026,11 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
     auto uuid = m.column_family_id();
     auto& cf = find_column_family(uuid);
 
+    if (is_in_critical_disk_utilization_mode() && cf.is_eligible_to_write_rejection_on_critical_disk_utilization()) {
+        ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
+        co_await coroutine::return_exception(replica::critical_disk_utilization_exception{"rejected write mutation"});
+    }
+
     if (!std::holds_alternative<std::monostate>(rate_limit_info) && can_apply_per_partition_rate_limit(*s, db::operation_type::write)) {
         auto table_limit = *s->per_partition_rate_limit_options().get_max_writes_per_second();
         auto& write_label = cf.get_rate_limiter_label_for_writes();
@@ -2091,6 +2127,12 @@ void database::update_write_metrics_for_timed_out_write() {
     ++_stats->total_writes;
     ++_stats->total_writes_failed;
     ++_stats->total_writes_timedout;
+}
+
+void database::update_write_metrics_for_rejected_writes() {
+    ++_stats->total_writes;
+    ++_stats->total_writes_failed;
+    ++_stats->total_writes_rejected_due_to_out_of_space_prevention;
 }
 
 future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, db::timeout_clock::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
@@ -2927,6 +2969,13 @@ void database::tables_metadata::add_table_helper(database& db, keyspace& ks, tab
     auto remove_cf3 = defer([&] () noexcept {
         _ks_cf_to_uuid.erase(std::make_pair(s->ks_name(), s->cf_name()));
     });
+
+    // MVs/SIs, CDC Log table - are located in the same keyspace as the associated user table
+    // audit - is not an internal keyspace in the sens of data_dictionary::keyspace::is_internal
+    // cql tracing - is part of system_traces that is an internal keyspace but we want to reject
+    const bool eligible = !ks.as_data_dictionary().is_internal()
+                          || ks.metadata()->name() == tracing::trace_keyspace_helper::KEYSPACE_NAME;
+    cf.set_eligible_to_write_rejection_on_critical_disk_utilization(eligible);
 
     if (s->is_view()) {
         db.find_column_family(s->view_info()->base_id()).add_or_update_view(view_ptr(s));

@@ -728,6 +728,16 @@ load_stats& load_stats::operator+=(const load_stats& s) {
     for (auto& [host, cap] : s.capacity) {
         capacity[host] = cap;
     }
+    if (s.critical_disk_utilization) {
+        if (!critical_disk_utilization) {
+            critical_disk_utilization = s.critical_disk_utilization;
+        } else {
+            for (auto& [host, cdu] : s.critical_disk_utilization.value()) {
+                critical_disk_utilization.value()[host] = cdu;
+            }
+        }
+    }
+
     return *this;
 }
 

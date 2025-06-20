@@ -29,6 +29,7 @@
 #include "test/lib/key_utils.hh"
 
 #include "replica/database.hh"
+#include "replica/exceptions.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "partition_slice_builder.hh"
@@ -55,6 +56,18 @@
 
 using namespace std::chrono_literals;
 using namespace sstables;
+
+class set_database_in_critical_disk_utilization_mode_guard {
+    sharded<replica::database>& _db;
+public:
+    set_database_in_critical_disk_utilization_mode_guard(sharded<replica::database>& db) : _db(db) {
+        replica::database::set_in_critical_disk_utilization_mode(_db, true).get();
+    }
+
+    ~set_database_in_critical_disk_utilization_mode_guard() {
+        replica::database::set_in_critical_disk_utilization_mode(_db, false).get();
+    }
+};
 
 class database_test_wrapper {
     replica::database& _db;
@@ -166,6 +179,57 @@ SEASTAR_TEST_CASE(test_safety_after_truncate) {
 
         assert_query_result(keys_per_shard);
         return make_ready_future<>();
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_reject_user_table_writes) {
+    auto cfg = make_shared<db::config>();
+    cfg->auto_snapshot.set(false);
+    return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
+        BOOST_REQUIRE_GT(smp::count, 1);
+        const sstring ks_name = "ks";
+        const sstring cf_name = "cf";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (k TEXT PRIMARY KEY, v INT);", ks_name, cf_name)).get();
+
+        auto& db = e.local_db();
+        auto s = db.find_schema(ks_name, cf_name);
+        const table_id uuid = db.find_uuid(ks_name, cf_name);
+
+        auto pkey = partition_key::from_single_value(*s, to_bytes(fmt::format("key{}", 0)));
+        mutation m(s, pkey);
+        m.set_clustered_cell(clustering_key_prefix::make_empty(), "v", int32_t(42), {});
+
+        {
+            set_database_in_critical_disk_utilization_mode_guard guard(e.db());
+
+            apply_mutation(e.db(), uuid, m).then_wrapped([] (auto&& f) {
+                BOOST_REQUIRE_THROW(f.get(), replica::critical_disk_utilization_exception);
+                return make_ready_future<>();
+            }).get();
+        }
+
+        apply_mutation(e.db(), uuid, m).get();
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_reject_user_table_counter_update) {
+    auto cfg = make_shared<db::config>();
+    cfg->auto_snapshot.set(false);
+    return do_with_cql_env_and_compaction_groups([] (cql_test_env& e) {
+        BOOST_REQUIRE_GT(smp::count, 1);
+        const sstring ks_name = "ks";
+        const sstring cf_name = "cf";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (pk TEXT PRIMARY KEY, v COUNTER);", ks_name, cf_name)).get();
+
+        {
+            set_database_in_critical_disk_utilization_mode_guard guard(e.db());
+            e.execute_cql(fmt::format("UPDATE {}.{} SET v = v + 5 WHERE pk = 'key0'", ks_name, cf_name)).then_wrapped([] (auto&& f) {
+                BOOST_REQUIRE_THROW(f.get(), replica::critical_disk_utilization_exception);
+                return make_ready_future<>();
+            }).get();
+        }
+
+        e.execute_cql(fmt::format("UPDATE {}.{} SET v = v + 5 WHERE pk = 'key0'", ks_name, cf_name)).get();
     }, cfg);
 }
 

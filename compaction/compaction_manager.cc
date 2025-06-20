@@ -629,7 +629,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
 }
 
 std::optional<gate::holder> compaction_manager::start_compaction(table_state& t) {
-    if (_state != state::enabled) {
+    if (_state != state::running || _disabled_state_count > 0) {
         return std::nullopt;
     }
 
@@ -1034,8 +1034,14 @@ void compaction_manager::register_metrics() {
 }
 
 void compaction_manager::enable() {
-    SCYLLA_ASSERT(_state == state::none || _state == state::disabled);
-    _state = state::enabled;
+    SCYLLA_ASSERT(_state == state::none || _state == state::running);
+
+    if (_disabled_state_count > 0 && --_disabled_state_count > 0) {
+        cmlog.warn("Compaction manager is still disabled, requires {} more call(s) to enable()", _disabled_state_count);
+        return;
+    }
+
+    _state = state::running;
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
     _waiting_reevalution = postponed_compactions_reevaluation();
 }
@@ -1055,7 +1061,7 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
 future<> compaction_manager::postponed_compactions_reevaluation() {
      while (true) {
         co_await _postponed_reevaluation.when();
-        if (_state != state::enabled) {
+        if (_state != state::running || _disabled_state_count > 0) {
             _postponed.clear();
             co_return;
         }
@@ -1140,11 +1146,8 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
 
 future<> compaction_manager::drain() {
     cmlog.info("Asked to drain");
-    if (_state == state::enabled) {
-        // This is a drain request and not a shutdown request.
-        // Disable the state so that it can be enabled later if requested.
-        _state = state::disabled;
-    }
+    ++_disabled_state_count;
+
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
     cmlog.info("Drained");
@@ -1199,7 +1202,7 @@ void compaction_manager::do_stop() noexcept {
 }
 
 inline bool compaction_manager::can_proceed(table_state* t) const {
-    if (_state != state::enabled) {
+    if (_state != state::running || _disabled_state_count > 0) {
         return false;
     }
     auto found = _compaction_state.find(t);
