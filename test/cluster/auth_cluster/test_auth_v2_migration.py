@@ -14,7 +14,8 @@ from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
 from cassandra.cluster import ConsistencyLevel
 from test.cluster.util import wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
-        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes
+        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
+        wait_for_token_ring_and_group0_consistency
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
@@ -162,6 +163,8 @@ async def test_auth_v2_migration(request, manager: ManagerClient):
 
     logging.info("Waiting until driver connects to every server")
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     logging.info("Checking the upgrade state on all nodes")
     for host in hosts:
