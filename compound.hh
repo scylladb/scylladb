@@ -255,6 +255,9 @@ public:
     // Returns true iff given prefix has no missing components
     bool is_full(managed_bytes_view v) const {
         SCYLLA_ASSERT(AllowPrefixes == allow_prefixes::yes);
+        if (_types.size() == 0) {
+            return v.empty();
+        }
         return std::distance(begin(v), end(v)) == (ssize_t)_types.size();
     }
     bool is_empty(managed_bytes_view v) const {
