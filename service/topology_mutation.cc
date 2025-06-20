@@ -92,6 +92,11 @@ Builder& topology_mutation_builder_base<Builder>::set(const char* cell, topology
 }
 
 template<typename Builder>
+Builder& topology_mutation_builder_base<Builder>::set(const char* cell, global_topology_request value) {
+    return apply_atomic(cell, sstring{::format("{}", value)});
+}
+
+template<typename Builder>
 Builder& topology_mutation_builder_base<Builder>::set(const char* cell, const sstring& value) {
     return apply_atomic(cell, value);
 }
@@ -239,6 +244,18 @@ topology_mutation_builder& topology_mutation_builder::set_global_topology_reques
     return apply_atomic("global_topology_request_id", value);
 }
 
+topology_mutation_builder& topology_mutation_builder::queue_global_topology_request_id(const utils::UUID& value) {
+    return apply_set("global_requests", collection_apply_mode::update, std::vector<data_value>{value});
+}
+
+topology_mutation_builder& topology_mutation_builder::drop_first_global_topology_request_id(const std::vector<utils::UUID>& values, utils::UUID& id) {
+    if (!values.empty() && values[0] == id) {
+        return apply_set("global_requests", collection_apply_mode::overwrite, std::span(values.begin() + 1, values.size() - 1));
+    } else {
+        return *this;
+    }
+}
+
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state(topology::upgrade_state_type value) {
     return apply_atomic("upgrade_state", ::format("{}", value));
 }
@@ -305,6 +322,10 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     return _set_type ? builder_base::set(cell, value) : *this;
 }
 
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set(const char* cell, global_topology_request value) {
+    return _set_type ? builder_base::set(cell, value) : *this;
+}
+
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::done(std::optional<sstring> error) {
     set("end_time", db_clock::now());
     if (error) {
@@ -317,6 +338,16 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
     apply_atomic("truncate_table_id", table_id.uuid());
     return *this;
 }
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_new_keyspace_rf_change_data(
+        const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
+    apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
+    apply_atomic("new_keyspace_rf_change_data",
+                 make_map_value(schema().get_column_definition("new_keyspace_rf_change_data")->type,
+                                map_type_impl::native_type(rf_per_dc.begin(), rf_per_dc.end())));
+    return *this;
+}
+
 
 template class topology_mutation_builder_base<topology_mutation_builder>;
 template class topology_mutation_builder_base<topology_node_mutation_builder>;
