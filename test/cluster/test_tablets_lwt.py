@@ -6,7 +6,7 @@
 
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 
-from test.cluster.util import new_test_keyspace, unique_name
+from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.conftest import skip_mode
@@ -14,6 +14,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest
+from test.pylib.scylla_cluster import ReplaceConfig
 
 import pytest
 import asyncio
@@ -224,3 +225,89 @@ async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
             await cql.run_async(f"DELETE FROM {ks}.test WHERE key = 1 IF EXISTS")
         res = await cql.run_async(f"SELECT val FROM {ks}.test WHERE key = 1")
         assert res[0].val == 0
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
+    # Scenario:
+    # 1. A cluster with 3 nodes, rf=3.
+    # 2. A successful LWT(c := 1) with cl_learn = 1 comes, stores accepts on n1 and n2, learn -- only on n1.
+    #    The user has observed its effects (the LWT is successfull), so we are not allowed to lose it.
+    # 3. Node n1 is lost permanently.
+    # 4. New node n4 is added to replace n1. The tablet is rebuilt on n4 based on n2 and n3.
+    # 5. Do the SERIAL (paxos) read of c from {n3, n4}. If paxos state was not rebuilt, we would
+    #    miss the decided value c == 1 of the first LWT.
+
+    logger.info("Bootstrap a cluster with three nodes")
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    config = {
+        'rf_rack_valid_keyspaces': False
+    }
+    servers = await manager.servers_add(3, cmdline=cmdline, config=config)
+    cql = manager.get_cql()
+
+    logger.info("Resolve hosts")
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logger.info("Disable tablet balancing")
+    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        logger.info("Create a table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        stopped_servers = set()
+
+        async def set_injection(set_to: list[ServerInfo], injection: str):
+            logger.info(f"Injecting {injection} on {set_to}")
+            await inject_error_on(manager, injection, set_to)
+            unset_from = [
+                s for s in servers if s not in set_to and s not in stopped_servers]
+            logger.info(f"Disabling {injection} on {unset_from}")
+            await disable_injection_on(manager, injection, unset_from)
+
+        # Step2. Inject paxos_error_before_save_proposal - on [n3], paxos_error_before_learn on [n2, n3]
+        await set_injection([servers[2]], 'paxos_error_before_save_proposal')
+        await set_injection([servers[1], servers[2]], 'paxos_error_before_learn')
+        logger.info("Execute CAS(c := 1)")
+        lwt1 = SimpleStatement(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS",
+                               consistency_level=ConsistencyLevel.ONE)
+        await cql.run_async(lwt1, host=hosts[0])
+
+        # Step3: Node n1 is lost permanently
+        logger.info("Stop n1")
+        await manager.server_stop(servers[0].server_id)
+        stopped_servers.add(servers[0])
+        cql = await reconnect_driver(manager)
+
+        # Step 4: New node n4 is added to replace n1.
+        logger.info("Start n4")
+        replace_cfg = ReplaceConfig(
+            replaced_id=servers[0].server_id,
+            reuse_ip_addr=False,
+            use_host_id=True,
+            wait_replaced_dead=True
+        )
+        servers += [await manager.server_add(replace_cfg=replace_cfg, cmdline=cmdline, config=config)]
+        # Check we've actually run rebuild
+        logs = []
+        for s in servers:
+            logs.append(await manager.server_open_log(s.server_id))
+        assert sum([len(await log.grep('Initiating repair phase of tablet rebuild')) for log in logs]) == 1
+
+        # Step 5. Do the SERIAL (paxos) read of c from {n3, n4}.
+        await set_injection([servers[1]], 'paxos_error_before_save_promise')
+        await set_injection([servers[1]], 'paxos_error_before_save_proposal')
+        await set_injection([], 'paxos_error_before_learn')
+        logger.info("Execute paxos read")
+        lwt_read = SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1;",
+                                   consistency_level=ConsistencyLevel.SERIAL)
+        rows = await cql.run_async(lwt_read)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 1
