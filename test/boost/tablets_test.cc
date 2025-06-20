@@ -1738,6 +1738,10 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
 SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
     // Verifies that new table doesn't get tablets allocated on a node being decommissioned
     // which may leave them on replicas absent in topology post decommission.
+    // Also verifies that the allocated tablet count doesn't take into account nodes being decommissioned
+    // to achieve the desired tablet count per shard in a DC.
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->tablets_initial_scale_factor(1);
     do_with_cql_env_thread([](auto& e) {
         inet_address ip1("192.168.0.1");
         inet_address ip2("192.168.0.2");
@@ -1758,17 +1762,15 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
             }
         });
 
-        const unsigned shard_count = 1;
-
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
             tm.update_host_id(host1, ip1);
             tm.update_host_id(host2, ip2);
             tm.update_host_id(host3, ip3);
             tm.update_host_id(host4, ip4);
-            tm.update_topology(host1, dcrack, node::state::normal, shard_count);
-            tm.update_topology(host2, dcrack, node::state::normal, shard_count);
-            tm.update_topology(host3, dcrack, node::state::being_decommissioned, shard_count);
-            tm.update_topology(host4, dcrack, node::state::left, shard_count);
+            tm.update_topology(host1, dcrack, node::state::normal, 1);
+            tm.update_topology(host2, dcrack, node::state::normal, 1);
+            tm.update_topology(host3, dcrack, node::state::being_decommissioned, 16);
+            tm.update_topology(host4, dcrack, node::state::left, 16);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(1. / 4))}, host1);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(2. / 4))}, host2);
             co_await tm.update_normal_tokens(std::unordered_set{token(tests::d2t(3. / 4))}, host3);
@@ -1780,13 +1782,16 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
         sstring table_name = "table1";
         e.execute_cql(format("create keyspace {} with replication = "
                              "{{'class': 'NetworkTopologyStrategy', '{}': 1}} "
-                             "and tablets = {{'enabled': true, 'initial': 8}}", ks_name, dcrack.dc)).get();
+                             "and tablets = {{'enabled': true}}", ks_name, dcrack.dc)).get();
         e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
         auto s = e.local_db().find_schema(ks_name, table_name);
 
         auto* rs = e.local_db().find_keyspace(ks_name).get_replication_strategy().maybe_as_tablet_aware();
         BOOST_REQUIRE(rs);
-        auto tmap = rs->allocate_tablets_for_new_table(s, stm.get(), 8).get();
+        auto tmap = rs->allocate_tablets_for_new_table(s, stm.get(), 1).get();
+
+        // Verify we do not treat leaving nodes as having capacity.
+        BOOST_REQUIRE_EQUAL(tmap.tablet_count(), 2);
 
         tmap.for_each_tablet([&](auto tid, auto& tinfo) {
             for (auto& replica : tinfo.replicas) {
@@ -1795,7 +1800,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
             }
             return make_ready_future<>();
         }).get();
-    }, tablet_cql_test_config()).get();
+    }, cfg).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_table_creation_during_rack_decommission) {
