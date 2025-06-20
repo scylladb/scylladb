@@ -4325,6 +4325,7 @@ SEASTAR_TEST_CASE(test_reading_of_nonfull_keys) {
                     .with_column("ck1", utf8_type, column_kind::clustering_key)
                     .with_column("ck2", utf8_type, column_kind::clustering_key)
                     .with_column("v", utf8_type)
+                    .with(schema_builder::compact_storage::yes)
                     .build();
 
             auto pkey = dht::decorate_key(*s, partition_key::from_single_value(*s, serialized("pk1")));
