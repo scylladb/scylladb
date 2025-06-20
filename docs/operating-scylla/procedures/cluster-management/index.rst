@@ -24,7 +24,6 @@ Cluster Management Procedures
    Update Topology Strategy From Simple to Network <update-topology-strategy-from-simple-to-network>
    Safely Shutdown Your Cluster <safe-shutdown>
    Safely Restart Your Cluster <safe-start>
-   Handling Membership Change Failures <handling-membership-change-failures>
    repair-based-node-operation
    Prevent Quorum Loss in Symmetrical Multi-DC Clusters <arbiter-dc>
 
@@ -79,8 +78,6 @@ Cluster Management Procedures
   * :doc:`What to do if a Node Starts Automatically </operating-scylla/procedures/cluster-management/clear-data/>`
 
   * :doc:`Add a Decommissioned Node Back to a ScyllaDB Cluster </operating-scylla/procedures/cluster-management/revoke-decommission/>`
-
-  * :doc:`Handling Membership Change Failures </operating-scylla/procedures/cluster-management/handling-membership-change-failures>`
 
   * :ref:`Add Bigger Nodes to a Cluster <add-bigger-nodes-to-a-cluster>`
 
