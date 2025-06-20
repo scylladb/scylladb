@@ -18,13 +18,14 @@ Syntax
                [--snapshot <snapshot>]
                --endpoint <endpoint> --bucket <bucket> --prefix <prefix>
                [--nowait]
+               [--move-files]
 
 Example
 -------
 
 .. code-block:: console
 
-    nodetool backup --endpoint s3.us-east-2.amazonaws.com  --bucket bucket-foo --prefix foo/bar/baz --keyspace ks --table table --snapshot ss
+    nodetool backup --endpoint s3.us-east-2.amazonaws.com  --bucket bucket-foo --prefix foo/bar/baz --keyspace ks --table table --snapshot ss --move-files
 
 Options
 -------
@@ -38,6 +39,7 @@ Options
 * ``--bucket`` - Name of the bucket to backup SSTables to
 * ``--prefix`` - Prefix to backup SSTables to
 * ``--nowait`` - Don't wait on the backup process
+* ``--move-files`` - Move files instead of copying them. This will delete the files from the local disk after they are uploaded to the object storage.
 
 See also
 
