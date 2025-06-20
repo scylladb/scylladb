@@ -1615,7 +1615,7 @@ SEASTAR_TEST_CASE(test_disk_space_monitor_capacity_override) {
             .free = 12,
             .available = 11,
         };
-        monitor.set_space_source([&] { return make_ready_future<std::filesystem::space_info>(orig_space); });
+        auto reg = monitor.set_space_source([&] { return make_ready_future<std::filesystem::space_info>(orig_space); });
 
         utils::phased_barrier poll_barrier("poll_barrier"); // new operation started whenever monitor calls listeners.
         auto op = poll_barrier.start();
