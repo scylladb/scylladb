@@ -1655,6 +1655,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             newtabs.push_back(newtab);
             tlogger.debug("Flushing to {}", newtab->get_filename());
 
+            gate::holder holder = _compaction_manager.get_compaction_state(&cg.as_table_state()).gate.hold();
             auto monitor = database_sstable_write_monitor(permit, newtab, cg,
                 old->get_max_timestamp());
 
