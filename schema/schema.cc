@@ -40,8 +40,6 @@
 
 #include <boost/lexical_cast.hpp>
 
-constexpr int32_t schema::NAME_LENGTH;
-
 extern logging::logger dblog;
 
 sstring

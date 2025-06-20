@@ -614,8 +614,22 @@ public:
     typedef std::ranges::subrange<iterator> iterator_range_type;
     typedef std::ranges::subrange<const_iterator> const_iterator_range_type;
 
-    static constexpr int32_t NAME_LENGTH = 48;
-
+    // The maximum allowed length for any schema name (table, keyspace, view, or index).
+    // This limit is primarily determined by the maximum table name length.
+    //
+    // When a new table is created, sstables::init_table_storage() generates a directory name
+    // by concatenating the full table name, a dash ('-'), and a 32-byte UUID. Since most Linux
+    // filesystems restrict a single filename component to 255 bytes, any table name longer than
+    // 222 bytes would result in a directory name exceeding this limit, causing mkdir() to fail.
+    //
+    // Additionally, we reserve 15 bytes for the "_scylla_cdc_log" suffix, which is appended to
+    // CDC-enabled table names (see cdc_log_suffix in cdc/log.cc). While this suffix
+    // only applies to table names, for simplicity, the same length restriction is enforced for
+    // keyspace, view, and index names as well.
+    // We also reserve 15 bytes for future use, allowing for potential future extensions without
+    // breaking existing schemas.
+    // Hence the length is: 255 - 32 (UUID) - 1 (dash) - 15 (CDC suffix) - 15 (reserved) = 192.
+    static constexpr size_t NAME_LENGTH = 192;
 
     struct column {
         bytes name;
