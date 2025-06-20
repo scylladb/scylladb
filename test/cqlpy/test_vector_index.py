@@ -76,6 +76,17 @@ def test_create_vector_search_index_on_nonfloat_vector_column(cql, test_keyspace
     with new_test_table(cql, test_keyspace, schema) as table:
         with pytest.raises(InvalidRequest, match="Vector indexes are only supported on columns of vectors of floats"):
             cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+
+def test_no_view_for_vector_search_index(cql, test_keyspace, scylla_only):
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX abc ON {table}(v) USING 'vector_index'")
+        result = cql.execute(f"SELECT * FROM system_schema.views WHERE keyspace_name = '{test_keyspace}' AND view_name = 'abc_index'")
+        assert len(result.current_rows) == 0, "Vector search index should not create a view in system_schema.views"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE INDEX def ON {table}(v)")
+        result = cql.execute(f"SELECT * FROM system_schema.views WHERE keyspace_name = '{test_keyspace}' AND view_name = 'def_index'")
+        assert len(result.current_rows) == 1, "Regular index should create a view in system_schema.views"
         
 
 def test_describe_custom_index(cql, test_keyspace):
@@ -104,3 +115,9 @@ def test_describe_custom_index(cql, test_keyspace):
 
         assert f"CREATE CUSTOM INDEX custom ON {table}{maybe_space}(v1) USING '{custom_class}'" in a_desc
         assert f"CREATE CUSTOM INDEX custom1 ON {table}{maybe_space}(v2) USING '{custom_class}'" in b_desc
+
+        # Try to recreate the indexes with the describe output
+        cql.execute(f"DROP INDEX {test_keyspace}.custom")
+        cql.execute(f"DROP INDEX {test_keyspace}.custom1")
+        cql.execute(a_desc)
+        cql.execute(b_desc)

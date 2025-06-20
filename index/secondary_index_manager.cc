@@ -374,4 +374,16 @@ std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_ma
     }
 }
 
+std::optional<std::unique_ptr<custom_index>> secondary_index_manager::get_custom_class(const index_metadata& im) {
+    auto it = im.options().find("class_name");
+    if (it == im.options().end()) {
+        return std::nullopt;
+    }
+    auto custom_class_factory = secondary_index::secondary_index_manager::get_custom_class_factory(it->second);
+    if (!custom_class_factory) {
+        return std::nullopt;
+    }
+    return (*custom_class_factory)();
+}
+
 }
