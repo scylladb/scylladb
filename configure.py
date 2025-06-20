@@ -566,6 +566,7 @@ scylla_tests = set([
     'test/boost/symmetric_key_test',
     'test/boost/types_test',
     'test/boost/utf8_test',
+    'test/boost/vector_store_test',
     'test/boost/vint_serialization_test',
     'test/boost/virtual_table_mutation_source_test',
     'test/boost/wasm_alloc_test',
@@ -1216,6 +1217,7 @@ scylla_core = (['message/messaging_service.cc',
                 'node_ops/task_manager_module.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
+                'service/vector_store.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )

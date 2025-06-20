@@ -855,3 +855,10 @@ rf_rack_valid_keyspaces: false
 # Maximum number of items in single BatchWriteItem command. Default is 100.
 # Note: DynamoDB has a hard-coded limit of 25.
 # alternator_max_items_in_batch_write: 100
+
+#
+# Vector Store options
+#
+# Uri for the vector store using dns name. Only http schema is supported. Port number is mandatory.
+# Default is empty, which means that the vector store is not used.
+# vector_store_uri: http://vector-store.dns.name:{port}
