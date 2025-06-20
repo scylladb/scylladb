@@ -74,11 +74,34 @@ void set_token_metadata(http_context& ctx, routes& r, sharded<locator::shared_to
     });
 
     ss::get_host_id_map.set(r, [&tm, &g](const_req req) {
+<<<<<<< HEAD
         std::vector<ss::mapper> res;
         auto map = tm.local().get()->get_host_ids() |
             std::views::transform([&g] (locator::host_id id) { return std::make_pair(g.local().get_address_map().get(id), id); }) |
             std::ranges::to<std::unordered_map>();
         return map_to_key_value(std::move(map), res);
+||||||| parent of e364995e28 (api: return error from get_host_id_map if gossiper is not enabled yet.)
+        return tm.local().get()->get_host_ids()
+            | std::views::transform([&g] (locator::host_id id) {
+                ss::mapper m;
+                m.key = fmt::to_string(g.local().get_address_map().get(id));
+                m.value = fmt::to_string(id);
+                return m;
+            })
+            | std::ranges::to<std::vector<ss::mapper>>();
+=======
+        if (!g.local().is_enabled()) {
+            throw std::runtime_error("The gossiper is not ready yet");
+        }
+        return tm.local().get()->get_host_ids()
+            | std::views::transform([&g] (locator::host_id id) {
+                ss::mapper m;
+                m.key = fmt::to_string(g.local().get_address_map().get(id));
+                m.value = fmt::to_string(id);
+                return m;
+            })
+            | std::ranges::to<std::vector<ss::mapper>>();
+>>>>>>> e364995e28 (api: return error from get_host_id_map if gossiper is not enabled yet.)
     });
 
     static auto host_or_broadcast = [&tm](const_req req) {
