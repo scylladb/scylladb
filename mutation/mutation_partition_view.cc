@@ -448,59 +448,67 @@ mutation_partition_view mutation_partition_view::from_view(ser::mutation_partiti
     return { v.v };
 }
 
+mutation_fragment read_clustered_row(const schema& s, reader_permit permit, ser::clustering_row_view crv) {
+    class clustering_row_builder {
+        const schema& _s;
+        mutation_fragment _mf;
+    public:
+        clustering_row_builder(const schema& s, reader_permit permit, clustering_key key, row_tombstone t, row_marker m)
+            : _s(s), _mf(mutation_fragment::clustering_row_tag_t(), s, std::move(permit), std::move(key), std::move(t), std::move(m), row()) { }
+        void accept_atomic_cell(column_id id, atomic_cell ac) {
+            _mf.mutate_as_clustering_row(_s, [&] (clustering_row& cr) mutable {
+                cr.cells().append_cell(id, std::move(ac));
+            });
+        }
+        void accept_collection(column_id id, const collection_mutation& cm) {
+            _mf.mutate_as_clustering_row(_s, [&] (clustering_row& cr) mutable {
+                cr.cells().append_cell(id, collection_mutation(*_s.regular_column_at(id).type, cm));
+            });
+        }
+        mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
+    };
+
+    auto cr = crv.row();
+    auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
+    clustering_row_builder builder(s, permit, cr.key(), std::move(t), read_row_marker(cr.marker()));
+    read_and_visit_row(cr.cells(), s.get_column_mapping(), column_kind::regular_column, builder);
+    return std::move(builder).get_mutation_fragment();
+}
+
+mutation_fragment read_static_row(const schema& s, reader_permit permit, ser::static_row_view sr) {
+    class static_row_builder {
+        const schema& _s;
+        mutation_fragment _mf;
+    public:
+        explicit static_row_builder(const schema& s, reader_permit permit) : _s(s), _mf(_s, std::move(permit), static_row()) { }
+        void accept_atomic_cell(column_id id, atomic_cell ac) {
+            _mf.mutate_as_static_row(_s, [&] (static_row& sr) mutable {
+                sr.cells().append_cell(id, std::move(ac));
+            });
+        }
+        void accept_collection(column_id id, const collection_mutation& cm) {
+            _mf.mutate_as_static_row(_s, [&] (static_row& sr) mutable {
+                sr.cells().append_cell(id, collection_mutation(*_s.static_column_at(id).type, cm));
+            });
+        }
+        mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
+    };
+
+    static_row_builder builder(s, permit);
+    read_and_visit_row(sr.cells(), s.get_column_mapping(), column_kind::static_column, builder);
+    return std::move(builder).get_mutation_fragment();
+}
+
 mutation_fragment frozen_mutation_fragment::unfreeze(const schema& s, reader_permit permit)
 {
     auto in = ser::as_input_stream(_bytes);
     auto view = ser::deserialize(in, std::type_identity<ser::mutation_fragment_view>());
     return seastar::visit(view.fragment(),
         [&] (ser::clustering_row_view crv) {
-            class clustering_row_builder {
-                const schema& _s;
-                mutation_fragment _mf;
-            public:
-                clustering_row_builder(const schema& s, reader_permit permit, clustering_key key, row_tombstone t, row_marker m)
-                    : _s(s), _mf(mutation_fragment::clustering_row_tag_t(), s, std::move(permit), std::move(key), std::move(t), std::move(m), row()) { }
-                void accept_atomic_cell(column_id id, atomic_cell ac) {
-                    _mf.mutate_as_clustering_row(_s, [&] (clustering_row& cr) mutable {
-                        cr.cells().append_cell(id, std::move(ac));
-                    });
-                }
-                void accept_collection(column_id id, const collection_mutation& cm) {
-                    _mf.mutate_as_clustering_row(_s, [&] (clustering_row& cr) mutable {
-                        cr.cells().append_cell(id, collection_mutation(*_s.regular_column_at(id).type, cm));
-                    });
-                }
-                mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
-            };
-
-            auto cr = crv.row();
-            auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
-            clustering_row_builder builder(s, permit, cr.key(), std::move(t), read_row_marker(cr.marker()));
-            read_and_visit_row(cr.cells(), s.get_column_mapping(), column_kind::regular_column, builder);
-            return std::move(builder).get_mutation_fragment();
+            return read_clustered_row(s, permit, crv);
         },
         [&] (ser::static_row_view sr) {
-            class static_row_builder {
-                const schema& _s;
-                mutation_fragment _mf;
-            public:
-                explicit static_row_builder(const schema& s, reader_permit permit) : _s(s), _mf(_s, std::move(permit), static_row()) { }
-                void accept_atomic_cell(column_id id, atomic_cell ac) {
-                    _mf.mutate_as_static_row(_s, [&] (static_row& sr) mutable {
-                        sr.cells().append_cell(id, std::move(ac));
-                    });
-                }
-                void accept_collection(column_id id, const collection_mutation& cm) {
-                    _mf.mutate_as_static_row(_s, [&] (static_row& sr) mutable {
-                        sr.cells().append_cell(id, collection_mutation(*_s.static_column_at(id).type, cm));
-                    });
-                }
-                mutation_fragment get_mutation_fragment() && { return std::move(_mf); }
-            };
-
-            static_row_builder builder(s, permit);
-            read_and_visit_row(sr.cells(), s.get_column_mapping(), column_kind::static_column, builder);
-            return std::move(builder).get_mutation_fragment();
+            return read_static_row(s, permit, sr);
         },
         [&] (ser::range_tombstone_view rt) {
             return mutation_fragment(s, permit, range_tombstone(rt));
