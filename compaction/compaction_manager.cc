@@ -1122,6 +1122,17 @@ future<> compaction_manager::drain() {
         _state = state::disabled;
         co_await stop_ongoing_compactions("drain");
     }
+<<<<<<< HEAD
+||||||| parent of a9a53d9178 (compaction_manager: cancel submission timer on drain)
+    // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
+    co_await stop_ongoing_compactions("drain");
+=======
+    _compaction_submission_timer.cancel();
+    // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
+    co_await stop_ongoing_compactions("drain");
+    // Trigger a signal to properly exit from postponed_compactions_reevaluation() fiber
+    reevaluate_postponed_compactions();
+>>>>>>> a9a53d9178 (compaction_manager: cancel submission timer on drain)
     cmlog.info("Drained");
 }
 

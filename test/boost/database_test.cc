@@ -1454,3 +1454,121 @@ SEASTAR_TEST_CASE(mutation_dump_generated_schema_deterministic_id_version) {
 
     return make_ready_future<>();
 }
+<<<<<<< HEAD
+||||||| parent of a9a53d9178 (compaction_manager: cancel submission timer on drain)
+
+SEASTAR_TEST_CASE(test_disk_space_monitor_capacity_override) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        utils::disk_space_monitor& monitor = e.disk_space_monitor();
+        std::filesystem::space_info orig_space = {
+            .capacity = 100,
+            .free = 12,
+            .available = 11,
+        };
+        auto reg = monitor.set_space_source([&] { return make_ready_future<std::filesystem::space_info>(orig_space); });
+
+        utils::phased_barrier poll_barrier("poll_barrier"); // new operation started whenever monitor calls listeners.
+        auto op = poll_barrier.start();
+        auto listener_registration = monitor.listen([&] (auto& mon) mutable {
+            op = poll_barrier.start();
+            return make_ready_future<>();
+        });
+
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE(monitor.space() == orig_space);
+
+        e.db_config().data_file_capacity(90);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+
+        BOOST_REQUIRE_EQUAL(monitor.space().capacity, 90);
+        BOOST_REQUIRE_EQUAL(monitor.space().available, 1);
+        BOOST_REQUIRE_EQUAL(monitor.space().free, 2);
+
+        e.db_config().data_file_capacity(10);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE_EQUAL(monitor.space().capacity, 10);
+        BOOST_REQUIRE_EQUAL(monitor.space().available, 0);
+        BOOST_REQUIRE_EQUAL(monitor.space().free, 0);
+
+        e.db_config().data_file_capacity(1000);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE_EQUAL(monitor.space().capacity, 1000);
+        BOOST_REQUIRE_EQUAL(monitor.space().available, 911);
+        BOOST_REQUIRE_EQUAL(monitor.space().free, 912);
+
+        e.db_config().data_file_capacity(0);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE(monitor.space() == orig_space);
+    });
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+=======
+
+SEASTAR_TEST_CASE(test_disk_space_monitor_capacity_override) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        utils::disk_space_monitor& monitor = e.disk_space_monitor();
+        std::filesystem::space_info orig_space = {
+            .capacity = 100,
+            .free = 12,
+            .available = 11,
+        };
+        auto reg = monitor.set_space_source([&] { return make_ready_future<std::filesystem::space_info>(orig_space); });
+
+        utils::phased_barrier poll_barrier("poll_barrier"); // new operation started whenever monitor calls listeners.
+        auto op = poll_barrier.start();
+        auto listener_registration = monitor.listen([&] (auto& mon) mutable {
+            op = poll_barrier.start();
+            return make_ready_future<>();
+        });
+
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE(monitor.space() == orig_space);
+
+        e.db_config().data_file_capacity(90);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+
+        BOOST_REQUIRE_EQUAL(monitor.space().capacity, 90);
+        BOOST_REQUIRE_EQUAL(monitor.space().available, 1);
+        BOOST_REQUIRE_EQUAL(monitor.space().free, 2);
+
+        e.db_config().data_file_capacity(10);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE_EQUAL(monitor.space().capacity, 10);
+        BOOST_REQUIRE_EQUAL(monitor.space().available, 0);
+        BOOST_REQUIRE_EQUAL(monitor.space().free, 0);
+
+        e.db_config().data_file_capacity(1000);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE_EQUAL(monitor.space().capacity, 1000);
+        BOOST_REQUIRE_EQUAL(monitor.space().available, 911);
+        BOOST_REQUIRE_EQUAL(monitor.space().free, 912);
+
+        e.db_config().data_file_capacity(0);
+        monitor.trigger_poll();
+        poll_barrier.advance_and_await().get();
+        BOOST_REQUIRE(monitor.space() == orig_space);
+    });
+}
+
+SEASTAR_TEST_CASE(enable_drained_compaction_manager) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.db().invoke_on_all([] (replica::database& db) -> future<> {
+            auto& cm = db.get_compaction_manager();
+            co_await cm.drain();
+            cm.enable();
+        }).get();
+    });
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+>>>>>>> a9a53d9178 (compaction_manager: cancel submission timer on drain)
