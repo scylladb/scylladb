@@ -1810,6 +1810,15 @@ sstable::read_scylla_metadata() noexcept {
     });
 }
 
+static sstable_column_kind to_sstable_column_kind(column_kind k) {
+    switch (k) {
+        case column_kind::partition_key: return sstable_column_kind::partition_key;
+        case column_kind::clustering_key: return sstable_column_kind::clustering_key;
+        case column_kind::static_column: return sstable_column_kind::static_column;
+        case column_kind::regular_column: return sstable_column_kind::regular_column;
+    }
+}
+
 void
 sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         std::optional<scylla_metadata::large_data_stats> ld_stats, std::optional<scylla_metadata::ext_timestamp_stats> ts_stats) {
@@ -1875,6 +1884,16 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
         sstlog.info("SSTable {} has numerical generation. SSTable identifier in scylla_metadata set to {}", get_filename(), sid);
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::SSTableIdentifier>(scylla_metadata::sstable_identifier{sid});
+
+    sstable_schema_type sstable_schema;
+    sstable_schema.id = _schema->id();
+    sstable_schema.version = _schema->version();
+    sstable_schema.keyspace_name.value = to_bytes(_schema->ks_name());
+    sstable_schema.table_name.value = to_bytes(_schema->cf_name());
+    for (const auto& col : _schema->all_columns()) {
+        sstable_schema.columns.elements.push_back(sstable_column_description{to_sstable_column_kind(col.kind), {col.name()}, {to_bytes(col.type->name())}});
+    }
+    _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
 
     write_simple<component_type::Scylla>(*_components->scylla_metadata);
 }
