@@ -3195,7 +3195,6 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     co_await _cache.invalidate(row_cache::external_updater([this, &rp, &remove, truncated_at] {
         // FIXME: the following isn't exception safe.
         for_each_compaction_group([&] (compaction_group& cg) {
-            auto gc_trunc = to_gc_clock(truncated_at);
 
             auto pruned = make_lw_shared<sstables::sstable_set>(cg.make_main_sstable_set());
             auto maintenance_pruned = cg.make_maintenance_sstable_set();
@@ -3204,7 +3203,7 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                                             const lw_shared_ptr<sstables::sstable_set>& pruning,
                                             replica::enable_backlog_tracker enable_backlog_tracker) mutable {
                 pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
-                    if (p->max_data_age() <= gc_trunc) {
+                    if (p->max_data_age() <= truncated_at) {
                         if (p->originated_on_this_node().value_or(false) && p->get_stats_metadata().position.shard_id() == this_shard_id()) {
                             rp = std::max(p->get_stats_metadata().position, rp);
                         }
