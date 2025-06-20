@@ -88,8 +88,11 @@ def populateSomeData(cql, cf: str, pk_range: tuple[int], timestamp: int | None =
     stmt = cql.prepare(f"INSERT INTO {cf} (pk, ck, v) VALUES (?, ?, ?) {'USING TIMESTAMP ?' if timestamp else ''}")
     for pk in range(*pk_range):
         for ck in range(1, 6):
-            timestamp = timestamp + step if timestamp is not None else None
-            cql.execute(stmt, [pk, ck*11+100, 0], timestamp)
+            data = [pk, ck*11+100, 0]
+            if timestamp is not None:
+                timestamp += step
+                data.append(timestamp)
+            cql.execute(stmt, data)
 
 
 def alterSomeData(cql, cf: str, timestamp: int | None = None):
@@ -125,16 +128,22 @@ def test_compactionhistory_rows_merged_time_window_compaction_strategy(cql, rest
         compaction_opt = "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', 'compaction_window_size': 1}"
         with new_test_table(cql, ks, "pk int, ck int, v int, PRIMARY KEY (pk, ck)",
                             f"WITH compaction = {compaction_opt};") as cf:
-            timestamp = int(time.time())
+            now = int(time.time() * 1e6) # ms
+            window_size = int(6e7) # 1 minutes in microseconds
+            step = int(1e6) # 1 second in microseconds
 
             # Spread data across 2 windows by simulating a write process. `USING TIMESTAMP` is
             # provided to distribute the writes in the first one-minute window while updates and
             # deletes are propagated into the second 1-minute window.
-            populateSomeData(cql, cf, (1, 6), timestamp - 60, 1)
+            #
+            # To assign a timestamp to a window in TWCS, we just divide it with the respective
+            # duration and use the result as the window id (discarding the remainder).
+            start = (now // window_size - 1)*window_size
+            populateSomeData(cql, cf, (1, 6),  start, step)
             response = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}")
             assert response.status_code == requests.codes.ok
 
-            alterSomeData(cql, cf)
+            alterSomeData(cql, cf, start + window_size)
             response = rest_api.send("POST", f"storage_service/keyspace_flush/{ks}")
             assert response.status_code == requests.codes.ok
 
@@ -167,7 +176,7 @@ def test_compactionhistory_tombstone_purge_statistics(cql, rest_api):
 
             response = waitAndGetCompleteCompactionHistory(rest_api, cf)
             stats = extractTombstonePurgeStatistics(response, ks)
-            assert stats == TombstonePurgeStats(5, 0, 0)
+            assert stats == TombstonePurgeStats(4, 0, 0)
 
             stats = extractSStablesStatistics(response, ks)
             assert len(stats.input) == 4 and len(stats.output) == 2
@@ -199,7 +208,7 @@ def test_compactionhistory_tombstone_purge_statistics_overlapping_with_memtable(
 
             response = waitAndGetCompleteCompactionHistory(rest_api, cf)
             stats = extractTombstonePurgeStatistics(response, ks)
-            assert stats == TombstonePurgeStats(5, 1, 0)
+            assert stats == TombstonePurgeStats(4, 1, 0)
 
 
 def test_compactionhistory_tombstone_purge_statistics_overlapping_with_other_sstables(cql, rest_api):
@@ -230,7 +239,7 @@ def test_compactionhistory_tombstone_purge_statistics_overlapping_with_other_sst
             response = waitAndGetCompleteCompactionHistory(rest_api, cf)
 
             stats = extractTombstonePurgeStatistics(response, ks)
-            assert stats == TombstonePurgeStats(5, 0, 1)
+            assert stats == TombstonePurgeStats(4, 0, 1)
 
             stats = extractSStablesStatistics(response, ks)
             assert len(stats.input) == 4 and len(stats.output) == 2
