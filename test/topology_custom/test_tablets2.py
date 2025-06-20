@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from typing import Any
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import HostID, ServerInfo, ServerNum
@@ -95,7 +96,7 @@ async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(m
         '--logger-log-level', 'messaging_service=trace',
         '--logger-log-level', 'rpc=trace',
         ]
-    servers = await manager.servers_add(3, cmdline=cmdline)
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
 
     s0 = servers[0].server_id
     not_s0 = servers[1:]
@@ -394,7 +395,11 @@ async def test_tablet_repair(manager: ManagerClient):
         '--logger-log-level', 'repair=trace',
         '--task-ttl-in-seconds', '3600',    # Make sure the test passes with non-zero task_ttl.
     ]
-    servers = await manager.servers_add(3, cmdline=cmdline)
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"}
+    ])
 
     await inject_error_on(manager, "tablet_allocator_shuffle", servers)
 
@@ -457,7 +462,11 @@ async def test_concurrent_tablet_repair_and_split(manager: ManagerClient):
     ]
     servers = await manager.servers_add(3, cmdline=cmdline, config={
         'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
-    })
+    }, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"}
+    ])
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
@@ -521,9 +530,7 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
     cmdline = [
         '--hinted-handoff-enabled', 'false',
         ]
-    servers = [await manager.server_add(cmdline=cmdline),
-               await manager.server_add(cmdline=cmdline),
-               await manager.server_add(cmdline=cmdline)]
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
@@ -559,7 +566,7 @@ async def test_tablet_missing_data_repair(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_repair_history(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add(), await manager.server_add()]
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
 
     rf = 3
     tablets = 8
@@ -585,7 +592,7 @@ async def test_tablet_repair_history(manager: ManagerClient):
 @pytest.mark.asyncio
 async def test_tablet_repair_ranges_selection(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
-    servers = [await manager.server_add(), await manager.server_add()]
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
 
     rf = 2
     tablets = 4
@@ -1503,12 +1510,12 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         logger.info("Verify data is not resurrected")
         await assert_empty_table()
 
-async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, nodes_per_rack: int) -> dict[ServerNum, ServerInfo]:
+async def create_cluster(manager: ManagerClient, num_dcs: int, num_racks: int, nodes_per_rack: int, config: dict[str, Any] = None) -> dict[ServerNum, ServerInfo]:
     logger.debug(f"Creating cluster: num_dcs={num_dcs} num_racks={num_racks} nodes_per_rack={nodes_per_rack}")
     servers: dict[ServerNum, ServerInfo] = dict()
     for dc in range(1, num_dcs + 1):
         for rack in range(1, num_racks + 1):
-            rack_servers = await manager.servers_add(nodes_per_rack, property_file={"dc": f"dc{dc}", "rack": f"rack{rack}"})
+            rack_servers = await manager.servers_add(nodes_per_rack, config=config, property_file={"dc": f"dc{dc}", "rack": f"rack{rack}"})
             for s in rack_servers:
                 servers[s.server_id] = s
     logger.debug(f"Created servers={list(servers.values())}")
@@ -1582,7 +1589,12 @@ async def test_decommission_rack_basic(manager: ManagerClient):
     nodes_per_rack = 2
     rf = num_racks - 1
 
-    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack)
+    # We need to disable this option to be able to create a keyspace. This can be ditched
+    # once we've implemented scylladb/scylladb#23426 and we can add new racks with the option enabled.
+    # Then we can create `rf` nodes, create the keyspace, and add another node.
+    config = {"rf_rack_valid_keyspaces": False}
+
+    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
@@ -1618,7 +1630,11 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
     nodes_per_rack = 2
     rf = initial_num_racks
 
-    initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack)
+    # We can't add a new rack if we create a keyspace.
+    # Once scylladb/scylladb#23426 has been implemented, this can be ditched.
+    config = {"rf_rack_valid_keyspaces": False}
+
+    initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.debug("Temporarily disable tablet load balancing")
         node1 = sorted(initial_servers.values(), key=lambda s: s.server_id)[0]
@@ -1628,7 +1644,7 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
         new_rack = f"rack{num_racks}"
         # copy initial_servers into all_servers, don't just assign it (by reference)
         all_servers: list[ServerInfo] = list(initial_servers.values())
-        new_rack_servers = await manager.servers_add(nodes_per_rack, property_file={"dc": "dc1", "rack": new_rack})
+        new_rack_servers = await manager.servers_add(nodes_per_rack, config=config, property_file={"dc": "dc1", "rack": new_rack})
         all_servers.extend(new_rack_servers)
 
         logger.info("Verify tablet replicas distribution")
