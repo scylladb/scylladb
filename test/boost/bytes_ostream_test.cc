@@ -334,3 +334,31 @@ BOOST_AUTO_TEST_CASE(test_conversion_to_managed_bytes) {
     buf2.write(to_bytes(mb));
     assert_sequence(buf2, 1024);
 }
+
+BOOST_AUTO_TEST_CASE(test_write_managed_bytes_view) {
+    // Generate data for test
+    int count = 25000;
+    managed_bytes source_bytes(managed_bytes::initialized_later(), sizeof(long) * count);
+    managed_bytes_mutable_view source_bytes_mutable_view(source_bytes);
+    for (long num = 0; num < count; num++) {
+        write<long>(source_bytes_mutable_view, tests::random::get_int<long>());
+    }
+
+    // Verify writing managed_bytes_view into bytes_ostream works
+    bytes_ostream buf1;
+    managed_bytes_view source_bytes_view(source_bytes);
+    buf1.write(source_bytes_view);
+    BOOST_REQUIRE(std::move(buf1).to_managed_bytes() == source_bytes);
+
+    // Verify writing works when there is space left in the stream's current chunk
+    bytes_ostream buf2(1024);
+    // Partial write - this will create a chunk but it will not be full after write
+    size_t bytes_to_write = 10;
+    buf2.write(source_bytes_view.prefix(10));
+    source_bytes_view.remove_prefix(bytes_to_write);
+    // Verify write
+    BOOST_REQUIRE(buf2.size_bytes() == bytes_to_write);
+    // Now write the remaining bytes into buffer and verify the write
+    buf2.write(source_bytes_view);
+    BOOST_REQUIRE(std::move(buf2).to_managed_bytes() == source_bytes);
+}
