@@ -196,6 +196,16 @@ template<typename Input>
   return static_cast<{name}>(deserialize(buf, std::type_identity<{self.underlying_type}>()));
 }}""")
 
+    def serializer_skip_impl(self, cout):
+        name = self.ns_qualified_name()
+
+        fprintln(cout, f"""
+{self.template_declaration}
+template<typename Input>
+void serializer<{name}>::skip(Input& buf) {{
+  buf.skip(sizeof({self.underlying_type}));
+}}""")
+
 
 class Attributes(ASTBase):
     ''' AST node for representing class and field attributes.
@@ -843,6 +853,7 @@ def handle_enum(enum, hout, cout):
 
     enum.serializer_write_impl(cout)
     enum.serializer_read_impl(cout)
+    enum.serializer_skip_impl(cout)
 
 
 def join_template(template_params):
