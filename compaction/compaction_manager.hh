@@ -208,14 +208,14 @@ private:
     template <std::ranges::range Range>
     requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
     void deregister_compacting_sstables(const Range& range);
-
+public:
     // gets the table's compaction state
     // throws std::out_of_range exception if not found.
     compaction_state& get_compaction_state(compaction::table_state* t);
     const compaction_state& get_compaction_state(compaction::table_state* t) const {
         return const_cast<compaction_manager*>(this)->get_compaction_state(t);
     }
-
+private:
     // Return true if compaction manager is enabled and
     // table still exists and compaction is not disabled for the table.
     inline bool can_proceed(compaction::table_state* t) const;
