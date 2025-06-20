@@ -137,6 +137,10 @@ public:
     storage_proxy_clock_type::time_point timeout(storage_proxy& sp) const {
         return _timeout;
     }
+
+    service_permit get_permit() const& {
+        return permit;
+    }
 };
 
 struct storage_proxy_coordinator_query_result {
@@ -550,13 +554,13 @@ private:
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 
+    mutation do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+    future<> drain_on_shutdown();
+public:
     utils::phased_barrier::operation start_write() {
         return _pending_writes_phaser.start();
     }
 
-    mutation do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
-    future<> drain_on_shutdown();
-public:
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {

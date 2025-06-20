@@ -239,6 +239,7 @@ public:
     future<> update_connections_scheduling_group();
     future<> update_connections_service_level_params();
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();
+    service_permit make_service_permit(semaphore_units<>&& units = semaphore_units<>()) const;
 private:
     class fmt_visitor;
     friend class connection;
@@ -360,7 +361,10 @@ private:
         process_on_shard(shard_id shard, uint16_t stream, fragmented_temporary_buffer::istream is, service::client_state& cs,
                 tracing::trace_state_ptr trace_state, cql3::dialect dialect, cql3::computed_function_values&& cached_vals, Process process_fn);
 
-        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit = empty_service_permit(), cql_compression compression = cql_compression::none);
+        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit, cql_compression compression);
+        void write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response) {
+            write_response(std::move(response), _server.make_service_permit(), cql_compression::none);
+        }
 
         friend event_notifier;
     };
