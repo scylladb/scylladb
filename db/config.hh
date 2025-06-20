@@ -488,6 +488,8 @@ public:
     named_value<sstring> alternator_describe_endpoints;
     named_value<uint32_t> alternator_max_items_in_batch_write;
 
+    named_value<sstring> vector_store_uri;
+
     named_value<bool> abort_on_ebadf;
 
     named_value<uint16_t> redis_port;
