@@ -25,6 +25,7 @@
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
+#include "seastar/core/sstring.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
 #include "types/tuple.hh"
@@ -58,6 +59,7 @@ logging::logger cdc_log("cdc");
 
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
+static schema_ptr create_log_schema_for_vsc(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
 }
 
 static constexpr auto cdc_group_name = "cdc";
@@ -214,6 +216,37 @@ public:
 
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
         }
+
+        bool is_vsc = check_if_vector_index_exists(new_schema);
+        bool was_vsc = check_if_vector_index_exists(old_schema);
+
+        if (is_vsc) {
+            auto& db = _ctxt._proxy.get_db().local();
+            auto logname = vsc_log_name(old_schema.cf_name());
+            auto& keyspace = db.find_keyspace(old_schema.ks_name());
+            auto has_cdc_log = db.has_schema(old_schema.ks_name(), logname);
+            auto log_schema = has_cdc_log ? db.find_schema(old_schema.ks_name(), logname) : nullptr;
+            if (!was_vsc && has_cdc_log) {
+                // make sure the apparent log table really is a cdc log (not user table)
+                // we just check the partitioner - since user tables should _not_ be able
+                // set/use this.
+                if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                    // will throw
+                    check_that_cdc_log_table_does_not_exist(db, old_schema, logname);
+                }
+                
+            }
+            ensure_that_table_has_no_counter_columns(new_schema);
+            ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
+            auto new_log_schema = create_log_schema_for_vsc(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
+
+            auto log_mut = log_schema 
+                ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
+                : db::schema_tables::make_create_table_mutations(new_log_schema, timestamp)
+                ;
+
+            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+        }
     }
 
     void on_before_drop_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
@@ -276,6 +309,17 @@ private:
             throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because keyspace uses tablets. See issue #16317.",
                 schema.ks_name(), schema.cf_name()));
         }
+    }
+
+    static bool check_if_vector_index_exists(const schema& s) {
+        auto i = s.indices();
+        return std::any_of(i.begin(), i.end(), [](const auto& index) {
+            auto it = index.options().find("class_name");
+            if (it != index.options().end()) {
+                return it->second == "vector_index";
+            }
+            return false;
+        });    
     }
 };
 
@@ -415,6 +459,7 @@ namespace cdc {
 using operation_native_type = std::underlying_type_t<operation>;
 
 static const sstring cdc_log_suffix = "_scylla_cdc_log";
+static const sstring vsc_log_suffix = "_scylla_vsc_log";
 static const sstring cdc_meta_column_prefix = "cdc$";
 static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "deleted_";
 static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix + "deleted_elements_";
@@ -462,6 +507,10 @@ seastar::sstring base_name(std::string_view log_name) {
 
 sstring log_name(std::string_view table_name) {
     return sstring(table_name) + cdc_log_suffix;
+}
+
+sstring vsc_log_name(std::string_view table_name) {
+    return sstring(table_name) + vsc_log_suffix;
 }
 
 sstring log_data_column_name(std::string_view column_name) {
@@ -571,6 +620,76 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
                     }
                 ));
                 b.with_column(log_data_column_deleted_elements_name_bytes(column.name()), dtype);
+            }
+        }
+    };
+    add_columns(s.partition_key_columns());
+    add_columns(s.clustering_key_columns());
+    add_columns(s.static_columns(), true);
+    add_columns(s.regular_columns(), true);
+
+    if (uuid) {
+        b.set_uuid(*uuid);
+    }
+
+    /**
+     * #10473 - if we are redefining the log table, we need to ensure any dropped
+     * columns are registered in "dropped_columns" table, otherwise clients will not
+     * be able to read data older than now.
+     */
+    if (old) {
+        // not super efficient, but we don't do this often.
+        for (auto& col : old->all_columns()) {
+            if (!b.has_column({col.name(), col.name_as_text() })) {
+                b.without_column(col.name_as_text(), col.type, api::new_timestamp());
+            }
+        }
+    }
+
+    return b.build();
+}
+
+static schema_ptr create_log_schema_for_vsc(const schema& s, std::optional<table_id> uuid, schema_ptr old) {
+    schema_builder b(s.ks_name(), vsc_log_name(s.cf_name()));
+    b.with_partitioner(cdc::cdc_partitioner::classname);
+    b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+    b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
+    auto ttl_seconds = s.cdc_options().ttl();
+    if (ttl_seconds > 0) {
+        b.set_gc_grace_seconds(0);
+        auto ceil = [] (int dividend, int divisor) {
+            return dividend / divisor + (dividend % divisor == 0 ? 0 : 1);
+        };
+        auto seconds_to_minutes = [] (int seconds_value) {
+            using namespace std::chrono;
+            return std::chrono::ceil<minutes>(seconds(seconds_value)).count();
+        };
+        // What's the minimum window that won't create more than 24 sstables.
+        auto window_seconds = ceil(ttl_seconds, 24);
+        auto window_minutes = seconds_to_minutes(window_seconds);
+        b.set_compaction_strategy_options({
+                {"compaction_window_unit", "MINUTES"},
+                {"compaction_window_size", std::to_string(window_minutes)},
+                // A new SSTable will become fully expired every
+                // `window_seconds` seconds so we shouldn't check for expired
+                // sstables too often.
+                {"expired_sstable_check_frequency_seconds",
+                        std::to_string(std::max(1, window_seconds / 2))},
+        });
+    }
+    b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
+    b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
+    b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
+    b.with_column(log_meta_column_name_bytes("operation"), data_type_for<operation_native_type>());
+    b.with_column(log_meta_column_name_bytes("ttl"), long_type);
+    b.with_column(log_meta_column_name_bytes("end_of_batch"), boolean_type);
+    b.set_caching_options(caching_options::get_disabled_caching_options());
+    auto add_columns = [&] (const schema::const_iterator_range_type& columns, bool is_data_col = false) {
+        for (const auto& column : columns) {
+            auto type = column.type;
+            b.with_column(log_data_column_name_bytes(column.name()), type);
+            if (is_data_col) {
+                b.with_column(log_data_column_deleted_name_bytes(column.name()), boolean_type);
             }
         }
     };
