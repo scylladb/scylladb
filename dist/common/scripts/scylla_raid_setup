@@ -123,6 +123,8 @@ if __name__ == '__main__':
                         help='specify RAID level')
     parser.add_argument('--online-discard', default="True",
                         help='Enable XFS online discard (trim SSD cells after file deletion)')
+    parser.add_argument('--blk-discard', default="False",
+                        help='Execute blkdiscard on the disks before creating the RAID or XFS volume. This is not needed on clean disks, which is often the case with cloud instances, but can be useful on bare metal servers with disks that were used before.')
 
     args = parser.parse_args()
 
@@ -200,18 +202,19 @@ if __name__ == '__main__':
             md_service = systemd_unit('mdadm.service')
 
     print('Creating {type} for scylla using {nr_disk} disk(s): {disks}'.format(type=f'RAID{args.raid_level}' if raid else 'XFS volume', nr_disk=len(disks), disks=args.disks))
-    procs=[]
-    for disk in disks:
-        d = disk.replace('/dev/', '')
-        discard_path = '/sys/block/{}/queue/discard_granularity'.format(d)
-        if os.path.exists(discard_path):
-            with open(discard_path) as f:
-                discard = f.read().strip()
-            if discard != '0':
-                proc = subprocess.Popen(['blkdiscard', disk])
-                procs.append(proc)
-    for proc in procs:
-        proc.wait()
+    if args.blk_discard:
+        procs=[]
+        for disk in disks:
+            d = disk.replace('/dev/', '')
+            discard_path = '/sys/block/{}/queue/discard_granularity'.format(d)
+            if os.path.exists(discard_path):
+                with open(discard_path) as f:
+                    discard = f.read().strip()
+                if discard != '0':
+                    proc = subprocess.Popen(['blkdiscard', disk])
+                    procs.append(proc)
+        for proc in procs:
+            proc.wait()
     for disk in disks:
         run(f'wipefs -a {disk}', shell=True, check=True)
     if raid:
