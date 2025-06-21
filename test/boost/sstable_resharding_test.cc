@@ -150,7 +150,6 @@ SEASTAR_TEST_CASE(sstable_resharding_over_s3_test, *boost::unit_test::preconditi
         run_sstable_resharding_test(env);
     }, test_env_config{
         .storage = make_test_object_storage_options(),
-        .use_uuid = true,
     });
 }
 
