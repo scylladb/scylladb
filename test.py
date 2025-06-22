@@ -327,6 +327,8 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
         args.extend(['-k', expression])
     if not options.save_log_on_success:
         args.append('--allure-no-capture')
+    else:
+        args.append('--save-log-on-success')
     if options.markers:
         args.append(f"-m={options.markers}")
     args.extend(files_to_run)

@@ -64,6 +64,7 @@ class CppTestFacade(ABC):
         self.temp_dir: Path = Path(config.getoption('tmpdir'))
         self.run_id: int = config.getoption('run_id') or 1
         self.gather_metrics: bool = config.getoption('gather_metrics')
+        self.save_log_on_success: bool = config.getoption('save_log_on_success')
         self.combined_suites: dict[str, list[str]] = combined_tests
 
     def list_tests(self, executable: Path , no_parallel: bool, mode: str) -> tuple[bool,list[str]]:

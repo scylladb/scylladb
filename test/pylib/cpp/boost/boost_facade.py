@@ -145,8 +145,9 @@ class BoostTestFacade(CppTestFacade):
             )
             return [failure], ''
 
-        log_xml.unlink(missing_ok=True)
-        stdout_file_path.unlink(missing_ok=True)
+        if not self.save_log_on_success:
+            log_xml.unlink(missing_ok=True)
+            stdout_file_path.unlink(missing_ok=True)
 
         if results:
             return results, ''
