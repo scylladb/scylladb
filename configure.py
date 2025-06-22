@@ -642,6 +642,7 @@ wasms = set([
 
 apps = set([
     'scylla',
+    'patchelf',
 ])
 
 lto_binaries = set([
@@ -1407,6 +1408,7 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
 
 deps = {
     'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools + scylla_perfs,
+    'patchelf': ['tools/patchelf.cc'],
 }
 
 pure_boost_tests = set([
@@ -2616,8 +2618,8 @@ def write_build_file(f,
             include_scylla_and_iotune_stripped = ''
             include_scylla_and_iotune_debug = ''
         else:
-            include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune'
-            include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped'
+            include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/patchelf'
+            include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped $builddir/{mode}/patchelf.stripped'
             include_scylla_and_iotune_debug = f'$builddir/{mode}/scylla.debug $builddir/{mode}/iotune.debug'
         f.write('build $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian $builddir/node_exporter/node_exporter | always\n'.format(**locals()))
         f.write('  mode = {mode}\n'.format(**locals()))

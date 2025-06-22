@@ -363,3 +363,6 @@ endif()
 if(Scylla_BUILD_INSTRUMENTED)
   add_subdirectory(pgo)
 endif()
+
+add_executable(patchelf
+  tools/patchelf.cc)
