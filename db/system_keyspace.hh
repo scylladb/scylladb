@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "db/view/view_build_status.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
@@ -28,6 +29,7 @@
 #include "virtual_tables.hh"
 #include "types/types.hh"
 #include "auth_version.hh"
+#include "service/view_building_state.hh"
 
 namespace utils {
     class shared_dict;
@@ -179,6 +181,7 @@ public:
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
     static constexpr auto DICTS = "dicts";
+    static constexpr auto VIEW_BUILDING_TASKS = "view_building_tasks";
 
     // auth
     static constexpr auto ROLES = "roles";
@@ -274,6 +277,7 @@ public:
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
     static schema_ptr dicts();
+    static schema_ptr view_building_tasks();
 
     // auth
     static schema_ptr roles();
@@ -531,6 +535,26 @@ public:
     future<std::vector<view_name>> load_built_views();
     future<std::vector<view_build_progress>> load_view_build_progress();
 
+    // system.view_build_status_v2
+    using view_build_status_map = std::map<system_keyspace_view_name, std::map<locator::host_id, view::build_status>>;
+    future<view_build_status_map> get_view_build_status_map();
+    future<mutation> make_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
+    future<mutation> make_view_build_status_update_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id, view::build_status status);
+    future<mutation> make_remove_view_build_status_mutation(api::timestamp_type ts, system_keyspace_view_name view_name);
+    future<mutation> make_remove_view_build_status_on_host_mutation(api::timestamp_type ts, system_keyspace_view_name view_name, locator::host_id host_id);
+
+    // system.view_building_tasks
+    future<service::view_building::building_tasks> get_view_building_tasks();
+    future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const service::view_building::view_building_task& task);
+    future<mutation> make_update_view_building_task_state_mutation(api::timestamp_type ts, utils::UUID id, service::view_building::view_building_task::task_state state);
+    future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
+
+    // system.scylla_local, view_building_processing_base key
+    future<std::optional<table_id>> get_view_building_processing_base_id();
+    future<std::optional<mutation>> get_view_building_processing_base_id_mutation();
+    future<mutation> make_view_building_processing_base_id_mutation(api::timestamp_type ts, table_id base_id);
+    future<mutation> make_remove_view_building_processing_base_id_mutation(api::timestamp_type ts);
+    
     // Paxos related functions
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
             db::timeout_clock::time_point timeout);
