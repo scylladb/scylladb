@@ -1622,6 +1622,42 @@ def test_get_records_too_high_limit(test_table_ss_keys_only, dynamodbstreams):
     with pytest.raises(ClientError, match='ValidationException.*[Ll]imit'):
         response = dynamodbstreams.get_records(ShardIterator=iter, Limit=-1)
 
+# padded_name() creates a unique name of given length by taking the
+# output of unique_table_name() and padding it with extra 'x' characters:
+def padded_name(length):
+    u = unique_table_name()
+    assert length >= len(u)
+    return u + 'x'*(length-len(u))
+
+# When Alternator enables streams, CDC creates a new table whose name is the
+# same as the existing table with the suffix "_scylla_cdc_log". Let's check
+# that if the table's name is already as long as it can be, we can still
+# enable streams without any disasterous I/O error.
+# We have two versions of this test - one with the stream created with the
+# table, and one with the stream added to the existing table.
+# Reproduces #24598
+@pytest.mark.skip(reason="issue #24598, causes a Scylla crash so has to be skipped ")
+def test_stream_table_name_length_222_create(dynamodb):
+    with new_test_table(dynamodb, name=padded_name(222),
+        Tags=TAGS,
+        StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
+    ) as table:
+        pass
+
+@pytest.mark.skip(reason="issue #24598, causes a Scylla crash so has to be skipped ")
+def test_stream_table_name_length_222_update(dynamodb, dynamodbstreams):
+    with new_test_table(dynamodb, name=padded_name(222),
+        Tags=TAGS,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
+    ) as table:
+        table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'});
+        # DynamoDB doesn't allow deleting the base table while the stream
+        # is in the process of being added
+        wait_for_active_stream(dynamodbstreams, table)
+
 # TODO: tests on multiple partitions
 # TODO: write a test that disabling the stream and re-enabling it works, but
 #   requires the user to wait for the first stream to become DISABLED before
