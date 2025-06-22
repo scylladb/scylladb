@@ -51,5 +51,6 @@ class UnitTestFacade(CppTestFacade):
                 contents=msg
             )
             return [failure], ''
-        stdout_file_path.unlink(missing_ok=True)
+        if not self.save_log_on_success:
+            stdout_file_path.unlink(missing_ok=True)
         return None, ''
