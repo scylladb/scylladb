@@ -60,6 +60,26 @@ Breaks: scylla-enterprise-node-exporter (<< 2025.1.0~)
 Description: Prometheus exporter for machine metrics
  Prometheus exporter for machine metrics, written in Go with pluggable metric collectors.
 
+Package: scylla-cqlsh
+Architecture: any
+Provides: scylla-enterprise-cqlsh
+Replaces: scylla-enterprise-cqlsh (<< 2025.1.0~)
+Breaks: scylla-enterprise-cqlsh (<< 2025.1.0~)
+Description: Scylla CQL shell
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+ This package contains the CQL shell for Scylla.
+
+Package: scylla-python3
+Architecture: any
+Provides: scylla-enterprise-python3
+Replaces: scylla-enterprise-python3 (<< 2025.1.0~)
+Breaks: scylla-enterprise-python3 (<< 2025.1.0~)
+Description: Scylla Python3 runtime
+ Scylla is a highly scalable, eventually consistent, distributed,
+ partitioned row DB.
+ This package contains the Python3 runtime for Scylla.
+
 Package: scylla
 Section: metapackages
 Architecture: any
