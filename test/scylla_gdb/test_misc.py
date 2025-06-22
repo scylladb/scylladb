@@ -1,6 +1,6 @@
 import pytest
 import re
-
+print(12)
 # Convenience function to execute a scylla command in gdb, returning its
 # output as a string - or a gdb.error exception.
 def scylla(gdb, cmd):
