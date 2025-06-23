@@ -20,21 +20,58 @@
 namespace rest {
 
 /**
- * HTTP client wrapper for making short, stateless REST calls, such as
- * OAUTH, GCP/AWS/Azure queries, etc.
- * No statefulness, no reuse, no sessions.
- * Just a GET/POST and a result. 
+ * Wrapper for http::request, making setting headers, body, etc
+ * more convinient for our purposes. Separated from the below client
+ * so the logic can be shared with non-single usage, i.e. the free-form
+ * simple_send method, possibly caching a http::client across calls.
  */
-class httpclient {
+class request_wrapper {
 public:
-    httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> = {}, std::optional<seastar::tls::tls_options> = {});
+    request_wrapper(std::string_view host);
+    request_wrapper(request_wrapper&&);
 
-    httpclient& add_header(std::string_view key, std::string_view value);
+    request_wrapper& add_header(std::string_view key, std::string_view value);
     void clear_headers();
 
     using reply_status = seastar::http::reply::status_type;
     using request_type = seastar::http::request;
     using reply_type = seastar::http::reply;
+
+    using method_type = seastar::httpd::operation_type;
+    using body_writer = decltype(std::declval<seastar::http::request>().body_writer);
+
+    void method(method_type);
+    void content(std::string_view);
+    void content(body_writer, size_t);
+
+    void target(std::string_view);
+
+    request_type& request() {
+        return _req;
+    }
+    const request_type& request() const {
+        return _req;
+    }
+    operator request_type&() {
+        return request();
+    }
+    operator const request_type&() const {
+        return request();
+    }
+protected:
+    request_type _req;
+};
+
+/**
+ * HTTP client wrapper for making short, stateless REST calls, such as
+ * OAUTH, GCP/AWS/Azure queries, etc.
+ * No statefulness, no reuse, no sessions.
+ * Just a GET/POST and a result. 
+ */
+class httpclient : public request_wrapper {
+public:
+    httpclient();
+    httpclient(std::string host, uint16_t port, seastar::shared_ptr<seastar::tls::certificate_credentials> = {}, std::optional<seastar::tls::tls_options> = {});
 
     struct result_type {
         seastar::http::reply reply;
@@ -54,15 +91,6 @@ public:
     seastar::future<result_type> send();
     seastar::future<> send(const handler_func&);
 
-    using method_type = seastar::httpd::operation_type;
-
-    void method(method_type);
-    void content(std::string_view);
-    void target(std::string_view);
-
-    const request_type& request() const {
-        return _req;
-    }
     const std::string& host() const {
         return _host;
     }
@@ -77,8 +105,11 @@ private:
     uint16_t _port;
     seastar::shared_ptr<seastar::tls::certificate_credentials> _creds;
     seastar::tls::tls_options _tls_options;
-    request_type _req;
 };
+
+using handler_func_ex = std::function<future<>(const seastar::http::reply&, seastar::input_stream<char>&)>;
+
+seastar::future<> simple_send(seastar::http::experimental::client&, seastar::http::request&, const handler_func_ex&);
 
 // Interface for redacting sensitive data from HTTP requests and responses before logging.
 class http_log_filter {
