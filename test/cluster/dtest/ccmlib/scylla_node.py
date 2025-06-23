@@ -104,6 +104,8 @@ class ScyllaNode:
         self.__global_log_level = "info"
         self.__classes_log_level = {}
 
+        self.bootstrap = True
+
     def set_configuration_options(self,
                                   values: dict | None = None,
                                   batch_commitlog: bool | None = None) -> None:
@@ -431,6 +433,7 @@ class ScyllaNode:
 
         self.cluster.manager.server_start(
             server_id=self.server_id,
+            seeds=None if self.bootstrap else [self.address()],
             expected_server_up_state=ServerUpState.PROCESS_STARTED,
             cmdline_options_override=scylla_args,
             append_env_override=scylla_env,
