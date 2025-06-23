@@ -1301,9 +1301,7 @@ public:
     compaction::compaction_group_view& try_get_compaction_group_view_with_static_sharding() const;
     // Safely iterate through table states, while performing async operations on them.
     future<> parallel_foreach_compaction_group_view(std::function<future<>(compaction::compaction_group_view&)> action);
-    compaction::compaction_group_view& compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const noexcept {
-        return compaction_group_for_sstable(sst).as_compaction_group_view();
-    }
+    compaction::compaction_group_view& compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const;
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
     // Returns true iff sst was found and erased.
