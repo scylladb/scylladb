@@ -15,7 +15,7 @@
 
 namespace compaction {
 
-class table_state;
+class compaction_group_view;
 class strategy_control;
 struct compaction_state;
 

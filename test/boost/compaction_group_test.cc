@@ -55,7 +55,7 @@ static sstables::shared_sstable sstable_that_needs_split(schema_ptr s, std::func
     return generate_sstable(std::move(s), std::move(sst_gen), [] (dht::token) { return true; });
 }
 
-class single_compaction_group : public compaction::table_state {
+class single_compaction_group : public compaction::compaction_group_view {
 private:
     schema_ptr _schema;
     sstables::sstables_manager& _sst_man;
