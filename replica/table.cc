@@ -686,13 +686,17 @@ public:
         : _t(t)
     {
         storage_group_map r;
+
+        // Incremental repair is not supported with vnodes, so all sstables will be considered unrepaired.
+        auto noop_repair_sstable_classifier = [] (const sstables::shared_sstable&) { return repair_sstable_classification::unrepaired; };
+
         // this might not reflect real vnode range for this node, but with 256 tokens, the actual
         // first and last tokens are likely to be ~0.5% of the edges, so any measurement against
         // this accurate enough token range will be likely up to ~1% off.
         // TODO: we could fed actual vnode range here, but we might bump into a chicken and egg
         //     problem if e.g. a system table is created before tokens were allocated.
         auto full_token_range = dht::token_range::make(dht::first_token(), dht::last_token());
-        auto cg = make_lw_shared<compaction_group>(_t, size_t(0), std::move(full_token_range));
+        auto cg = make_lw_shared<compaction_group>(_t, size_t(0), std::move(full_token_range), noop_repair_sstable_classifier);
         _single_cg = cg.get();
         auto sg = make_lw_shared<storage_group>(std::move(cg));
         _single_sg = sg;
@@ -814,8 +818,15 @@ private:
         return { idx, side };
     }
 
+    repair_classifier_func make_repair_sstable_classifier_func() const {
+        // FIXME: implement it for incremental repair!
+        return [] (const sstables::shared_sstable& sst) {
+            return repair_sstable_classification::unrepaired;
+        };
+    }
+
     storage_group_ptr allocate_storage_group(const locator::tablet_map& tmap, locator::tablet_id tid, dht::token_range range) const {
-        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range));
+        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range), make_repair_sstable_classifier_func());
         auto sg = make_lw_shared<storage_group>(std::move(cg));
         if (tmap.needs_split()) {
             sg->set_split_mode();
@@ -967,7 +978,7 @@ bool storage_group::set_split_mode() {
     if (!splitting_mode()) {
         auto create_cg = [this] () -> compaction_group_ptr {
             // TODO: use the actual sub-ranges instead, to help incremental selection on the read path.
-            return make_lw_shared<compaction_group>(_main_cg->_t, _main_cg->group_id(), _main_cg->token_range());
+            return compaction_group::make_empty_group(*_main_cg);
         };
         std::vector<compaction_group_ptr> split_ready_groups(2);
         split_ready_groups[to_idx(locator::tablet_range_side::left)] = create_cg();
@@ -2442,6 +2453,23 @@ table::make_memtable_list(compaction_group& cg) {
 class compaction_group::compaction_group_view : public compaction::compaction_group_view {
     table& _t;
     compaction_group& _cg;
+    // When engaged, compaction is disabled altogether on this view.
+    std::optional<compaction_manager::compaction_reenabler> _compaction_reenabler;
+private:
+    bool belongs_to_this_view(const sstables::shared_sstable& sst) const {
+        return &_cg.view_for_sstable(sst) == this;
+    }
+
+    future<lw_shared_ptr<const sstables::sstable_set>> make_sstable_set_for_this_view(lw_shared_ptr<const sstables::sstable_set> sstables, auto make_sstable_set_func) const {
+        sstables::sstable_set ret = make_sstable_set_func();
+        auto all_sstables = sstables->all();
+        auto belongs_to_this_view_func = [this] (const sstables::shared_sstable& sst) { return belongs_to_this_view(sst); };
+        for (auto sst : *all_sstables | std::views::filter(belongs_to_this_view_func)) {
+            ret.insert(sst);
+            co_await coroutine::maybe_yield();
+        }
+        co_return make_lw_shared<const sstables::sstable_set>(std::move(ret));
+    }
 public:
     explicit compaction_group_view(table& t, compaction_group& cg) : _t(t), _cg(cg) {}
 
@@ -2468,10 +2496,10 @@ public:
         return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
     }
     future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
-        co_return _cg.main_sstables();
+        return make_sstable_set_for_this_view(_cg.main_sstables(), [this] { return _cg.make_main_sstable_set(); });
     }
     future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
-        co_return _cg.maintenance_sstables();
+        return make_sstable_set_for_this_view(_cg.maintenance_sstables(), [this] { return *_cg.make_maintenance_sstable_set(); });
     }
     lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
         return _t.sstable_set_for_tombstone_gc(_cg);
@@ -2544,9 +2572,25 @@ public:
     }
 };
 
-compaction_group::compaction_group(table& t, size_t group_id, dht::token_range token_range)
+std::unique_ptr<compaction_group::compaction_group_view> compaction_group::make_compacting_view() {
+    auto view = std::make_unique<compaction_group_view>(_t, *this);
+    _t._compaction_manager.add(*view);
+    return view;
+}
+
+std::unique_ptr<compaction_group::compaction_group_view> compaction_group::make_non_compacting_view() {
+    auto view = std::make_unique<compaction_group_view>(_t, *this);
+    auto reenabler = _t._compaction_manager.add_with_compaction_disabled(*view);
+    // Attaches compaction reenabler, so this non compacting view will not be compacted.
+    _compaction_disabler_for_views.push_back(std::move(reenabler));
+    return view;
+}
+
+compaction_group::compaction_group(table& t, size_t group_id, dht::token_range token_range, repair_classifier_func repair_classifier)
     : _t(t)
-    , _compaction_group_view(std::make_unique<compaction_group_view>(t, *this))
+    , _unrepaired_view(make_compacting_view())
+    , _repairing_view(make_non_compacting_view())
+    , _repaired_view(make_compacting_view())
     , _group_id(group_id)
     , _token_range(std::move(token_range))
     , _compaction_strategy_state(compaction::compaction_strategy_state::make(_t._compaction_strategy))
@@ -2555,11 +2599,12 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
     , _backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
+    , _repair_sstable_classifier(std::move(repair_classifier))
 {
-  // FIXME: indentation.
-  for (auto view : all_views()) {
-    _t._compaction_manager.add(*view);
-  }
+}
+
+compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
+    return make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
 }
 
 bool compaction_group::compaction_disabled() const {
@@ -2589,6 +2634,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
 
     co_await _flush_gate.close();
   // FIXME: indentation
+  _compaction_disabler_for_views.clear();
   for (auto view : all_views()) {
     co_await _t._compaction_manager.remove(*view, reason);
   }
@@ -2795,7 +2841,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
         }
         auto new_tid = id >> log2_reduce_factor;
 
-        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_tmap.get_token_range(locator::tablet_id(new_tid)));
+        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_tmap.get_token_range(locator::tablet_id(new_tid)), make_repair_sstable_classifier_func());
         auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
 
         for (unsigned i = 0; i < merge_size; i++) {
@@ -4097,17 +4143,23 @@ compaction::compaction_group_view& compaction_group::as_view_for_static_sharding
 }
 
 compaction::compaction_group_view& compaction_group::view_for_unrepaired_data() const {
-    return *_compaction_group_view;
+    return *_unrepaired_view;
 }
 
 compaction::compaction_group_view& compaction_group::view_for_sstable(const sstables::shared_sstable& sst) const {
-    // FIXME: implement filter fed by replica::table that can answer whether sstable is currently repaired or unrepaired.
-    return *_compaction_group_view;
+    switch (_repair_sstable_classifier(sst)) {
+        case repair_sstable_classification::unrepaired: return *_unrepaired_view;
+        case repair_sstable_classification::repairing: return *_repairing_view;
+        case repair_sstable_classification::repaired: return *_repaired_view;
+    }
+    std::unreachable();
 }
 
-utils::small_vector<compaction::compaction_group_view*, 2> compaction_group::all_views() const {
-    utils::small_vector<compaction::compaction_group_view*, 2> ret;
-    ret.push_back(_compaction_group_view.get());
+utils::small_vector<compaction::compaction_group_view*, 3> compaction_group::all_views() const {
+    utils::small_vector<compaction::compaction_group_view*, 3> ret;
+    ret.push_back(_unrepaired_view.get());
+    ret.push_back(_repairing_view.get());
+    ret.push_back(_repaired_view.get());
     return ret;
 }
 
