@@ -428,7 +428,6 @@ public:
     void register_backlog_tracker(compaction_backlog_tracker& backlog_tracker) {
         _backlog_manager.register_backlog_tracker(backlog_tracker);
     }
-    void register_backlog_tracker(compaction::compaction_group_view& t, compaction_backlog_tracker new_backlog_tracker);
 
     compaction_backlog_tracker& get_backlog_tracker(compaction::compaction_group_view& t);
 
