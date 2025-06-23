@@ -27,7 +27,10 @@ struct compaction_state {
     // and by any function running under run_with_compaction_disabled().
     seastar::named_gate gate;
 
-    // Prevents table from running major and minor compaction at the same time.
+    // Used for synchronizing selection of sstable for compaction.
+    // Write lock is held when getting sstable list, feeding them into strategy, and registering compacting sstables.
+    // The lock prevents two concurrent compaction tasks from picking the same sstables. And it also helps major
+    // to synchronize with minor, such that major doesn't miss any sstable.
     seastar::rwlock lock;
 
     // Raised by any function running under run_with_compaction_disabled();

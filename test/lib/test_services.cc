@@ -63,14 +63,14 @@ public:
     bool compaction_enforce_min_threshold() const noexcept override {
         return true;
     }
-    const sstables::sstable_set& main_sstable_set() const override {
-        return table().try_get_compaction_group_view_with_static_sharding().main_sstable_set();
+    future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
+        co_return co_await table().try_get_compaction_group_view_with_static_sharding().main_sstable_set();
     }
-    const sstables::sstable_set& maintenance_sstable_set() const override {
-        return table().try_get_compaction_group_view_with_static_sharding().maintenance_sstable_set();
+    future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
+        co_return co_await table().try_get_compaction_group_view_with_static_sharding().maintenance_sstable_set();
     }
     lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
-        return make_lw_shared<const sstables::sstable_set>(main_sstable_set());
+        return table().try_get_compaction_group_with_static_sharding()->main_sstables();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return sstables::get_fully_expired_sstables(*this, sstables, query_time);
