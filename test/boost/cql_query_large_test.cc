@@ -125,7 +125,7 @@ SEASTAR_THREAD_TEST_CASE(test_large_data) {
         flush(e);
         e.db().invoke_on_all([] (replica::database& dbi) {
             return dbi.get_tables_metadata().parallel_for_each_table([&dbi] (table_id, lw_shared_ptr<replica::table> t) {
-                return dbi.get_compaction_manager().perform_major_compaction(t->try_get_table_state_with_static_sharding(), tasks::task_info{});
+                return dbi.get_compaction_manager().perform_major_compaction(t->try_get_compaction_group_view_with_static_sharding(), tasks::task_info{});
             });
         }).get();
 

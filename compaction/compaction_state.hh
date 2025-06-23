@@ -40,7 +40,7 @@ struct compaction_state {
 
     gc_clock::time_point last_regular_compaction;
 
-    explicit compaction_state(table_state& t);
+    explicit compaction_state(compaction_group_view& t);
     compaction_state(compaction_state&&) = delete;
     ~compaction_state();
 
