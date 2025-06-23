@@ -376,6 +376,71 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
         return tablet_count < old_tablet_count or None
     await wait_for(finished_merging, time.time() + 120)
 
+# Reproduces #23284
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_split_merge_with_many_tables(manager: ManagerClient, racks = 2):
+    cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200',]
+    config = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
+
+    servers = []
+    rf = racks
+    for rack_id in range(0, racks):
+        rack = f'rack{rack_id+1}'
+        servers.extend(await manager.servers_add(3, config=config, cmdline=cmdline, property_file={'dc': 'mydc', 'rack': rack}))
+
+    cql = manager.get_cql()
+    ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
+    await asyncio.gather(*[cql.run_async(f"CREATE TABLE {ks}.test{i} (pk int PRIMARY KEY, c blob);") for i in range(1, 200)])
+
+    async def check_logs(when):
+        for server in servers:
+            log = await manager.server_open_log(server.server_id)
+            matches = await log.grep("Too long queue accumulated for gossip")
+            if matches:
+                pytest.fail(f"Server {server.server_id} has too long queue accumulated for gossip {when}: {matches=}")
+
+    await check_logs("after creating tables")
+
+    total_keys = 400
+    keys = range(total_keys)
+    insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+    for pk in keys:
+        value = random.randbytes(2000)
+        cql.execute(insert, [pk, value])
+
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+    async def finished_splitting():
+        # FIXME: fragile since it's expecting on-disk size will be enough to produce a few splits.
+        #   (raw_data=800k / target_size=30k) = ~26, lower power-of-two is 16. Compression was disabled.
+        #   Per-table hints (min_tablet_count) can be used to improve this.
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        return tablet_count >= 16 or None
+    # Give enough time for split to happen in debug mode
+    await wait_for(finished_splitting, time.time() + 120)
+
+    await check_logs("after split completion")
+
+    delete_keys = range(total_keys - 1)
+    await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
+    keys = range(total_keys - 1, total_keys)
+
+    old_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+
+    for server in servers:
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+    async def finished_merging():
+        tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+        return tablet_count < old_tablet_count or None
+    await wait_for(finished_merging, time.time() + 120)
+
+    await check_logs("after merge completion")
+
 # Reproduces use-after-free when migration right after merge, but concurrently to background
 # merge completion handler.
 # See: https://github.com/scylladb/scylladb/issues/24045
