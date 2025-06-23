@@ -1426,7 +1426,7 @@ public:
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
 class database_sstable_write_monitor : public permit_monitor, public backlog_write_progress_manager {
     sstables::shared_sstable _sst;
-    compaction::compaction_group_view& _ts;
+    compaction_group& _cg;
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
@@ -1435,7 +1435,7 @@ public:
         compaction_group& cg, api::timestamp_type max_timestamp)
             : permit_monitor(std::move(permit))
             , _sst(std::move(sst))
-            , _ts(cg.as_compaction_group_view())
+            , _cg(cg)
             , _maximum_timestamp(max_timestamp)
     {}
 
@@ -1446,13 +1446,13 @@ public:
         // We failed to finish handling this SSTable, so we have to update the backlog_tracker
         // about it.
         if (_sst) {
-            _ts.get_backlog_tracker().revert_charges(_sst);
+            _cg.get_backlog_tracker().revert_charges(_sst);
         }
     }
 
     virtual void on_write_started(const sstables::writer_offset_tracker& t) override {
         _tracker = &t;
-        _ts.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
+        _cg.get_backlog_tracker().register_partially_written_sstable(_sst, *this);
     }
 
     virtual void on_data_write_completed() override {
@@ -2216,7 +2216,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
             // Update strategy state and backlog tracker according to new strategy. SSTable set update
             // is delayed until new compaction, which is triggered on strategy change. SSTable set
             // cannot be updated here since it must happen under the set update lock.
-            t._compaction_manager.register_backlog_tracker(cg.as_compaction_group_view(), std::move(new_bt));
+            cg.register_backlog_tracker(std::move(new_bt));
             cg.set_compaction_strategy_state(std::move(new_cs_state));
         }
     };
@@ -2508,7 +2508,7 @@ public:
         return _t.get_compaction_manager().get_tombstone_gc_state();
     }
     compaction_backlog_tracker& get_backlog_tracker() override {
-        return _t._compaction_manager.get_backlog_tracker(*this);
+        return _cg.get_backlog_tracker();
     }
     const std::string get_group_id() const noexcept override {
         return fmt::format("{}", _cg.group_id());
@@ -2533,6 +2533,7 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _main_sstables(make_lw_shared<sstables::sstable_set>(make_main_sstable_set()))
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
+    , _backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
 {
     _t._compaction_manager.add(as_compaction_group_view());
 }
@@ -4035,7 +4036,12 @@ std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::to
 }
 
 compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
-    return as_compaction_group_view().get_backlog_tracker();
+    return *_backlog_tracker;
+}
+
+void compaction_group::register_backlog_tracker(compaction_backlog_tracker new_backlog_tracker) {
+    _backlog_tracker.emplace(std::move(new_backlog_tracker));
+    get_compaction_manager().register_backlog_tracker(*_backlog_tracker);
 }
 
 compaction_manager& compaction_group::get_compaction_manager() noexcept {
