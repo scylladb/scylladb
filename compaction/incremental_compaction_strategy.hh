@@ -70,7 +70,7 @@ private:
 
     bool is_any_bucket_interesting(const std::vector<std::vector<sstables::frozen_sstable_run>>& buckets, size_t min_threshold) const;
 
-    compaction_descriptor find_garbage_collection_job(const table_state& t, std::vector<size_bucket_t>& buckets);
+    compaction_descriptor find_garbage_collection_job(const compaction_group_view& t, std::vector<size_bucket_t>& buckets);
 
     static std::vector<shared_sstable> runs_to_sstables(std::vector<frozen_sstable_run> runs);
     static std::vector<frozen_sstable_run> sstables_to_runs(std::vector<shared_sstable> sstables);
@@ -82,13 +82,13 @@ public:
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& t, strategy_control& control) override;
+    virtual compaction_descriptor get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
 
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& t, std::vector<shared_sstable> candidates) const override;
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<shared_sstable> candidates) const override;
 
-    virtual compaction_descriptor get_major_compaction_job(table_state& t, std::vector<sstables::shared_sstable> candidates) override;
+    virtual compaction_descriptor get_major_compaction_job(compaction_group_view& t, std::vector<sstables::shared_sstable> candidates) override;
 
-    virtual int64_t estimated_pending_compactions(table_state& t) const override;
+    virtual int64_t estimated_pending_compactions(compaction_group_view& t) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::incremental;
@@ -98,7 +98,7 @@ public:
 
     virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
 
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const table_state& ts) const override;
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const override;
 
     friend class ::incremental_backlog_tracker;
 };

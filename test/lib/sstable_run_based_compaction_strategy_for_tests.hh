@@ -24,9 +24,9 @@ class sstable_run_based_compaction_strategy_for_tests : public compaction_strate
 public:
     sstable_run_based_compaction_strategy_for_tests();
 
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override;
+    virtual compaction_descriptor get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
-    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
+    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const override;
 
     virtual compaction_strategy_type type() const override;
 

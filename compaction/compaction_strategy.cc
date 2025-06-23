@@ -46,7 +46,7 @@ compaction_descriptor compaction_strategy_impl::make_major_compaction_job(std::v
     return compaction_descriptor(std::move(candidates), level, max_sstable_bytes);
 }
 
-std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
+std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
     // The default implementation is suboptimal and causes the writeamp problem described issue in #10097.
     // The compaction strategy relying on it should strive to implement its own method, to make cleanup bucket aware.
     return candidates | std::views::transform([] (const shared_sstable& sst) {
@@ -55,7 +55,7 @@ std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compact
     }) | std::ranges::to<std::vector>();
 }
 
-bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const table_state& t) {
+bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t) {
     if (_disable_tombstone_compaction) {
         return false;
     }
@@ -581,11 +581,11 @@ struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
 //
 class null_compaction_strategy : public compaction_strategy_impl {
 public:
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override {
+    virtual compaction_descriptor get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override {
         return sstables::compaction_descriptor();
     }
 
-    virtual int64_t estimated_pending_compactions(table_state& table_s) const override {
+    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const override {
         return 0;
     }
 
@@ -700,19 +700,19 @@ compaction_strategy_type compaction_strategy::type() const {
     return _compaction_strategy_impl->type();
 }
 
-compaction_descriptor compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+compaction_descriptor compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     return _compaction_strategy_impl->get_sstables_for_compaction(table_s, control);
 }
 
-compaction_descriptor compaction_strategy::get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+compaction_descriptor compaction_strategy::get_major_compaction_job(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) {
     return _compaction_strategy_impl->get_major_compaction_job(table_s, std::move(candidates));
 }
 
-std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
+std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
     return _compaction_strategy_impl->get_cleanup_compaction_jobs(table_s, std::move(candidates));
 }
 
-void compaction_strategy::notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
+void compaction_strategy::notify_completion(compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     _compaction_strategy_impl->notify_completion(table_s, removed, added);
 }
 
@@ -720,7 +720,7 @@ bool compaction_strategy::parallel_compaction() const {
     return _compaction_strategy_impl->parallel_compaction();
 }
 
-int64_t compaction_strategy::estimated_pending_compactions(table_state& table_s) const {
+int64_t compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     return _compaction_strategy_impl->estimated_pending_compactions(table_s);
 }
 
@@ -789,7 +789,7 @@ future<reshape_config> make_reshape_config(const sstables::storage& storage, res
     };
 }
 
-std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const table_state& ts) const {
+std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
     return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 

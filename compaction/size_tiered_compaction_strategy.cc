@@ -208,7 +208,7 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 }
 
 compaction_descriptor
-size_tiered_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+size_tiered_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = table_s.min_compaction_threshold();
     int max_threshold = table_s.schema()->max_compaction_threshold();
@@ -266,7 +266,7 @@ int64_t size_tiered_compaction_strategy::estimated_pending_compactions(const std
     return n;
 }
 
-int64_t size_tiered_compaction_strategy::estimated_pending_compactions(table_state& table_s) const {
+int64_t size_tiered_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     int min_threshold = table_s.min_compaction_threshold();
     int max_threshold = table_s.schema()->max_compaction_threshold();
     std::vector<sstables::shared_sstable> sstables;
@@ -337,7 +337,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 std::vector<compaction_descriptor>
-size_tiered_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
+size_tiered_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     const auto& schema = table_s.schema();
     unsigned max_threshold = schema->max_compaction_threshold();

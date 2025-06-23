@@ -1287,7 +1287,7 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
                 for (auto& [cf_name, schema] : ks.metadata()->cf_meta_data()) {
                     auto& t = db.find_column_family(schema->id());
                     constexpr bool exclude_current_version = false;
-                    co_await t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
+                    co_await t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) {
                         return cm.perform_sstable_upgrade(owned_ranges_ptr, ts, exclude_current_version, tasks::task_info{});
                     });
                 }
@@ -1403,7 +1403,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
             found = co_await db.invoke_on((shard + i) % smp::count, [] (replica::database& db) -> future<bool> {
                 auto& cf = db.find_column_family("ks", "cf");
                 bool found = false;
-                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
                     auto sstables = in_strategy_sstables(ts);
                     if (sstables.empty()) {
                         co_return;
@@ -1452,7 +1452,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
         for (unsigned i = 0; i < smp::count; i++) {
             co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
-                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
                     auto sstables = in_strategy_sstables(ts);
                     if (sstables.empty()) {
                         co_return;
@@ -1688,7 +1688,7 @@ SEASTAR_TEST_CASE(test_drop_quarantined_sstables) {
             [] (replica::database& _db) -> future<size_t> {
                 auto& cf = _db.find_column_family("ks", "cf");
                 std::atomic<size_t> quarantined_on_shard = 0;
-                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
                     auto sstables = in_strategy_sstables(ts);
                     if (sstables.empty()) {
                         co_return;

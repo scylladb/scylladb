@@ -43,25 +43,25 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
 private:
     int32_t calculate_max_sstable_size_in_mb(std::optional<sstring> option_value) const;
 
-    leveled_compaction_strategy_state& get_state(table_state& table_s) const;
+    leveled_compaction_strategy_state& get_state(compaction_group_view& table_s) const;
 public:
     static unsigned ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size);
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
     leveled_compaction_strategy(const std::map<sstring, sstring>& options);
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override;
+    virtual compaction_descriptor get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const override;
 
-    virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) override;
+    virtual compaction_descriptor get_major_compaction_job(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) override;
 
-    virtual void notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
+    virtual void notify_completion(compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) override;
 
     // for each level > 0, get newest sstable and use its last key as last
     // compacted key for the previous level.
     void generate_last_compacted_keys(leveled_compaction_strategy_state&, leveled_manifest& manifest);
 
-    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
+    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const override;
 
     virtual bool parallel_compaction() const override {
         return false;
@@ -70,7 +70,7 @@ public:
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::leveled;
     }
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const table_state& ts) const override;
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const override;
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
