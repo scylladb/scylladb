@@ -70,6 +70,7 @@ target_sources(utils
     azure/identity/azure_cli_credentials.cc
     azure/identity/default_credentials.cc
     gcp/gcp_credentials.cc
+    gcp/object_storage.cc
     )
 target_include_directories(utils
   PUBLIC
