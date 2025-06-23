@@ -208,6 +208,28 @@ future<> rest::send_request(std::string_view uri
     });
 }
 
+std::tuple<std::string, std::string, bool, uint16_t> rest::parse_simple_uri(std::string_view uri) {
+        // Extremely simplified URI parsing. Does not handle any params etc. But we do not expect such here.
+    static boost::regex simple_url(R"foo((https?):\/\/([^\/:]+)(:\d+)?(\/.*)?)foo");
+
+    boost::smatch m;
+    std::string tmp(uri);
+    if (!boost::regex_match(tmp, m, simple_url)) {
+        throw std::invalid_argument(fmt::format("Could not parse URI {}", uri));
+    }
+
+    auto scheme = m[1].str();
+    auto host = m[2].str();
+    auto port = m[3].str();
+    auto path = m[4].str();
+
+    bool https = scheme == "https";
+
+    uint16_t pi = port.empty() ? (https ? 443 : 80) : uint16_t(std::stoi(port.substr(1)));
+
+    return std::make_tuple(host, path, https, pi);
+}
+
 constexpr auto linesep = '\n';
 
 auto 

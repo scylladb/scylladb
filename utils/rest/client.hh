@@ -116,6 +116,9 @@ future<> send_request(std::string_view uri
     , key_values headers = {}
 );
 
+// Returns [<hostname>, <path>, https, port]
+std::tuple<std::string, std::string, bool, uint16_t> parse_simple_uri(std::string_view);
+
 }
 
 template <>
