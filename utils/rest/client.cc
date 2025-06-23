@@ -18,6 +18,41 @@
 
 using namespace seastar;
 
+rest::request_wrapper::request_wrapper(std::string_view host)
+    : _req(http::request::make(httpd::operation_type::GET, sstring(host), ""))
+{
+    _req._version = "1.1";
+}
+
+rest::request_wrapper::request_wrapper(request_wrapper&&) = default;
+
+rest::request_wrapper& rest::request_wrapper::add_header(std::string_view key, std::string_view value) {
+    _req._headers[sstring(key)] = sstring(value);
+    return *this;
+}
+
+void rest::request_wrapper::clear_headers() {
+    _req._headers.clear();
+}
+
+void rest::request_wrapper::method(method_type type) {
+    _req._method = httpd::type2str(type);
+}
+
+void rest::request_wrapper::content(std::string_view content) {
+    _req.content_length = content.size();
+    _req.content = sstring(content);
+}
+
+void rest::request_wrapper::content(body_writer w, size_t len) {
+    _req.content_length = len;
+    _req.body_writer = std::move(w);
+}
+
+void rest::request_wrapper::target(std::string_view s) {
+    _req._url = sstring(s);
+}
+
 static std::string default_server_name(const std::string& host) {
     // don't verify host cert name if "host" is just an ip address.
     // typically testing.
@@ -26,23 +61,12 @@ static std::string default_server_name(const std::string& host) {
 }
 
 rest::httpclient::httpclient(std::string host, uint16_t port, shared_ptr<tls::certificate_credentials> creds, std::optional<tls::tls_options> options)
-    : _host(std::move(host))
+    : request_wrapper(host)
+    , _host(std::move(host))
     , _port(port)
     , _creds(std::move(creds))
     , _tls_options(options.value_or(tls::tls_options{ .server_name = default_server_name(_host) }))
-    , _req(http::request::make(httpd::operation_type::GET, _host, ""))
-{
-    _req._version = "1.1";
-}
-
-rest::httpclient& rest::httpclient::add_header(std::string_view key, std::string_view value) {
-    _req._headers[sstring(key)] = sstring(value);
-    return *this;
-}
-
-void rest::httpclient::clear_headers() {
-    _req._headers.clear();
-}
+{}
 
 seastar::future<rest::httpclient::result_type> rest::httpclient::send() {
     result_type res;
@@ -82,21 +106,13 @@ seastar::future<> rest::httpclient::send(const handler_func& f) {
         }
     };
 
-    if (_req._url.empty()) {
-        _req._url = "/";
-    }
-    if (!_req._headers.count(CONTENT_TYPE_HEADER)) {
-        _req._headers[CONTENT_TYPE_HEADER] = "application/x-www-form-urlencoded";
-    }
-
     http::experimental::client client(std::make_unique<my_connection_factory>(socket_address(addr, _port), _creds, _tls_options, _host));
 
     std::exception_ptr p;
     try {
-        co_await client.make_request(std::move(_req), [&](const http::reply& rep, input_stream<char>&& in) -> future<> {
+        co_await simple_send(client, _req, [&](const seastar::http::reply& rep, seastar::input_stream<char>& in_stream) -> future<> {
             // ensure these are on our coroutine frame.
             auto& resp_handler = f;
-            auto in_stream = std::move(in);
             auto result = co_await util::read_entire_stream_contiguous(in_stream);
             resp_handler(rep, result);
         });
@@ -111,18 +127,22 @@ seastar::future<> rest::httpclient::send(const handler_func& f) {
     }
 }
 
-void rest::httpclient::method(method_type type) {
-    _req._method = httpd::type2str(type);
+seastar::future<> rest::simple_send(seastar::http::experimental::client& client, seastar::http::request& req, const handler_func_ex& f) {
+    if (req._url.empty()) {
+        req._url = "/";
+    }
+    if (!req._headers.count(httpclient::CONTENT_TYPE_HEADER)) {
+        req._headers[httpclient::CONTENT_TYPE_HEADER] = "application/x-www-form-urlencoded";
+    }
+
+    co_await client.make_request(std::move(req), [&](const http::reply& rep, input_stream<char>&& in) -> future<> {
+        // ensure these are on our coroutine frame.
+        auto& resp_handler = f;
+        auto in_stream = std::move(in);
+        co_await resp_handler(rep, in_stream);
+    });
 }
 
-void rest::httpclient::content(std::string_view content) {
-    _req.content_length = content.size();
-    _req.content = sstring(content);
-}
-
-void rest::httpclient::target(std::string_view s) {
-    _req._url = sstring(s);
-}
 
 rest::unexpected_status_error::unexpected_status_error(seastar::http::reply::status_type status, key_values headers)
     : httpd::unexpected_status_error(status)
