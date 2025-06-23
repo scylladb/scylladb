@@ -192,7 +192,7 @@ private:
     void deregister_weight(int weight);
 
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
-    std::vector<sstables::shared_sstable> get_candidates(compaction::compaction_group_view& t) const;
+    future<std::vector<sstables::shared_sstable>> get_candidates(compaction::compaction_group_view& t) const;
 
     bool eligible_for_compaction(const sstables::shared_sstable& sstable) const;
     bool eligible_for_compaction(const sstables::frozen_sstable_run& sstable_run) const;
@@ -638,4 +638,4 @@ struct fmt::formatter<compaction::compaction_task_executor> {
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges);
 
 // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
-std::vector<sstables::shared_sstable> in_strategy_sstables(compaction::compaction_group_view& table_s);
+future<std::vector<sstables::shared_sstable>> in_strategy_sstables(compaction::compaction_group_view& table_s);
