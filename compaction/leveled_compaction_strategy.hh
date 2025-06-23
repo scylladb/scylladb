@@ -61,7 +61,7 @@ public:
     // compacted key for the previous level.
     void generate_last_compacted_keys(leveled_compaction_strategy_state&, leveled_manifest& manifest);
 
-    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const override;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
 
     virtual bool parallel_compaction() const override {
         return false;

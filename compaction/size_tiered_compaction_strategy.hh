@@ -81,7 +81,7 @@ public:
 
     static int64_t estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
         int min_threshold, int max_threshold, size_tiered_compaction_strategy_options options);
-    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const override;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::size_tiered;
