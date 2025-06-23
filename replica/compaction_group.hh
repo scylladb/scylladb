@@ -60,6 +60,7 @@ class compaction_group {
     // Gates flushes.
     seastar::named_gate _flush_gate;
     bool _tombstone_gc_enabled = true;
+    std::optional<compaction_backlog_tracker> _backlog_tracker;
 private:
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
@@ -177,6 +178,7 @@ public:
     void trigger_compaction();
 
     compaction_backlog_tracker& get_backlog_tracker();
+    void register_backlog_tracker(compaction_backlog_tracker new_backlog_tracker);
 
     size_t live_sstable_count() const noexcept;
     uint64_t live_disk_space_used() const noexcept;
