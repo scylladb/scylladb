@@ -132,14 +132,14 @@ void leveled_compaction_strategy::generate_last_compacted_keys(leveled_compactio
     state.last_compacted_keys = std::move(last_compacted_keys);
 }
 
-int64_t leveled_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
+future<int64_t> leveled_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     std::vector<sstables::shared_sstable> sstables;
     auto all_sstables = table_s.main_sstable_set().all();
     sstables.reserve(all_sstables->size());
     for (auto& entry : *all_sstables) {
         sstables.push_back(entry);
     }
-    return leveled_manifest::get_estimated_tasks(leveled_manifest::get_levels(sstables), _max_sstable_size_in_mb * 1024 * 1024);
+    co_return leveled_manifest::get_estimated_tasks(leveled_manifest::get_levels(sstables), _max_sstable_size_in_mb * 1024 * 1024);
 }
 
 compaction_descriptor

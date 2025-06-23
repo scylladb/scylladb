@@ -144,7 +144,7 @@ public:
 private:
     friend class time_window_backlog_tracker;
 public:
-    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const override;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::time_window;

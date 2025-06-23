@@ -58,7 +58,7 @@ public:
     bool use_clustering_key_filter() const;
 
     // An estimation of number of compaction for strategy to be satisfied.
-    int64_t estimated_pending_compactions(compaction_group_view& table_s) const;
+    future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const;
 
     static sstring name(compaction_strategy_type type) {
         switch (type) {
