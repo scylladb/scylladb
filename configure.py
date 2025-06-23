@@ -537,6 +537,7 @@ scylla_tests = set([
     'test/boost/reusable_buffer_test',
     'test/boost/rust_test',
     'test/boost/s3_test',
+    'test/boost/gcp_object_storage_test',
     'test/boost/aws_errors_test',
     'test/boost/aws_error_injection_test',
     'test/boost/schema_changes_test',
