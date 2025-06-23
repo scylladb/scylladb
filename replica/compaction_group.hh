@@ -103,6 +103,8 @@ public:
         return _group_id;
     }
 
+    const schema_ptr& schema() const;
+
     // Stops all activity in the group, synchronizes with in-flight writes, before
     // flushing memtable(s), so all data can be found in the SSTable set.
     future<> stop(sstring reason) noexcept;
@@ -176,6 +178,8 @@ public:
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
     // Triggers regular compaction.
     void trigger_compaction();
+    bool compaction_disabled() const;
+    unsigned estimate_pending_compactions() const;
 
     compaction_backlog_tracker& get_backlog_tracker();
     void register_backlog_tracker(compaction_backlog_tracker new_backlog_tracker);
@@ -184,7 +188,14 @@ public:
     uint64_t live_disk_space_used() const noexcept;
     uint64_t total_disk_space_used() const noexcept;
 
-    compaction::compaction_group_view& as_compaction_group_view() const noexcept;
+    // With static sharding, i.e. vnodes, there will be only one active view.
+    compaction::compaction_group_view& as_view_for_static_sharding() const;
+    // Default view to be used on newly created sstables, e.g. those produced by repair or memtable.
+    compaction::compaction_group_view& view_for_unrepaired_data() const;
+    // Gets the view a sstable currently belongs to.
+    //  TODO: Add a filter for determining whether a sstable is repaired or not.
+    compaction::compaction_group_view& view_for_sstable(const sstables::shared_sstable& sst) const;
+    utils::small_vector<compaction::compaction_group_view*, 2> all_views() const;
 
     seastar::condition_variable& get_staging_done_condition() noexcept {
         return _staging_done_condition;
@@ -200,6 +211,8 @@ public:
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
+
+    future<> split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
 
     friend class storage_group;
 };
