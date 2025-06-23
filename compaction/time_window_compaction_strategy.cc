@@ -21,7 +21,7 @@ extern logging::logger clogger;
 
 using timestamp_type = api::timestamp_type;
 
-time_window_compaction_strategy_state& time_window_compaction_strategy::get_state(table_state& table_s) const {
+time_window_compaction_strategy_state& time_window_compaction_strategy::get_state(compaction_group_view& table_s) const {
     return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state>();
 }
 
@@ -333,7 +333,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     auto& state = get_state(table_s);
     auto compaction_time = gc_clock::now();
     auto candidates = control.candidates(table_s);
@@ -382,7 +382,7 @@ time_window_compaction_strategy::compaction_mode(const time_window_compaction_st
 }
 
 std::vector<shared_sstable>
-time_window_compaction_strategy::get_next_non_expired_sstables(table_state& table_s, strategy_control& control,
+time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control,
         std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time) {
     auto most_interesting = get_compaction_candidates(table_s, control, non_expiring_sstables);
 
@@ -409,7 +409,7 @@ time_window_compaction_strategy::get_next_non_expired_sstables(table_state& tabl
 }
 
 std::vector<shared_sstable>
-time_window_compaction_strategy::get_compaction_candidates(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables) {
+time_window_compaction_strategy::get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables) {
     auto& state = get_state(table_s);
     auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
@@ -463,7 +463,7 @@ struct fmt::formatter<std::map<sstables::timestamp_type, std::vector<sstables::s
 namespace sstables {
 
 std::vector<shared_sstable>
-time_window_compaction_strategy::newest_bucket(table_state& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
+time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
         int min_threshold, int max_threshold, timestamp_type now) {
     auto& state = get_state(table_s);
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
@@ -515,7 +515,7 @@ time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> b
     return bucket;
 }
 
-int64_t time_window_compaction_strategy::estimated_pending_compactions(table_state& table_s) const {
+int64_t time_window_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     auto& state = get_state(table_s);
     auto min_threshold = table_s.min_compaction_threshold();
     auto max_threshold = table_s.schema()->max_compaction_threshold();
@@ -539,7 +539,7 @@ int64_t time_window_compaction_strategy::estimated_pending_compactions(table_sta
 }
 
 std::vector<compaction_descriptor>
-time_window_compaction_strategy::get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const {
+time_window_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     for (auto&& [_, sstables] : get_buckets(std::move(candidates), _options).first) {
         auto per_window_jobs = size_tiered_compaction_strategy(_stcs_options).get_cleanup_compaction_jobs(table_s, std::move(sstables));

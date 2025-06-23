@@ -107,7 +107,7 @@ shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable>
 
 future<compaction_result> compact_sstables(test_env& env, sstables::compaction_descriptor descriptor, table_for_tests t,
                  std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer, can_purge_tombstones can_purge) {
-    auto& table_s = t.as_table_state();
+    auto& table_s = t.as_compaction_group_view();
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
     };
@@ -132,7 +132,7 @@ class compaction_manager_test_task : public compaction::compaction_task_executor
     gate::holder _hold;
 
 public:
-    compaction_manager_test_task(compaction_manager& cm, table_state& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
+    compaction_manager_test_task(compaction_manager& cm, compaction_group_view& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
         : compaction::compaction_task_executor(cm, throw_if_stopping::no, &table_s, sstables::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
@@ -148,7 +148,7 @@ protected:
     }
 };
 
-future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, table_state& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, compaction_group_view& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
     auto& tcm = env.test_compaction_manager();
     auto task = make_shared<compaction_manager_test_task>(tcm.get_compaction_manager(), table_s, output_run_id, std::move(job));
     co_await tcm.perform_compaction(std::move(task));

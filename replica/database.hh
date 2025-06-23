@@ -1298,11 +1298,11 @@ public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
 
-    compaction::table_state& try_get_table_state_with_static_sharding() const;
+    compaction::compaction_group_view& try_get_compaction_group_view_with_static_sharding() const;
     // Safely iterate through table states, while performing async operations on them.
-    future<> parallel_foreach_table_state(std::function<future<>(compaction::table_state&)> action);
-    compaction::table_state& table_state_for_sstable(const sstables::shared_sstable& sst) const noexcept {
-        return compaction_group_for_sstable(sst).as_table_state();
+    future<> parallel_foreach_compaction_group_view(std::function<future<>(compaction::compaction_group_view&)> action);
+    compaction::compaction_group_view& compaction_group_view_for_sstable(const sstables::shared_sstable& sst) const noexcept {
+        return compaction_group_for_sstable(sst).as_compaction_group_view();
     }
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
