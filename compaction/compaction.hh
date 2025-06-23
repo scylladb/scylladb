@@ -16,7 +16,7 @@
 #include "mutation/mutation_tombstone_stats.hh"
 #include "gc_clock.hh"
 #include "utils/UUID.hh"
-#include "table_state.hh"
+#include "compaction_group_view.hh"
 #include <seastar/core/abort_source.hh>
 #include "sstables/basic_info.hh"
 
@@ -123,7 +123,7 @@ public:
     uint64_t get_progress() const;
 
     friend class compaction;
-    friend future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor, compaction_data&, table_state&, compaction_progress_monitor&);
+    friend future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&);
 };
 
 // Compact a list of N sstables into M sstables.
@@ -131,7 +131,7 @@ public:
 //
 // compaction_descriptor is responsible for specifying the type of compaction, and influencing
 // compaction behavior through its available member fields.
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, table_state& table_s, compaction_progress_monitor& progress_monitor);
+future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor);
 
 // Return list of expired sstables for column family cf.
 // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its
@@ -139,7 +139,7 @@ future<compaction_result> compact_sstables(sstables::compaction_descriptor descr
 // In simpler words, a sstable is fully expired if all of its live cells with TTL is expired
 // and possibly doesn't contain any tombstone that covers cells in other sstables.
 std::unordered_set<sstables::shared_sstable>
-get_fully_expired_sstables(const table_state& table_s, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
+get_fully_expired_sstables(const compaction_group_view& table_s, const std::vector<sstables::shared_sstable>& compacting, gc_clock::time_point gc_before);
 
 // For tests, can drop after we virtualize sstables.
 mutation_reader make_scrubbing_reader(mutation_reader rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors);
