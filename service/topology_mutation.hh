@@ -46,6 +46,7 @@ protected:
     Builder& apply_set(const char* cell, collection_apply_mode apply_mode, const C& c);
     Builder& set(const char* cell, node_state value);
     Builder& set(const char* cell, topology_request value);
+    Builder& set(const char* cell, global_topology_request value);
     Builder& set(const char* cell, const sstring& value);
     Builder& set(const char* cell, const raft::server_id& value);
     Builder& set(const char* cell, const uint32_t& value);
@@ -126,6 +127,8 @@ public:
     topology_mutation_builder& del_session();
     topology_mutation_builder& del_global_topology_request();
     topology_mutation_builder& del_global_topology_request_id();
+    topology_mutation_builder& queue_global_topology_request_id(const utils::UUID& value);
+    topology_mutation_builder& drop_first_global_topology_request_id(const std::vector<utils::UUID>&, utils::UUID&);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -149,8 +152,11 @@ public:
     using builder_base::set;
     using builder_base::del;
     topology_request_tracking_mutation_builder& set(const char* cell, topology_request value);
+    topology_request_tracking_mutation_builder& set(const char* cell, global_topology_request value);
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
+    topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
+
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
 

@@ -668,6 +668,7 @@ CREATE TABLE system.topology (
     new_cdc_generation_data_uuid timeuuid static,
     new_keyspace_rf_change_ks_name text static,
     new_keyspace_rf_change_data frozen<map<text, text>> static,
+    global_requests set<timeuuid_type> static,
     PRIMARY KEY (key, host_id)
 )
 ```
@@ -701,6 +702,8 @@ There are also a few static columns for cluster-global properties:
 - `upgrade_state` - describes the progress of the upgrade to raft-based topology.
 - `new_keyspace_rf_change_ks_name` - the name of the KS that is being the target of the scheduled ALTER KS statement
 - `new_keyspace_rf_change_data` - the KS options to be used when executing the scheduled ALTER KS statement
+- `global_requests` - contains a list of ids of pending global requests, the information about requests (type and parameters)
+                      can be obtained from topology_requests table by using request's id as a look up key.
 
 # Join procedure
 
