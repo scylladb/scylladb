@@ -3860,23 +3860,27 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
             return m;
         };
 
-        const auto keys = tests::generate_partition_keys(3, s);
+        const auto keys = tests::generate_partition_keys(4, s);
         const auto& alpha = keys[0];
         const auto& beta = keys[1];
         const auto& gamma = keys[2];
+        const auto& zetta = keys[3];
 
         auto ttl = 5;
 
         auto mut1 = make_insert(alpha);
         auto mut2 = make_insert(beta);
         auto mut3 = make_insert(gamma);
+        auto mut4 = make_insert(zetta);
         auto mut1_deletion = make_delete(alpha);
 
         auto non_expired_sst = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
+        auto non_expired_sst_2 = make_sstable_containing(sst_gen, {mut4});
         auto expired_sst = make_sstable_containing(sst_gen, {mut1_deletion});
 
         std::vector<shared_sstable> sstables = {
                 non_expired_sst,
+                non_expired_sst_2,
                 expired_sst,
         };
 
@@ -3924,7 +3928,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         // That needs to happen after fragments were inserted into sstable_set, as they'll placed into different runs due to detected overlapping.
         auto run_id = sstables::run_id::create_random_id();
         sstables::test(non_expired_sst).set_run_identifier(run_id);
-        sstables::test(expired_sst).set_run_identifier(run_id);
+        sstables::test(non_expired_sst_2).set_run_identifier(run_id);
 
         bool swallowed = false;
         try {
