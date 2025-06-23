@@ -19,6 +19,9 @@
 
 namespace compaction {
 
+// There's 1:1 relationship between compaction_grop_view and compaction_state.
+// Two or more compaction_group_view can be served by the same instance of sstable::sstable_set,
+// so it's not safe to track any sstable state here.
 struct compaction_state {
     // Used both by compaction tasks that refer to the compaction_state
     // and by any function running under run_with_compaction_disabled().
@@ -33,8 +36,7 @@ struct compaction_state {
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 
-    std::optional<compaction_backlog_tracker> backlog_tracker;
-
+    // Used only with vnodes, will not work with tablets. Can be removed once vnodes are gone.
     std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
     compaction::owned_ranges_ptr owned_ranges_ptr;
 

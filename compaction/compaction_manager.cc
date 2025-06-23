@@ -2200,7 +2200,6 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
 
 compaction::compaction_state::compaction_state(compaction_group_view& t)
     : gate(format("compaction_state for table {}.{}", t.schema()->ks_name(), t.schema()->cf_name()))
-    , backlog_tracker(t.get_compaction_strategy().make_backlog_tracker())
 {
 }
 
@@ -2213,8 +2212,8 @@ void compaction_manager::add(compaction_group_view& t) {
 
 future<> compaction_manager::remove(compaction_group_view& t, sstring reason) noexcept {
     auto& c_state = get_compaction_state(&t);
-    auto erase_state = defer([&t, &c_state, this] () noexcept {
-       c_state.backlog_tracker->disable();
+    auto erase_state = defer([&t, this] () noexcept {
+       t.get_backlog_tracker().disable();
        _compaction_state.erase(&t);
     });
 
@@ -2448,13 +2447,6 @@ compaction_backlog_manager::~compaction_backlog_manager() {
     }
 }
 
-void compaction_manager::register_backlog_tracker(compaction_group_view& t, compaction_backlog_tracker new_backlog_tracker) {
-    auto& cs = get_compaction_state(&t);
-    cs.backlog_tracker.emplace(std::move(new_backlog_tracker));
-    register_backlog_tracker(*cs.backlog_tracker);
-}
-
 compaction_backlog_tracker& compaction_manager::get_backlog_tracker(compaction_group_view& t) {
-    auto& cs = get_compaction_state(&t);
-    return *cs.backlog_tracker;
+    return t.get_backlog_tracker();
 }
