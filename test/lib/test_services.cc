@@ -170,6 +170,12 @@ void table_for_tests::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexce
     _data->cf->set_tombstone_gc_enabled(tombstone_gc_enabled);
 }
 
+void table_for_tests::set_repair_sstable_classifier(replica::repair_classifier_func repair_sstable_classifier) {
+    _data->cf->for_each_compaction_group([&] (replica::compaction_group& cg) {
+        cg.set_repair_sstable_classifier(repair_sstable_classifier);
+    });
+}
+
 namespace sstables {
 
 std::vector<db::object_storage_endpoint_param> make_storage_options_config(const data_dictionary::storage_options& so) {
