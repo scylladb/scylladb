@@ -2467,11 +2467,11 @@ public:
     bool compaction_enforce_min_threshold() const noexcept override {
         return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
     }
-    const sstables::sstable_set& main_sstable_set() const override {
-        return *_cg.main_sstables();
+    future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
+        co_return _cg.main_sstables();
     }
-    const sstables::sstable_set& maintenance_sstable_set() const override {
-        return *_cg.maintenance_sstables();
+    future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
+        co_return _cg.maintenance_sstables();
     }
     lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
         return _t.sstable_set_for_tombstone_gc(_cg);

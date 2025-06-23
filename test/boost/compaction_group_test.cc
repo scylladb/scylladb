@@ -101,9 +101,9 @@ public:
     virtual const schema_ptr& schema() const noexcept override { return _schema; }
     virtual unsigned min_compaction_threshold() const noexcept override { return _schema->min_compaction_threshold(); }
     virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
-    virtual const sstables::sstable_set& main_sstable_set() const override { return _main_set; }
-    virtual const sstables::sstable_set& maintenance_sstable_set() const override { return _maintenance_set; }
-    virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override { return make_lw_shared<const sstables::sstable_set>(main_sstable_set()); }
+    virtual future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_main_set); }
+    virtual future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_maintenance_set); }
+    virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override { return make_lw_shared<const sstables::sstable_set>(_main_set); }
     virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const override { return {}; }
     virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override { return _compacted_undeleted_sstables; }
     virtual sstables::compaction_strategy& get_compaction_strategy() const noexcept override { return _compaction_strategy; }
@@ -164,8 +164,8 @@ SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
             auto ret = cm.perform_split_compaction(*compaction_group, sstables::compaction_type_options::split{classifier}, tasks::task_info{}).get();
             BOOST_REQUIRE_EQUAL(ret->start_size, expected_compaction_size);
 
-            BOOST_REQUIRE(compaction_group->main_sstable_set().size() == expected_output);
-            compaction_group->main_sstable_set().for_each_sstable([&] (const sstables::shared_sstable& sst) {
+            BOOST_REQUIRE(compaction_group->main_sstable_set().get()->size() == expected_output);
+            compaction_group->main_sstable_set().get()->for_each_sstable([&] (const sstables::shared_sstable& sst) {
                 BOOST_REQUIRE(!sstable_needs_split(sst));
                 validate(sst);
             });

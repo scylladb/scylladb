@@ -1404,7 +1404,7 @@ SEASTAR_TEST_CASE(populate_from_quarantine_works) {
                 auto& cf = db.find_column_family("ks", "cf");
                 bool found = false;
                 co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
-                    auto sstables = in_strategy_sstables(ts);
+                    auto sstables = co_await in_strategy_sstables(ts);
                     if (sstables.empty()) {
                         co_return;
                     }
@@ -1453,7 +1453,7 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
             co_await db.invoke_on((shard + i) % smp::count, [&] (replica::database& db) -> future<> {
                 auto& cf = db.find_column_family("ks", "cf");
                 co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
-                    auto sstables = in_strategy_sstables(ts);
+                    auto sstables = co_await in_strategy_sstables(ts);
                     if (sstables.empty()) {
                         co_return;
                     }
@@ -1689,7 +1689,7 @@ SEASTAR_TEST_CASE(test_drop_quarantined_sstables) {
                 auto& cf = _db.find_column_family("ks", "cf");
                 std::atomic<size_t> quarantined_on_shard = 0;
                 co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
-                    auto sstables = in_strategy_sstables(ts);
+                    auto sstables = co_await in_strategy_sstables(ts);
                     if (sstables.empty()) {
                         co_return;
                     }

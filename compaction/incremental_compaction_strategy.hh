@@ -82,7 +82,7 @@ public:
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
-    virtual compaction_descriptor get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
+    virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
 
     virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<shared_sstable> candidates) const override;
 

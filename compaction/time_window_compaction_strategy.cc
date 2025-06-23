@@ -332,14 +332,14 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
     return compaction_descriptor();
 }
 
-compaction_descriptor
+future<compaction_descriptor>
 time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     auto& state = get_state(table_s);
     auto compaction_time = gc_clock::now();
-    auto candidates = control.candidates(table_s);
+    auto candidates = co_await control.candidates(table_s);
 
     if (candidates.empty()) {
-        return compaction_descriptor();
+        co_return compaction_descriptor();
     }
 
     auto now = db_clock::now();
@@ -350,7 +350,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         auto expired = table_s.fully_expired_sstables(candidates, compaction_time);
         if (!expired.empty()) {
             clogger.debug("[{}] Going to compact {} expired sstables", fmt::ptr(this), expired.size());
-            return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()));
+            co_return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()));
         }
         // Keep checking for fully_expired_sstables until we don't find
         // any among the candidates, meaning they are either already compacted
@@ -362,7 +362,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time);
     clogger.debug("[{}] Going to compact {} non-expired sstables", fmt::ptr(this), compaction_candidates.size());
-    return compaction_descriptor(std::move(compaction_candidates));
+    co_return compaction_descriptor(std::move(compaction_candidates));
 }
 
 time_window_compaction_strategy::bucket_compaction_mode
@@ -519,7 +519,8 @@ future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(c
     auto& state = get_state(table_s);
     auto min_threshold = table_s.min_compaction_threshold();
     auto max_threshold = table_s.schema()->max_compaction_threshold();
-    auto candidate_sstables = *table_s.main_sstable_set().all() | std::ranges::to<std::vector>();
+    auto main_set = co_await table_s.main_sstable_set();
+    auto candidate_sstables = *main_set->all() | std::ranges::to<std::vector>();
     auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
 
     int64_t n = 0;

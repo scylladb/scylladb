@@ -113,7 +113,7 @@ future<compaction_result> compact_sstables(test_env& env, sstables::compaction_d
     };
     descriptor.replacer = std::move(replacer);
     if (can_purge) {
-        descriptor.enable_garbage_collection(table_s.main_sstable_set());
+        descriptor.enable_garbage_collection(*co_await table_s.main_sstable_set());
     }
     sstables::compaction_result ret;
     co_await run_compaction_task(env, descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
