@@ -67,4 +67,5 @@ struct table_for_tests {
     future<> stop();
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
+    void set_repair_sstable_classifier(replica::repair_classifier_func repair_sstable_classifier);
 };

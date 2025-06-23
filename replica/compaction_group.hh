@@ -242,6 +242,10 @@ public:
 
     future<> split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
 
+    void set_repair_sstable_classifier(repair_classifier_func repair_sstable_classifier) {
+        _repair_sstable_classifier = std::move(repair_sstable_classifier);
+    }
+
     friend class storage_group;
 };
 
