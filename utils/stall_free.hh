@@ -100,6 +100,11 @@ concept Container = Iterable<T> && requires (T x, typename T::iterator it) {
 };
 
 template <typename T>
+concept Extractable = Iterable<T> && requires (T x, typename T::iterator it) {
+    x.extract(it);
+};
+
+template <typename T>
 concept MapLike = Container<T> && requires (T x) {
     std::is_same_v<typename T::value_type, std::pair<const typename T::key_type, typename T::mapped_type>>;
 };
@@ -130,8 +135,12 @@ future<> clear_gently(T& v) noexcept;
 template <MapLike T>
 future<> clear_gently(T& c) noexcept;
 
-template <Container T>
+template <Extractable T>
 requires (!StringLike<T> && !Sequence<T> && !MapLike<T>)
+future<> clear_gently(T& c) noexcept;
+
+template <Container T>
+requires (!StringLike<T> && !Sequence<T> && !MapLike<T> && !Extractable<T>)
 future<> clear_gently(T& c) noexcept;
 
 template <typename T>
@@ -241,8 +250,17 @@ future<> clear_gently(T& c) noexcept {
     });
 }
 
-template <Container T>
+template <Extractable T>
 requires (!StringLike<T> && !Sequence<T> && !MapLike<T>)
+future<> clear_gently(T& c) noexcept {
+    return do_until([&c] { return c.empty(); }, [&c] {
+        auto node = c.extract(c.begin());
+        return internal::clear_gently(node.value()).finally([node = std::move(node)] {});
+    });
+}
+
+template <Container T>
+requires (!StringLike<T> && !Sequence<T> && !MapLike<T> && !Extractable<T>)
 future<> clear_gently(T& c) noexcept {
     return do_until([&c] { return c.empty(); }, [&c] {
         auto it = c.begin();

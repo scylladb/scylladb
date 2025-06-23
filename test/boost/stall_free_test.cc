@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <compare>
 #include <random>
+#include <set>
+#include <unordered_set>
 
 #include "test/lib/scylla_test_case.hh"
 #include "utils/stall_free.hh"
@@ -78,6 +81,12 @@ struct clear_gently_tracker {
         }
         return *this;
     }
+    bool operator==(const clear_gently_tracker& o) const noexcept {
+        return ptr() == o.ptr();
+    }
+    std::strong_ordering operator<=>(const clear_gently_tracker& o) const noexcept {
+        return uintptr_t(ptr()) <=> uintptr_t(o.ptr());
+    }
     future<> clear_gently() noexcept {
         on_clear(*v);
         v.reset();
@@ -86,7 +95,19 @@ struct clear_gently_tracker {
     operator bool() const noexcept {
         return bool(v);
     }
+    const T* ptr() const noexcept {
+        return v.get();
+    }
 };
+
+namespace std {
+    template <typename T>
+    struct hash<clear_gently_tracker<T>> {
+        size_t operator()(const clear_gently_tracker<T>& t) const noexcept {
+            return std::hash<uintptr_t>()(uintptr_t(t.ptr()));
+        }
+    };
+} // namespace std
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_non_trivial_unique_ptr) {
     int cleared_gently = 0;
@@ -396,6 +417,38 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_unordered_map_object) {
 
     utils::clear_gently(v).get();
     BOOST_CHECK(v.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_clear_gently_set_object) {
+    constexpr int count = 100;
+    std::set<clear_gently_tracker<int>> s;
+    int cleared_gently = 0;
+    auto tracker = [&cleared_gently] (int) { cleared_gently++; };
+
+    for (int i = 0; i < count; i++) {
+        s.insert(clear_gently_tracker<int>(i, tracker));
+    }
+    BOOST_REQUIRE_EQUAL(s.size(), count);
+
+    utils::clear_gently(s).get();
+    BOOST_CHECK(s.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_clear_gently_unordered_set_object) {
+    constexpr int count = 100;
+    std::unordered_set<clear_gently_tracker<int>> s;
+    int cleared_gently = 0;
+    auto tracker = [&cleared_gently] (int) { cleared_gently++; };
+
+    for (int i = 0; i < count; i++) {
+        s.insert(clear_gently_tracker<int>(i, tracker));
+    }
+    BOOST_REQUIRE_EQUAL(s.size(), count);
+
+    utils::clear_gently(s).get();
+    BOOST_CHECK(s.empty());
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 }
 
