@@ -35,7 +35,7 @@
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
 #include "compaction/compaction_manager.hh"
-#include "compaction/table_state.hh"
+#include "compaction/compaction_group_view.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
@@ -551,7 +551,7 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() co
 }
 
 sstables::sstable_set compaction_group::make_main_sstable_set() const {
-    return _t._compaction_strategy.make_sstable_set(as_table_state());
+    return _t._compaction_strategy.make_sstable_set(as_compaction_group_view());
 }
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
@@ -891,7 +891,7 @@ bool table::uses_tablets() const {
 
 storage_group::storage_group(compaction_group_ptr cg)
         : _main_cg(cg)
-        , _async_gate(format("[storage_group {}.{} {}]", cg->as_table_state().schema()->ks_name(), cg->as_table_state().schema()->cf_name(), cg->group_id()))
+        , _async_gate(format("[storage_group {}.{} {}]", cg->as_compaction_group_view().schema()->ks_name(), cg->as_compaction_group_view().schema()->cf_name(), cg->group_id()))
 {
 }
 
@@ -1011,8 +1011,8 @@ future<> storage_group::split(sstables::compaction_type_options::split opt, task
         auto holder = cg->async_gate().hold();
         co_await cg->flush();
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
-        co_await cg->get_compaction_manager().perform_offstrategy(_main_cg->as_table_state(), tablet_split_task_info);
-        co_await cg->get_compaction_manager().perform_split_compaction(_main_cg->as_table_state(), std::move(opt), tablet_split_task_info);
+        co_await cg->get_compaction_manager().perform_offstrategy(_main_cg->as_compaction_group_view(), tablet_split_task_info);
+        co_await cg->get_compaction_manager().perform_split_compaction(_main_cg->as_compaction_group_view(), std::move(opt), tablet_split_task_info);
     }
 }
 
@@ -1116,7 +1116,7 @@ tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable
 
     auto& cg = compaction_group_for_sstable(sst);
     auto holder = cg.async_gate().hold();
-    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, cg.as_table_state(), split_compaction_options());
+    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, cg.as_compaction_group_view(), split_compaction_options());
 }
 
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
@@ -1431,7 +1431,7 @@ public:
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
 class database_sstable_write_monitor : public permit_monitor, public backlog_write_progress_manager {
     sstables::shared_sstable _sst;
-    compaction::table_state& _ts;
+    compaction::compaction_group_view& _ts;
     const sstables::writer_offset_tracker* _tracker = nullptr;
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
@@ -1440,7 +1440,7 @@ public:
         compaction_group& cg, api::timestamp_type max_timestamp)
             : permit_monitor(std::move(permit))
             , _sst(std::move(sst))
-            , _ts(cg.as_table_state())
+            , _ts(cg.as_compaction_group_view())
             , _maximum_timestamp(max_timestamp)
     {}
 
@@ -1643,7 +1643,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         auto estimated_partitions = _compaction_strategy.adjust_partition_estimate(metadata, old->partition_count(), _schema);
 
         if (!cg.async_gate().is_closed()) {
-            co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_table_state());
+            co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.as_compaction_group_view());
         }
 
         auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
@@ -2109,7 +2109,7 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
     co_await perform_offstrategy_compaction(info);
     co_await parallel_foreach_compaction_group([this, info, consider_only_existing_data] (compaction_group& cg) {
-        return _compaction_manager.perform_major_compaction(cg.as_table_state(), info, consider_only_existing_data);
+        return _compaction_manager.perform_major_compaction(cg.as_compaction_group_view(), info, consider_only_existing_data);
     });
 }
 
@@ -2134,7 +2134,7 @@ void table::try_trigger_compaction(compaction_group& cg) noexcept {
 void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
     if (!_async_gate.is_closed()) {
-        _t._compaction_manager.submit(as_table_state());
+        _t._compaction_manager.submit(as_compaction_group_view());
     }
 }
 
@@ -2156,7 +2156,7 @@ future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
     _off_strategy_trigger.cancel();
     bool performed = false;
     co_await parallel_foreach_compaction_group([this, &performed, info] (compaction_group& cg) -> future<> {
-        performed |= co_await _compaction_manager.perform_offstrategy(cg.as_table_state(), info);
+        performed |= co_await _compaction_manager.perform_offstrategy(cg.as_compaction_group_view(), info);
     });
     co_return performed;
 }
@@ -2173,13 +2173,13 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
         co_await flush();
     }
 
-    co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_table_state(), info);
+    co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_compaction_group_view(), info);
 }
 
 unsigned table::estimate_pending_compactions() const {
     unsigned ret = 0;
     for_each_compaction_group([this, &ret] (const compaction_group& cg) {
-        ret += _compaction_strategy.estimated_pending_compactions(cg.as_table_state());
+        ret += _compaction_strategy.estimated_pending_compactions(cg.as_compaction_group_view());
     });
     return ret;
 }
@@ -2221,7 +2221,7 @@ void table::set_compaction_strategy(sstables::compaction_strategy_type strategy)
             // Update strategy state and backlog tracker according to new strategy. SSTable set update
             // is delayed until new compaction, which is triggered on strategy change. SSTable set
             // cannot be updated here since it must happen under the set update lock.
-            t._compaction_manager.register_backlog_tracker(cg.as_table_state(), std::move(new_bt));
+            t._compaction_manager.register_backlog_tracker(cg.as_compaction_group_view(), std::move(new_bt));
             cg.set_compaction_strategy_state(std::move(new_cs_state));
         }
     };
@@ -2340,11 +2340,11 @@ table::make_memtable_list(compaction_group& cg) {
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group);
 }
 
-class compaction_group::table_state : public compaction::table_state {
+class compaction_group::compaction_group_view : public compaction::compaction_group_view {
     table& _t;
     compaction_group& _cg;
 public:
-    explicit table_state(table& t, compaction_group& cg) : _t(t), _cg(cg) {}
+    explicit compaction_group_view(table& t, compaction_group& cg) : _t(t), _cg(cg) {}
 
     dht::token_range token_range() const noexcept override {
         return _cg.token_range();
@@ -2447,7 +2447,7 @@ public:
 
 compaction_group::compaction_group(table& t, size_t group_id, dht::token_range token_range)
     : _t(t)
-    , _table_state(std::make_unique<table_state>(t, *this))
+    , _compaction_group_view(std::make_unique<compaction_group_view>(t, *this))
     , _group_id(group_id)
     , _token_range(std::move(token_range))
     , _compaction_strategy_state(compaction::compaction_strategy_state::make(_t._compaction_strategy))
@@ -2456,12 +2456,12 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
 {
-    _t._compaction_manager.add(as_table_state());
+    _t._compaction_manager.add(as_compaction_group_view());
 }
 
 compaction_group::~compaction_group() {
     // Unclosed group is not tolerated since it might result in an use-after-free.
-    if (!_t._compaction_manager.compaction_disabled(as_table_state())) {
+    if (!_t._compaction_manager.compaction_disabled(as_compaction_group_view())) {
         on_fatal_internal_error(tlogger, format("Compaction group of id {} that belongs to {}.{} was not disabled.",
                                                 _group_id, _t.schema()->ks_name(), _t.schema()->cf_name()));
     }
@@ -2472,11 +2472,11 @@ future<> compaction_group::stop(sstring reason) noexcept {
         co_return;
     }
 
-    co_await _t._compaction_manager.stop_ongoing_compactions(reason, &as_table_state());
+    co_await _t._compaction_manager.stop_ongoing_compactions(reason, &as_compaction_group_view());
     co_await _async_gate.close();
     auto flush_future = co_await seastar::coroutine::as_future(flush());
     co_await _flush_gate.close();
-    co_await _t._compaction_manager.remove(as_table_state(), reason);
+    co_await _t._compaction_manager.remove(as_compaction_group_view(), reason);
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
@@ -3181,7 +3181,7 @@ future<> table::clear() {
 
 bool storage_group::compaction_disabled() const {
     return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
-        return cg->get_compaction_manager().compaction_disabled(cg->as_table_state()); });
+        return cg->get_compaction_manager().compaction_disabled(cg->as_compaction_group_view()); });
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
@@ -3754,7 +3754,7 @@ table::disable_auto_compaction() {
     _compaction_disabled_by_user = true;
     return with_gate(_async_gate, [this] {
         return parallel_foreach_compaction_group([this] (compaction_group& cg) {
-            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &cg.as_table_state(), sstables::compaction_type::Compaction);
+            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &cg.as_compaction_group_view(), sstables::compaction_type::Compaction);
         });
     });
 }
@@ -3801,7 +3801,7 @@ future<> table::move_sstables_from_staging(std::vector<sstables::shared_sstable>
             // from stepping on each other's toe.
             co_await sst->change_state(sstables::sstable_state::normal, &delay_commit);
             auto& cg = compaction_group_for_sstable(sst);
-            if (get_compaction_manager().requires_cleanup(cg.as_table_state(), sst)) {
+            if (get_compaction_manager().requires_cleanup(cg.as_compaction_group_view(), sst)) {
                 compaction_groups_to_notify.insert(&cg);
             }
             // If view building finished faster, SSTable with repair origin still exists.
@@ -3957,7 +3957,7 @@ std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::to
 }
 
 compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
-    return as_table_state().get_backlog_tracker();
+    return as_compaction_group_view().get_backlog_tracker();
 }
 
 compaction_manager& compaction_group::get_compaction_manager() noexcept {
@@ -3968,8 +3968,8 @@ const compaction_manager& compaction_group::get_compaction_manager() const noexc
     return _t.get_compaction_manager();
 }
 
-compaction::table_state& compaction_group::as_table_state() const noexcept {
-    return *_table_state;
+compaction::compaction_group_view& compaction_group::as_compaction_group_view() const noexcept {
+    return *_compaction_group_view;
 }
 
 compaction_group* table::try_get_compaction_group_with_static_sharding() const {
@@ -3979,17 +3979,17 @@ compaction_group* table::try_get_compaction_group_with_static_sharding() const {
     return get_compaction_group(0);
 }
 
-compaction::table_state& table::try_get_table_state_with_static_sharding() const {
+compaction::compaction_group_view& table::try_get_compaction_group_view_with_static_sharding() const {
     auto* cg = try_get_compaction_group_with_static_sharding();
     if (!cg) {
         throw std::runtime_error("Getting table state is allowed only with static sharding");
     }
-    return cg->as_table_state();
+    return cg->as_compaction_group_view();
 }
 
-future<> table::parallel_foreach_table_state(std::function<future<>(table_state&)> action) {
+future<> table::parallel_foreach_compaction_group_view(std::function<future<>(compaction_group_view&)> action) {
     return parallel_foreach_compaction_group([action = std::move(action)] (compaction_group& cg) -> future<> {
-       return action(cg.as_table_state());
+       return action(cg.as_compaction_group_view());
     });
 }
 
@@ -4001,18 +4001,18 @@ table::as_data_dictionary() const {
 
 bool table::erase_sstable_cleanup_state(const sstables::shared_sstable& sst) {
     auto& cg = compaction_group_for_sstable(sst);
-    return get_compaction_manager().erase_sstable_cleanup_state(cg.as_table_state(), sst);
+    return get_compaction_manager().erase_sstable_cleanup_state(cg.as_compaction_group_view(), sst);
 }
 
 bool table::requires_cleanup(const sstables::shared_sstable& sst) const {
     auto& cg = compaction_group_for_sstable(sst);
-    return get_compaction_manager().requires_cleanup(cg.as_table_state(), sst);
+    return get_compaction_manager().requires_cleanup(cg.as_compaction_group_view(), sst);
 }
 
 bool table::requires_cleanup(const sstables::sstable_set& set) const {
     return bool(set.for_each_sstable_until([this] (const sstables::shared_sstable &sst) {
         auto& cg = compaction_group_for_sstable(sst);
-        return stop_iteration(_compaction_manager.requires_cleanup(cg.as_table_state(), sst));
+        return stop_iteration(_compaction_manager.requires_cleanup(cg.as_compaction_group_view(), sst));
     }));
 }
 

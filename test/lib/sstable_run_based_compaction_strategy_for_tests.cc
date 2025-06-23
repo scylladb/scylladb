@@ -14,7 +14,7 @@ namespace sstables {
 
 sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_strategy_for_tests() = default;
 
-compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(table_state& table_s, strategy_control& control) {
+compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     // Get unique runs from all uncompacting sstables
     std::vector<frozen_sstable_run> runs = table_s.main_sstable_set().all_sstable_runs();
 
@@ -48,7 +48,7 @@ compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstab
     return sstables::compaction_descriptor();
 }
 
-int64_t sstable_run_based_compaction_strategy_for_tests::estimated_pending_compactions(table_state& table_s) const {
+int64_t sstable_run_based_compaction_strategy_for_tests::estimated_pending_compactions(compaction_group_view& table_s) const {
     throw std::runtime_error("unimplemented");
 }
 

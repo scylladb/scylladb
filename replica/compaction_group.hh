@@ -38,8 +38,8 @@ using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 //          isolated from other groups.
 class compaction_group {
     table& _t;
-    class table_state;
-    std::unique_ptr<table_state> _table_state;
+    class compaction_group_view;
+    std::unique_ptr<compaction_group_view> _compaction_group_view;
     size_t _group_id;
     // Tokens included in this compaction_groups
     dht::token_range _token_range;
@@ -182,7 +182,7 @@ public:
     uint64_t live_disk_space_used() const noexcept;
     uint64_t total_disk_space_used() const noexcept;
 
-    compaction::table_state& as_table_state() const noexcept;
+    compaction::compaction_group_view& as_compaction_group_view() const noexcept;
 
     seastar::condition_variable& get_staging_done_condition() noexcept {
         return _staging_done_condition;
