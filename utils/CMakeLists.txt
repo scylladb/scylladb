@@ -66,7 +66,9 @@ target_sources(utils
     s3/credentials_providers/sts_assume_role_credentials_provider.cc
     s3/credentials_providers/aws_credentials_provider_chain.cc
     s3/utils/manip_s3.cc
-    gcp/gcp_credentials.cc)
+    gcp/gcp_credentials.cc
+    gcp/object_storage.cc
+    )
 target_include_directories(utils
   PUBLIC
     ${CMAKE_SOURCE_DIR}
