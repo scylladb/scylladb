@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 def new_node(cluster: ScyllaCluster, bootstrap: bool = True) -> ScyllaNode:
-    assert bootstrap is True, "bootstrap=True is supported only"
-
-    return cluster.populate(1).nodelist()[-1]
+    node = cluster.populate(1).nodelist()[-1]
+    node.bootstrap = bootstrap
+    return node
 
 
 def run_rest_api(run_on_node: ScyllaNode, cmd, api_method: str = "post", params: dict | None = None):
