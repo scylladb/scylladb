@@ -14,9 +14,11 @@ namespace sstables {
 
 sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_strategy_for_tests() = default;
 
-compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
+future<compaction_descriptor>
+sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     // Get unique runs from all uncompacting sstables
-    std::vector<frozen_sstable_run> runs = table_s.main_sstable_set().all_sstable_runs();
+    auto main_set = co_await table_s.main_sstable_set();
+    std::vector<frozen_sstable_run> runs = main_set->all_sstable_runs();
 
     // Group similar sized runs into a bucket.
     std::map<uint64_t, std::vector<frozen_sstable_run>> similar_sized_runs;
@@ -43,9 +45,9 @@ compaction_descriptor sstable_run_based_compaction_strategy_for_tests::get_sstab
             | std::views::transform([] (auto& run) -> auto& { return run->all(); })
             | std::views::join
             | std::ranges::to<std::vector>();
-        return sstables::compaction_descriptor(std::move(all), 0, static_fragment_size_for_run);
+        co_return sstables::compaction_descriptor(std::move(all), 0, static_fragment_size_for_run);
     }
-    return sstables::compaction_descriptor();
+    co_return sstables::compaction_descriptor();
 }
 
 future<int64_t> sstable_run_based_compaction_strategy_for_tests::estimated_pending_compactions(compaction_group_view& table_s) const {
