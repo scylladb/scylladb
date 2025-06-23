@@ -896,7 +896,7 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
     }
 }
 
-class scylla_sstable_table_state : public compaction::table_state {
+class scylla_sstable_compaction_group_view : public compaction::compaction_group_view {
     struct dummy_compaction_backlog_tracker : public compaction_backlog_tracker::impl {
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override { }
         virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override { return 0.0; }
@@ -935,7 +935,7 @@ private:
     }
 
 public:
-    scylla_sstable_table_state(schema_ptr schema, reader_permit permit, sstables::sstables_manager& sst_man, std::string output_dir)
+    scylla_sstable_compaction_group_view(schema_ptr schema, reader_permit permit, sstables::sstables_manager& sst_man, std::string output_dir)
         : _schema(std::move(schema))
         , _permit(std::move(permit))
         , _sst_man(sst_man)
@@ -1047,17 +1047,17 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
         validate_output_dir(output_dir, vm.count("unsafe-accept-nonempty-output-dir"));
     }
 
-    scylla_sstable_table_state table_state(schema, permit, sst_man, output_dir);
+    scylla_sstable_compaction_group_view compaction_group_view(schema, permit, sst_man, output_dir);
 
     auto compaction_descriptor = sstables::compaction_descriptor(std::move(sstables));
     compaction_descriptor.options = sstables::compaction_type_options::make_scrub(scrub_mode, sstables::compaction_type_options::scrub::quarantine_invalid_sstables::no);
-    compaction_descriptor.creator = [&table_state] (shard_id) { return table_state.make_sstable(); };
+    compaction_descriptor.creator = [&compaction_group_view] (shard_id) { return compaction_group_view.make_sstable(); };
     compaction_descriptor.replacer = [] (sstables::compaction_completion_desc) { };
 
     auto compaction_data = sstables::compaction_data{};
 
     compaction_progress_monitor progress_monitor;
-    sstables::compact_sstables(std::move(compaction_descriptor), compaction_data, table_state, progress_monitor).get();
+    sstables::compact_sstables(std::move(compaction_descriptor), compaction_data, compaction_group_view, progress_monitor).get();
 }
 
 void dump_index_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,

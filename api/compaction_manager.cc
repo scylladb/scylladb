@@ -118,7 +118,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
             auto& cm = db.get_compaction_manager();
             return parallel_for_each(tables, [&] (const table_info& ti) {
                 auto& t = db.find_column_family(ti.id);
-                return t.parallel_foreach_table_state([&] (compaction::table_state& ts) {
+                return t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) {
                     return cm.stop_compaction(type, &ts);
                 });
             });

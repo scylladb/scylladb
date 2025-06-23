@@ -244,7 +244,7 @@ incremental_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 }
 
 compaction_descriptor
-incremental_compaction_strategy::find_garbage_collection_job(const compaction::table_state& t, std::vector<size_bucket_t>& buckets) {
+incremental_compaction_strategy::find_garbage_collection_job(const compaction::compaction_group_view& t, std::vector<size_bucket_t>& buckets) {
     auto worth_dropping_tombstones = [this, &t, now = db_clock::now()] (const sstable_run& run, gc_clock::time_point compaction_time) {
         if (run.all().empty()) {
             return false;
@@ -319,7 +319,7 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::t
 }
 
 compaction_descriptor
-incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, strategy_control& control) {
+incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) {
     auto candidates = control.candidates_as_runs(t);
 
     // make local copies so they can't be changed out from under us mid-method
@@ -392,14 +392,14 @@ incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, str
 }
 
 compaction_descriptor
-incremental_compaction_strategy::get_major_compaction_job(table_state& t, std::vector<sstables::shared_sstable> candidates) {
+incremental_compaction_strategy::get_major_compaction_job(compaction_group_view& t, std::vector<sstables::shared_sstable> candidates) {
     if (candidates.empty()) {
         return compaction_descriptor();
     }
     return make_major_compaction_job(std::move(candidates), 0, _fragment_size);
 }
 
-int64_t incremental_compaction_strategy::estimated_pending_compactions(table_state& t) const {
+int64_t incremental_compaction_strategy::estimated_pending_compactions(compaction_group_view& t) const {
     size_t min_threshold = t.schema()->min_compaction_threshold();
     size_t max_threshold = t.schema()->max_compaction_threshold();
     int64_t n = 0;
@@ -483,7 +483,7 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 std::vector<compaction_descriptor>
-incremental_compaction_strategy::get_cleanup_compaction_jobs(table_state& t, std::vector<shared_sstable> candidates) const {
+incremental_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     const auto& schema = t.schema();
     unsigned max_threshold = schema->max_compaction_threshold();

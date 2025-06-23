@@ -25,7 +25,7 @@
 #include "test/lib/log.hh"
 
 namespace compaction {
-class table_state;
+class compaction_group_view;
 class compaction_task_executor;
 }
 
@@ -89,7 +89,7 @@ public:
 
     compaction_manager& get_compaction_manager() { return _cm; }
 
-    void propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
+    void propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
 };

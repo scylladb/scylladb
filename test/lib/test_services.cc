@@ -30,7 +30,7 @@
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
 
-class table_for_tests::table_state : public compaction::table_state {
+class table_for_tests::compaction_group_view : public compaction::compaction_group_view {
     table_for_tests::data& _data;
     sstables::sstables_manager& _sstables_manager;
     std::vector<sstables::shared_sstable> _compacted_undeleted;
@@ -44,13 +44,13 @@ private:
         return *_data.cf;
     }
 public:
-    explicit table_state(table_for_tests::data& data, sstables::sstables_manager& sstables_manager)
+    explicit compaction_group_view(table_for_tests::data& data, sstables::sstables_manager& sstables_manager)
             : _data(data)
             , _sstables_manager(sstables_manager)
             , _tombstone_gc_state(nullptr)
             , _backlog_tracker(get_compaction_strategy().make_backlog_tracker())
             , _compaction_strategy_state(compaction::compaction_strategy_state::make(get_compaction_strategy()))
-            , _group_id("table_for_tests::table_state")
+            , _group_id("table_for_tests::compaction_group_view")
     {
     }
     dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
@@ -64,10 +64,10 @@ public:
         return true;
     }
     const sstables::sstable_set& main_sstable_set() const override {
-        return table().try_get_table_state_with_static_sharding().main_sstable_set();
+        return table().try_get_compaction_group_view_with_static_sharding().main_sstable_set();
     }
     const sstables::sstable_set& maintenance_sstable_set() const override {
-        return table().try_get_table_state_with_static_sharding().maintenance_sstable_set();
+        return table().try_get_compaction_group_view_with_static_sharding().maintenance_sstable_set();
     }
     lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
         return make_lw_shared<const sstables::sstable_set>(main_sstable_set());
@@ -85,7 +85,7 @@ public:
         return _compaction_strategy_state;
     }
     reader_permit make_compaction_reader_permit() const override {
-        return table().compaction_concurrency_semaphore().make_tracking_only_permit(schema(), "table_for_tests::table_state", db::no_timeout, {});
+        return table().compaction_concurrency_semaphore().make_tracking_only_permit(schema(), "table_for_tests::compaction_group_view", db::no_timeout, {});
     }
     sstables::sstables_manager& get_sstables_manager() noexcept override {
         return _sstables_manager;
@@ -108,7 +108,7 @@ public:
     }
     bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
-        return table().try_get_table_state_with_static_sharding().on_compaction_completion(std::move(desc), offstrategy);
+        return table().try_get_compaction_group_view_with_static_sharding().on_compaction_completion(std::move(desc), offstrategy);
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return table().is_auto_compaction_disabled_by_user();
@@ -151,12 +151,12 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, c
     _data->s = s ? s : make_default_schema();
     _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(storage), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
-    _data->table_s = std::make_unique<table_state>(*_data, sstables_manager);
+    _data->table_s = std::make_unique<compaction_group_view>(*_data, sstables_manager);
     cm.add(*_data->table_s);
     _data->storage = std::move(storage);
 }
 
-compaction::table_state& table_for_tests::as_table_state() noexcept {
+compaction::compaction_group_view& table_for_tests::as_compaction_group_view() noexcept {
     return *_data->table_s;
 }
 
@@ -514,7 +514,7 @@ test_env::make_table_for_tests(schema_ptr s) {
 sstables::sstable_set test_env::make_sstable_set(sstables::compaction_strategy& cs, schema_ptr s) {
     auto t = make_table_for_tests(s);
     auto close_t = deferred_stop(t);
-    return cs.make_sstable_set(t.as_table_state());
+    return cs.make_sstable_set(t.as_compaction_group_view());
 }
 
 void test_env::request_abort() {
@@ -544,7 +544,7 @@ future<shared_sstable> test_env::reusable_sst(schema_ptr schema, sstring dir, ss
     throw sst_not_found(dir, generation);
 }
 
-void test_env_compaction_manager::propagate_replacement(compaction::table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
+void test_env_compaction_manager::propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
     _cm.propagate_replacement(table_s, removed, added);
 }
 

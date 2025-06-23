@@ -45,18 +45,18 @@ protected:
             uint64_t max_sstable_bytes = compaction_descriptor::default_max_sstable_bytes);
 public:
     virtual ~compaction_strategy_impl() {}
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) = 0;
-    virtual compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<sstables::shared_sstable> candidates) {
+    virtual compaction_descriptor get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) = 0;
+    virtual compaction_descriptor get_major_compaction_job(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) {
         return make_major_compaction_job(std::move(candidates));
     }
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const;
-    virtual void notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) { }
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const;
+    virtual void notify_completion(compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) { }
     virtual compaction_strategy_type type() const = 0;
     virtual bool parallel_compaction() const {
         return true;
     }
-    virtual int64_t estimated_pending_compactions(table_state& table_s) const = 0;
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const table_state& ts) const;
+    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const = 0;
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const;
 
     bool use_clustering_key_filter() const {
         return _use_clustering_key_filter;
@@ -64,7 +64,7 @@ public:
 
     // Check if a given sstable is entitled for tombstone compaction based on its
     // droppable tombstone histogram and gc_before.
-    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const table_state& t);
+    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t);
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const = 0;
 

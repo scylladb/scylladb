@@ -30,9 +30,9 @@ class compaction_strategy_state;
 
 namespace compaction {
 
-class table_state {
+class compaction_group_view {
 public:
-    virtual ~table_state() {}
+    virtual ~compaction_group_view() {}
     virtual dht::token_range token_range() const noexcept = 0;
     virtual const schema_ptr& schema() const noexcept = 0;
     // min threshold as defined by table.
@@ -68,9 +68,9 @@ public:
 namespace fmt {
 
 template <>
-struct formatter<compaction::table_state> : formatter<string_view> {
+struct formatter<compaction::compaction_group_view> : formatter<string_view> {
     template <typename FormatContext>
-    auto format(const compaction::table_state& t, FormatContext& ctx) const {
+    auto format(const compaction::compaction_group_view& t, FormatContext& ctx) const {
         auto s = t.schema();
         return fmt::format_to(ctx.out(), "{}.{} compaction_group={}", s->ks_name(), s->cf_name(), t.get_group_id());
     }

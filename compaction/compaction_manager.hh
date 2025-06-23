@@ -123,12 +123,12 @@ private:
     future<> _waiting_reevalution = make_ready_future<>();
     condition_variable _postponed_reevaluation;
     // tables that wait for compaction but had its submission postponed due to ongoing compaction.
-    std::unordered_set<compaction::table_state*> _postponed;
+    std::unordered_set<compaction::compaction_group_view*> _postponed;
     // tracks taken weights of ongoing compactions, only one compaction per weight is allowed.
     // weight is value assigned to a compaction job that is log base N of total size of all input sstables.
     std::unordered_set<int> _weight_tracker;
 
-    std::unordered_map<compaction::table_state*, compaction_state> _compaction_state;
+    std::unordered_map<compaction::compaction_group_view*, compaction_state> _compaction_state;
 
     // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
@@ -167,7 +167,7 @@ private:
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
 
     // Return nullopt if compaction cannot be started
-    std::optional<gate::holder> start_compaction(table_state& t);
+    std::optional<gate::holder> start_compaction(compaction_group_view& t);
 
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&
@@ -184,7 +184,7 @@ private:
     unsigned current_compaction_fan_in_threshold() const;
 
     // Return true if compaction can be initiated
-    bool can_register_compaction(compaction::table_state& t, int weight, unsigned fan_in) const;
+    bool can_register_compaction(compaction::compaction_group_view& t, int weight, unsigned fan_in) const;
     // Register weight for a table. Do that only if can_register_weight()
     // returned true.
     void register_weight(int weight);
@@ -192,14 +192,14 @@ private:
     void deregister_weight(int weight);
 
     // Get candidates for compaction strategy, which are all sstables but the ones being compacted.
-    std::vector<sstables::shared_sstable> get_candidates(compaction::table_state& t) const;
+    std::vector<sstables::shared_sstable> get_candidates(compaction::compaction_group_view& t) const;
 
     bool eligible_for_compaction(const sstables::shared_sstable& sstable) const;
     bool eligible_for_compaction(const sstables::frozen_sstable_run& sstable_run) const;
 
     template <std::ranges::range Range>
     requires std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable> || std::convertible_to<std::ranges::range_value_t<Range>, sstables::frozen_sstable_run>
-    std::vector<std::ranges::range_value_t<Range>> get_candidates(table_state& t, const Range& sstables) const;
+    std::vector<std::ranges::range_value_t<Range>> get_candidates(compaction_group_view& t, const Range& sstables) const;
 
     template <std::ranges::range Range>
     requires std::same_as<std::ranges::range_value_t<Range>, sstables::shared_sstable>
@@ -211,23 +211,23 @@ private:
 
     // gets the table's compaction state
     // throws std::out_of_range exception if not found.
-    compaction_state& get_compaction_state(compaction::table_state* t);
-    const compaction_state& get_compaction_state(compaction::table_state* t) const {
+    compaction_state& get_compaction_state(compaction::compaction_group_view* t);
+    const compaction_state& get_compaction_state(compaction::compaction_group_view* t) const {
         return const_cast<compaction_manager*>(this)->get_compaction_state(t);
     }
 
     // Return true if compaction manager is enabled and
     // table still exists and compaction is not disabled for the table.
-    inline bool can_proceed(compaction::table_state* t) const;
+    inline bool can_proceed(compaction::compaction_group_view* t) const;
 
     future<> postponed_compactions_reevaluation();
     void reevaluate_postponed_compactions() noexcept;
     // Postpone compaction for a table that couldn't be executed due to ongoing
     // similar-sized compaction.
-    void postpone_compaction_for_table(compaction::table_state* t);
+    void postpone_compaction_for_table(compaction::compaction_group_view* t);
 
     using quarantine_invalid_sstables = sstables::compaction_type_options::scrub::quarantine_invalid_sstables;
-    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::table_state& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables);
+    future<compaction_stats_opt> perform_sstable_scrub_validate_mode(compaction::compaction_group_view& t, tasks::task_info info, quarantine_invalid_sstables quarantine_sstables);
     future<> update_static_shares(float shares);
 
     using get_candidates_func = std::function<future<std::vector<sstables::shared_sstable>>()>;
@@ -237,9 +237,10 @@ private:
     template<typename TaskType, typename... Args>
     requires std::derived_from<TaskType, compaction_task_executor> &&
             std::derived_from<TaskType, compaction_task_impl>
-    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(sstring reason, tasks::task_info info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
 
-    future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
+    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(sstring reason, tasks::task_info info, compaction_group_view& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
+
+    future<compaction_stats_opt> rewrite_sstables(compaction::compaction_group_view& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
 
     // Stop all fibers, without waiting. Safe to be called multiple times.
@@ -247,7 +248,7 @@ private:
     future<> really_do_stop() noexcept;
 
     // Propagate replacement of sstables to all ongoing compaction of a given table
-    void propagate_replacement(compaction::table_state& t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
+    void propagate_replacement(compaction::compaction_group_view& t, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added);
 
     // This constructor is supposed to only be used for testing so lets be more explicit
     // about invoking it. Ref #10146
@@ -305,18 +306,18 @@ public:
     future<> get_compaction_history(compaction_history_consumer&& f);
 
     // Submit a table to be compacted.
-    void submit(compaction::table_state& t);
+    void submit(compaction::compaction_group_view& t);
 
     // Can regular compaction be performed in the given table
-    bool can_perform_regular_compaction(compaction::table_state& t);
+    bool can_perform_regular_compaction(compaction::compaction_group_view& t);
 
     // Maybe wait before adding more sstables
     // if there are too many sstables.
-    future<> maybe_wait_for_sstable_count_reduction(compaction::table_state& t);
+    future<> maybe_wait_for_sstable_count_reduction(compaction::compaction_group_view& t);
 
     // Submit a table to be off-strategy compacted.
     // Returns true iff off-strategy compaction was required and performed.
-    future<bool> perform_offstrategy(compaction::table_state& t, tasks::task_info info);
+    future<bool> perform_offstrategy(compaction::compaction_group_view& t, tasks::task_info info);
 
     // Submit a table to be cleaned up and wait for its termination.
     //
@@ -325,34 +326,34 @@ public:
     // Cleanup is about discarding keys that are no longer relevant for a
     // given sstable, e.g. after node loses part of its token range because
     // of a newly added node.
-    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, tasks::task_info info);
+    future<> perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
 private:
-    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, tasks::task_info info);
+    future<> try_perform_cleanup(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, tasks::task_info info);
 
     // Add sst to or remove it from the respective compaction_state.sstables_requiring_cleanup set.
-    bool update_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
+    bool update_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst, const dht::token_range_vector& sorted_owned_ranges);
 
-    future<> on_compaction_completion(table_state& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy);
+    future<> on_compaction_completion(compaction_group_view& t, sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy);
 public:
     // Submit a table to be upgraded and wait for its termination.
-    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::table_state& t, bool exclude_current_version, tasks::task_info info);
+    future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, bool exclude_current_version, tasks::task_info info);
 
     // Submit a table to be scrubbed and wait for its termination.
-    future<compaction_stats_opt> perform_sstable_scrub(compaction::table_state& t, sstables::compaction_type_options::scrub opts, tasks::task_info info);
+    future<compaction_stats_opt> perform_sstable_scrub(compaction::compaction_group_view& t, sstables::compaction_type_options::scrub opts, tasks::task_info info);
 
     // Submit a table for major compaction.
-    future<> perform_major_compaction(compaction::table_state& t, tasks::task_info info, bool consider_only_existing_data = false);
+    future<> perform_major_compaction(compaction::compaction_group_view& t, tasks::task_info info, bool consider_only_existing_data = false);
 
     // Splits a compaction group by segregating all its sstable according to the classifier[1].
     // [1]: See sstables::compaction_type_options::splitting::classifier.
     // Returns when all sstables in the main sstable set are split. The only exception is shutdown
     // or user aborted splitting using stop API.
-    future<compaction_stats_opt> perform_split_compaction(compaction::table_state& t, sstables::compaction_type_options::split opt, tasks::task_info info);
+    future<compaction_stats_opt> perform_split_compaction(compaction::compaction_group_view& t, sstables::compaction_type_options::split opt, tasks::task_info info);
 
     // Splits a single SSTable by segregating all its data according to the classifier.
     // If SSTable doesn't need split, the same input SSTable is returned as output.
     // If SSTable needs split, then output SSTables are returned and the input SSTable is deleted.
-    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(sstables::shared_sstable sst, table_state& t, sstables::compaction_type_options::split opt);
+    future<std::vector<sstables::shared_sstable>> maybe_split_sstable(sstables::shared_sstable sst, compaction_group_view& t, sstables::compaction_type_options::split opt);
 
     // Run a custom job for a given table, defined by a function
     // it completes when future returned by job is ready or returns immediately
@@ -361,21 +362,21 @@ public:
     // parameter type is the compaction type the operation can most closely be
     //      associated with, use compaction_type::Compaction, if none apply.
     // parameter job is a function that will carry the operation
-    future<> run_custom_job(compaction::table_state& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, tasks::task_info info, throw_if_stopping do_throw_if_stopping);
+    future<> run_custom_job(compaction::compaction_group_view& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, tasks::task_info info, throw_if_stopping do_throw_if_stopping);
 
     class compaction_reenabler {
         compaction_manager& _cm;
-        compaction::table_state* _table;
+        compaction::compaction_group_view* _table;
         compaction::compaction_state& _compaction_state;
         gate::holder _holder;
 
     public:
-        compaction_reenabler(compaction_manager&, compaction::table_state&);
+        compaction_reenabler(compaction_manager&, compaction::compaction_group_view&);
         compaction_reenabler(compaction_reenabler&&) noexcept;
 
         ~compaction_reenabler();
 
-        compaction::table_state* compacting_table() const noexcept {
+        compaction::compaction_group_view* compacting_table() const noexcept {
             return _table;
         }
 
@@ -386,10 +387,10 @@ public:
 
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
-    future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::table_state& t);
+    future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::compaction_group_view& t);
 
     // Run a function with compaction temporarily disabled for a table T.
-    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func, sstring reason = "custom operation");
+    future<> run_with_compaction_disabled(compaction::compaction_group_view& t, std::function<future<> ()> func, sstring reason = "custom operation");
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     future<> unplug_system_keyspace() noexcept;
@@ -397,28 +398,28 @@ public:
     // Adds a table to the compaction manager.
     // Creates a compaction_state structure that can be used for submitting
     // compaction jobs of all types.
-    void add(compaction::table_state& t);
+    void add(compaction::compaction_group_view& t);
 
     // Remove a table from the compaction manager.
     // Cancel requests on table and wait for possible ongoing compactions.
-    future<> remove(compaction::table_state& t, sstring reason = "table removal") noexcept;
+    future<> remove(compaction::compaction_group_view& t, sstring reason = "table removal") noexcept;
 
     const stats& get_stats() const {
         return _stats;
     }
 
-    const std::vector<sstables::compaction_info> get_compactions(compaction::table_state* t = nullptr) const;
+    const std::vector<sstables::compaction_info> get_compactions(compaction::compaction_group_view* t = nullptr) const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
-    bool has_table_ongoing_compaction(const compaction::table_state& t) const;
+    bool has_table_ongoing_compaction(const compaction::compaction_group_view& t) const;
 
-    bool compaction_disabled(compaction::table_state& t) const;
+    bool compaction_disabled(compaction::compaction_group_view& t) const;
 
     // Stops ongoing compaction of a given type.
-    future<> stop_compaction(sstring type, compaction::table_state* table = nullptr);
+    future<> stop_compaction(sstring type, compaction::compaction_group_view* table = nullptr);
 
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, compaction::table_state* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -427,9 +428,9 @@ public:
     void register_backlog_tracker(compaction_backlog_tracker& backlog_tracker) {
         _backlog_manager.register_backlog_tracker(backlog_tracker);
     }
-    void register_backlog_tracker(compaction::table_state& t, compaction_backlog_tracker new_backlog_tracker);
+    void register_backlog_tracker(compaction::compaction_group_view& t, compaction_backlog_tracker new_backlog_tracker);
 
-    compaction_backlog_tracker& get_backlog_tracker(compaction::table_state& t);
+    compaction_backlog_tracker& get_backlog_tracker(compaction::compaction_group_view& t);
 
     static sstables::compaction_data create_compaction_data();
 
@@ -445,11 +446,11 @@ public:
 
     // Uncoditionally erase sst from `sstables_requiring_cleanup`
     // Returns true iff sst was found and erased.
-    bool erase_sstable_cleanup_state(table_state& t, const sstables::shared_sstable& sst);
+    bool erase_sstable_cleanup_state(compaction_group_view& t, const sstables::shared_sstable& sst);
 
     // checks if the sstable is in the respective compaction_state.sstables_requiring_cleanup set.
-    bool requires_cleanup(table_state& t, const sstables::shared_sstable& sst) const;
-    const std::unordered_set<sstables::shared_sstable>& sstables_requiring_cleanup(table_state& t) const;
+    bool requires_cleanup(compaction_group_view& t, const sstables::shared_sstable& sst) const;
+    const std::unordered_set<sstables::shared_sstable>& sstables_requiring_cleanup(compaction_group_view& t) const;
 
     friend class compacting_sstable_registration;
     friend class compaction_weight_registration;
@@ -489,7 +490,7 @@ public:
     };
 protected:
     compaction_manager& _cm;
-    ::compaction::table_state* _compacting_table = nullptr;
+    ::compaction::compaction_group_view* _compacting_table = nullptr;
     compaction::compaction_state& _compaction_state;
     sstables::compaction_data _compaction_data;
     state _state = state::none;
@@ -505,7 +506,7 @@ private:
     compaction_manager::compaction_stats_opt _stats = std::nullopt;
 
 public:
-    explicit compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, ::compaction::table_state* t, sstables::compaction_type type, sstring desc);
+    explicit compaction_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, ::compaction::compaction_group_view* t, sstables::compaction_type type, sstring desc);
 
     compaction_task_executor(compaction_task_executor&&) = delete;
     compaction_task_executor(const compaction_task_executor&) = delete;
@@ -549,7 +550,7 @@ protected:
     future<sstables::compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, sstables::compaction_data& cdata, on_replacement&,
                                 compaction_manager::can_purge_tombstones can_purge = compaction_manager::can_purge_tombstones::yes,
                                 sstables::offstrategy offstrategy = sstables::offstrategy::no);
-    future<> update_history(::compaction::table_state& t, sstables::compaction_result&& res, const sstables::compaction_data& cdata);
+    future<> update_history(::compaction::compaction_group_view& t, sstables::compaction_result&& res, const sstables::compaction_data& cdata);
     bool should_update_history(sstables::compaction_type ct) {
         return ct == sstables::compaction_type::Compaction;
     }
@@ -560,7 +561,7 @@ public:
 
     future<compaction_manager::compaction_stats_opt> run_compaction() noexcept;
 
-    const ::compaction::table_state* compacting_table() const noexcept {
+    const ::compaction::compaction_group_view* compacting_table() const noexcept {
         return _compacting_table;
     }
 
@@ -596,7 +597,7 @@ private:
         return _compaction_done.get_future();
     }
 
-    future<sstables::sstable_set> sstable_set_for_tombstone_gc(::compaction::table_state& t);
+    future<sstables::sstable_set> sstable_set_for_tombstone_gc(::compaction::compaction_group_view& t);
 public:
     bool stopping() const noexcept {
         return _compaction_data.abort.abort_requested();
@@ -638,4 +639,4 @@ struct fmt::formatter<compaction::compaction_task_executor> {
 bool needs_cleanup(const sstables::shared_sstable& sst, const dht::token_range_vector& owned_ranges);
 
 // Return all sstables but those that are off-strategy like the ones in maintenance set and staging dir.
-std::vector<sstables::shared_sstable> in_strategy_sstables(compaction::table_state& table_s);
+std::vector<sstables::shared_sstable> in_strategy_sstables(compaction::compaction_group_view& table_s);
