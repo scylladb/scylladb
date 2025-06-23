@@ -17,9 +17,9 @@ leveled_compaction_strategy_state& leveled_compaction_strategy::get_state(compac
     return table_s.get_compaction_strategy_state().get<leveled_compaction_strategy_state>();
 }
 
-compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
+future<compaction_descriptor> leveled_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     auto& state = get_state(table_s);
-    auto candidates = control.candidates(table_s);
+    auto candidates = co_await control.candidates(table_s);
     // NOTE: leveled_manifest creation may be slightly expensive, so later on,
     // we may want to store it in the strategy itself. However, the sstable
     // lists managed by the manifest may become outdated. For example, one
@@ -32,12 +32,13 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
     auto candidate = manifest.get_compaction_candidates(*state.last_compacted_keys, state.compaction_counter);
 
     if (!candidate.sstables.empty()) {
-        leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), table_s.main_sstable_set().all()->size());
-        return candidate;
+        auto main_set = co_await table_s.main_sstable_set();
+        leveled_manifest::logger.debug("leveled: Compacting {} out of {} sstables", candidate.sstables.size(), main_set->size());
+        co_return candidate;
     }
 
     if (!table_s.tombstone_gc_enabled()) {
-        return compaction_descriptor();
+        co_return compaction_descriptor();
     }
 
     // if there is no sstable to compact in standard way, try compacting based on droppable tombstone ratio
@@ -59,9 +60,9 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(c
             auto ratio_j = j->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
             return ratio_i < ratio_j;
         });
-        return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());
+        co_return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());
     }
-    return {};
+    co_return compaction_descriptor();
 }
 
 compaction_descriptor leveled_compaction_strategy::get_major_compaction_job(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) {
@@ -134,7 +135,8 @@ void leveled_compaction_strategy::generate_last_compacted_keys(leveled_compactio
 
 future<int64_t> leveled_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     std::vector<sstables::shared_sstable> sstables;
-    auto all_sstables = table_s.main_sstable_set().all();
+    auto main_set = co_await table_s.main_sstable_set();
+    auto all_sstables = main_set->all();
     sstables.reserve(all_sstables->size());
     for (auto& entry : *all_sstables) {
         sstables.push_back(entry);

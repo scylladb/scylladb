@@ -207,13 +207,13 @@ size_tiered_compaction_strategy::most_interesting_bucket(std::vector<std::vector
     return std::move(max);
 }
 
-compaction_descriptor
+future<compaction_descriptor>
 size_tiered_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     // make local copies so they can't be changed out from under us mid-method
     int min_threshold = table_s.min_compaction_threshold();
     int max_threshold = table_s.schema()->max_compaction_threshold();
     auto compaction_time = gc_clock::now();
-    auto candidates = control.candidates(table_s);
+    auto candidates = co_await control.candidates(table_s);
 
     // TODO: Add support to filter cold sstables (for reference: SizeTieredCompactionStrategy::filterColdSSTables).
 
@@ -221,17 +221,17 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting));
+        co_return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
     // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
     if (!table_s.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        return sstables::compaction_descriptor(std::move(most_interesting));
+        co_return sstables::compaction_descriptor(std::move(most_interesting));
     }
 
     if (!table_s.tombstone_gc_enabled()) {
-        return compaction_descriptor();
+        co_return compaction_descriptor();
     }
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
@@ -250,9 +250,9 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
             return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
         });
-        return sstables::compaction_descriptor({ *it });
+        co_return sstables::compaction_descriptor({ *it });
     }
-    return sstables::compaction_descriptor();
+    co_return sstables::compaction_descriptor();
 }
 
 int64_t size_tiered_compaction_strategy::estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
@@ -271,7 +271,8 @@ future<int64_t> size_tiered_compaction_strategy::estimated_pending_compactions(c
     int max_threshold = table_s.schema()->max_compaction_threshold();
     std::vector<sstables::shared_sstable> sstables;
 
-    auto all_sstables = table_s.main_sstable_set().all();
+    auto main_set = co_await table_s.main_sstable_set();
+    auto all_sstables = main_set->all();
     sstables.reserve(all_sstables->size());
     for (auto& entry : *all_sstables) {
         sstables.push_back(entry);

@@ -51,11 +51,13 @@ public:
     bool has_ongoing_compaction(compaction_group_view& table_s) const noexcept override {
         return _has_ongoing_compaction;
     }
-    virtual std::vector<sstables::shared_sstable> candidates(compaction_group_view& t) const override {
-        return boost::copy_range<std::vector<sstables::shared_sstable>>(*t.main_sstable_set().all());
+    virtual future<std::vector<sstables::shared_sstable>> candidates(compaction_group_view& t) const override {
+        auto main_set = co_await t.main_sstable_set();
+        co_return boost::copy_range<std::vector<sstables::shared_sstable>>(*main_set->all());
     }
-    virtual std::vector<sstables::frozen_sstable_run> candidates_as_runs(compaction_group_view& t) const override {
-        return t.main_sstable_set().all_sstable_runs();
+    virtual future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction_group_view& t) const override {
+        auto main_set = co_await t.main_sstable_set();
+        co_return main_set->all_sstable_runs();
     }
 };
 
@@ -135,7 +137,7 @@ SEASTAR_TEST_CASE(incremental_compaction_test) {
 
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) -> std::vector<shared_sstable> {
             auto control = make_strategy_control_for_test(false);
-            auto desc = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control);
+            auto desc = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
 
             // nothing to compact, move on.
             if (desc.sstables.empty()) {
@@ -252,7 +254,7 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
             auto& table_s = _cf.as_compaction_group_view();
             auto control = make_strategy_control_for_test(false);
             for (;;) {
-                auto desc = _ics.get_sstables_for_compaction(table_s, *control);
+                auto desc = _ics.get_sstables_for_compaction(table_s, *control).get();
                 // no more jobs, bailing out...
                 if (desc.sstables.empty()) {
                     break;
@@ -362,7 +364,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
             options.emplace("tombstone_compaction_interval", "1");
             sleep(2s).get();
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
-            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control);
+            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 1);
             BOOST_REQUIRE(descriptor.sstables.front() == sst);
         }
@@ -372,7 +374,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
             std::map<sstring, sstring> options;
             options.emplace("tombstone_threshold", "0.5f");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
-            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control);
+            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which was recently created won't be included due to min interval
@@ -381,7 +383,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
             options.emplace("tombstone_compaction_interval", "3600");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now());
-            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control);
+            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which should not be included because of droppable ratio of 0.3, will actually be included
@@ -393,7 +395,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
             options.emplace("unchecked_tombstone_compaction", "true");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::seconds(7200));
-            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control);
+            auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 1);
         }
     });
@@ -520,7 +522,7 @@ SEASTAR_TEST_CASE(gc_tombstone_with_grace_seconds_test) {
         forward_jump_clocks(std::chrono::seconds{1});
         auto control = make_strategy_control_for_test(false);
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
-        auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control);
+        auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
         BOOST_REQUIRE_EQUAL(descriptor.sstables.size(), 1);
         BOOST_REQUIRE_EQUAL(descriptor.sstables.front(), sst);
     });

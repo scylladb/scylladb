@@ -41,7 +41,7 @@ public:
     compaction_strategy& operator=(compaction_strategy&&);
 
     // Return a list of sstables to be compacted after applying the strategy.
-    compaction_descriptor get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control);
+    future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control);
 
     compaction_descriptor get_major_compaction_job(compaction_group_view& table_s, std::vector<shared_sstable> candidates);
 

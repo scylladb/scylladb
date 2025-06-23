@@ -125,12 +125,14 @@ public:
         return _has_ongoing_compaction;
     }
 
-    std::vector<sstables::shared_sstable> candidates(compaction_group_view& t) const override {
-        return _candidates_opt.value_or(*t.main_sstable_set().all() | std::ranges::to<std::vector>());
+    future<std::vector<sstables::shared_sstable>> candidates(compaction_group_view& t) const override {
+        auto main_set = co_await t.main_sstable_set();
+        co_return _candidates_opt.value_or(*main_set->all() | std::ranges::to<std::vector>());
     }
 
-    std::vector<sstables::frozen_sstable_run> candidates_as_runs(compaction_group_view& t) const override {
-        return t.main_sstable_set().all_sstable_runs();
+    future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction_group_view& t) const override {
+        auto main_set = co_await t.main_sstable_set();
+        co_return main_set->all_sstable_runs();
     }
 };
 
@@ -140,11 +142,11 @@ static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has
 
 template <typename CompactionStrategy>
 requires requires(CompactionStrategy cs, compaction_group_view& t, strategy_control& c) {
-    { cs.get_sstables_for_compaction(t, c) } -> std::same_as<sstables::compaction_descriptor>;
+    { cs.get_sstables_for_compaction(t, c) } -> std::same_as<future<sstables::compaction_descriptor>>;
 }
-static compaction_descriptor get_sstables_for_compaction(CompactionStrategy& cs, compaction_group_view& t, std::vector<shared_sstable> candidates) {
+static future<compaction_descriptor> get_sstables_for_compaction(CompactionStrategy& cs, compaction_group_view& t, std::vector<shared_sstable> candidates) {
     auto control = make_strategy_control_for_test(false, std::move(candidates));
-    return cs.get_sstables_for_compaction(t, *control);
+    co_return co_await cs.get_sstables_for_compaction(t, *control);
 }
 
 static void assert_table_sstable_count(table_for_tests& t, size_t expected_count) {
@@ -1958,7 +1960,7 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
         sstables::test(sst).set_data_file_size(1);
         candidates.push_back(std::move(sst));
     }
-    auto desc = get_sstables_for_compaction(cs, cf.as_compaction_group_view(), std::move(candidates));
+    auto desc = get_sstables_for_compaction(cs, cf.as_compaction_group_view(), std::move(candidates)).get();
     BOOST_REQUIRE(desc.sstables.size() == size_t(max_threshold));
   });
 }
@@ -2029,7 +2031,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
         // that's needed because sstable with expired data should be old enough.
         sstables::test(sst).set_data_file_write_time(db_clock::time_point::min());
-        auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst });
+        auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
@@ -2039,7 +2041,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto close_lcs_table = deferred_stop(lcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
         sst->set_sstable_level(1);
-        descriptor = get_sstables_for_compaction(cs, lcs_table.as_compaction_group_view(), { sst });
+        descriptor = get_sstables_for_compaction(cs, lcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
         // make sure sstable picked for tombstone compaction removal won't be promoted or demoted.
@@ -2049,10 +2051,10 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto twcs_table = env.make_table_for_tests(make_schema("twcs", sstables::compaction_strategy_type::time_window));
         auto close_twcs_table = deferred_stop(twcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, {});
-        descriptor = get_sstables_for_compaction(cs, twcs_table.as_compaction_group_view(), { sst });
+        descriptor = get_sstables_for_compaction(cs, twcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 0);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, options);
-        descriptor = get_sstables_for_compaction(cs, twcs_table.as_compaction_group_view(), { sst });
+        descriptor = get_sstables_for_compaction(cs, twcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
@@ -2061,7 +2063,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             std::map<sstring, sstring> options;
             options.emplace("tombstone_threshold", "0.5f");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
-            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst });
+            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which was recently created won't be included due to min interval
@@ -2070,7 +2072,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             options.emplace("tombstone_compaction_interval", "3600");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now());
-            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst });
+            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which should not be included because of droppable ratio of 0.3, will actually be included
@@ -2082,7 +2084,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             options.emplace("unchecked_tombstone_compaction", "true");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::seconds(7200));
-            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst });
+            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 1);
         }
     });
@@ -2378,7 +2380,7 @@ public:
 
         bool found_sstable = false;
         foreach_compaction_group_view_with_thread(table, [&] (compaction::compaction_group_view& ts) {
-            auto sstables = in_strategy_sstables(ts);
+            auto sstables = in_strategy_sstables(ts).get();
             if (sstables.empty()) {
                 return;
             }
@@ -2429,7 +2431,7 @@ public:
 
         bool found_sstable = false;
         foreach_compaction_group_view_with_thread(table, [&] (compaction::compaction_group_view& ts) {
-            auto sstables = in_strategy_sstables(ts);
+            auto sstables = in_strategy_sstables(ts).get();
             if (sstables.empty()) {
                 return;
             }
@@ -2467,7 +2469,7 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2503,7 +2505,7 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2541,7 +2543,7 @@ void scrub_validate_corrupted_digest(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2568,8 +2570,8 @@ void scrub_validate_no_digest(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
         BOOST_REQUIRE(!sst->get_checksum());
 
         // Corrupt the data to cause an invalid checksum.
@@ -2586,7 +2588,7 @@ void scrub_validate_no_digest(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2609,8 +2611,8 @@ void scrub_validate_valid(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
     });
 }
 
@@ -2695,8 +2697,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
         when_all_succeed(std::move(scrub1), std::move(scrub2)).get();
 
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
         // Checksum component released after scrub instances terminate.
         BOOST_REQUIRE(sst->get_checksum() == nullptr);
 
@@ -2776,8 +2778,8 @@ void scrub_validate_cassandra_compat(const compression_parameters& cp, sstring s
             BOOST_REQUIRE_GT(stats->validation_errors, 0);
         }
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
         BOOST_REQUIRE(!sst->get_checksum());
     });
 }
@@ -2988,8 +2990,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
         BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
 
-        BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
-        BOOST_REQUIRE(in_strategy_sstables(ts).front() == sst);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().front() == sst);
     });
 }
 
@@ -3034,10 +3036,10 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
         table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
-        BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
-        BOOST_REQUIRE(in_strategy_sstables(ts).front() != sst);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().front() != sst);
 
-        verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), scrubbed_fragments);
+        verify_fragments(in_strategy_sstables(ts).get(), test.env().make_reader_permit(), scrubbed_fragments);
     });
 }
 
@@ -3075,9 +3077,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
         table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
-        testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
-        BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
-        verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), explode(test.env().make_reader_permit(), muts));
+        testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).get().size());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().size() > 1);
+        verify_fragments(in_strategy_sstables(ts).get(), test.env().make_reader_permit(), explode(test.env().make_reader_permit(), muts));
     });
 }
 
@@ -3117,7 +3119,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
             table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+            BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
             BOOST_REQUIRE(sst->is_quarantined());
             verify_fragments({sst}, permit, corrupt_fragments);
 
@@ -3132,13 +3134,13 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             case sstables::compaction_type_options::scrub::quarantine_mode::include:
             case sstables::compaction_type_options::scrub::quarantine_mode::only:
                 // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
-                testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
-                BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
-                verify_fragments(in_strategy_sstables(ts), permit, scrubbed_fragments);
+                testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).get().size());
+                BOOST_REQUIRE(in_strategy_sstables(ts).get().size() > 1);
+                verify_fragments(in_strategy_sstables(ts).get(), permit, scrubbed_fragments);
                 break;
             case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
                 // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
-                BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+                BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
                 BOOST_REQUIRE(sst->is_quarantined());
                 verify_fragments({sst}, permit, corrupt_fragments);
                 break;
@@ -3404,24 +3406,24 @@ SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
         // add the sstable to cf's maintenance set
         cf->add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
         auto& cf_ts = cf.as_compaction_group_view();
-        auto maintenance_sst_set = cf_ts.maintenance_sstable_set();
-        BOOST_REQUIRE_EQUAL(maintenance_sst_set.size(), 1);
-        BOOST_REQUIRE_EQUAL(*maintenance_sst_set.all()->begin(), sst);
+        auto maintenance_sst_set = cf_ts.maintenance_sstable_set().get();
+        BOOST_REQUIRE_EQUAL(maintenance_sst_set->size(), 1);
+        BOOST_REQUIRE_EQUAL(*maintenance_sst_set->all()->begin(), sst);
         // confirm main sstable_set is empty
-        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().get()->size(), 0);
 
         // Perform scrub on the table
         cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
 
         // main set should have the resultant sst and the maintenance set should be empty now
-        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
-        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().get()->size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().get()->size(), 0);
 
         // Now that there is an sstable in main set, perform scrub on the table
         // again to verify that the result ends up again in main sstable_set
         cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
-        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
-        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().get()->size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().get()->size(), 0);
     });
 }
 
@@ -3488,7 +3490,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) mutable -> std::vector<shared_sstable> {
             auto input_ssts = std::vector<shared_sstable>(sstables.begin(), sstables.end());
-            auto desc = get_sstables_for_compaction(cs, cf.as_compaction_group_view(), std::move(input_ssts));
+            auto desc = get_sstables_for_compaction(cs, cf.as_compaction_group_view(), std::move(input_ssts)).get();
 
             // nothing to compact, move on.
             if (desc.sstables.empty()) {
