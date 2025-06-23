@@ -2184,20 +2184,20 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
     co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_view_for_static_sharding(), info);
 }
 
-unsigned compaction_group::estimate_pending_compactions() const {
+future<unsigned> compaction_group::estimate_pending_compactions() const {
     unsigned ret = 0;
     for (auto& view : all_views()) {
-        ret += _t.get_compaction_strategy().estimated_pending_compactions(*view);
+        ret += co_await _t.get_compaction_strategy().estimated_pending_compactions(*view);
     }
-    return ret;
+    co_return ret;
 }
 
-unsigned table::estimate_pending_compactions() const {
+future<unsigned> table::estimate_pending_compactions() const {
     unsigned ret = 0;
-    for_each_compaction_group([&ret] (const compaction_group& cg) {
-        ret += cg.estimate_pending_compactions();
+    co_await const_cast<table*>(this)->parallel_foreach_compaction_group([&ret] (const compaction_group& cg) -> future<> {
+        ret += co_await cg.estimate_pending_compactions();
     });
-    return ret;
+    co_return ret;
 }
 
 void compaction_group::set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept {

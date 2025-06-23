@@ -585,8 +585,8 @@ public:
         return sstables::compaction_descriptor();
     }
 
-    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const override {
-        return 0;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override {
+        return make_ready_future<int64_t>(0);
     }
 
     virtual compaction_strategy_type type() const override {
@@ -720,7 +720,7 @@ bool compaction_strategy::parallel_compaction() const {
     return _compaction_strategy_impl->parallel_compaction();
 }
 
-int64_t compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
+future<int64_t> compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     return _compaction_strategy_impl->estimated_pending_compactions(table_s);
 }
 
