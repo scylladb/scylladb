@@ -266,7 +266,7 @@ int64_t size_tiered_compaction_strategy::estimated_pending_compactions(const std
     return n;
 }
 
-int64_t size_tiered_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
+future<int64_t> size_tiered_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     int min_threshold = table_s.min_compaction_threshold();
     int max_threshold = table_s.schema()->max_compaction_threshold();
     std::vector<sstables::shared_sstable> sstables;
@@ -277,7 +277,7 @@ int64_t size_tiered_compaction_strategy::estimated_pending_compactions(compactio
         sstables.push_back(entry);
     }
 
-    return estimated_pending_compactions(sstables, min_threshold, max_threshold, _options);
+    co_return estimated_pending_compactions(sstables, min_threshold, max_threshold, _options);
 }
 
 std::vector<sstables::shared_sstable>

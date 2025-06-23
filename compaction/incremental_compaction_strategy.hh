@@ -88,7 +88,7 @@ public:
 
     virtual compaction_descriptor get_major_compaction_job(compaction_group_view& t, std::vector<sstables::shared_sstable> candidates) override;
 
-    virtual int64_t estimated_pending_compactions(compaction_group_view& t) const override;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& t) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::incremental;

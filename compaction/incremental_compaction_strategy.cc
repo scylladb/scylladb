@@ -399,7 +399,7 @@ incremental_compaction_strategy::get_major_compaction_job(compaction_group_view&
     return make_major_compaction_job(std::move(candidates), 0, _fragment_size);
 }
 
-int64_t incremental_compaction_strategy::estimated_pending_compactions(compaction_group_view& t) const {
+future<int64_t> incremental_compaction_strategy::estimated_pending_compactions(compaction_group_view& t) const {
     size_t min_threshold = t.schema()->min_compaction_threshold();
     size_t max_threshold = t.schema()->max_compaction_threshold();
     int64_t n = 0;
@@ -409,7 +409,7 @@ int64_t incremental_compaction_strategy::estimated_pending_compactions(compactio
             n += (bucket.size() + max_threshold - 1) / max_threshold;
         }
     }
-    return n;
+    co_return n;
 }
 
 std::vector<shared_sstable>

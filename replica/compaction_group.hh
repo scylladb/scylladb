@@ -179,7 +179,7 @@ public:
     // Triggers regular compaction.
     void trigger_compaction();
     bool compaction_disabled() const;
-    unsigned estimate_pending_compactions() const;
+    future<unsigned> estimate_pending_compactions() const;
 
     compaction_backlog_tracker& get_backlog_tracker();
     void register_backlog_tracker(compaction_backlog_tracker new_backlog_tracker);
