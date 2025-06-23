@@ -55,7 +55,7 @@ public:
     virtual bool parallel_compaction() const {
         return true;
     }
-    virtual int64_t estimated_pending_compactions(compaction_group_view& table_s) const = 0;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const = 0;
     virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const;
 
     bool use_clustering_key_filter() const {

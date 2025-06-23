@@ -515,7 +515,7 @@ time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> b
     return bucket;
 }
 
-int64_t time_window_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
+future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
     auto& state = get_state(table_s);
     auto min_threshold = table_s.min_compaction_threshold();
     auto max_threshold = table_s.schema()->max_compaction_threshold();
@@ -535,7 +535,7 @@ int64_t time_window_compaction_strategy::estimated_pending_compactions(compactio
             break;
         }
     }
-    return n;
+    co_return n;
 }
 
 std::vector<compaction_descriptor>
