@@ -482,7 +482,7 @@ async def add_new_node(manager: ManagerClient,
     yield
 
     LOGGER.info("Add a new node to the cluster")
-    await manager.server_add(timeout=TOPOLOGY_TIMEOUT)
+    await manager.server_add(config={"rf_rack_valid_keyspaces": False}, timeout=TOPOLOGY_TIMEOUT)
 
     yield
 

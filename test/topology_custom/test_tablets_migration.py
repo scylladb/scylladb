@@ -28,15 +28,15 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
     host_ids = []
     servers = []
 
-    async def make_server():
-        s = await manager.server_add(config=cfg)
+    async def make_server(rack: str):
+        s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
         await manager.api.disable_tablet_balancing(s.ip_addr)
 
-    await make_server()
-    await make_server()
-    await make_server()
+    await make_server("r1")
+    await make_server("r1")
+    await make_server("r2")
 
     cql = manager.get_cql()
 
@@ -110,22 +110,22 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
     host_ids = []
     servers = []
 
-    async def make_server():
-        s = await manager.server_add(config=cfg)
+    async def make_server(rack: str):
+        s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
         servers.append(s)
         host_ids.append(await manager.get_host_id(s.server_id))
         await manager.api.disable_tablet_balancing(s.ip_addr)
 
-    await make_server()
+    await make_server("r1")
+    await make_server("r2")
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
-        await make_server()
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
-        await make_server()
+        await make_server("r2")
 
         if fail_stage in ["cleanup_target", "revert_migration"]:
             # we'll stop 2 servers, group0 quorum should be there
@@ -140,7 +140,7 @@ async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail
             # attempt to remove the 2nd node, to make cleanup_target stage
             # go ahead, will step on the legacy API lock on storage_service,
             # so we need to ask some other node to do it
-            await make_server()
+            await make_server("r2")
 
         logger.info(f"Cluster is [{host_ids}]")
 

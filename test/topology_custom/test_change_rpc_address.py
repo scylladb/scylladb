@@ -32,7 +32,7 @@ N_SERVERS = 2
 @pytest.fixture
 async def two_nodes_cluster(manager: ManagerClient) -> list[ServerNum]:
     logger.info(f"Booting initial 2-nodes cluster")
-    servers = [srv.server_id for srv in await manager.servers_add(N_SERVERS)]
+    servers = [srv.server_id for srv in await manager.servers_add(N_SERVERS, auto_rack_dc="dc1")]
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     return servers
 

@@ -5,4 +5,5 @@ cluster:
 extra_scylla_config_options:
     authenticator: AllowAllAuthenticator
     authorizer: AllowAllAuthorizer
+    rf_rack_valid_keyspaces: True
     tablets_mode_for_new_keyspaces: enabled

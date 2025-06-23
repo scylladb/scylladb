@@ -69,7 +69,8 @@ async def test_replace(manager: ManagerClient):
         '--logger-log-level', 'raft_topology=trace',
     ]
 
-    servers = await manager.servers_add(3, cmdline=cmdline)
+    config = {"rf_rack_valid_keyspaces": False}
+    servers = await manager.servers_add(3, cmdline=cmdline, config=config)
 
     cql = manager.get_cql()
 
@@ -118,7 +119,7 @@ async def test_replace(manager: ManagerClient):
     logger.info('Replacing a node')
     await manager.server_stop_gracefully(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = False, use_host_id = True)
-    servers.append(await manager.server_add(replace_cfg))
+    servers.append(await manager.server_add(replace_cfg, config=config))
     servers = servers[1:]
 
     key_count = await finish_writes()
@@ -146,8 +147,10 @@ async def test_removenode(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = ['--logger-log-level', 'storage_service=trace']
 
+    config = {"rf_rack_valid_keyspaces": False}
+
     # 4 nodes so that we can find new tablet replica for the RF=3 table on removenode
-    servers = await manager.servers_add(4, cmdline=cmdline)
+    servers = await manager.servers_add(4, cmdline=cmdline, config=config)
 
     cql = manager.get_cql()
 
@@ -211,7 +214,13 @@ async def test_removenode_with_ignored_node(manager: ManagerClient):
 
     # 5 nodes because we need a quorum with 2 nodes down.
     # 4 nodes would be enough to not lose data with RF=3.
-    servers = await manager.servers_add(5, cmdline=cmdline)
+    servers = await manager.servers_add(5, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"}
+    ])
 
     cql = manager.get_cql()
 

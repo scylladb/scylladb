@@ -78,7 +78,7 @@ async def test_replace_different_ip_using_host_id(manager: ManagerClient) -> Non
 @pytest.mark.asyncio
 async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
     """Replace an existing node with new node using the same IP address"""
-    servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': 2000})
+    servers = await manager.servers_add(3, config={'failure_detector_timeout_in_ms': 2000}, auto_rack_dc="dc1")
     host2 = (await wait_for_cql_and_get_hosts(manager.get_cql(), [servers[2]], time.time() + 60))[0]
 
     logger.info(f"creating test table")
@@ -90,7 +90,7 @@ async def test_replace_reuse_ip(request, manager: ManagerClient) -> None:
 
     await manager.server_stop_gracefully(servers[0].server_id)
     replace_cfg = ReplaceConfig(replaced_id = servers[0].server_id, reuse_ip_addr = True, use_host_id = False)
-    replace_future = asyncio.create_task(manager.server_add(replace_cfg))
+    replace_future = asyncio.create_task(manager.server_add(replace_cfg, property_file=servers[0].property_file()))
     start_time = time.time()
     next_id = 0
     logger.info(f"running write requests in a loop while the replacing node is starting")
