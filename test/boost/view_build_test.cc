@@ -551,7 +551,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_deadlock) {
         sst->open_data().get();
         t->add_sstable_and_update_cache(sst).get();
 
-        auto& sem = *with_scheduling_group(e.local_db().get_streaming_scheduling_group(), [&] () {
+        auto& sem = *with_scheduling_group(get_scheduling_groups().get().streaming_scheduling_group, [&] () {
             return &e.local_db().get_reader_concurrency_semaphore();
         }).get();
 
