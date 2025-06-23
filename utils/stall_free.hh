@@ -181,7 +181,7 @@ template <SharedPointer T>
 future<> clear_gently(foreign_ptr<T>& o) noexcept {
     return smp::submit_to(o.get_owner_shard(), [&o] {
         if (o.unwrap_on_owner_shard().use_count() == 1) {
-            return internal::clear_gently(*o);
+            return internal::clear_gently(const_cast<std::remove_const_t<typename foreign_ptr<T>::element_type>&>(*o));
         }
         return make_ready_future<>();
     });
@@ -190,7 +190,7 @@ future<> clear_gently(foreign_ptr<T>& o) noexcept {
 template <SmartPointer T>
 future<> clear_gently(foreign_ptr<T>& o) noexcept {
     return smp::submit_to(o.get_owner_shard(), [&o] {
-        return internal::clear_gently(*o);
+        return internal::clear_gently(const_cast<std::remove_const_t<typename foreign_ptr<T>::element_type>&>(*o));
     });
 }
 
@@ -205,7 +205,7 @@ future<> clear_gently(T&&... o) {
 template <SharedPointer T>
 future<> clear_gently(T& o) noexcept {
     if (o.use_count() == 1) {
-        return internal::clear_gently(*o);
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o));
     }
     return make_ready_future<>();
 }
@@ -213,7 +213,7 @@ future<> clear_gently(T& o) noexcept {
 template <SmartPointer T>
 future<> clear_gently(T& o) noexcept {
     if (auto p = o.get()) {
-        return internal::clear_gently(*p);
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*p));
     } else {
         return make_ready_future<>();
     }
@@ -222,7 +222,7 @@ future<> clear_gently(T& o) noexcept {
 template <typename T, std::size_t N>
 future<> clear_gently(std::array<T, N>& a) noexcept {
     return do_for_each(a, [] (T& o) {
-        return internal::clear_gently(o);
+        return internal::clear_gently(const_cast<std::remove_const_t<T>&>(o));
     });
 }
 
@@ -243,7 +243,7 @@ template <Sequence T>
 requires (!StringLike<T> && !TriviallyClearableSequence<T>)
 future<> clear_gently(T& v) noexcept {
     return do_until([&v] { return v.empty(); }, [&v] {
-        return internal::clear_gently(v.back()).then([&v] {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::value_type>&>(v.back())).then([&v] {
             v.pop_back();
         });
     });
@@ -254,7 +254,7 @@ template <MapLike T>
 future<> clear_gently(T& c) noexcept {
     return do_until([&c] { return c.empty(); }, [&c] {
         auto it = c.begin();
-        return internal::clear_gently(it->second).then([&c, it = std::move(it)] () mutable {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::mapped_type>&>(it->second)).then([&c, it = std::move(it)] () mutable {
             c.erase(it);
         });
     });
@@ -265,7 +265,7 @@ requires (!StringLike<T> && !Sequence<T> && !MapLike<T>)
 future<> clear_gently(T& c) noexcept {
     return do_until([&c] { return c.empty(); }, [&c] {
         auto node = c.extract(c.begin());
-        return internal::clear_gently(node.value()).finally([node = std::move(node)] {});
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::value_type>&>(node.value())).finally([node = std::move(node)] {});
     });
 }
 
@@ -274,7 +274,7 @@ requires (!StringLike<T> && !Sequence<T> && !MapLike<T> && !Extractable<T>)
 future<> clear_gently(T& c) noexcept {
     return do_until([&c] { return c.empty(); }, [&c] {
         auto it = c.begin();
-        return internal::clear_gently(*it).then([&c, it = std::move(it)] () mutable {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::value_type>&>(*it)).then([&c, it = std::move(it)] () mutable {
             c.erase(it);
         });
     });
@@ -283,7 +283,7 @@ future<> clear_gently(T& c) noexcept {
 template <typename T>
 future<> clear_gently(std::optional<T>& opt) noexcept {
     if (opt) {
-        return utils::clear_gently(*opt);
+        return utils::clear_gently(const_cast<std::remove_const_t<T>&>(*opt));
     } else {
         return make_ready_future<>();
     }
