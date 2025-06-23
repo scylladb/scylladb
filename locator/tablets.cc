@@ -335,18 +335,25 @@ void tablet_metadata::drop_tablet_map(table_id id) {
 }
 
 future<> tablet_metadata::clear_gently() {
-    for (auto&& [id, map] : _tablets) {
-        const auto shard = map.get_owner_shard();
-        co_await smp::submit_to(shard, [map = std::move(map)] () mutable {
-            auto map_ptr = map.release();
-            // Others copies exist, we simply drop ours, no need to clear anything.
-            if (map_ptr.use_count() > 1) {
-                return make_ready_future<>();
-            }
-            return const_cast<tablet_map&>(*map_ptr).clear_gently().finally([map_ptr = std::move(map_ptr)] { });
-        });
+    tablet_logger.debug("tablet_metadata::clear_gently {}", fmt::ptr(this));
+    // First, Sort the tablet maps per shard to avoid destruction of all foreign tablet map ptrs
+    // on this shard. We don't use sharded<> here since it will require a similar 
+    // submit_to to each shard owner per tablet-map.
+    std::vector<std::vector<tablet_map_ptr>> tablet_maps_per_shard;
+    tablet_maps_per_shard.resize(smp::count);
+    for (auto& [_, map_ptr] : _tablets) {
+        tablet_maps_per_shard[map_ptr.get_owner_shard()].emplace_back(std::move(map_ptr));
     }
     _tablets.clear();
+
+    // Now destroy the foreign tablet map pointers on each shard.
+    co_await smp::invoke_on_all([&] -> future<> {
+        for (auto& map_ptr : tablet_maps_per_shard[this_shard_id()]) {
+            auto map = map_ptr.release();
+            co_await utils::clear_gently(map);
+        }
+    });
+
     co_return;
 }
 
