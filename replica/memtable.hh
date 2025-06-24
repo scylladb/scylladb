@@ -107,7 +107,8 @@ struct table_stats;
 class memtable final
     : public enable_lw_shared_from_this<memtable>
     , public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>
-    , private dirty_memory_manager_logalloc::size_tracked_region {
+    , private dirty_memory_manager_logalloc::size_tracked_region
+    , public logalloc::region_listener {
 public:
     using partitions_type = double_decker<int64_t, memtable_entry,
                             dht::raw_token_less_comparator, dht::ring_position_comparator,
@@ -129,8 +130,25 @@ private:
     // mutation_source is necessary for the combined mutation source to be
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
-    uint64_t _flushed_memory = 0;
     bool _merging_into_cache = false;
+    // Tracks the difference between the amount of memory "spooled" during the flush
+    // and the memory freed during the flush.
+    //
+    // If positive, this is equal to the difference between the amount of "spooled" memory
+    // registered in dirty_memory_manager with account_potentially_cleaned_up_memory
+    // and unregistered with revert_potentially_cleaned_up_memory.
+    // If negative, the above difference is 0.
+    int64_t _flushed_memory = 0;
+    // For most of the time, this is equal to occupancy().total_memory.
+    // But we want to know the current memory usage in our logalloc::region_listener
+    // handlers, and at that point in time occupancy() is undefined. (LSA can choose to
+    // update it before or after the handler). So we track it ourselves, based on the deltas
+    // passed to the handlers.
+    uint64_t _total_memory = 0;
+    // During LSA compaction, _total_memory can fluctuate up and down.
+    // But we are only interested in the maximal total decrease since the beginning of flush.
+    // This tracks the lowest value of _total_memory seen during the flush.
+    uint64_t _total_memory_low_watermark_during_flush = 0;
     bool _merged_into_cache = false;
     replica::table_stats& _table_stats;
 
@@ -198,7 +216,6 @@ private:
     void add_flushed_memory(uint64_t);
     void remove_flushed_memory(uint64_t);
     void clear() noexcept;
-    uint64_t dirty_size() const;
 public:
     explicit memtable(schema_ptr schema, dirty_memory_manager&,
             memtable_table_shared_data& shared_data,
@@ -330,6 +347,14 @@ public:
     dirty_memory_manager& get_dirty_memory_manager() noexcept {
         return _dirty_mgr;
     }
+
+    // Implementation of region_listener.
+    virtual void increase_usage(logalloc::region* r, ssize_t delta) override;
+    virtual void decrease_evictable_usage(logalloc::region* r) override;
+    virtual void decrease_usage(logalloc::region* r, ssize_t delta) override;
+    virtual void add(logalloc::region* r) override;
+    virtual void del(logalloc::region* r) override;
+    virtual void moved(logalloc::region* old_address, logalloc::region* new_address) override;
 
     friend fmt::formatter<memtable>;
 };
