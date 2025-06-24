@@ -2635,9 +2635,8 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
                 for (auto& group : sg.merging_groups()) {
                     // Synchronize with ongoing writes that might be blocked waiting for memory.
                     // Also, disabling compaction provides stability on the sstable set.
-                    co_await group->stop("tablet merge");
                     // Flushes memtable, so all the data can be moved.
-                    co_await group->flush();
+                    co_await group->stop("tablet merge");
                     co_await main_group->merge_sstables_from(*group);
                 }
                 co_await sg.remove_empty_merging_groups();
