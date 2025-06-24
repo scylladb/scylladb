@@ -876,6 +876,34 @@ uint64_t load_stats::get_tablet_size(host_id host, const range_based_tablet_id& 
     return default_tablet_size;
 }
 
+void load_stats::reconcile_tablets_resize(token_metadata_ptr tmptr) {
+    for (auto& [host, tls] : tablet_stats) {
+        std::unordered_map<locator::range_based_tablet_id, uint64_t> reconciled_sizes;
+        for (const auto& [rb_tid, size] : tls.tablet_sizes) {
+            auto& tmap = tmptr->tablets().get_tablet_map(rb_tid.table);
+            const dht::token_range current_range = tmap.get_token_range(tmap.get_tablet_id(rb_tid.range.end()->value()));
+            if (current_range == rb_tid.range) {
+                reconciled_sizes[{rb_tid.table, current_range}] = size;
+            } else if (current_range.contains(rb_tid.range, dht::token_comparator{})) {
+                // handle merge
+                reconciled_sizes[{rb_tid.table, current_range}] += size;
+            } else if (rb_tid.range.contains(current_range, dht::token_comparator{})) {
+                // handle split
+                auto first_tablet = tmap.get_tablet_id(rb_tid.range.start()->value().next());
+                auto last_tablet = tmap.get_tablet_id(rb_tid.range.end()->value());
+                auto num_tablets = last_tablet.id - first_tablet.id + 1;
+                auto avg_size = size / num_tablets;
+                for (size_t i = first_tablet.id; i <= last_tablet.id; ++i) {
+                    auto new_range = tmap.get_token_range(tablet_id(i));
+                    reconciled_sizes[{rb_tid.table, new_range}] += avg_size;
+                }
+            }
+        }
+
+        tls.tablet_sizes = std::move(reconciled_sizes);
+    }
+}
+
 tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
     : _schema(std::move(schema))
     , _ranges(ranges)
