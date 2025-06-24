@@ -358,6 +358,9 @@ private:
     void set_version_tracker(version_tracker_t tracker);
 
     void set_shared_token_metadata(shared_token_metadata& stm);
+
+    // Clears and disposes the token metadata impl in the background, if present.
+    void clear_and_dispose_impl() noexcept;
 };
 
 struct topology_change_info {
@@ -375,6 +378,7 @@ using token_metadata_lock = semaphore_units<>;
 using token_metadata_lock_func = noncopyable_function<future<token_metadata_lock>() noexcept>;
 
 class shared_token_metadata : public peering_sharded_service<shared_token_metadata> {
+    gate _background_dispose_gate;
     mutable_token_metadata_ptr _shared;
     token_metadata_lock_func _lock_func;
     std::chrono::steady_clock::duration _stall_detector_threshold = std::chrono::seconds(2);
@@ -414,6 +418,8 @@ public:
 
     shared_token_metadata(const shared_token_metadata& x) = delete;
     shared_token_metadata(shared_token_metadata&& x) = default;
+
+    future<> stop() noexcept;
 
     mutable_token_metadata_ptr make_token_metadata_ptr() {
         return make_lw_shared<token_metadata>(*this, token_metadata::config{_shared->get_topology().get_config()});
@@ -472,6 +478,8 @@ public:
     //
     // Must be called on shard 0.
     static future<> mutate_on_all_shards(sharded<shared_token_metadata>& stm, seastar::noncopyable_function<future<> (token_metadata&)> func);
+
+    void clear_and_dispose(std::unique_ptr<token_metadata_impl> impl) noexcept;
 
 private:
     // for testing only, unsafe to be called without awaiting get_lock() first

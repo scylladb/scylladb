@@ -278,6 +278,7 @@ void simple_test() {
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
 
     std::vector<ring_point> ring_points = {
         { 1.0,  inet_address("192.100.10.1") },
@@ -361,6 +362,7 @@ void heavy_origin_test() {
 
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); },
      locator::token_metadata::config{locator::topology::config{ .local_dc_rack = locator::endpoint_dc_rack::default_location }});
+     auto stop_stm = deferred_stop(stm);
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
@@ -474,6 +476,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 
         // Initialize the token_metadata
         locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+        auto stop_stm = deferred_stop(stm);
         stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
             auto& topo = tm.get_topology();
             for (const auto& [ring_point, endpoint, id] : ring_points) {
@@ -565,6 +568,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
 
     // Initialize the token_metadata
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : ring_points) {
@@ -895,6 +899,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
     for (size_t run = 0; run < RUNS; ++run) {
         semaphore sem(1);
         shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
+        auto stop_stm = deferred_stop(stm);
 
         std::unordered_set<dht::token> random_tokens;
         while (random_tokens.size() < nodes.size() * VNODES) {
@@ -1041,6 +1046,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_compare_endpoints) {
 
     semaphore sem(1);
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         auto& topo = tm.get_topology();
         generate_topology(topo, datacenters, nodes);
@@ -1085,6 +1091,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_sort_by_proximity) {
     tm_cfg.topo_cfg.local_dc_rack = locator::endpoint_dc_rack::default_location;
     semaphore sem(1);
     shared_token_metadata stm([&sem] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         generate_topology(tm.get_topology(), datacenters, nodes);
         return make_ready_future();
@@ -1120,6 +1127,7 @@ SEASTAR_THREAD_TEST_CASE(test_topology_tracks_local_node) {
             .local_dc_rack = ip1_dc_rack,
         }
     });
+    auto stop_stm = deferred_stop(stm);
 
     // get_location() should work before any node is added
 
