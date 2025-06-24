@@ -47,7 +47,7 @@ class abstract_replication_strategy;
 
 using token = dht::token;
 
-class token_metadata;
+class shared_token_metadata;
 class tablet_metadata;
 
 struct host_id_or_endpoint {
@@ -166,6 +166,7 @@ private:
 };
 
 class token_metadata final {
+    shared_token_metadata* _shared_token_metadata = nullptr;
     std::unique_ptr<token_metadata_impl> _impl;
 private:
     friend class token_metadata_ring_splitter;
@@ -178,7 +179,7 @@ public:
     using version_t = service::topology::version_t;
     using version_tracker_t = version_tracker;
 
-    token_metadata(config cfg);
+    token_metadata(shared_token_metadata& stm, config cfg);
     explicit token_metadata(std::unique_ptr<token_metadata_impl> impl);
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     token_metadata& operator=(token_metadata&&) noexcept;
@@ -355,6 +356,8 @@ public:
     friend class shared_token_metadata;
 private:
     void set_version_tracker(version_tracker_t tracker);
+
+    void set_shared_token_metadata(shared_token_metadata& stm);
 };
 
 struct topology_change_info {
@@ -403,7 +406,7 @@ public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
     explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
-        : _shared(make_lw_shared<token_metadata>(cfg))
+        : _shared(make_lw_shared<token_metadata>(*this, cfg))
         , _lock_func(std::move(lock_func))
         , _versions_barrier("shared_token_metadata::versions_barrier")
     {
@@ -414,10 +417,11 @@ public:
     shared_token_metadata(shared_token_metadata&& x) = default;
 
     mutable_token_metadata_ptr make_token_metadata_ptr() {
-        return make_lw_shared<token_metadata>(token_metadata::config{_shared->get_topology().get_config()});
+        return make_lw_shared<token_metadata>(*this, token_metadata::config{_shared->get_topology().get_config()});
     }
 
     mutable_token_metadata_ptr make_token_metadata_ptr(token_metadata&& tm) {
+        tm.set_shared_token_metadata(*this);
         return make_lw_shared<token_metadata>(std::move(tm));
     }
 
