@@ -177,3 +177,8 @@ template <>
 struct fmt::formatter<rest::redacted_result_type> : fmt::formatter<std::string_view> {
     auto format(const rest::redacted_result_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
+
+template <>
+struct fmt::formatter<seastar::http::reply> : fmt::formatter<std::string_view> {
+    auto format(const seastar::http::reply&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
