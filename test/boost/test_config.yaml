@@ -14,6 +14,7 @@ run_first:
 # These test cannot work in case-by-case mode because
 # some test-cases depend on each other
 no_parallel_cases:
+    - encryption_at_rest_test
     - logalloc_test
     - logalloc_standard_allocator_segment_pool_backend_test
 # Enable compaction groups on tests except on a few, listed below
