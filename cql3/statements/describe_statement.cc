@@ -289,14 +289,30 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     replica::schema_describe_helper describe_helper{db};
     auto table_desc = schema->describe(describe_helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
     if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
-        // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
-        // This way, the user learns about the internals of the table, but they're also told not to execute it.
-        table_desc.create_statement = seastar::format(
-                "/* Do NOT execute this statement! It's only for informational purposes.\n"
-                "   A CDC log table is created automatically when the base is created.\n"
-                "\n{}\n"
-                "*/",
-                *table_desc.create_statement);
+        auto base_table = cdc::get_base_table(db.real_database(), ks, name);
+        auto vsc_base_table = cdc::get_vsc_base_table(db.real_database(), ks, name);
+        if (base_table && base_table->cdc_options().enabled()) {
+            // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
+            // This way, the user learns about the internals of the table, but they're also told not to execute it.
+            table_desc.create_statement = seastar::format(
+                    "/* Do NOT execute this statement! It's only for informational purposes.\n"
+                    "   A CDC log table is created automatically when the base is created.\n"
+                    "\n{}\n"
+                    "*/",
+                    *table_desc.create_statement);
+        } else if (vsc_base_table && vsc_base_table->has_vector_index()) {
+            // If the table the user wants to describe is a VSC log table, we want
+            // to print it as a CQL comment. This way, the user learns about the
+            // internals of the table, but they're also told not to execute it.
+            table_desc.create_statement = seastar::format(
+                    "/* Do NOT execute this statement! It's only for informational purposes.\n"
+                    "   A VSC log table is created automatically when the index is created.\n"
+                    "\n{}\n"
+                    "*/",
+                    *table_desc.create_statement);
+        }
+
+        
     }
     result.push_back(std::move(table_desc));
 
