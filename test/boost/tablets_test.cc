@@ -1090,7 +1090,7 @@ SEASTAR_TEST_CASE(test_sharder) {
 
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
-        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1, .local_dc_rack = locator::endpoint_dc_rack::default_location } });
+        token_metadata tokm(e.get_shared_token_metadata().local(), token_metadata::config{ .topo_cfg{ .this_host_id = h1, .local_dc_rack = locator::endpoint_dc_rack::default_location } });
         tokm.get_topology().add_or_update_endpoint(h1);
 
         std::vector<tablet_id> tablet_ids;
@@ -1305,7 +1305,13 @@ SEASTAR_TEST_CASE(test_intranode_sharding) {
 
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
-        token_metadata tokm(token_metadata::config{ .topo_cfg{ .this_host_id = h1, .local_dc_rack = locator::endpoint_dc_rack::default_location } });
+        locator::token_metadata::config tm_cfg;
+        tm_cfg.topo_cfg.this_host_id = h1;
+        tm_cfg.topo_cfg.local_dc_rack = endpoint_dc_rack::default_location;
+        semaphore sem(1);
+        shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+        auto tmptr = stm.make_token_metadata_ptr();
+        auto& tokm = *tmptr;
         tokm.get_topology().add_or_update_endpoint(h1);
 
         auto leaving_replica = tablet_replica{h1, 5};
