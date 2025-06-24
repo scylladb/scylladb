@@ -276,3 +276,48 @@ to Scylla's REST API port over the loopback (localhost) interface.
 The port on which scylla-jmx listens is by default port 7199. This port,
 and the listen address, can be overridden with the `-jp` and `-ja` options
 (respectively) of the `scylla-jmx` script.
+
+## Vector Store
+
+The Vector Search functionality within Scylla is provided by an external
+service [vector-store](https://github.com/scylla/vector-store). That service is
+responsible for creating and managing vector indexes built from data retrieved
+from Scylla using the CQL protocol and CDC functionality from a table and a
+custom index created in Scylla using `CREATE INDEX {keyspace}.{index} ON
+{table}({embedding) USING 'vector_index'`. Scylla does a vector search by
+delegating the search to the vector-store service using the HTTP API protocol.
+Scylla is the HTTP client of the vector-store service.
+
+The supported vector-store HTTP API:
+
+### `POST /api/v1/indexes/{keyspace}/{index}/ann`
+
+This endpoint is for an ANN (Approximate Nearest Neighbor) search.
+
+Parameters:
+- `keyspace`: The keyspace name of the index to search.
+- `index`: The index name to search.
+
+Request Body:
+```json
+{
+  "embedding": [0.1, 0.2, 0.3, ...],  // The vector to search for.
+  "limit": 10                         // The number of nearest neighbors to return.
+}
+```
+
+Responses:
+
+- 200 OK: Returns the nearest neighbors found.
+
+  Response Body (Structure of Arrays):
+  ```json
+  {
+    "distances": [0.1234, 0.5678, ...], // The distances to the nearest neighbors up to the limit provided by a request.
+    "primary_keys": {
+      "pk1_column_name": ["value1", "value2", ...], // The primary key values of the pk1_column_name with same size as "distances".
+      "ck1_column_name": ["value1", "value2", ...], // The primary key values of the ck1_column_name with same size as "distances".
+    }
+  }
+  ```
+
