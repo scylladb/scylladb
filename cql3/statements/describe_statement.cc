@@ -251,6 +251,24 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
     return schema_desc;
 }
 
+// `base_name` should be a table with a vector search index
+std::optional<description> describe_vsc_log_table(const data_dictionary::database& db, const sstring& ks, const sstring& base_name) {
+    auto table = db.try_find_table(ks, cdc::vsc_log_name(base_name));
+    if (!table) {
+        dlogger.warn("Couldn't find vsc log table for base table {}.{}", ks, base_name);
+        return std::nullopt;
+    }
+
+    std::ostringstream os;
+    auto schema = table->schema();
+    replica::schema_describe_helper describe_helper{db};
+    schema->describe_alter_with_properties(describe_helper, os);
+
+    auto schema_desc = schema->describe(describe_helper, describe_option::NO_STMTS);
+    schema_desc.create_statement = std::move(os).str();
+    return schema_desc;
+}
+
 future<std::vector<description>> table(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
     auto table = db.try_find_table(ks, name);
     if (!table) {
@@ -304,6 +322,13 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
         auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
         if (cdc_log_alter) {
             result.push_back(*cdc_log_alter);
+        }
+    }
+
+    if (schema->has_vector_index()) {
+        auto vsc_log_alter = describe_vsc_log_table(db, ks, name);
+        if (vsc_log_alter) {
+            result.push_back(*vsc_log_alter);
         }
     }
 
