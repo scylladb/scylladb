@@ -762,6 +762,38 @@ private:
              mutation_reader::forwarding fwd_mr,
              std::function<void(size_t)> reserve_fn) const;
 public:
+    // note: there's nothing synchronizing value between shards, so it's absolutely possible
+    // to get different values on different shards - we don't care that much, because the value
+    // will close in on "real thing" over time.
+    template <typename T> class simple_value_with_expiry {
+        std::chrono::nanoseconds expire_when;
+        std::optional<T> value;
+    public:
+        std::optional<T> get() const {
+            auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(lowres_clock::now().time_since_epoch());
+            if (now <= expire_when) {
+                return value;
+            }
+            return std::nullopt;
+        }
+        std::chrono::nanoseconds set_now(T v, std::chrono::nanoseconds ttl) {
+            auto now = std::chrono::duration_cast<std::chrono::nanoseconds>((lowres_clock::now() + ttl).time_since_epoch());
+            if (now <= expire_when) {
+                now = expire_when + std::chrono::nanoseconds{ 1 };
+            }
+            value = std::move(v);
+            expire_when = now;
+            return now;
+            
+        }
+        void set(std::uint64_t v, std::chrono::nanoseconds expiry) {
+            if (expiry > expire_when) {
+                expire_when = expiry;
+                value = v;
+            }
+        }
+    };
+
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
     future<> init_storage();
