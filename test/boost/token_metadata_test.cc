@@ -31,13 +31,11 @@ namespace {
         };
     }
 
-    mutable_token_metadata_ptr create_token_metadata(host_id this_host_id) {
-        return make_lw_shared<token_metadata>(token_metadata::config {
-            topology::config {
-                .this_host_id = this_host_id,
-                .local_dc_rack = get_dc_rack(this_host_id)
-            }
-        });
+    token_metadata::config create_token_metadata_config(host_id this_host_id) {
+        return token_metadata::config{topology::config{
+            .this_host_id = this_host_id,
+            .local_dc_rack = get_dc_rack(this_host_id)
+        }};
     }
 
     template <typename Strategy>
@@ -55,7 +53,10 @@ SEASTAR_THREAD_TEST_CASE(test_pending_and_read_endpoints_for_everywhere_strategy
     const auto t1 = dht::token::from_int64(10);
     const auto t2 = dht::token::from_int64(20);
 
-    auto token_metadata = create_token_metadata(e1_id);
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto token_metadata = stm.make_token_metadata_ptr();
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_normal_tokens({t1}, e1_id).get();
@@ -75,7 +76,10 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_second_node) {
     const auto e1_id = gen_id(1);
     const auto e2_id = gen_id(2);
 
-    auto token_metadata = create_token_metadata(e1_id);
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto token_metadata = stm.make_token_metadata_ptr();
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_normal_tokens({t1}, e1_id).get();
@@ -103,7 +107,10 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_bootstrap_with_replicas) {
     const auto e2_id = gen_id(2);
     const auto e3_id = gen_id(3);
 
-    auto token_metadata = create_token_metadata(e1_id);
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto token_metadata = stm.make_token_metadata_ptr();
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -133,7 +140,10 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_leave_with_replicas) {
     const auto e2_id = gen_id(2);
     const auto e3_id = gen_id(3);
 
-    auto token_metadata = create_token_metadata(e1_id);
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto token_metadata = stm.make_token_metadata_ptr();
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -165,7 +175,10 @@ SEASTAR_THREAD_TEST_CASE(test_pending_endpoints_for_replace_with_replicas) {
     const auto e3_id = gen_id(3);
     const auto e4_id = gen_id(4);
 
-    auto token_metadata = create_token_metadata(e1_id);
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto token_metadata = stm.make_token_metadata_ptr();
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -201,7 +214,10 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     const auto e2_id = gen_id(2);
     const auto e3_id = gen_id(3);
 
-    auto token_metadata = create_token_metadata(e1_id);
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto token_metadata = stm.make_token_metadata_ptr();
     token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
     token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
     token_metadata->update_topology(e3_id, get_dc_rack(e3_id), node::state::normal);
@@ -254,7 +270,10 @@ SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
     const auto e1_id1 = gen_id(1);
     const auto e1_id2 = gen_id(2);
 
-    auto token_metadata = create_token_metadata(e1_id2);
+    semaphore sem(1);
+    auto tm_cfg = create_token_metadata_config(e1_id2);
+    shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+    auto token_metadata = stm.make_token_metadata_ptr();
     token_metadata->update_topology(e1_id1, get_dc_rack(e1_id1), node::state::being_replaced);
     token_metadata->update_normal_tokens({t1}, e1_id1).get();
 
