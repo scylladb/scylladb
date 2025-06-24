@@ -1599,7 +1599,7 @@ private:
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
     std::vector<std::any> _listeners;
-    const locator::shared_token_metadata& _shared_token_metadata;
+    locator::shared_token_metadata& _shared_token_metadata;
     lang::manager& _lang_manager;
 
     reader_concurrency_semaphore_group _reader_concurrency_semaphores_group;
@@ -1684,7 +1684,7 @@ public:
     // (keyspace/table definitions, column mappings etc.)
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
-    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, const locator::shared_token_metadata& stm,
+    database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
             compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&, const abort_source& abort,
             utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
@@ -1719,7 +1719,7 @@ public:
         return _compaction_manager;
     }
 
-    const locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
+    locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }
     const locator::token_metadata& get_token_metadata() const { return *_shared_token_metadata.get(); }
 
