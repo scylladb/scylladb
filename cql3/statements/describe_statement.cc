@@ -300,7 +300,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
         co_await coroutine::maybe_yield();
     }
 
-    if (schema->cdc_options().enabled() || schema->has_vector_index()) {
+    if (schema->cdc_options().enabled()) {
         auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
         if (cdc_log_alter) {
             result.push_back(*cdc_log_alter);
