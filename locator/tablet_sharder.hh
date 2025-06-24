@@ -40,7 +40,7 @@ private:
         return std::nullopt;
     };
 
-    dht::shard_replica_set shard_for_writes(tablet_id tid, host_id host, std::optional<write_replica_set_selector> sel = std::nullopt) const {
+    dht::shard_replica_set choose_shard_for_writes(tablet_id tid, host_id host, std::optional<write_replica_set_selector> sel = std::nullopt) const {
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
         auto& tinfo = _tmap->get_tablet_info(tid);
         dht::shard_replica_set shards;
@@ -78,7 +78,7 @@ private:
         return shards;
     }
 
-    std::optional<shard_id> shard_for_reads(tablet_id tid, host_id host) const {
+    std::optional<shard_id> choose_shard_for_reads(tablet_id tid, host_id host) const {
         ensure_tablet_map();
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
         auto& tinfo = _tmap->get_tablet_info(tid);
@@ -107,13 +107,10 @@ public:
 
     virtual ~tablet_sharder() = default;
 
-    virtual unsigned shard_for_reads(const token& t) const override {
+    virtual std::optional<unsigned> try_get_shard_for_reads(const token& t) const override {
         ensure_tablet_map();
         auto tid = _tmap->get_tablet_id(t);
-        // FIXME: Consider throwing when there is no owning shard on the current host rather than returning 0.
-        // It's a coordination mistake to route requests to non-owners. Topology coordinator should synchronize
-        // with request coordinators before moving the shard away.
-        auto shard = shard_for_reads(tid, _host).value_or(0);
+        auto shard = choose_shard_for_reads(tid, _host);
         tablet_logger.trace("[{}] shard_of({}) = {}, tablet={}", _table, t, shard, tid);
         return shard;
     }
@@ -121,7 +118,7 @@ public:
     virtual dht::shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel = std::nullopt) const override {
         ensure_tablet_map();
         auto tid = _tmap->get_tablet_id(t);
-        auto shards = shard_for_writes(tid, _host, sel);
+        auto shards = choose_shard_for_writes(tid, _host, sel);
         tablet_logger.trace("[{}] shard_for_writes({}) = {}, tablet={}", _table, t, shards, tid);
         return shards;
     }
@@ -130,7 +127,7 @@ public:
         ensure_tablet_map();
         std::optional<tablet_id> tb = _tmap->get_tablet_id(t);
         while ((tb = _tmap->next_tablet(*tb))) {
-            auto r = shard_for_reads(*tb, _host);
+            auto r = choose_shard_for_reads(*tb, _host);
             auto next = _tmap->get_first_token(*tb);
             tablet_logger.trace("[{}] token_for_next_shard({}) = {{{}, {}}}, tablet={}", _table, t, next, r, *tb);
             return dht::shard_and_token{r.value_or(0), next};
