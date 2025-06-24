@@ -222,13 +222,18 @@ fmt::formatter<rest::httpclient::request_type>::format(const rest::httpclient::r
 
 auto 
 fmt::formatter<rest::httpclient::result_type>::format(const rest::httpclient::result_type& r, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    auto s = r.reply.response_line();
+    return fmt::format_to(ctx.out(), "{}", r.reply);
+}
+
+auto 
+fmt::formatter<seastar::http::reply>::format(const seastar::http::reply& r, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto s = r.response_line();
     // remove the trailing \r\n from response_line string. we want our own linebreak, hence substr.
     auto os = fmt::format_to(ctx.out(), "{}{}", std::string_view(s).substr(0, s.size()-2), linesep);
-    for (auto& [k, v] : r.reply._headers) {
+    for (auto& [k, v] : r._headers) {
         os = fmt::format_to(os, "{}: {}{}", k, v, linesep);
     }
-    os = fmt::format_to(os, "{}{}", linesep, r.body());
+    os = fmt::format_to(os, "{}{}", linesep, r._content);
     return os;
 }
 
