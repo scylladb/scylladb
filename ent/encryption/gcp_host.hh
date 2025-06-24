@@ -65,6 +65,8 @@ public:
     ~gcp_host();
 
     future<> init();
+    future<> stop();
+
     const host_options& options() const;
 
     struct option_override : public t_credentials_source<std::optional<std::string>> {
