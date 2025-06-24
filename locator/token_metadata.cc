@@ -840,11 +840,20 @@ token_metadata::token_metadata(shared_token_metadata& stm, config cfg)
 {
 }
 
-token_metadata::~token_metadata() = default;
+token_metadata::~token_metadata() {
+    clear_and_dispose_impl();
+}
 
 token_metadata::token_metadata(token_metadata&&) noexcept = default;
 
-token_metadata& token_metadata::token_metadata::operator=(token_metadata&&) noexcept = default;
+token_metadata& token_metadata::token_metadata::operator=(token_metadata&& o) noexcept {
+    if (this != &o) {
+        clear_and_dispose_impl();
+        _shared_token_metadata = std::exchange(o._shared_token_metadata, nullptr);
+        _impl = std::exchange(o._impl, nullptr);
+    }
+    return *this;
+}
 
 void token_metadata::set_shared_token_metadata(shared_token_metadata& stm) {
     _shared_token_metadata = &stm;
@@ -1032,6 +1041,15 @@ token_metadata::clone_after_all_left() const noexcept {
     co_return token_metadata(co_await _impl->clone_after_all_left());
 }
 
+void token_metadata::clear_and_dispose_impl() noexcept {
+    if (!_shared_token_metadata) {
+        return;
+    }
+    if (auto impl = std::exchange(_impl, nullptr)) {
+        _shared_token_metadata->clear_and_dispose(std::move(impl));
+    }
+}
+
 future<> token_metadata::clear_gently() noexcept {
     return _impl->clear_gently();
 }
@@ -1146,6 +1164,17 @@ version_tracker shared_token_metadata::new_tracker(token_metadata::version_t ver
     auto tracker = version_tracker(_versions_barrier.start(), version);
     _trackers.push_front(tracker);
     return tracker;
+}
+
+future<> shared_token_metadata::stop() noexcept {
+    co_await _background_dispose_gate.close();
+}
+
+void shared_token_metadata::clear_and_dispose(std::unique_ptr<token_metadata_impl> impl) noexcept {
+    // Safe to drop the future since the gate is closed in stop()
+    if (auto gh = _background_dispose_gate.try_hold()) {
+        (void)impl->clear_gently().finally([i = std::move(impl), gh = std::move(gh)] {});
+    }
 }
 
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
