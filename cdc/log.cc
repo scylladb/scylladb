@@ -677,6 +677,7 @@ static schema_ptr create_log_schema_for_vsc(const schema& s, std::optional<table
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("VSC log for {}.{}", s.ks_name(), s.cf_name()));
     auto ttl_seconds = 86400;
+    b.set_gc_grace_seconds(0);
     auto window_seconds = ttl_seconds / 24;
     auto window_minutes = window_seconds / 60;
     b.set_compaction_strategy_options({
