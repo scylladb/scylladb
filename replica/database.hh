@@ -768,22 +768,26 @@ public:
     template <typename T> class simple_value_with_expiry {
         std::chrono::nanoseconds expire_when;
         std::optional<T> value;
+
+        static auto now() {
+            return std::chrono::high_resolution_clock::now();
+        }
     public:
         std::optional<T> get() const {
-            auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(lowres_clock::now().time_since_epoch());
-            if (now <= expire_when) {
+            auto n = std::chrono::duration_cast<std::chrono::nanoseconds>(now().time_since_epoch());
+            if (n <= expire_when) {
                 return value;
             }
             return std::nullopt;
         }
         std::chrono::nanoseconds set_now(T v, std::chrono::nanoseconds ttl) {
-            auto now = std::chrono::duration_cast<std::chrono::nanoseconds>((lowres_clock::now() + ttl).time_since_epoch());
-            if (now <= expire_when) {
-                now = expire_when + std::chrono::nanoseconds{ 1 };
+            auto n = std::chrono::duration_cast<std::chrono::nanoseconds>((now() + ttl).time_since_epoch());
+            if (n <= expire_when) {
+                n = expire_when + std::chrono::nanoseconds{ 1 };
             }
             value = std::move(v);
-            expire_when = now;
-            return now;
+            expire_when = n;
+            return n;
             
         }
         void set(std::uint64_t v, std::chrono::nanoseconds expiry) {
@@ -793,6 +797,14 @@ public:
             }
         }
     };
+
+private:
+    simple_value_with_expiry<std::uint64_t> _table_size_in_bytes;
+
+public:
+    auto &table_size_in_bytes() {
+        return _table_size_in_bytes;
+    }
 
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
