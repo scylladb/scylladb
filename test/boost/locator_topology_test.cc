@@ -14,6 +14,7 @@
 #include <functional>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/util/closeable.hh>
 
 #include "locator/types.hh"
 #include "test/lib/scylla_test_case.hh"
@@ -213,6 +214,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
             .local_dc_rack = locator::endpoint_dc_rack::default_location
         }
     });
+    auto stop_stm = deferred_stop(stm);
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         tm.update_topology(host1, locator::endpoint_dc_rack::default_location, node::state::normal, node1_shard_count);
