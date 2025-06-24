@@ -101,6 +101,7 @@ public:
     ~impl() = default;
 
     future<> init();
+    future<> stop();
     const host_options& options() const {
         return _options;
     }
@@ -840,6 +841,11 @@ future<> encryption::gcp_host::impl::init() {
     _initialized = true;
 }
 
+future<> encryption::gcp_host::impl::stop() {
+    co_await _attr_cache.stop();
+    co_await _id_cache.stop();
+}
+
 std::tuple<std::string, std::string> encryption::gcp_host::impl::parse_key(std::string_view spec) {
     auto i = spec.find_last_of('/');
     if (i == std::string_view::npos) {
@@ -1000,6 +1006,10 @@ encryption::gcp_host::~gcp_host() = default;
 
 future<> encryption::gcp_host::init() {
     return _impl->init();
+}
+
+future<> encryption::gcp_host::stop() {
+    return _impl->stop();
 }
 
 const encryption::gcp_host::host_options& encryption::gcp_host::options() const {
