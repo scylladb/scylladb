@@ -675,7 +675,7 @@ static schema_ptr create_log_schema_for_vsc(const schema& s, std::optional<table
     schema_builder b(s.ks_name(), vsc_log_name(s.cf_name()));
     b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
-    b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
+    b.set_comment(fmt::format("VSC log for {}.{}", s.ks_name(), s.cf_name()));
     auto ttl_seconds = 86400;
     auto window_seconds = ttl_seconds / 24;
     auto window_minutes = window_seconds / 60;
