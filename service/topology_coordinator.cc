@@ -1777,6 +1777,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
 
         auto tm = get_token_metadata_ptr();
+        lw_shared_ptr<locator::load_stats> full_stats { make_lw_shared<locator::load_stats>() };
+        for (auto& [host, stats] : _load_stats_per_node) {
+            rtlogger.debug("Reconciling tablets for host: {}", host);
+            stats.reconcile_tablets_resize(tm);
+            *full_stats += stats;
+        }
+        _tablet_allocator.set_load_stats(std::move(full_stats));
         auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
 
         std::vector<canonical_mutation> updates;
