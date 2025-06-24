@@ -841,6 +841,7 @@ SEASTAR_TEST_CASE(test_get_shard) {
                         .local_dc_rack = locator::endpoint_dc_rack::default_location
                 }
         });
+        auto stop_stm = deferred_stop(stm);
 
         tablet_id tid(0);
         tablet_id tid1(0);
@@ -1310,6 +1311,7 @@ SEASTAR_TEST_CASE(test_intranode_sharding) {
         tm_cfg.topo_cfg.local_dc_rack = endpoint_dc_rack::default_location;
         semaphore sem(1);
         shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+        auto stop_stm = deferred_stop(stm);
         auto tmptr = stm.make_token_metadata_ptr();
         auto& tokm = *tmptr;
         tokm.get_topology().add_or_update_endpoint(h1);
@@ -3785,6 +3787,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
     tm_cfg.topo_cfg.this_host_id = test_config.ring_points[0].id;
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
+    auto stop_stm = deferred_stop(stm);
 
     // Initialize the token_metadata
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
