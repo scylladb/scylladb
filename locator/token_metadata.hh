@@ -371,12 +371,7 @@ struct topology_change_info {
 using token_metadata_lock = semaphore_units<>;
 using token_metadata_lock_func = noncopyable_function<future<token_metadata_lock>() noexcept>;
 
-template <typename... Args>
-mutable_token_metadata_ptr make_token_metadata_ptr(Args... args) {
-    return make_lw_shared<token_metadata>(std::forward<Args>(args)...);
-}
-
-class shared_token_metadata {
+class shared_token_metadata : public peering_sharded_service<shared_token_metadata> {
     mutable_token_metadata_ptr _shared;
     token_metadata_lock_func _lock_func;
     std::chrono::steady_clock::duration _stall_detector_threshold = std::chrono::seconds(2);
@@ -408,7 +403,7 @@ public:
     // used to construct the shared object as a sharded<> instance
     // lock_func returns semaphore_units<>
     explicit shared_token_metadata(token_metadata_lock_func lock_func, token_metadata::config cfg)
-        : _shared(make_token_metadata_ptr(std::move(cfg)))
+        : _shared(make_lw_shared<token_metadata>(cfg))
         , _lock_func(std::move(lock_func))
     {
         _shared->set_version_tracker(new_tracker(_shared->get_version()));
@@ -416,6 +411,14 @@ public:
 
     shared_token_metadata(const shared_token_metadata& x) = delete;
     shared_token_metadata(shared_token_metadata&& x) = default;
+
+    mutable_token_metadata_ptr make_token_metadata_ptr() {
+        return make_lw_shared<token_metadata>(token_metadata::config{_shared->get_topology().get_config()});
+    }
+
+    mutable_token_metadata_ptr make_token_metadata_ptr(token_metadata&& tm) {
+        return make_lw_shared<token_metadata>(std::move(tm));
+    }
 
     token_metadata_ptr get() const noexcept {
         return _shared;
