@@ -107,13 +107,10 @@ public:
 
     virtual ~tablet_sharder() = default;
 
-    virtual unsigned shard_for_reads(const token& t) const override {
+    virtual std::optional<unsigned> try_get_shard_for_reads(const token& t) const override {
         ensure_tablet_map();
         auto tid = _tmap->get_tablet_id(t);
-        // FIXME: Consider throwing when there is no owning shard on the current host rather than returning 0.
-        // It's a coordination mistake to route requests to non-owners. Topology coordinator should synchronize
-        // with request coordinators before moving the shard away.
-        auto shard = shard_for_reads(tid, _host).value_or(0);
+        auto shard = shard_for_reads(tid, _host);
         tablet_logger.trace("[{}] shard_of({}) = {}, tablet={}", _table, t, shard, tid);
         return shard;
     }

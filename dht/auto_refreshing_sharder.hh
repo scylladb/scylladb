@@ -41,7 +41,7 @@ public:
 
     virtual ~auto_refreshing_sharder();
 
-    virtual unsigned shard_for_reads(const token& t) const override;
+    virtual std::optional<unsigned> try_get_shard_for_reads(const token& t) const override;
 
     virtual dht::shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const override;
 

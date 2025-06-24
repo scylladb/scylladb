@@ -55,6 +55,12 @@ public:
     virtual ~sharder() = default;
 
     /**
+    * Returns the shard that handles a particular token for reads, or empty if this
+    * node doesn't contain data for it.
+    */
+    virtual std::optional<unsigned> try_get_shard_for_reads(const token& t) const = 0;
+
+    /**
      * Returns the shard that handles a particular token for reads.
      * Use shard_for_writes() to determine the set of shards that should receive writes.
      *
@@ -67,7 +73,12 @@ public:
      *   }
      *
      */
-    virtual unsigned shard_for_reads(const token& t) const = 0;
+    unsigned shard_for_reads(const token& t) const {
+        // FIXME: Consider throwing when there is no owning shard on the current host rather than returning 0.
+        // It's a coordination mistake to route requests to non-owners. Topology coordinator should synchronize
+        // with request coordinators before moving the shard away.
+        return try_get_shard_for_reads(t).value_or(0);
+    }
 
     /**
      * Returns the set of shards which should receive a write to token t.
@@ -134,7 +145,7 @@ public:
     virtual std::optional<shard_and_token> next_shard(const token& t) const;
     virtual token token_for_next_shard(const token& t, shard_id shard, unsigned spans = 1) const;
 
-    virtual unsigned shard_for_reads(const token& t) const override;
+    virtual std::optional<unsigned> try_get_shard_for_reads(const token& t) const override;
     virtual shard_replica_set shard_for_writes(const token& t, std::optional<write_replica_set_selector> sel) const override;
     virtual token token_for_next_shard_for_reads(const token& t, shard_id shard, unsigned spans = 1) const override;
     virtual std::optional<shard_and_token> next_shard_for_reads(const token& t) const override;
