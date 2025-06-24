@@ -447,8 +447,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
             if max_failures != 0 and max_failures <= failed:
                 print("Too much failures, stopping")
                 await cancel(pending, "Too much failures, stopping")
-    except asyncio.CancelledError:
-        return
     finally:
         await TestSuite.artifacts.cleanup_before_exit()
 
@@ -521,6 +519,9 @@ async def main() -> int:
         stop_event.set()
         async with asyncio.timeout(5):
             await resource_watcher
+    except asyncio.CancelledError:
+        print('\ntests cancelled by signal')
+        return 1
     except Exception as e:
         print(palette.fail(e))
         raise
