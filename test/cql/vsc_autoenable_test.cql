@@ -1,0 +1,23 @@
+-- Important: using the same partition key for each row so the results of select from log table
+-- do not depend on how stream IDs are assigned to partition keys.
+
+-- Error messages contain a keyspace name. Make the output stable.
+-- CDC and tablets are not working together yet, turn them off.
+CREATE KEYSPACE ks
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
+    tablets = {'enabled': false};
+
+-- create cdc enabled table
+create table ks.t (pk int, ck int, v vector<float, 3>, primary key(pk, ck));
+
+-- create index on vector column using 'vector_index' custom class
+-- this enables VSC automatically
+create index on ks.t (v) using 'vector_index';
+
+-- this write goes to the log
+insert into ks.t (pk, ck, v) values (0, 1, [100.0, 101.0, 102.0]);
+
+-- should work, and give one row (0, 1, [100.0, 101.0, 102.0])
+select "cdc$batch_seq_no", "cdc$operation", "cdc$ttl", pk, ck, v from ks.t_scylla_vsc_log;
+
+DROP KEYSPACE ks;
