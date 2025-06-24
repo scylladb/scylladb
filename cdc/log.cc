@@ -181,12 +181,15 @@ public:
         bool is_cdc = new_schema.cdc_options().enabled();
         bool was_cdc = old_schema.cdc_options().enabled();
 
+        bool is_vsc = new_schema.has_vector_index();
+        bool was_vsc = old_schema.has_vector_index();
+
         // if we are turning off cdc we can skip this, since even if columns change etc,
         // any writer should see cdc -> off together with any actual schema changes to
         // base table, so should never try to write to non-existent log column etc.
         // note that if user has set ttl=0 in cdc options, he is still responsible
         // for emptying the log. 
-        if (is_cdc) {
+        if (is_cdc || is_vsc) {
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(old_schema.cf_name());
             auto& keyspace = db.find_keyspace(old_schema.ks_name());
@@ -216,9 +219,6 @@ public:
 
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
         }
-
-        bool is_vsc = check_if_vector_index_exists(new_schema);
-        bool was_vsc = check_if_vector_index_exists(old_schema);
 
         if (is_vsc) {
             auto& db = _ctxt._proxy.get_db().local();
@@ -309,17 +309,6 @@ private:
             throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because keyspace uses tablets. See issue #16317.",
                 schema.ks_name(), schema.cf_name()));
         }
-    }
-
-    static bool check_if_vector_index_exists(const schema& s) {
-        auto i = s.indices();
-        return std::any_of(i.begin(), i.end(), [](const auto& index) {
-            auto it = index.options().find("class_name");
-            if (it != index.options().end()) {
-                return it->second == "vector_index";
-            }
-            return false;
-        });    
     }
 };
 
@@ -1897,7 +1886,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        auto s = m.schema();
+        return s->cdc_options().enabled() || s->has_vector_index();
     });
 
     if (i == e) {
@@ -1913,7 +1903,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             auto& m = mutations[idx];
             auto s = m.schema();
 
-            if (!s->cdc_options().enabled()) {
+            if (!s->cdc_options().enabled() || !s->has_vector_index()) {
                 return make_ready_future<>();
             }
 
@@ -1978,7 +1968,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
 bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutations) const {
     return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        auto s = m.schema();
+        return s->cdc_options().enabled() || s->has_vector_index();
     });
 }
 

@@ -2458,7 +2458,7 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
     // We use the first path for CDC mutations (if present) and the latter for "paxos mutations".
     // Attempts to send both kinds of mutations in one shot caused an infinite loop.
     future<> f_cdc = make_ready_future<>();
-    if (_schema->cdc_options().enabled()) {
+    if (_schema->cdc_options().enabled() || _schema->has_vector_index()) {
         auto update_mut = decision->update.unfreeze(_schema);
         const auto base_tbl_id = update_mut.column_family_id();
         std::vector<mutation> update_mut_vec{std::move(update_mut)};
