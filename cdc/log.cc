@@ -655,29 +655,18 @@ static schema_ptr create_log_schema_for_vsc(const schema& s, std::optional<table
     b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
-    auto ttl_seconds = s.cdc_options().ttl();
-    if (ttl_seconds > 0) {
-        b.set_gc_grace_seconds(0);
-        auto ceil = [] (int dividend, int divisor) {
-            return dividend / divisor + (dividend % divisor == 0 ? 0 : 1);
-        };
-        auto seconds_to_minutes = [] (int seconds_value) {
-            using namespace std::chrono;
-            return std::chrono::ceil<minutes>(seconds(seconds_value)).count();
-        };
-        // What's the minimum window that won't create more than 24 sstables.
-        auto window_seconds = ceil(ttl_seconds, 24);
-        auto window_minutes = seconds_to_minutes(window_seconds);
-        b.set_compaction_strategy_options({
-                {"compaction_window_unit", "MINUTES"},
-                {"compaction_window_size", std::to_string(window_minutes)},
-                // A new SSTable will become fully expired every
-                // `window_seconds` seconds so we shouldn't check for expired
-                // sstables too often.
-                {"expired_sstable_check_frequency_seconds",
-                        std::to_string(std::max(1, window_seconds / 2))},
-        });
-    }
+    auto ttl_seconds = 86400;
+    auto window_seconds = ttl_seconds / 24;
+    auto window_minutes = window_seconds / 60;
+    b.set_compaction_strategy_options({
+            {"compaction_window_unit", "MINUTES"},
+            {"compaction_window_size", std::to_string(window_minutes)},
+            // A new SSTable will become fully expired every
+            // `window_seconds` seconds so we shouldn't check for expired
+            // sstables too often.
+            {"expired_sstable_check_frequency_seconds",
+                    std::to_string(std::max(1, window_seconds / 2))},
+    });
     b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
     b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
