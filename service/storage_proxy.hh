@@ -88,6 +88,7 @@ class mutation_holder;
 class client_state;
 class migration_manager;
 struct hint_wrapper;
+struct batchlog_replay_mutation;
 struct read_repair_mutation;
 
 using replicas_per_token_range = std::unordered_map<dht::token_range, std::vector<locator::host_id>>;
@@ -341,6 +342,7 @@ private:
             const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change, tracing::trace_state_ptr tr_state, storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable);
     result<response_id_type> create_write_response_handler(const mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const hint_wrapper&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
+    result<response_id_type> create_write_response_handler(const batchlog_replay_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const read_repair_mutation&, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
     result<response_id_type> create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& proposal,
             db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit);
@@ -633,6 +635,8 @@ public:
     future<result<>> mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit);
 
     future<> send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s);
+
+    future<> send_batchlog_replay_to_all_replicas(std::vector<mutation> mutations, clock_type::time_point timeout);
 
     // Send a mutation to one specific remote target.
     // Inspired by Cassandra's StorageProxy.sendToHintedEndpoints but without
