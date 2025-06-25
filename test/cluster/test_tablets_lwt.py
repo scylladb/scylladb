@@ -539,3 +539,56 @@ async def test_paxos_state_table_permissions(manager: ManagerClient):
         # Relogin as a default user to be able to DROP the test keyspace
         await manager.driver_connect()
         cql = manager.get_cql()
+
+
+@pytest.mark.asyncio
+async def test_lwt_coordinator_shard(manager: ManagerClient):
+    # The test checks that an LWT coordinator runs on a replica shard, and not on a 'default' (zero) shard.
+    # Scenario:
+    # 1. Start a cluster with one node with --smp 2
+    # 2. Create a table with one tablet and one replica, move tablet to the second shard
+    # 3. Start another node
+    # 4. Run an LWT on the second node, check the logs and assert that an LWT was executed on shard 1
+    # Note: Before the changes in storage_proxy/get_cas_shard, the last LWT would be executed
+    # on shard 0 of the second node because this node doesn't host any replicas of the
+    # tablet, and sharder.shard_for_reads would return 0 as the 'default' shard.
+
+    logger.info("Starting the first node")
+    cmdline = [
+        '--logger-log-level', 'paxos=trace',
+        '--smp', '2'
+    ]
+    servers = [await manager.server_add(cmdline=cmdline)]
+    cql = manager.get_cql()
+
+    logger.info("Disable tablet balancing")
+    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        logger.info("Create a table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Migrating the tablet to shard 1")
+        n1_host_id = await manager.get_host_id(servers[0].server_id)
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert len(tablets) == 1
+        tablet = tablets[0]
+        assert len(tablet.replicas) == 1
+        old_replica = tablet.replicas[0]
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", *old_replica,
+                                      *(n1_host_id, 1), tablet.last_token)
+
+        logger.info("Starting a second node")
+        servers += [await manager.server_add(cmdline=cmdline)]
+
+        logger.info("Wait for cql and get hosts")
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logger.info(f"Execute CAS on {hosts[1]}")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS", host=hosts[1])
+
+        n2_log = await manager.server_open_log(servers[1].server_id)
+        matches = await n2_log.grep("CAS\\[0\\] successful")
+        assert len(matches) == 1
+        assert "shard 1" in matches[0][0]
