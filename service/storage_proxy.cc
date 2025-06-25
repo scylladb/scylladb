@@ -1164,13 +1164,24 @@ const dht::token& end_token(const dht::partition_range& r) {
     return r.end() ? r.end()->value().token() : max_token;
 }
 
-static unsigned get_cas_shard(const schema& s, dht::token token) {
-    return s.table().shard_for_reads(token);
+static unsigned get_cas_shard(const schema& s, dht::token token, const locator::effective_replication_map& erm) {
+    if (const auto shard = erm.get_sharder(s).try_get_shard_for_reads(token); shard) {
+        return *shard;
+    }
+    if (const auto& rs = erm.get_replication_strategy(); rs.uses_tablets()) {
+        const auto& tablet_map = erm.get_token_metadata().tablets().get_tablet_map(s.id());
+        const auto tablet_id = tablet_map.get_tablet_id(token);
+        return tablet_map.get_primary_replica(tablet_id).shard % smp::count;
+    } else {
+        on_internal_error(paxos::paxos_state::logger,
+            format("failed to detect shard for reads for non-tablet-based rs {}, table {}.{}", 
+                rs.get_type(), s.ks_name(), s.cf_name()));
+    }
 }
 
 cas_shard::cas_shard(const schema& s, dht::token token)
     : _token_guard(s.table(), token)
-    , _shard(get_cas_shard(s, token))
+    , _shard(get_cas_shard(s, token, *_token_guard.get_erm()))
 {
 }
 
@@ -6551,7 +6562,10 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
     db::validate_for_cas(cl_for_paxos);
     db::validate_for_cas_learn(cl_for_learn, schema->ks_name());
 
-    if (get_cas_shard(*schema, partition_ranges[0].start()->value().as_decorated_key().token()) != this_shard_id()) {
+    auto token_guard = std::move(cas_shard).token_guard();
+    auto key = partition_ranges[0].start()->value().as_decorated_key();
+    const auto token = key.token();
+    if (get_cas_shard(*schema, token, *token_guard.get_erm()) != this_shard_id()) {
         on_internal_error(paxos::paxos_state::logger, "storage_proxy::cas called on a wrong shard");
     }
 
@@ -6566,9 +6580,9 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
     shared_ptr<paxos_response_handler> handler;
     try {
         handler = seastar::make_shared<paxos_response_handler>(shared_from_this(),
-                std::move(cas_shard).token_guard(),
+                std::move(token_guard),
                 query_options.trace_state, query_options.permit,
-                partition_ranges[0].start()->value().as_decorated_key(),
+                std::move(key),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
         write ?  get_stats().cas_write_unavailables.mark() : get_stats().cas_read_unavailables.mark();
@@ -6580,7 +6594,6 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
 
     unsigned contentions = 0;
 
-    dht::token token = partition_ranges[0].start()->value().as_decorated_key().token();
     utils::latency_counter lc;
     lc.start();
 
