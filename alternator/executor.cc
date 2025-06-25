@@ -256,7 +256,7 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
 // the limit. The second limit is also one of the reasons why the first limit
 // is set lower than 222 - to have room to enable streams which add the extra
 // suffix "_scylla_cdc_log" to the table name.
-static constexpr int max_table_name_length = 222;
+static constexpr int max_table_name_length = 192;
 static constexpr int max_auxiliary_table_name_length = 222;
 
 static bool valid_table_name_chars(std::string_view name) {
