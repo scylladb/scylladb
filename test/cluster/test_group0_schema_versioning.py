@@ -312,7 +312,7 @@ async def test_upgrade(manager: ManagerClient):
     await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logger.info("Creating keyspace and table")
-    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks_name:
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks_name:
         table = f"{ks_name}.t"
         await verify_table_versions_synced(cql, hosts)
         await cql.run_async(f"create table {table} (pk int primary key)")
