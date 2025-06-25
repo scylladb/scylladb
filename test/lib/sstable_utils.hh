@@ -120,7 +120,7 @@ public:
         _sst->_run_identifier = identifier;
     }
 
-    future<> store(sstring dir, sstables::generation_type generation) {
+    future<sstable_ptr> store(sstring dir, sstables::generation_type generation) {
         _sst->_generation = generation;
         co_await _sst->_storage->change_dir_for_test(dir);
         _sst->_recognized_components.erase(component_type::Index);
@@ -133,6 +133,7 @@ public:
             sst->write_summary();
             sst->seal_sstable(false).get();
         });
+        co_return _sst;
     }
 
     // Used to create synthetic sstables for testing leveled compaction strategy.

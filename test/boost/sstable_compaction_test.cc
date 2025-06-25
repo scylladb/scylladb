@@ -3657,7 +3657,6 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         auto partial_sstable_run_sst = make_sstable_easy(env, make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut)), sst_cfg);
 
         column_family_test(cf).add_sstable(partial_sstable_run_sst).get();
-        column_family_test::update_sstables_known_generation(*cf, partial_sstable_run_sst->generation());
 
         auto generation_exists = [&cf] (sstables::generation_type generation) {
             auto sstables = cf->get_sstables();
@@ -3674,7 +3673,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
 
         // make sure partial sstable run has none of its fragments compacted.
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
-    }, test_env_config{ .use_uuid = false });
+    });
 }
 
 // Make sure that a custom tombstone-gced-only writer will be fed with gc'able tombstone
@@ -5806,7 +5805,6 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
             for (auto&& sst : ssts) {
                 t->add_sstable_and_update_cache(sst, offstrategy).get();
                 testlog.info("run id {}, refcount = {}", sst->run_identifier(), sst.use_count());
-                column_family_test::update_sstables_known_generation(*t, sst->generation());
                 observers.push_back(sst->add_on_closed_handler([&] (sstable& sst) mutable {
                     auto sstables = t->get_sstables();
                     auto input_sstable_count = std::count_if(sstables->begin(), sstables->end(), [&] (const shared_sstable& sst) {
@@ -5836,7 +5834,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
 
         BOOST_REQUIRE(sstables_closed == sstables_nr);
         BOOST_REQUIRE(sstables_closed_during_cleanup >= sstables_nr / 2);
-    }, test_env_config{ .use_uuid = false });
+    });
 }
 
 SEASTAR_TEST_CASE(cleanup_incremental_compaction_test) {

@@ -92,9 +92,6 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
         logger.warn("The tablets feature is disabled due to forced gossip topology changes");
         fcfg._disabled_features.insert("TABLETS"s);
     }
-    if (!cfg.uuid_sstable_identifiers_enabled()) {
-        fcfg._disabled_features.insert("UUID_SSTABLE_IDENTIFIERS"s);
-    }
     if (!cfg.table_digest_insensitive_to_expiry()) {
         fcfg._disabled_features.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
     }
