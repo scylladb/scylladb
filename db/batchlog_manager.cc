@@ -242,7 +242,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 // send to partially or wholly fail in actually sending stuff. Since we don't
                 // have hints (yet), send with CL=ALL, and hope we can re-do this soon.
                 // See below, we use retry on write failure.
-                return _qp.proxy().mutate(mutations, db::consistency_level::ALL, db::no_timeout, nullptr, empty_service_permit(), db::allow_per_partition_rate_limit::no);
+                return _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), db::no_timeout);
             });
         }).then_wrapped([this, id](future<> batch_result) {
             try {
