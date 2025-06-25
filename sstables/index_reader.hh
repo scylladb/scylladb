@@ -454,12 +454,12 @@ class index_reader {
     bool _single_page_read;
     abort_source _abort;
 
-    std::unique_ptr<index_consume_entry_context<index_consumer>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
+    future<std::unique_ptr<index_consume_entry_context<index_consumer>>> make_context(uint64_t begin, uint64_t end, index_consumer& consumer) {
         auto index_file = make_tracked_index_file(*_sstable, _permit, _trace_state, _use_caching);
         auto input = make_file_input_stream(index_file, begin, (_single_page_read ? end : _sstable->index_size()) - begin,
                         get_file_input_stream_options());
         auto trust_pi = trust_promoted_index(_sstable->has_correct_promoted_index_entries());
-        return std::make_unique<index_consume_entry_context<index_consumer>>(*_sstable, _permit, consumer, trust_pi, std::move(input),
+        co_return std::make_unique<index_consume_entry_context<index_consumer>>(*_sstable, _permit, consumer, trust_pi, std::move(input),
                             begin, end - begin, _sstable->get_column_translation(), _abort, _trace_state);
     }
 
@@ -467,12 +467,12 @@ class index_reader {
         assert(!bound.context || !_single_page_read);
         if (!bound.context) {
             bound.consumer = std::make_unique<index_consumer>(_region, _sstable->get_schema());
-            bound.context = make_context(begin, end, *bound.consumer);
+            bound.context = co_await make_context(begin, end, *bound.consumer);
             bound.consumer->prepare(quantity);
-            return make_ready_future<>();
+            co_return;
         }
         bound.consumer->prepare(quantity);
-        return bound.context->fast_forward_to(begin, end);
+        co_return co_await bound.context->fast_forward_to(begin, end);
     }
 
 private:
