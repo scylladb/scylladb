@@ -357,6 +357,7 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_only_tok
 }
 
 future<> token_metadata_impl::clear_gently() noexcept {
+    _version_tracker = {};
     co_await utils::clear_gently(_token_to_endpoint_map);
     co_await utils::clear_gently(_normal_token_owners);
     co_await utils::clear_gently(_bootstrap_tokens);
