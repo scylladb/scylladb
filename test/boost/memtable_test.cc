@@ -1261,7 +1261,7 @@ SEASTAR_TEST_CASE(flushing_rate_is_reduced_if_compaction_doesnt_keep_up) {
     });
 }
 
-static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_extension> mep, bool& should_fail, const bool& did_fail, bool expect_isolate) {
+static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_extension> mep, bool& should_fail, const bool& did_fail, const schema*& schema_filter, bool expect_isolate) {
     auto ext = std::make_shared<db::extensions>();
     auto cfg = seastar::make_shared<db::config>(ext);
 
@@ -1270,6 +1270,8 @@ static future<> exceptions_in_flush_helper(std::unique_ptr<sstables::file_io_ext
     co_await do_with_cql_env([&](cql_test_env& env) -> future<> {
 
         co_await env.execute_cql(fmt::format("create table t0 (pk text primary key, v text)"));
+
+        schema_filter = env.local_db().find_column_family("ks", "t0").schema().get();
 
         should_fail = true;
 
@@ -1325,10 +1327,17 @@ static future<> exceptions_in_flush_on_sstable_write_helper(std::function<void()
     public:
         bool should_fail = false;
         bool did_fail = false;
+        const schema* schema_filter = nullptr;
         std::function<void()> throw_func;
 
+        bool match_schema_filter(const schema& s) const {
+            const auto ret = !schema_filter || schema_filter->id() == s.id();
+            testlog.info("exceptions_in_flush_on_sstable_write_helper()::match_schema_filter({}.{}#{}) -> {}", s.ks_name(), s.cf_name(), s.id(), ret);
+            return ret;
+        }
+
         future<file> wrap_file(const sstable& t, component_type type, file f, open_flags flags) override {
-            if (should_fail) {
+            if (should_fail && match_schema_filter(*t.get_schema())) {
                 class myimpl : public seastar::file_impl {
                     file _file;
                     myext& _myext;
@@ -1409,7 +1418,7 @@ static future<> exceptions_in_flush_on_sstable_write_helper(std::function<void()
     auto mep = std::make_unique<myext>();
     auto& me = *mep;
     me.throw_func = std::move(throw_func);
-    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail, expect_isolate);
+    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail, me.schema_filter, expect_isolate);
 }
 
 SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_write) {
@@ -1445,10 +1454,17 @@ static future<> exceptions_in_flush_on_sstable_open_helper(std::function<void()>
     public:
         bool should_fail = false;
         bool did_fail = false;
+        const schema* schema_filter = nullptr;
         std::function<void()> throw_func;
 
+        bool match_schema_filter(const schema& s) const {
+            const auto ret = !schema_filter || schema_filter->id() == s.id();
+            testlog.info("exceptions_in_flush_on_sstable_open_helper()::match_schema_filter({}.{}#{}) -> {}", s.ks_name(), s.cf_name(), s.id(), ret);
+            return ret;
+        }
+
         future<file> wrap_file(const sstable& t, component_type type, file f, open_flags flags) override {
-            if (should_fail) {
+            if (should_fail && match_schema_filter(*t.get_schema())) {
                 did_fail = true;
                 testlog.debug("Throwing exception");
                 throw_func();
@@ -1459,7 +1475,7 @@ static future<> exceptions_in_flush_on_sstable_open_helper(std::function<void()>
     auto mep = std::make_unique<myext>();
     auto& me = *mep;
     me.throw_func = std::move(throw_func);;
-    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail, expect_isolate);
+    co_await exceptions_in_flush_helper(std::move(mep), me.should_fail, me.did_fail, me.schema_filter, expect_isolate);
 }
 
 SEASTAR_TEST_CASE(test_exceptions_in_flush_on_sstable_open) {
