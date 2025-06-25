@@ -254,7 +254,7 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
 // mean that it is not possible to add a GSI or Streams to an existing
 // table, because the name of the new auxiliary table may go over the
 // limit.
-static constexpr int max_table_name_length = 222;
+static constexpr int max_table_name_length = 192;
 static constexpr int max_auxiliary_table_name_length = 222;
 
 static bool valid_table_name_chars(std::string_view name) {
