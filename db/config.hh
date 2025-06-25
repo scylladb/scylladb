@@ -537,6 +537,14 @@ public:
     named_value<bool> alternator_http_response_disable_date_header;
     named_value<sstring> alternator_http_response_server_header;
 
+    named_value<sstring> webshell_http_address;
+    named_value<uint16_t> webshell_http_port;
+    named_value<sstring> webshell_https_address;
+    named_value<uint16_t> webshell_https_port;
+    named_value<string_map> webshell_https_encryption_options;
+    named_value<sstring> webshell_https_client_auth;
+    named_value<sstring> webshell_resource_manifest_path;
+
     named_value<bool> abort_on_ebadf;
 
     named_value<bool> sanitizer_report_backtrace;
