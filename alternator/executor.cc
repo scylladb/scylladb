@@ -293,6 +293,27 @@ static void validate_table_name(const std::string& name) {
     }
 }
 
+// Validate that a CDC log table could be created for the base table with a
+// given table_name, and if not, throw a user-visible api_error::validation.
+// It is not possible to create a CDC log table if the table name is so long
+// that adding the 15-character suffix "_scylla_cdc_log" (cdc_log_suffix)
+// makes it go over max_auxiliary_table_name_length.
+// Note that if max_table_name_length is set to less than 207 (which is
+// max_auxiliary_table_name_length-15), then this function will never
+// fail. However, it's still important to call it in UpdateTable, in case
+// we have pre-existing tables with names longer than this to avoid #24598.
+static void validate_cdc_log_name_length(std::string_view table_name) {
+    if (cdc::log_name(table_name).length() > max_auxiliary_table_name_length) {
+        // CDC will add cdc_log_suffix ("_scylla_cdc_log") to the table name
+        // to create its log table, and this will exceed the maximum allowed
+        // length. To provide a more helpful error message, we assume that
+        // cdc::log_name() always adds a suffix of the same length.
+        int suffix_len = cdc::log_name(table_name).length() - table_name.length();
+        throw api_error::validation(fmt::format("Streams cannot be enabled to a table whose name is longer than {} characters: {}",
+            max_auxiliary_table_name_length - suffix_len, table_name));
+    }
+}
+
 // In DynamoDB index names are local to a table, while in Scylla, materialized
 // view names are global (in a keyspace). So we need to compose a unique name
 // for the view taking into account both the table's name and the index name.
@@ -1577,7 +1598,9 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
 
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        executor::add_stream_options(*stream_specification, builder, sp);
+        if (executor::add_stream_options(*stream_specification, builder, sp)) {
+            validate_cdc_log_name_length(builder.cf_name());
+        }
     }
 
     // Parse the "Tags" parameter early, so we can avoid creating the table
@@ -1768,7 +1791,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
-                add_stream_options(*stream_specification, builder, p.local());
+                if (add_stream_options(*stream_specification, builder, p.local())) {
+                    validate_cdc_log_name_length(builder.cf_name());
+                }
                 // Alternator Streams doesn't yet work when the table uses tablets (#16317)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {

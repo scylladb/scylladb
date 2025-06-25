@@ -1052,7 +1052,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     });
 }
 
-void executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, service::storage_proxy& sp) {
+bool executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, service::storage_proxy& sp) {
     auto stream_enabled = rjson::find(stream_specification, "StreamEnabled");
     if (!stream_enabled || !stream_enabled->IsBool()) {
         throw api_error::validation("StreamSpecification needs boolean StreamEnabled");
@@ -1086,10 +1086,12 @@ void executor::add_stream_options(const rjson::value& stream_specification, sche
                 break;
         }
         builder.with_cdc_options(opts);
+        return true;
     } else {
         cdc::options opts;
         opts.enabled(false);
         builder.with_cdc_options(opts);
+        return false;
     }
 }
 

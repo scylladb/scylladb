@@ -1630,15 +1630,48 @@ def padded_name(length):
     return u + 'x'*(length-len(u))
 
 # When Alternator enables streams, CDC creates a new table whose name is the
-# same as the existing table with the suffix "_scylla_cdc_log". Let's check
-# that if the table's name is already as long as it can be, we can still
-# enable streams without any disasterous I/O error.
+# same as the existing table with the suffix "_scylla_cdc_log". In issue
+# #24598, we discovered that we could create a table with length 222 but
+# then creating the stream crashed Scylla. We accept that either the table
+# creation or the stream creation can fail if we lower the limits in the
+# future, but it mustn't crash as it did in #24598.
 # We have two versions of this test - one with the stream created with the
 # table, and one with the stream added to the existing table.
 # Reproduces #24598
-@pytest.mark.skip(reason="issue #24598, causes a Scylla crash so has to be skipped ")
 def test_stream_table_name_length_222_create(dynamodb):
-    with new_test_table(dynamodb, name=padded_name(222),
+    try:
+        with new_test_table(dynamodb, name=padded_name(222),
+            Tags=TAGS,
+            StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
+        ) as table:
+            pass
+    except ClientError as e:
+        # In Alternator, we may decide that 222 is too long to create a table,
+        # or too long to create the stream. But if we reached here, at least
+        # it didn't crash.
+        assert 'table name is longer than' in str(e) or 'TableName must be' in str(e)
+
+# Reproduces #24598
+def test_stream_table_name_length_222_update(dynamodb, dynamodbstreams):
+    try:
+        with new_test_table(dynamodb, name=padded_name(222),
+            Tags=TAGS,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
+        ) as table:
+            table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'});
+            # DynamoDB doesn't allow deleting the base table while the stream
+            # is in the process of being added
+            wait_for_active_stream(dynamodbstreams, table)
+    except ClientError as e:
+        assert 'table name is longer than' in str(e) or 'TableName must be' in str(e)
+
+# When the table has a shorter name length, like 192, we should be able to
+# create both the table and streams, with no problems.
+def test_stream_table_name_length_192_create(dynamodb):
+    with new_test_table(dynamodb, name=padded_name(192),
         Tags=TAGS,
         StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -1646,9 +1679,8 @@ def test_stream_table_name_length_222_create(dynamodb):
     ) as table:
         pass
 
-@pytest.mark.skip(reason="issue #24598, causes a Scylla crash so has to be skipped ")
-def test_stream_table_name_length_222_update(dynamodb, dynamodbstreams):
-    with new_test_table(dynamodb, name=padded_name(222),
+def test_stream_table_name_length_192_update(dynamodb, dynamodbstreams):
+    with new_test_table(dynamodb, name=padded_name(192),
         Tags=TAGS,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' }, ]
