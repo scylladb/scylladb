@@ -3052,6 +3052,10 @@ struct hint_wrapper {
     mutation mut;
 };
 
+struct batchlog_replay_mutation {
+    mutation mut;
+};
+
 struct read_repair_mutation {
     std::unordered_map<locator::host_id, std::optional<mutation>> value;
     locator::effective_replication_map_ptr ermp;
@@ -3062,6 +3066,12 @@ struct read_repair_mutation {
 template <> struct fmt::formatter<service::hint_wrapper> : fmt::formatter<string_view> {
     auto format(const service::hint_wrapper& h, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "hint_wrapper{{{}}}", h.mut);
+    }
+};
+
+template <> struct fmt::formatter<service::batchlog_replay_mutation> : fmt::formatter<string_view> {
+    auto format(const service::batchlog_replay_mutation& h, fmt::format_context& ctx) const {
+        return fmt::format_to(ctx.out(), "batchlog_replay_mutation{{{}}}", h.mut);
     }
 };
 
@@ -3425,6 +3435,12 @@ storage_proxy::create_write_response_handler(const mutation& m, db::consistency_
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
     return create_write_response_handler_helper(h.mut.schema(), h.mut.token(), std::make_unique<hint_mutation>(h.mut), cl, type, tr_state,
+            std::move(permit), allow_limit, is_cancellable::yes);
+}
+
+result<storage_proxy::response_id_type>
+storage_proxy::create_write_response_handler(const batchlog_replay_mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+    return create_write_response_handler_helper(m.mut.schema(), m.mut.token(), std::make_unique<shared_mutation>(m.mut), cl, type, tr_state,
             std::move(permit), allow_limit, is_cancellable::yes);
 }
 
@@ -4230,6 +4246,15 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
     std::array<hint_wrapper, 1> ms{hint_wrapper { fm_a_s.fm.unfreeze(fm_a_s.s) }};
     return mutate_internal(std::move(ms), db::consistency_level::ALL, nullptr, empty_service_permit())
+            .then(utils::result_into_future<result<>>);
+}
+
+future<> storage_proxy::send_batchlog_replay_to_all_replicas(std::vector<mutation> mutations, clock_type::time_point timeout) {
+    std::vector<batchlog_replay_mutation> ms = mutations | std::views::transform([] (auto&& m) {
+            return batchlog_replay_mutation(std::move(m));
+        }) | std::ranges::to<std::vector<batchlog_replay_mutation>>();
+
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, nullptr, empty_service_permit(), timeout)
             .then(utils::result_into_future<result<>>);
 }
 
