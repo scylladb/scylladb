@@ -2137,8 +2137,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                    .set("node_state", node_state::normal);
                             rtbuilder.done();
                             auto reason = ::format("bootstrap: joined a zero-token node {}", node.id);
-                            co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
                             co_await _voter_handler.on_node_added(node.id, _as);
+                            co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
                             break;
                         }
 
@@ -2191,9 +2191,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             builder2.with_node(replaced_id)
                                     .set("node_state", node_state::left);
                             rtbuilder.done();
+                            co_await _voter_handler.on_node_added(node.id, _as);
                             co_await update_topology_state(take_guard(std::move(node)), {builder.build(), builder2.build(), rtbuilder.build()},
                                     fmt::format("replace: replaced node {} with the new zero-token node {}", replaced_id, node.id));
-                            co_await _voter_handler.on_node_added(node.id, _as);
                             break;
                         }
 
@@ -2455,14 +2455,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                            .set("node_state", node_state::normal);
                     muts.emplace_back(builder.build());
                     muts.emplace_back(rtbuilder.build());
-                    co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
-                                                   "bootstrap: read fence completed");
+                    co_await _voter_handler.on_node_added(node.id, _as);
+                    co_await update_topology_state(take_guard(std::move(node)), std::move(muts), "bootstrap: read fence completed");
                     // Make sure the load balancer knows the capacity for the new node immediately.
                     (void)_tablet_load_stats_refresh.trigger().handle_exception([] (auto ep) {
                         rtlogger.warn("Error during tablet load stats refresh: {}", ep);
                     });
                     }
-                    co_await _voter_handler.on_node_added(node.id, _as);
                     break;
                 case node_state::removing: {
                     co_await utils::get_local_injector().inject("delay_node_removal", utils::wait_for_message(std::chrono::minutes(5)));
@@ -2517,10 +2516,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     muts.push_back(rtbuilder.build());
                     co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(replaced_node_id.uuid()), muts);
+                    co_await _voter_handler.on_node_added(node.id, _as);
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                   "replace: read fence completed");
                     }
-                    co_await _voter_handler.on_node_added(node.id, _as);
                     break;
                 default:
                     on_fatal_internal_error(rtlogger, ::format(
@@ -2669,10 +2668,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                 auto str = fmt::format("complete rollback of {} to state normal after {} failure", node.id, node.rs->state);
 
+                co_await _voter_handler.on_node_added(node.id, _as);
+
                 rtlogger.info("{}", str);
                 co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, str);
-
-                co_await _voter_handler.on_node_added(node.id, _as);
             }
                 break;
             case topology::transition_state::truncate_table:

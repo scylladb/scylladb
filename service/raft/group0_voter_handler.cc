@@ -496,6 +496,20 @@ future<> group0_voter_handler::update_nodes(
 
     group0_voter_calculator::nodes_list_t nodes;
 
+    auto get_replica_state = [this](const raft::server_id& id, bool allow_transitioning) -> const replica_state* {
+        if (const auto it = _topology.normal_nodes.find(id); it != _topology.normal_nodes.end()) {
+            return &it->second;
+        }
+        rvlogger.debug("Node {} is not present in the normal nodes", id);
+        if (allow_transitioning) {
+            if (const auto it = _topology.transition_nodes.find(id); it != _topology.transition_nodes.end()) {
+                return &it->second;
+            }
+            rvlogger.debug("Node {} is not present in the transitioning nodes", id);
+        }
+        return nullptr;
+    };
+
     // Helper for adding a single node to the nodes list
     auto add_node = [&nodes, &group0_config, &leader_id](const raft::server_id& id, const replica_state& rs, bool is_alive) {
         const auto is_voter = group0_config.can_vote(id);
@@ -510,17 +524,16 @@ future<> group0_voter_handler::update_nodes(
     };
 
     // Helper function to add nodes from a gossiper node set
-    auto add_nodes_from_list = [this, &add_node](const std::set<locator::host_id>& nodes_set, bool is_alive) {
+    auto add_nodes_from_list = [&add_node, &get_replica_state, &group0_config](const std::set<locator::host_id>& nodes_set, bool is_alive) {
         for (const auto& host_id : nodes_set) {
             const raft::server_id id{host_id.uuid()};
-            const auto it = _topology.normal_nodes.find(id);
-            if (it == _topology.normal_nodes.end()) {
-                // This is expected, as nodes present in the gossiper may not be present
-                // in the topology yet or anymore.
-                rvlogger.debug("Node {} not found in the topology", id);
+            // We only allow transitioning nodes to be added if they are already voters.
+            const bool allow_transitioning = group0_config.can_vote(id);
+            const auto* node = get_replica_state(id, allow_transitioning);
+            if (!node) {
                 continue;
             }
-            add_node(id, it->second, is_alive);
+            add_node(id, *node, is_alive);
         }
     };
 
@@ -535,12 +548,14 @@ future<> group0_voter_handler::update_nodes(
             rvlogger.debug("Node {} to be added is already a member", id);
             continue;
         }
-        const auto it = _topology.normal_nodes.find(id);
-        if (it == _topology.normal_nodes.end()) {
+        // When adding a node, it may not be present in normal nodes yet, but might be joining
+        // and be in the transitioning state.
+        const auto* node = get_replica_state(id, true);
+        if (!node) {
             rvlogger.warn("Node {} was not found in the topology, can't add as a voter candidate", id);
             continue;
         }
-        add_node(id, it->second, _gossiper.is_alive(locator::host_id{id.uuid()}));
+        add_node(id, *node, _gossiper.is_alive(locator::host_id{id.uuid()}));
     }
 
     std::unordered_set<raft::server_id> voters_add;
