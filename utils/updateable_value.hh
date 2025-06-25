@@ -205,7 +205,7 @@ updateable_value<T>::source() const {
 }
 
 template <typename T>
-observer<T>
+[[nodiscard]] observer<T>
 updateable_value<T>::observe(std::function<void (const T&)> callback) const {
     auto* src = source();
     return src ? src->observe(std::move(callback)) : dummy_observer<T>();
