@@ -72,6 +72,9 @@ static std::map<sstring, sstring> prepare_options(
         if (it == all_dcs.end()) {
             return;
         }
+        if (options.count(dc)) {
+            return;
+        }
         const auto& dc_racks = it->second;
         auto ordered_racks = dc_racks | std::views::transform([] (const auto& x) { return x.first; }) | std::ranges::to<std::vector<sstring>>();
         std::ranges::sort(ordered_racks);
