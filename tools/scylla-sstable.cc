@@ -72,8 +72,6 @@ const auto app_name = "sstable";
 
 logging::logger sst_log(format("scylla-{}", app_name));
 
-db::nop_large_data_handler large_data_handler;
-
 struct decorated_key_hash {
     std::size_t operator()(const dht::decorated_key& dk) const {
         return dht::token::to_int64(dk.token());
@@ -3569,6 +3567,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         sharded<sstables::storage_manager> sstm;
         sstm.start(std::ref(dbcfg), stm_cfg).get();
         auto stop_sstm = defer([&sstm] { sstm.stop().get(); });
+
+        db::nop_large_data_handler large_data_handler;
 
         sstables::sstables_manager sst_man(
             "scylla_sstable",
