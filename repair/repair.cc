@@ -1208,6 +1208,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
                 throw std::invalid_argument("Mixed vnode table and tablet table");
             }
             is_tablet = true;
+            throw tablets_unsupported();
         }
         if (is_tablet) {
             // Reject unsupported options for tablet repair
