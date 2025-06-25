@@ -245,7 +245,19 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
 // bytes (dash and UUID), and since directory names are limited to 255 bytes,
 // we need to limit table names to 222 bytes, instead of 255.
 // See https://github.com/scylladb/scylla/issues/4480
+// We actually have two limits here,
+// * max_table_name_length is the limit that Alternator will impose on names
+//   of new Alternator tables.
+// * max_auxiliary_table_name_length is the potentially higher absolute limit
+//   that Scylla imposes on the names of auxiliary tables that Alternator
+//   wants to create internally - i.e. materialized views or CDC log tables.
+// The second limit might mean that it is not possible to add a GSI to an
+// existing table, because the name of the new auxiliary table may go over
+// the limit. The second limit is also one of the reasons why the first limit
+// is set lower than 222 - to have room to enable streams which add the extra
+// suffix "_scylla_cdc_log" to the table name.
 static constexpr int max_table_name_length = 222;
+static constexpr int max_auxiliary_table_name_length = 222;
 
 static bool valid_table_name_chars(std::string_view name) {
     for (auto c : name) {
@@ -299,10 +311,10 @@ static std::string view_name(std::string_view table_name, std::string_view index
                 fmt::format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
     }
     std::string ret = std::string(table_name) + delim + std::string(index_name);
-    if (ret.length() > max_table_name_length && validate_len) {
+    if (ret.length() > max_auxiliary_table_name_length && validate_len) {
         throw api_error::validation(
                 fmt::format("The total length of TableName ('{}') and IndexName ('{}') cannot exceed {} characters",
-                        table_name, index_name, max_table_name_length - delim.size()));
+                        table_name, index_name, max_auxiliary_table_name_length - delim.size()));
     }
     return ret;
 }
