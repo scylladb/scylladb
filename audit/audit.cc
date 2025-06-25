@@ -209,6 +209,11 @@ future<> audit::log(const audit_info* audit_info, service::query_state& query_st
     static const sstring anonymous_username("anonymous");
     const sstring& username = client_state.user() ? client_state.user()->name.value_or(anonymous_username) : no_username;
     socket_address client_ip = client_state.get_client_address().addr();
+    if (logger.is_enabled(logging::log_level::debug)) {
+        logger.debug("Log written: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {}",
+            node_ip, audit_info->category_string(), cl, error, audit_info->keyspace(),
+            audit_info->query(), client_ip, audit_info->table(), username);
+    }
     return futurize_invoke(std::mem_fn(&storage_helper::write), _storage_helper_ptr, audit_info, node_ip, client_ip, cl, username, error)
         .handle_exception([audit_info, node_ip, client_ip, cl, username, error] (auto ep) {
             logger.error("Unexpected exception when writing log with: node_ip {} category {} cl {} error {} keyspace {} query '{}' client_ip {} table {} username {} exception {}",
@@ -219,6 +224,10 @@ future<> audit::log(const audit_info* audit_info, service::query_state& query_st
 
 future<> audit::log_login(const sstring& username, socket_address client_ip, bool error) noexcept {
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
+    if (logger.is_enabled(logging::log_level::debug)) {
+        logger.debug("Login log written: node_ip {}, client_ip {}, username {}, error {}",
+            node_ip, client_ip, username, error ? "true" : "false");
+    }
     return futurize_invoke(std::mem_fn(&storage_helper::write_login), _storage_helper_ptr, username, node_ip, client_ip, error)
         .handle_exception([username, node_ip, client_ip, error] (auto ep) {
             logger.error("Unexpected exception when writing login log with: node_ip {} client_ip {} username {} error {} exception {}",
