@@ -99,6 +99,23 @@ BOOST_AUTO_TEST_CASE(test_big_decimal_construct_from_string) {
     BOOST_REQUIRE_THROW(big_decimal("+-5"), marshal_exception);
     BOOST_REQUIRE_THROW(big_decimal("++5"), marshal_exception);
     BOOST_REQUIRE_THROW(big_decimal("--5"), marshal_exception);
+
+    // Verify large exponent gets parsed correctly
+    // 1E-2147483647 : scale = 2147483647; OK
+    BOOST_REQUIRE_NO_THROW(big_decimal("1E-2147483647"));
+    // 1E2147483648 : scale = -2147483648; OK
+    BOOST_REQUIRE_NO_THROW(big_decimal("1E2147483648"));
+    // 0.01E2147483650 : scale = -2147483648;
+    // exponent is > int32::max() but the adjusted scale is still within int32 limits, so it is OK.
+    BOOST_REQUIRE_NO_THROW(big_decimal("0.01E2147483650"));
+
+    // Any overflow to scale should throw marshal_exception.
+    // 1E-2147483648 : scale(2147483648) > int32::max()
+    BOOST_REQUIRE_THROW(big_decimal("1E-2147483648"), marshal_exception);
+    // 1E2147483649 : scale(-2147483649) < int32::min()
+    BOOST_REQUIRE_THROW(big_decimal("1E2147483649"), marshal_exception);
+    // 1.2E-2147483647 : scale(2147483648) > int32::max()
+    BOOST_REQUIRE_THROW(big_decimal("1.2E-2147483647"), marshal_exception);
 }
 
 BOOST_AUTO_TEST_CASE(test_big_decimal_div) {
