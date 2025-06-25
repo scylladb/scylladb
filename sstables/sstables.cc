@@ -2458,7 +2458,7 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
     }
 }
 
-input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
+future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
         integrity_check integrity, integrity_error_handler error_handler) {
     file_input_stream_options options;
@@ -2478,10 +2478,10 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
 
     if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
-            return make_compressed_file_m_format_input_stream(f, &_components->compression,
+            co_return make_compressed_file_m_format_input_stream(f, &_components->compression,
                pos, len, std::move(options), permit, digest);
         } else {
-            return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
+            co_return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
                 pos, len, std::move(options), permit, digest);
         }
     }
@@ -2489,18 +2489,18 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         auto checksum = get_checksum();
         auto file_len = data_size();
         if (_version >= sstable_version_types::mc) {
-             return make_checksummed_file_m_format_input_stream(f, file_len,
+             co_return make_checksummed_file_m_format_input_stream(f, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         } else {
-            return make_checksummed_file_k_l_format_input_stream(f, file_len,
+            co_return make_checksummed_file_k_l_format_input_stream(f, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         }
     }
-    return make_file_input_stream(f, pos, len, std::move(options));
+    co_return make_file_input_stream(f, pos, len, std::move(options));
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
-    auto stream = data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {});
+    auto stream = co_await data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {});
     auto buff = co_await stream.read_exactly(len);
     co_await stream.close();
     co_return buff;
@@ -2669,10 +2669,10 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
 
     input_stream<char> data_stream;
     if (sst->get_compression()) {
-        data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit,
+        data_stream = co_await sst->data_stream(0, sst->ondisk_data_size(), permit,
                 nullptr, nullptr, sstable::raw_stream::yes);
     } else {
-        data_stream = sst->data_stream(0, sst->data_size(), permit,
+        data_stream = co_await sst->data_stream(0, sst->data_size(), permit,
                 nullptr, nullptr, sstable::raw_stream::no,
                 integrity_check::yes, [&ret](sstring msg) {
                     sstlog.error("{}", msg);
