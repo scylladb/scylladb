@@ -132,6 +132,8 @@ future<> db::batchlog_manager::drain() {
         _sem.broken();
     }
 
+    co_await _qp.proxy().abort_batch_writes();
+
     co_await std::move(_loop_done);
     blogger.info("Drained");
 }
