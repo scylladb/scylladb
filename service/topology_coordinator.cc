@@ -1730,6 +1730,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> handle_tablet_resize_finalization(group0_guard g) {
+        co_await utils::get_local_injector().inject("handle_tablet_resize_finalization_wait", [] (auto& handler) -> future<> {
+            rtlogger.info("handle_tablet_resize_finalization: waiting");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{60});
+        });
+
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
         auto guard = co_await global_tablet_token_metadata_barrier(std::move(g));
