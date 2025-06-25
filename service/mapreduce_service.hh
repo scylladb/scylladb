@@ -47,7 +47,10 @@ class retrying_dispatcher;
 //   5. `dispatch` merges results from all coordinators and returns merged
 //      result.
 //
-// Splitting query into sub-queries in is implemented as:
+// Splitting query into sub-queries is implemented separately for vnodes
+// and for tablets.
+//
+// The splitting algorithm for vnodes works as follows:
 //   a. Partition ranges of the original query are split into a sequence of
 //      vnodes.
 //   b. Each vnode in the sequence is added to a set associated with some
@@ -58,7 +61,24 @@ class retrying_dispatcher;
 //      by the vnode set. This replacement will create a sub-query whose
 //      recipient is the endpoint that holds all vnodes in the set.
 //
-// Query splitting example (3 node cluster with num_tokens set to 3):
+// The splitting algorithm for tablets is more dynamic, and unlike
+// the algorithm for vnodes, it doesn't block topology changes (i.e. ERM) for
+// the whole duration of the query execution:
+//   a. Prepare a set of exclusive `partition_ranges`, where each range
+//      represents one tablet. This set is called `ranges_left`, because it
+//      contains ranges that still need processing.
+//   b. Loop until `ranges_left` is empty:
+//      I.  Create `tablet_replica` -> `ranges` mapping for the current ERM
+//          and `ranges_left`. Store this mapping and the number
+//          representing current ERM version as `ranges_per_replica`.
+//      II. In parallel, for each tablet_replica, iterate through
+//          ranges_per_tablet_replica. Select independently up to two ranges
+//          that are still existing in ranges_left. Remove each range
+//          selected for processing from ranges_left. Before each iteration,
+//          verify that ERM version has not changed. If it has,
+//          return to Step I.
+//
+// Query splitting (vnodes) example (3 node cluster with num_tokens set to 3):
 //   Original query: mapreduce_request{
 //       reduction_types=[reduction_type{count}],
 //       cmd=read_command{contents omitted},
@@ -160,6 +180,7 @@ public:
 private:
     future<> dispatch_range_and_reduce(const locator::effective_replication_map_ptr& erm, retrying_dispatcher& dispatcher, query::mapreduce_request const& req, query::mapreduce_request&& req_with_modified_pr, locator::host_id addr, query::mapreduce_result& result_, tracing::trace_state_ptr tr_state);
     future<> dispatch_to_vnodes(schema_ptr schema, replica::column_family& cf, query::mapreduce_request& req, query::mapreduce_result& result, tracing::trace_state_ptr tr_state);
+    future<> dispatch_to_tablets(schema_ptr schema, replica::column_family& cf, query::mapreduce_request& req, query::mapreduce_result& result, tracing::trace_state_ptr tr_state);
 
     // Used to distribute given `mapreduce_request` across shards.
     future<query::mapreduce_result> dispatch_to_shards(query::mapreduce_request req, std::optional<tracing::trace_info> tr_info);
@@ -171,6 +192,7 @@ private:
     future<> uninit_messaging_service();
 
     friend class retrying_dispatcher;
+    friend class mapreduce_tablet_algorithm;
 };
 
 } // namespace service
