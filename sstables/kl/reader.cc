@@ -1572,13 +1572,13 @@ public:
     }
     virtual future<> fill_buffer() override {
         if (_end_of_stream) {
-            return make_ready_future<>();
+            co_return;
         }
         if (_context->eof()) {
             _end_of_stream = true;
-            return make_ready_future<>();
+            co_return;
         }
-        return _context->consume_input();
+        co_return co_await _context->consume_input();
     }
     virtual future<> close() noexcept override {
         if (!_context) {

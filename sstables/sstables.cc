@@ -2500,11 +2500,10 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
-    return do_with(data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {}), [len] (auto& stream) {
-        return stream.read_exactly(len).finally([&stream] {
-            return stream.close();
-        });
-    });
+    auto stream = data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {});
+    auto buff = co_await stream.read_exactly(len);
+    co_await stream.close();
+    co_return buff;
 }
 
 template <typename ChecksumType>
