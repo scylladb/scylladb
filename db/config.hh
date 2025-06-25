@@ -486,6 +486,12 @@ public:
 
     named_value<sstring> vector_store_uri;
 
+    named_value<sstring> webshell_http_address;
+    named_value<uint16_t> webshell_http_port;
+    named_value<sstring> webshell_https_address;
+    named_value<uint16_t> webshell_https_port;
+    named_value<string_map> webshell_https_encryption_options;
+
     named_value<bool> abort_on_ebadf;
 
     named_value<bool> sanitizer_report_backtrace;
