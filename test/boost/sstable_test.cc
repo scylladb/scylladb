@@ -162,25 +162,29 @@ SEASTAR_TEST_CASE(missing_summary_first_last_sane) {
     });
 }
 
-static future<sstable_ptr> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
+static future<std::pair<sstable_ptr, sstable_ptr>> do_write_sst(test_env& env, schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
     auto sst = co_await env.reusable_sst(std::move(schema), load_dir, generation);
-    sstable_generation_generator gen(generation.as_int());
-    co_await sstables::test(sst).store(write_dir, gen());
-    co_return sst;
+    sstable_generation_generator gen;
+    auto sst2 = co_await sstables::test(sst).store(write_dir, gen(uuid_identifiers::yes));
+    co_return std::make_pair(sst, sst2);
 }
 
-static future<> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
-    return test_env::do_with_async([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir),
-                                    generation = std::move(generation)] (test_env& env) {
-        (void)do_write_sst(env, std::move(schema), std::move(load_dir), std::move(write_dir), std::move(generation)).get();
+static future<std::pair<sstables::generation_type, sstables::generation_type>> write_sst_info(schema_ptr schema, sstring load_dir, sstring write_dir, sstables::generation_type generation) {
+    std::pair<sstables::generation_type, sstables::generation_type> ret;
+    co_await test_env::do_with_async([schema = std::move(schema), load_dir = std::move(load_dir), write_dir = std::move(write_dir),
+                                    generation = std::move(generation), &ret] (test_env& env) {
+        auto [sst1, sst2] = do_write_sst(env, std::move(schema), std::move(load_dir), std::move(write_dir), std::move(generation)).get();
+        ret = std::make_pair(sst1->generation(), sst2->generation());
     });
+    co_return ret;
 }
 
 static future<> check_component_integrity(component_type component) {
     tmpdir tmp;
-    co_await write_sst_info(make_schema_for_compressed_sstable(), "test/resource/sstables/compressed", tmp.path().string(), sstables::generation_type(1));
-    auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, sstables::generation_type(1), big, component);
-    auto file_path_b = sstable::filename(tmp.path().string(), "ks", "cf", la, sstables::generation_type(2), big, component);
+    auto load_gen = sstables::generation_type(1);
+    auto [gen1, gen2] = co_await write_sst_info(make_schema_for_compressed_sstable(), "test/resource/sstables/compressed", tmp.path().string(), load_gen);
+    auto file_path_a = sstable::filename("test/resource/sstables/compressed", "ks", "cf", la, load_gen, big, component);
+    auto file_path_b = sstable::filename(tmp.path().string(), "ks", "cf", la, gen2, big, component);
     auto eq = co_await tests::compare_files(file_path_a, file_path_b);
     BOOST_REQUIRE(eq);
 }
@@ -190,17 +194,16 @@ SEASTAR_TEST_CASE(check_compressed_info_func) {
 }
 
 future<>
-write_and_validate_sst(schema_ptr s, sstring dir, noncopyable_function<void (shared_sstable sst1, shared_sstable sst2)> func) {
-    return test_env::do_with_async([s = std::move(s), dir = std::move(dir), func = std::move(func)] (test_env& env) mutable {
-        auto sst1 = do_write_sst(env, s, dir, env.tempdir().path().native(), env.new_generation()).get();
-        auto sst2 = env.make_sstable(s, sst1->get_version());
+write_and_validate_sst(schema_ptr s, sstring dir, sstables::generation_type load_gen, noncopyable_function<void (shared_sstable sst1, shared_sstable sst2)> func) {
+    return test_env::do_with_async([s = std::move(s), dir = std::move(dir), load_gen, func = std::move(func)] (test_env& env) mutable {
+        auto [sst1, sst2] = do_write_sst(env, s, dir, env.tempdir().path().native(), load_gen).get();
         func(std::move(sst1), std::move(sst2));
-    }, test_env_config{ .use_uuid = false });
+    });
 }
 
 SEASTAR_TEST_CASE(check_summary_func) {
     auto s = make_schema_for_compressed_sstable();
-    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
+    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", sstables::generation_type(1), [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_summary().get();
 
         const summary& sst1_s = sst1->get_summary();
@@ -220,7 +223,7 @@ SEASTAR_TEST_CASE(check_filter_func) {
 
 SEASTAR_TEST_CASE(check_statistics_func) {
     auto s = make_schema_for_compressed_sstable();
-    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
+    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", sstables::generation_type(1), [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_statistics().get();
         const auto& sst1_s = sst1->get_statistics();
         const auto& sst2_s = sst2->get_statistics();
@@ -237,7 +240,7 @@ SEASTAR_TEST_CASE(check_statistics_func) {
 
 SEASTAR_TEST_CASE(check_toc_func) {
     auto s = make_schema_for_compressed_sstable();
-    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", [] (shared_sstable sst1, shared_sstable sst2) {
+    return write_and_validate_sst(std::move(s), "test/resource/sstables/compressed", sstables::generation_type(1), [] (shared_sstable sst1, shared_sstable sst2) {
         sstables::test(sst2).read_toc().get();
         auto& sst1_c = sstables::test(sst1).get_components();
         auto& sst2_c = sstables::test(sst2).get_components();
