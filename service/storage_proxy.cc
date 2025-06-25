@@ -2111,8 +2111,8 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
                 co_await std::move(f);
             } catch(...) {
                 paxos::paxos_state::logger.debug("CAS[{}] Failure during commit repair {}", _id, std::current_exception());
-                continue;
             }
+            continue;
         }
         co_return ballot_and_data{ballot, std::move(summary.data)};
     }
