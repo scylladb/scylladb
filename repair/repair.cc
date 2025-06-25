@@ -1144,7 +1144,7 @@ future<> repair::shard_repair_task_impl::run() {
 // CPU is that it allows us to keep some state (like a list of ongoing
 // repairs). It is fine to always do this on one CPU, because the function
 // itself does very little (mainly tell other nodes and CPUs what to do).
-future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
+future<std::optional<int>> repair_service::do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     get_repair_module().check_in_shutdown();
     auto& sharded_db = get_db();
     auto& db = sharded_db.local();
@@ -1188,6 +1188,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
                 throw std::invalid_argument("Mixed vnode table and tablet table");
             }
             is_tablet = true;
+            co_return std::nullopt;
         }
         if (is_tablet) {
             // Reject unsupported options for tablet repair
@@ -1456,7 +1457,7 @@ std::optional<double> repair::user_requested_repair_task_impl::expected_children
     return smp::count;
 }
 
-future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
+future<std::optional<int>> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
     return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options), &am] (repair_service& local_repair) {
         return local_repair.do_repair_start(am.local(), std::move(keyspace), std::move(options));

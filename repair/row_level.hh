@@ -155,7 +155,7 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
-    future<int> do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map);
+    future<std::optional<int>> do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map);
 
     // The tokens are the tokens assigned to the bootstrap node.
     // all repair-based node operation entry points must be called on shard 0
