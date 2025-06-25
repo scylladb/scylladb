@@ -7,8 +7,6 @@ target_sources(utils
     UUID_gen.cc
     advanced_rpc_compressor.cc
     alien_worker.cc
-    arch/powerpc/crc32-vpmsum/crc32_wrapper.cc
-    arch/powerpc/crc32-vpmsum/crc32.S
     array-search.cc
     ascii.cc
     base64.cc

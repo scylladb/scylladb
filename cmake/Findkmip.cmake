@@ -20,8 +20,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|AARCH64")
   set(kmip_arch "aarch64")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "amd64|x86_64")
   set(kmip_arch "64")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(powerpc|ppc)64le")
-  set(kmip_arch "ppc64le")
 endif()
 
 set(kmip_ROOT "${PROJECT_SOURCE_DIR}/kmipc/kmipc-${kmip_ver}-${kmip_distrib}_${kmip_arch}")
