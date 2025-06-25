@@ -1159,7 +1159,6 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/aws_sigv4.cc',
                 'duration.cc',
                 'vint-serialization.cc',
-                'utils/arch/powerpc/crc32-vpmsum/crc32_wrapper.cc',
                 'querier.cc',
                 'mutation_writer/multishard_writer.cc',
                 'ent/encryption/encryption_config.cc',
@@ -2408,7 +2407,6 @@ def write_build_file(f,
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
                     if src.endswith('.cc')]
-            objs.append('$builddir/../utils/arch/powerpc/crc32-vpmsum/crc32.S')
             has_rust = False
             for dep in deps[binary]:
                 if isinstance(dep, Antlr3Grammar):
