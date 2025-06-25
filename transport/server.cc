@@ -418,6 +418,9 @@ cql_server::connection::read_frame() {
 future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const {
     auto time_left = timeout - seastar::lowres_clock::now();
     return seastar::sleep_abortable(time_left, _server._abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
+        if (f.failed()) {
+            clogger.debug("Got exception {} while waiting for a request timeout.", f.get_exception());
+        }
         // Return timeout error no matter if sleep was aborted or not
         return utils::result_into_future<result_with_foreign_response_ptr>(std::move(resp));
     });
