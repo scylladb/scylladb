@@ -441,14 +441,26 @@ class ScyllaRESTAPIClient:
 
     async def repair(self, node_ip: str, keyspace: str, table: str, ranges: str = '') -> None:
         """Repair the given table and wait for it to complete"""
-        if ranges:
-            params = {"columnFamilies": table, "ranges": ranges}
+        vnode_keyspaces = await self.client.get_json(f"/storage_service/keyspaces", host=node_ip, params={"replication": "vnodes"})
+        if keyspace in vnode_keyspaces:
+            if ranges:
+                params = {"columnFamilies": table, "ranges": ranges}
+            else:
+                params = {"columnFamilies": table}
+            sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params=params)
+            status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
+            if status != 'SUCCESSFUL':
+                raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}")
         else:
-            params = {"columnFamilies": table}
-        sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params=params)
-        status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
-        if status != 'SUCCESSFUL':
-            raise Exception(f"Repair id {sequence_number} on node {node_ip} for table {keyspace}.{table} failed: status={status}")
+            if ranges:
+                raise ValueError(f"Ranges parameter is not supported for tablet keyspaces")
+            params={
+                "ks": keyspace,
+                "table": table,
+                "tokens": "all",
+                "await_completion": "true",
+            }
+            await self.client.post_json(f"/storage_service/tablets/repair", host=node_ip, params=params)
 
     def __get_autocompaction_url(self, keyspace: str, table: Optional[str] = None) -> str:
         """Return autocompaction url for the given keyspace/table"""

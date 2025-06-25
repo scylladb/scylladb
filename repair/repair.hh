@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <stdexcept>
 #include <unordered_map>
 #include <exception>
 #include <fmt/core.h>
@@ -26,6 +27,10 @@
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
 #include "gms/gossip_address_map.hh"
+
+struct tablets_unsupported : std::runtime_error {
+    tablets_unsupported() : std::runtime_error("tablets are not supported for this operation") {}
+};
 
 namespace tasks {
 namespace repair {
@@ -91,6 +96,7 @@ constexpr shard_id repair_unspecified_shard = shard_id(-1);
 // repair_get_status(). The returned future<int> becomes available quickly,
 // as soon as repair_get_status() can be used - it doesn't wait for the
 // repair to complete.
+// repair_start() repairs only vnode keyspaces.
 future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
         sstring keyspace, std::unordered_map<sstring, sstring> options);
 
