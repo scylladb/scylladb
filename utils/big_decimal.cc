@@ -78,12 +78,18 @@ big_decimal::big_decimal(std::string_view text)
     if (negative) {
         _unscaled_value *= -1;
     }
+    // parse scale as int64_t, so that it can be adjusted with fraction size and then checked for overflow.
+    int64_t scale = 0;
     try {
-        _scale = exponent.empty() ? 0 : -boost::lexical_cast<int32_t>(exponent);
+        scale = exponent.empty() ? 0 : -boost::lexical_cast<int64_t>(exponent);
     } catch (...) {
         throw marshal_exception(seastar::format("big_decimal - failed to parse exponent: {}", exponent));
     }
-    _scale += fraction.size();
+    scale += fraction.size();
+    if (scale < std::numeric_limits<int32_t>::min() || scale > std::numeric_limits<int32_t>::max()) {
+        throw marshal_exception(seastar::format("big_decimal - scale out of range: {}", scale));
+    }
+    _scale = static_cast<int32_t>(scale);
 }
 
 boost::multiprecision::cpp_rational big_decimal::as_rational() const {
