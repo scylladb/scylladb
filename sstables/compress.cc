@@ -360,7 +360,7 @@ public:
     }
     virtual future<temporary_buffer<char>> get() override {
         if (_pos >= _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         auto addr = _compression_metadata->locate(_pos, _offsets);
         // Uncompress the next chunk. We need to skip part of the first
@@ -371,58 +371,55 @@ public:
         if (!addr.chunk_len) {
             throw sstables::malformed_sstable_exception(format("compressed chunk_len must be greater than zero, chunk_start={}", addr.chunk_start));
         }
-        return _input_stream->read_exactly(addr.chunk_len).then([this, addr](temporary_buffer<char> buf) {
-            if (buf.size() != addr.chunk_len) {
-                throw sstables::malformed_sstable_exception(format("compressed reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _underlying_pos, addr.chunk_len, buf.size()));
+        auto buf = co_await _input_stream->read_exactly(addr.chunk_len);
+        if (buf.size() != addr.chunk_len) {
+            throw sstables::malformed_sstable_exception(format("compressed reader hit premature end-of-file at file offset {}, expected chunk_len={}, actual={}", _underlying_pos, addr.chunk_len, buf.size()));
+        }
+        auto res_units = co_await _permit.request_memory(_compression_metadata->uncompressed_chunk_length());
+        // The last 4 bytes of the chunk are the adler32/crc32 checksum
+        // of the rest of the (compressed) chunk.
+        auto compressed_len = addr.chunk_len - 4;
+        // FIXME: Do not always calculate checksum - Cassandra has a
+        // probability (defaulting to 1.0, but still...)
+        auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
+        auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
+        if (expected_checksum != actual_checksum) {
+            throw sstables::malformed_sstable_exception(format("compressed chunk of size {} at file offset {} failed checksum, expected={}, actual={}", addr.chunk_len, _underlying_pos, expected_checksum, actual_checksum));
+        }
+
+        if constexpr (check_digest) {
+            if (_digests.can_calculate_digest) {
+                _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.get(), compressed_len);
+                if constexpr (mode == compressed_checksum_mode::checksum_all) {
+                    uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
+                    _digests.actual_digest = ChecksumType::checksum(_digests.actual_digest,
+                            reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
+                }
             }
-            return _permit.request_memory(_compression_metadata->uncompressed_chunk_length()).then(
-                    [this, addr, buf = std::move(buf)] (reader_permit::resource_units res_units) mutable {
-                // The last 4 bytes of the chunk are the adler32/crc32 checksum
-                // of the rest of the (compressed) chunk.
-                auto compressed_len = addr.chunk_len - 4;
-                // FIXME: Do not always calculate checksum - Cassandra has a
-                // probability (defaulting to 1.0, but still...)
-                auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
-                auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
-                if (expected_checksum != actual_checksum) {
-                    throw sstables::malformed_sstable_exception(format("compressed chunk of size {} at file offset {} failed checksum, expected={}, actual={}", addr.chunk_len, _underlying_pos, expected_checksum, actual_checksum));
-                }
+        }
 
-                if constexpr (check_digest) {
-                    if (_digests.can_calculate_digest) {
-                        _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.get(), compressed_len);
-                        if constexpr (mode == compressed_checksum_mode::checksum_all) {
-                            uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
-                            _digests.actual_digest = ChecksumType::checksum(_digests.actual_digest,
-                                    reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
-                        }
-                    }
-                }
+        // We know that the uncompressed data will take exactly
+        // chunk_length bytes (or less, if reading the last chunk).
+        temporary_buffer<char> out(
+                _compression_metadata->uncompressed_chunk_length());
+        // The compressed data is the whole chunk, minus the last 4
+        // bytes (which contain the checksum verified above).
 
-                // We know that the uncompressed data will take exactly
-                // chunk_length bytes (or less, if reading the last chunk).
-                temporary_buffer<char> out(
-                        _compression_metadata->uncompressed_chunk_length());
-                // The compressed data is the whole chunk, minus the last 4
-                // bytes (which contain the checksum verified above).
+        auto len = _compression_metadata->get_compressor().uncompress(buf.get(), compressed_len, out.get_write(), out.size());
 
-                auto len = _compression_metadata->get_compressor().uncompress(buf.get(), compressed_len, out.get_write(), out.size());
+        out.trim(len);
+        out.trim_front(addr.offset);
+        _pos += out.size();
+        _underlying_pos += addr.chunk_len;
 
-                out.trim(len);
-                out.trim_front(addr.offset);
-                _pos += out.size();
-                _underlying_pos += addr.chunk_len;
-
-                if constexpr (check_digest) {
-                    if (_digests.can_calculate_digest
-                            && _pos == _compression_metadata->uncompressed_file_length()
-                            && _digests.expected_digest != _digests.actual_digest) {
-                        throw sstables::malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
-                    }
-                }
-                return make_tracked_temporary_buffer(std::move(out), std::move(res_units));
-            });
-        });
+        if constexpr (check_digest) {
+            if (_digests.can_calculate_digest
+                    && _pos == _compression_metadata->uncompressed_file_length()
+                    && _digests.expected_digest != _digests.actual_digest) {
+                throw sstables::malformed_sstable_exception(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
+            }
+        }
+        co_return make_tracked_temporary_buffer(std::move(out), std::move(res_units));
     }
 
     virtual future<> close() override {
@@ -444,15 +441,14 @@ public:
         }
         _pos += n;
         if (_pos == _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         auto addr = _compression_metadata->locate(_pos, _offsets);
         auto underlying_n = addr.chunk_start - _underlying_pos;
         _underlying_pos = addr.chunk_start;
         _beg_pos = _pos;
-        return _input_stream->skip(underlying_n).then([] {
-            return make_ready_future<temporary_buffer<char>>();
-        });
+        co_await _input_stream->skip(underlying_n);
+        co_return temporary_buffer<char>();
     }
 };
 

@@ -94,7 +94,7 @@ public:
     virtual future<temporary_buffer<char>> get() override {
         uint64_t chunk_size = _checksum.chunk_size;
         if (_pos >= _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         // Read the next chunk. We need to skip part of the first
         // chunk, but then continue to read from beginning of chunks.
@@ -103,47 +103,46 @@ public:
         if (_pos != _beg_pos && (_pos & (chunk_size - 1)) != 0) {
             throw std::runtime_error(format("Checksummed reader not aligned to chunk boundary: pos={}, chunk_size={}", _pos, chunk_size));
         }
-        return _input_stream->read_exactly(chunk_size).then([this, chunk_size](temporary_buffer<char> buf) {
-            uint32_t chunk_index = _pos >> _chunk_size_trailing_zeros;
-            if (buf.size() != chunk_size) {
-                auto actual_end = _underlying_pos + buf.size();
-                if (chunk_index + 1 < _checksum.checksums.size()) {
-                    throw malformed_sstable_exception(seastar::format("Checksummed reader hit premature end-of-file at file offset {}: expected {} chunks of size {} but data file has {}",
-                            actual_end, _checksum.checksums.size(), chunk_size, chunk_index + 1));
-                } else if (actual_end < _file_len) {
-                    // Truncation on last chunk. Update _end_pos so that future
-                    // calls to get() return immediately.
-                    _end_pos = actual_end;
-                }
+        auto buf = co_await _input_stream->read_exactly(chunk_size);
+        uint32_t chunk_index = _pos >> _chunk_size_trailing_zeros;
+        if (buf.size() != chunk_size) {
+            auto actual_end = _underlying_pos + buf.size();
+            if (chunk_index + 1 < _checksum.checksums.size()) {
+                throw malformed_sstable_exception(seastar::format("Checksummed reader hit premature end-of-file at file offset {}: expected {} chunks of size {} but data file has {}",
+                        actual_end, _checksum.checksums.size(), chunk_size, chunk_index + 1));
+            } else if (actual_end < _file_len) {
+                // Truncation on last chunk. Update _end_pos so that future
+                // calls to get() return immediately.
+                _end_pos = actual_end;
             }
-            if (chunk_index >= _checksum.checksums.size()) {
-                throw malformed_sstable_exception(seastar::format("Chunk count mismatch between CRC and Data.db: expected {} but data file has more", _checksum.checksums.size()));
-            }
-            auto expected_checksum = _checksum.checksums[chunk_index];
-            auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
-            if (expected_checksum != actual_checksum) {
-                _error_handler(seastar::format(
-                        "Checksummed chunk of size {} at file offset {} failed checksum: expected={}, actual={}",
-                        buf.size(), _underlying_pos, expected_checksum, actual_checksum));
-            }
+        }
+        if (chunk_index >= _checksum.checksums.size()) {
+            throw malformed_sstable_exception(seastar::format("Chunk count mismatch between CRC and Data.db: expected {} but data file has more", _checksum.checksums.size()));
+        }
+        auto expected_checksum = _checksum.checksums[chunk_index];
+        auto actual_checksum = ChecksumType::checksum(buf.get(), buf.size());
+        if (expected_checksum != actual_checksum) {
+            _error_handler(seastar::format(
+                    "Checksummed chunk of size {} at file offset {} failed checksum: expected={}, actual={}",
+                    buf.size(), _underlying_pos, expected_checksum, actual_checksum));
+        }
 
-            if constexpr (check_digest) {
-                if (_digests.can_calculate_digest) {
-                    _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.begin(), buf.size());
-                }
+        if constexpr (check_digest) {
+            if (_digests.can_calculate_digest) {
+                _digests.actual_digest = checksum_combine_or_feed<ChecksumType>(_digests.actual_digest, actual_checksum, buf.begin(), buf.size());
             }
+        }
 
-            buf.trim_front(_pos & (chunk_size - 1));
-            _pos += buf.size();
-            _underlying_pos += chunk_size;
+        buf.trim_front(_pos & (chunk_size - 1));
+        _pos += buf.size();
+        _underlying_pos += chunk_size;
 
-            if constexpr (check_digest) {
-                if (_digests.can_calculate_digest && _pos == _file_len && _digests.expected_digest != _digests.actual_digest) {
-                    _error_handler(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
-                }
+        if constexpr (check_digest) {
+            if (_digests.can_calculate_digest && _pos == _file_len && _digests.expected_digest != _digests.actual_digest) {
+                _error_handler(seastar::format("Digest mismatch: expected={}, actual={}", _digests.expected_digest, _digests.actual_digest));
             }
-            return buf;
-        });
+        }
+        co_return buf;
     }
 
     virtual future<> close() override {
@@ -166,14 +165,13 @@ public:
         }
         _pos += n;
         if (_pos == _end_pos) {
-            return make_ready_future<temporary_buffer<char>>();
+            co_return temporary_buffer<char>();
         }
         auto underlying_n = align_down(_pos, chunk_size) - _underlying_pos;
         _beg_pos = _pos;
         _underlying_pos += underlying_n;
-        return _input_stream->skip(underlying_n).then([] {
-            return make_ready_future<temporary_buffer<char>>();
-        });
+        co_await _input_stream->skip(underlying_n);
+        co_return temporary_buffer<char>();
     }
 };
 
