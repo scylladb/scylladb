@@ -1618,6 +1618,10 @@ public:
         return _type == db::write_type::VIEW;
     }
 
+    bool is_batch() const noexcept {
+        return _type == db::write_type::BATCH;
+    }
+
     void set_cdc_operation_result_tracker(lw_shared_ptr<cdc::operation_result_tracker> tracker) {
         _cdc_operation_result_tracker = std::move(tracker);
     }
@@ -4278,7 +4282,7 @@ future<> storage_proxy::send_batchlog_replay_to_all_replicas(std::vector<mutatio
             return batchlog_replay_mutation(std::move(m));
         }) | std::ranges::to<std::vector<batchlog_replay_mutation>>();
 
-    return mutate_internal(std::move(ms), db::consistency_level::ALL, nullptr, empty_service_permit(), timeout)
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, nullptr, empty_service_permit(), timeout, db::write_type::BATCH)
             .then(utils::result_into_future<result<>>);
 }
 
@@ -6997,6 +7001,12 @@ future<> storage_proxy::drain_on_shutdown() {
 future<> storage_proxy::abort_view_writes() {
     return async([this] {
         cancel_write_handlers([] (const abstract_write_response_handler& handler) { return handler.is_view(); });
+    });
+}
+
+future<> storage_proxy::abort_batch_writes() {
+    return async([this] {
+        cancel_write_handlers([] (const abstract_write_response_handler& handler) { return handler.is_batch(); });
     });
 }
 
