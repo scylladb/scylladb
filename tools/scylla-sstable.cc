@@ -1709,7 +1709,7 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
         auto ostream = make_file_output_stream(std::move(ofile), options).get();
         auto close_ostream = defer([&ostream] { ostream.close().get(); });
 
-        auto istream = sst->data_stream(0, sst->data_size(), permit, nullptr, nullptr);
+        auto istream = sst->data_stream(0, sst->data_size(), permit, nullptr, nullptr).get();
         auto close_istream = defer([&istream] { istream.close().get(); });
 
         istream.consume([&] (temporary_buffer<char> buf) {
