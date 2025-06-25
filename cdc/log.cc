@@ -707,8 +707,18 @@ static schema_ptr create_log_schema_for_vsc(const schema& s, std::optional<table
     };
     add_columns(s.partition_key_columns());
     add_columns(s.clustering_key_columns());
-    add_columns(s.static_columns(), true);
-    add_columns(s.regular_columns(), true);
+
+    auto add_vector_columns = [&] (const schema::const_iterator_range_type& columns) {
+        for (const auto& column : columns) {
+            auto type = column.type;
+            if (type->get_kind() == abstract_type::kind::vector) {
+                b.with_column(log_data_column_name_bytes(column.name()), type);
+                b.with_column(log_data_column_deleted_name_bytes(column.name()), boolean_type);
+            }
+        }
+    };
+    add_vector_columns(s.regular_columns());
+
 
     if (uuid) {
         b.set_uuid(*uuid);
