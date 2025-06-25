@@ -2123,7 +2123,7 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
             // create_write_response_handler is overloaded for paxos::proposal and will
             // create cas_mutation holder, which consequently will ensure paxos::learn is
             // used.
-            auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, false, tr_state, _permit, _timeout)
+            auto f = _proxy->mutate_internal(std::move(m), db::consistency_level::ANY, tr_state, _permit, _timeout)
                     .then(utils::result_into_future<result<>>);
 
             // TODO: provided commits did not invalidate the prepare we just did above (which they
@@ -2475,7 +2475,7 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
                 return v.schema()->id() == base_tbl_id;
             });
             if (!mutations.empty()) {
-                f_cdc = _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker))
+                f_cdc = _proxy->mutate_internal(std::move(mutations), _cl_for_learn, tr_state, _permit, _timeout, {}, std::move(tracker))
                         .then(utils::result_into_future<result<>>);
             }
         }
@@ -2483,7 +2483,7 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
 
     // Path for the "base" mutations
     std::array<std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>, 1> m{std::make_tuple(std::move(decision), _schema, shared_from_this(), _key.token())};
-    future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, false, tr_state, _permit, _timeout)
+    future<> f_lwt = _proxy->mutate_internal(std::move(m), _cl_for_learn, tr_state, _permit, _timeout)
             .then(utils::result_into_future<result<>>);
 
     co_await when_all_succeed(std::move(f_cdc), std::move(f_lwt)).discard_result();
@@ -3846,7 +3846,7 @@ future<result<>> storage_proxy::do_mutate(std::vector<mutation> mutations, db::c
     }).begin();
     return seastar::when_all_succeed(
         mutate_counters(std::ranges::subrange(mutations.begin(), mid), cl, tr_state, permit, timeout),
-        mutate_internal(std::ranges::subrange(mid, mutations.end()), cl, false, tr_state, permit, timeout, std::move(cdc_tracker), allow_limit)
+        mutate_internal(std::ranges::subrange(mid, mutations.end()), cl, tr_state, permit, timeout, {}, std::move(cdc_tracker), allow_limit)
     ).then([] (std::tuple<result<>> res) {
         // For now, only mutate_internal returns a result<>
         return std::get<0>(std::move(res));
@@ -3855,8 +3855,10 @@ future<result<>> storage_proxy::do_mutate(std::vector<mutation> mutations, db::c
 
 future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistency_level cl, tracing::trace_state_ptr tr_state,
                                                       clock_type::time_point timeout, service_permit permit) {
+    // we need to pass correct db::write_type in case of a timeout so that
+    // client doesn't attempt to retry the request.
     // FIXME: do not send the mutation to itself, it has already been applied (it is not incorrect to do so, though)
-    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, true, std::move(tr_state), std::move(permit), timeout)
+    return mutate_internal(std::array<mutation, 1>{std::move(m)}, cl, std::move(tr_state), std::move(permit), timeout, db::write_type::COUNTER)
             .then(utils::result_into_future<result<>>);
 }
 
@@ -3867,8 +3869,8 @@ future<> storage_proxy::replicate_counter_from_leader(mutation m, db::consistenc
  */
 template<typename Range>
 future<result<>>
-storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool counters, tracing::trace_state_ptr tr_state, service_permit permit,
-                               std::optional<clock_type::time_point> timeout_opt, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker,
+storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit,
+                               std::optional<clock_type::time_point> timeout_opt, std::optional<db::write_type> type_opt, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker,
                                db::allow_per_partition_rate_limit allow_limit) {
     if (std::ranges::empty(mutations)) {
         return make_ready_future<result<>>(bo::success());
@@ -3877,12 +3879,10 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
     slogger.trace("mutate cl={}", cl);
     mlogger.trace("mutations={}", mutations);
 
-    // If counters is set it means that we are replicating counter shards. There
-    // is no need for special handling anymore, since the leader has already
-    // done its job, but we need to return correct db::write_type in case of
-    // a timeout so that client doesn't attempt to retry the request.
-    auto type = counters ? db::write_type::COUNTER
-                         : (std::next(std::begin(mutations)) == std::end(mutations) ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH);
+    // the parameter type_opt allows to pass a specific type if needed for
+    // special handling, e.g. counters. otherwise, a default type is used.
+    auto type = type_opt.value_or(std::next(std::begin(mutations)) == std::end(mutations) ? db::write_type::SIMPLE : db::write_type::UNLOGGED_BATCH);
+
     utils::latency_counter lc;
     lc.start();
 
@@ -4253,7 +4253,7 @@ future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s,
 
 future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_a_s) {
     std::array<hint_wrapper, 1> ms{hint_wrapper { fm_a_s.fm.unfreeze(fm_a_s.s) }};
-    return mutate_internal(std::move(ms), db::consistency_level::ALL, false, nullptr, empty_service_permit())
+    return mutate_internal(std::move(ms), db::consistency_level::ALL, nullptr, empty_service_permit())
             .then(utils::result_into_future<result<>>);
 }
 
@@ -4436,7 +4436,7 @@ future<result<>> storage_proxy::schedule_repair(locator::effective_replication_m
                     std::views::transform([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }) |
                     // The transform above is destructive, materialize into a vector to make the range re-iterable.
                     std::ranges::to<std::vector<read_repair_mutation>>()
-            , cl, false, std::move(trace_state), std::move(permit));
+            , cl, std::move(trace_state), std::move(permit));
 }
 
 class abstract_read_resolver {
