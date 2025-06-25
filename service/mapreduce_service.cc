@@ -586,11 +586,8 @@ std::optional<dht::partition_range> get_next_partition_range(query_ranges_to_vno
     return {};
 } 
 
-future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
-    schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
-    replica::table& cf = _db.local().find_column_family(schema);
+future<> mapreduce_service::dispatch_to_vnodes(schema_ptr schema, replica::column_family& cf, query::mapreduce_request& req, query::mapreduce_result& result, tracing::trace_state_ptr tr_state) {
     auto erm = cf.get_effective_replication_map();
-
     // Group vnodes by assigned endpoint.
     std::map<locator::host_id, dht::partition_range_vector> vnodes_per_addr;
     const auto& topo = get_token_metadata_ptr()->get_topology();
@@ -607,7 +604,7 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
         }
 
         vnodes_per_addr[*live_endpoints.begin()].push_back(std::move(*vnode));
-        // can potentially stall e.g. with a large tablet count.
+        // can potentially stall e.g. with a large vnodes count.
         co_await coroutine::maybe_yield();
     }
 
@@ -615,7 +612,6 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
     flogger.debug("dispatching mapreduce_request to {} endpoints", vnodes_per_addr.size());
 
     retrying_dispatcher dispatcher(*this, tr_state);
-    query::mapreduce_result result;
 
     co_await coroutine::parallel_for_each(vnodes_per_addr,
             [&] (std::pair<const locator::host_id, dht::partition_range_vector>& vnodes_with_addr) -> future<> {
@@ -624,6 +620,14 @@ future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_req
         req_with_modified_pr.pr = std::move(vnodes_with_addr.second);
         co_await dispatch_range_and_reduce(erm, dispatcher, req, std::move(req_with_modified_pr), addr, result, tr_state);
     });
+}
+
+future<query::mapreduce_result> mapreduce_service::dispatch(query::mapreduce_request req, tracing::trace_state_ptr tr_state) {
+    schema_ptr schema = local_schema_registry().get(req.cmd.schema_version);
+    replica::table& cf = _db.local().find_column_family(schema);
+    
+    query::mapreduce_result result;
+    co_await dispatch_to_vnodes(schema, cf, req, result, tr_state);
 
     mapreduce_aggregates aggrs(req);
     const bool requires_thread = aggrs.requires_thread();
