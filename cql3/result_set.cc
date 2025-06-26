@@ -9,8 +9,10 @@
  */
 
 #include <cstdint>
+#include "types/json_utils.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
+#include "utils/rjson.hh"
 #include "cql3/result_set.hh"
 
 namespace cql3 {
@@ -186,6 +188,87 @@ make_empty_metadata() {
         return result;
     }();
     return empty_metadata_cache;
+}
+
+void print_query_results_text(std::ostream& os, const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    struct column_values {
+        size_t max_size{0};
+        sstring header_format;
+        sstring row_format;
+        std::vector<sstring> values;
+
+        void add(sstring value) {
+            max_size = std::max(max_size, value.size());
+            values.push_back(std::move(value));
+        }
+    };
+
+    std::vector<column_values> columns;
+    columns.resize(column_metadata.size());
+
+    for (size_t i = 0; i < column_metadata.size(); ++i) {
+        columns[i].add(column_metadata[i]->name->text());
+    }
+
+    for (const auto& row : result.result_set().rows()) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (row[i]) {
+                columns[i].add(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))));
+            } else {
+                columns[i].add("");
+            }
+        }
+    }
+
+    std::vector<sstring> separators(columns.size(), sstring());
+    for (size_t i = 0; i < columns.size(); ++i) {
+        auto& col_values = columns[i];
+        col_values.header_format = seastar::format(" {{:<{}}} ", col_values.max_size);
+        col_values.row_format = seastar::format(" {{:>{}}} ", col_values.max_size);
+        for (size_t c = 0; c < col_values.max_size; ++c) {
+            separators[i] += "-";
+        }
+    }
+
+    for (size_t r = 0; r < result.result_set().rows().size() + 1; ++r) {
+        std::vector<sstring> row;
+        row.reserve(columns.size());
+        for (size_t i = 0; i < columns.size(); ++i) {
+            const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
+            row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
+        }
+        fmt::print(os, "{}\n", fmt::join(row, "|"));
+        if (!r) {
+            fmt::print(os, "-{}-\n", fmt::join(separators, "-+-"));
+        }
+    }
+}
+
+void print_query_results_json(std::ostream& os, const cql3::result& result) {
+    const auto& metadata = result.get_metadata();
+    const auto& column_metadata = metadata.get_names();
+
+    rjson::streaming_writer writer(os);
+
+    writer.StartArray();
+    for (const auto& row : result.result_set().rows()) {
+        writer.StartObject();
+        for (size_t i = 0; i < row.size(); ++i) {
+            writer.Key(column_metadata[i]->name->text());
+            if (!row[i] || row[i]->empty()) {
+                writer.Null();
+                continue;
+            }
+            const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
+            const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
+            writer.RawValue(value, type);
+        }
+        writer.EndObject();
+    }
+    writer.EndArray();
 }
 
 }
