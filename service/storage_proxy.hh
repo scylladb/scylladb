@@ -123,19 +123,22 @@ public:
     tracing::trace_state_ptr trace_state = nullptr;
     replicas_per_token_range preferred_replicas;
     std::optional<db::read_repair_decision> read_repair_decision;
+    node_local_only node_local_only;
 
     storage_proxy_coordinator_query_options(storage_proxy_clock_type::time_point timeout,
             service_permit permit_,
             client_state& client_state_,
             tracing::trace_state_ptr trace_state = nullptr,
             replicas_per_token_range preferred_replicas = { },
-            std::optional<db::read_repair_decision> read_repair_decision = { })
+            std::optional<db::read_repair_decision> read_repair_decision = { },
+            service::node_local_only node_local_only_ = service::node_local_only::no)
         : _timeout(timeout)
         , permit(std::move(permit_))
         , cstate(client_state_)
         , trace_state(std::move(trace_state))
         , preferred_replicas(std::move(preferred_replicas))
-        , read_repair_decision(read_repair_decision) {
+        , read_repair_decision(read_repair_decision)
+        , node_local_only(node_local_only_) {
     }
 
     storage_proxy_clock_type::time_point timeout(storage_proxy& sp) const {
@@ -386,7 +389,7 @@ private:
     bool hints_enabled(db::write_type type) const noexcept;
     db::hints::manager& hints_manager_for(db::write_type type);
     void sort_endpoints_by_proximity(const locator::effective_replication_map& erm, host_id_vector_replica_set& eps) const;
-    host_id_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const;
+    host_id_vector_replica_set get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token, node_local_only node_local_only) const;
     host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, host_id_vector_replica_set live_endpoints, const host_id_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<locator::host_id>* extra, replica::column_family*) const;
     // As above with read_repair_decision=NONE, extra=nullptr.
     host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set& live_endpoints, const host_id_vector_replica_set& preferred_endpoints, replica::column_family*) const;
@@ -399,7 +402,8 @@ private:
             tracing::trace_state_ptr trace_state,
             const host_id_vector_replica_set& preferred_endpoints,
             bool& is_bounced_read,
-            service_permit permit);
+            service_permit permit,
+            node_local_only node_local_only);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_result_local(
             locator::effective_replication_map_ptr,
             schema_ptr,
@@ -432,7 +436,8 @@ private:
             uint64_t remaining_row_count,
             uint32_t remaining_partition_count,
             replicas_per_token_range preferred_replicas,
-            service_permit permit);
+            service_permit permit,
+            node_local_only node_local_only);
 
     future<result<coordinator_query_result>> do_query(schema_ptr,
         lw_shared_ptr<query::read_command> cmd,
