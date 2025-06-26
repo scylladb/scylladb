@@ -1292,7 +1292,7 @@ class ScyllaCluster:
         # Starting may fail and if we didn't add it now it might leak.
         self.running[server_id] = server
         if not connect_driver:
-            expected_server_up_state = ServerUpState.HOST_ID_QUERIED
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
 
         def instance_auth_provider(desc: dict):
             module_path, class_name = desc["authenticator"].rsplit('.', 1)
