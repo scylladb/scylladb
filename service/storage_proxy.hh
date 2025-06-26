@@ -154,6 +154,10 @@ struct storage_proxy_coordinator_query_result {
     }
 };
 
+struct storage_proxy_coordinator_mutate_options {
+    locator::replica_local replica_local = locator::replica_local::no;
+};
+
 class cas_request;
 
 class storage_proxy : public seastar::async_sharded_service<storage_proxy>, public peering_sharded_service<storage_proxy>, public service::endpoint_lifecycle_subscriber  {
@@ -208,9 +212,7 @@ public:
 
     using coordinator_query_options = storage_proxy_coordinator_query_options;
     using coordinator_query_result = storage_proxy_coordinator_query_result;
-
-    struct coordinator_mutate_options {
-    };
+    using coordinator_mutate_options = storage_proxy_coordinator_mutate_options;
 
     // Holds  a list of endpoints participating in CAS request, for a given
     // consistency level, token, and state of joining/leaving nodes.

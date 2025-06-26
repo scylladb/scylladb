@@ -44,6 +44,10 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
+// When true, restricts query execution to the local replica only,
+// by filtering out all non-local replicas. Works only for cl = 1.
+using replica_local = bool_class<class replica_local_tag>;
+
 using replication_strategy_config_options = std::map<sstring, sstring>;
 struct replication_strategy_params {
     const replication_strategy_config_options options;
