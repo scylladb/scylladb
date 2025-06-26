@@ -21,9 +21,9 @@
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"
-#include "cql3/type_json.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/select_statement.hh"
+#include "cql3/query_result_printer.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
@@ -1788,87 +1788,6 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
     }
 }
 
-void print_query_results_text(std::ostream& os, const cql3::result& result) {
-    const auto& metadata = result.get_metadata();
-    const auto& column_metadata = metadata.get_names();
-
-    struct column_values {
-        size_t max_size{0};
-        sstring header_format;
-        sstring row_format;
-        std::vector<sstring> values;
-
-        void add(sstring value) {
-            max_size = std::max(max_size, value.size());
-            values.push_back(std::move(value));
-        }
-    };
-
-    std::vector<column_values> columns;
-    columns.resize(column_metadata.size());
-
-    for (size_t i = 0; i < column_metadata.size(); ++i) {
-        columns[i].add(column_metadata[i]->name->text());
-    }
-
-    for (const auto& row : result.result_set().rows()) {
-        for (size_t i = 0; i < row.size(); ++i) {
-            if (row[i]) {
-                columns[i].add(column_metadata[i]->type->to_string(linearized(managed_bytes_view(*row[i]))));
-            } else {
-                columns[i].add("");
-            }
-        }
-    }
-
-    std::vector<sstring> separators(columns.size(), sstring());
-    for (size_t i = 0; i < columns.size(); ++i) {
-        auto& col_values = columns[i];
-        col_values.header_format = seastar::format(" {{:<{}}} ", col_values.max_size);
-        col_values.row_format = seastar::format(" {{:>{}}} ", col_values.max_size);
-        for (size_t c = 0; c < col_values.max_size; ++c) {
-            separators[i] += "-";
-        }
-    }
-
-    for (size_t r = 0; r < result.result_set().rows().size() + 1; ++r) {
-        std::vector<sstring> row;
-        row.reserve(columns.size());
-        for (size_t i = 0; i < columns.size(); ++i) {
-            const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
-            row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
-        }
-        fmt::print(os, "{}\n", fmt::join(row, "|"));
-        if (!r) {
-            fmt::print(os, "-{}-\n", fmt::join(separators, "-+-"));
-        }
-    }
-}
-
-void print_query_results_json(std::ostream& os, const cql3::result& result) {
-    const auto& metadata = result.get_metadata();
-    const auto& column_metadata = metadata.get_names();
-
-    rjson::streaming_writer writer(os);
-
-    writer.StartArray();
-    for (const auto& row : result.result_set().rows()) {
-        writer.StartObject();
-        for (size_t i = 0; i < row.size(); ++i) {
-            writer.Key(column_metadata[i]->name->text());
-            if (!row[i]) {
-                writer.Null();
-                continue;
-            }
-            const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
-            const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
-            writer.RawValue(value, type);
-        }
-        writer.EndObject();
-    }
-    writer.EndArray();
-}
-
 class query_operation_result_visitor : public cql_transport::messages::result_message::visitor {
     output_format _output_format;
 private:
@@ -1888,10 +1807,10 @@ public:
         const auto& result = rows.rs();
         switch (_output_format) {
             case output_format::text:
-                print_query_results_text(std::cout, result);
+                cql3::print_query_results_text(std::cout, result);
                 break;
             case output_format::json:
-                print_query_results_json(std::cout, result);
+                cql3::print_query_results_json(std::cout, result);
                 break;
         }
     }
