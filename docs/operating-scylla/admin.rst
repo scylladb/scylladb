@@ -1,26 +1,28 @@
+=========================
 Administration Guide
-********************
+=========================
 
 For training material, also check out the `Admin Procedures lesson <https://university.scylladb.com/courses/scylla-operations/lessons/admin-procedures-and-basic-monitoring/>`_ on ScyllaDB University.
 
-System requirements
-===================
+System Requirements
+---------------------------
 Make sure you have met the :doc:`System Requirements </getting-started/system-requirements>`  before you install and configure ScyllaDB. 
 
 Download and Install
-====================
+---------------------------
 
 See the :doc:`getting started page </getting-started/index>` for info on installing ScyllaDB on your platform.
 
 
-System configuration
+System Configuration
 ====================
 See :ref:`System Configuration Guide <system-configuration-files-and-scripts>` for details on optimum OS settings for ScyllaDB. (These settings are performed automatically in the ScyllaDB packages, Docker containers, and Amazon AMIs.)
 
 .. _admin-scylla-configuration:
 
 ScyllaDB Configuration
-======================
+--------------------------------
+
 ScyllaDB configuration files are:
 
 +-------------------------------------------------------+-----------------------------------+
@@ -37,7 +39,7 @@ ScyllaDB configuration files are:
 .. _check-your-current-version-of-scylla:
 
 Check your current version of ScyllaDB
---------------------------------------
+==============================================
 This command allows you to check your current version of ScyllaDB. Note that this command is not the :doc:`nodetool version </operating-scylla/nodetool-commands/version>` command which reports the CQL version.
 If you are looking for the CQL or Cassandra version, refer to the CQLSH reference for :ref:`SHOW VERSION <cqlsh-show-version>`.
 
@@ -54,7 +56,7 @@ Output displays the ScyllaDB version. Your results may differ.
 .. _admin-address-configuration-in-scylla:
 
 Address Configuration in ScyllaDB
----------------------------------
+=====================================
 
 The following addresses can be configured in scylla.yaml:
 
@@ -86,7 +88,7 @@ The following addresses can be configured in scylla.yaml:
 .. note:: When the listen_address, rpc_address, broadcast_address, and broadcast_rpc_address parameters are not set correctly, ScyllaDB does not work as expected.
 
 scylla-server
--------------
+===============
 The :code:`scylla-server` file contains configuration related to starting up the ScyllaDB server.
 
 .. _admin-scylla.yaml:
@@ -96,7 +98,7 @@ The :code:`scylla-server` file contains configuration related to starting up the
 .. _object-storage-configuration:
 
 Configuring Object Storage :label-caution:`Experimental`
-========================================================
+--------------------------------------------------------------
 
 Scylla has the ability to communicate directly with S3-compatible storage. This
 feature enables various functionalities, but requires proper configuration of
@@ -140,7 +142,7 @@ AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
 .. _aws-s3-configuration:
 
 Configuring AWS S3 access
--------------------------
+============================
 
 You can define endpoint details in the ``scylla.yaml`` file. For example:
 
@@ -198,7 +200,7 @@ ARN to be defined in the ``scylla.yaml`` file, as shown below:
 .. _admin-compression:
 
 Compression
------------
+----------------
 
 In ScyllaDB, you can configure compression at rest and compression in transit.
 For compression in transit, you can configure compression between nodes or between the client and the node.
@@ -207,7 +209,7 @@ For compression in transit, you can configure compression between nodes or betwe
 .. _admin-client-node-compression:
 
 Client - Node Compression
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+===============================
 
 Compression between the client and the node is set by the driver that the application is using to access ScyllaDB.
 
@@ -222,7 +224,7 @@ Refer to the :doc:`Drivers Page </using-scylla/drivers/index>` for more drivers.
 .. _internode-compression:
 
 Internode Compression
-^^^^^^^^^^^^^^^^^^^^^
+===========================
 
 Internode compression is configured in the scylla.yaml
 
@@ -235,7 +237,7 @@ internode_compression controls whether traffic between nodes is compressed.
 Configuring TLS/SSL in scylla.yaml
 ----------------------------------
 
-ScyllaDB versions 1.1 and greater support encryption between nodes and between client and node. See the ScyllaDB :doc:`ScyllaDB TLS/SSL guide: </operating-scylla/security/index>` for configuration settings.
+ScyllaDB supports encryption between nodes and between client and node. See the ScyllaDB :doc:`ScyllaDB TLS/SSL guide: </operating-scylla/security/index>` for configuration settings.
 
 .. _cqlsh-networking:
 
@@ -251,7 +253,8 @@ The ScyllaDB ports are detailed in the table below. For ScyllaDB Manager ports, 
 All ports above need to be open to external clients (CQL) and other nodes (RPC). REST API port can be kept closed for incoming external connections.
 
 Advanced networking
--------------------
+======================
+
 It is possible that a client, or another node, may need to use a different IP address to connect to a ScyllaDB node from the address that the node is listening on. This is the case when a node is behind port forwarding. ScyllaDB allows for setting alternate IP addresses.
 
 Do not set any IP address to :code:`0.0.0.0`.
@@ -292,14 +295,14 @@ On RHEL and CentOS, the `Automatic Bug Reporting Tool <https://abrt.readthedocs.
 ScyllaDB places any core dumps in :code:`var/lib/scylla/coredump`. They are not visible with the :code:`coredumpctl` command. See the :doc:`System Configuration Guide </getting-started/system-configuration/>` for details on core dump configuration scripts. Check with ScyllaDB support before sharing any core dump, as they may contain sensitive data.
 
 Schedule fstrim
-===============
+----------------------
 
 ScyllaDB sets up daily fstrim on the filesystem(s),
 containing your ScyllaDB commitlog and data directory. This utility will
 discard, or trim, any blocks no longer in use by the filesystem.
 
 Experimental Features
-=====================
+-------------------------------
 
 ScyllaDB uses experimental flags to expose non-production-ready features safely. These features are not stable enough to be used in production, and their API will likely change, breaking backward or forward compatibility.
 
@@ -335,7 +338,7 @@ credentials and endpoint.
 
 .. _admin-views-with-tablets:
 
-Views with tablets
+Views with Tablets
 ------------------
 
 By default, Materialized Views (MV) and Secondary Indexes (SI)
@@ -352,16 +355,16 @@ the ``views-with-tablets`` option:
 
 
 Monitoring
-==========
+---------------------
 ScyllaDB exposes interfaces for online monitoring, as described below.
 
 Monitoring Interfaces
----------------------
+==========================
 
 `ScyllaDB Monitoring Interfaces <https://monitoring.docs.scylladb.com/stable/reference/monitoring_apis.html>`_
 
 Monitoring Stack
-----------------
+=======================
 
 |mon_root|
 
@@ -375,13 +378,13 @@ Un-contents
 ScyllaDB is designed for high performance before tuning, for fewer layers that interact in unpredictable ways, and to use better algorithms that do not require manual tuning. The following items are found in the manuals for other data stores but do not need to appear here.
 
 Configuration un-contents
-^^^^^^^^^^^^^^^^^^^^^^^^^
+============================
 
 * Generating tokens
 * Configuring virtual nodes
 
 Operations un-contents
-^^^^^^^^^^^^^^^^^^^^^^
+============================
 
 * Tuning Bloom filters
 * Data caching
@@ -390,14 +393,14 @@ Operations un-contents
 * Compression
 
 Testing compaction and compression
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+====================================
 
 * Tuning Java resources
 * Purging gossip state on a node
 
 
 Help with ScyllaDB
-==================
+--------------------------
 Contact `Support <https://www.scylladb.com/product/support/>`_, or visit the ScyllaDB `Community <https://www.scylladb.com/open-source-community/>`_ page for peer support.
 
 .. include:: /rst_include/apache-copyrights-index.rst

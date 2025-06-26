@@ -1,5 +1,5 @@
 scylla.yaml
-===========
+-------------------
 
 scylla.yaml is equivalent to the Apache Cassandra cassandra.yaml configuration file and it is compatible with relevant parameters. Below is a **subset** of scylla.yaml with parameters you are likely to update. For a full list of parameters, look at the file itself.
 
@@ -65,7 +65,8 @@ By default scylla.yaml is located at :code:`/etc/scylla/scylla.yaml`. Note that 
  
 
 scylla.yaml Required Settings
------------------------------
+====================================
+
 The following configuration items must be set
 
 ==============  ==================================================  
@@ -83,7 +84,7 @@ rpc_address     IP address of the interface for CQL client connections
 .. _yaml_enabling_experimental_features:
 
 Enabling Experimental Features
-------------------------------
+===================================
 
 There are two ways to enable experimental features:
 
@@ -116,7 +117,7 @@ For example:
 .. _ipv6_addresses:
 
 IPv6 Addresses
---------------
+=======================
 
 You can use IPv6 addresses wherever an IPv4 address is used, including client-to-node and node-to-node communication, Scylla Manager to Scylla nodes (Scylla Manager Agent), and Monitoring to nodes.
 

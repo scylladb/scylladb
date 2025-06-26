@@ -13,7 +13,7 @@ You can interact with the REST API directly using :code:`curl`, ScyllaDB's CLI f
 
 
 Swagger UI
-^^^^^^^^^^^^
+=============
 
 .. warning::
 
@@ -43,7 +43,7 @@ The following example shows using the Swagger UI with Docker.
 
 
 CLI for REST API
-^^^^^^^^^^^^^^^^^
+====================
 
 ScyllaDB ships with ``scylla-api-client``, a lightweight tool that provides a command-line interface 
 for the ScyllaDB API. The tool allows you to:
