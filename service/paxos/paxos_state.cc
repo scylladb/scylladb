@@ -304,32 +304,44 @@ paxos_store::paxos_store(db::system_keyspace& sys_ks)
 {
 }
 
+static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
+        db::timeout_clock::time_point timeout,
+        std::vector<data_value_or_unset> values,
+        cql3::query_processor& qp)
+{
+    const auto now = db::timeout_clock::now();
+    const auto d = now < timeout
+        ? timeout - now
+        : db::timeout_clock::duration::zero(); // let the `storage_proxy` time out the query down the call chain
+    service::client_state client_state(service::client_state::internal_tag{},
+        timeout_config{d, d, d, d, d, d, d});
+    service::query_state qs(client_state, empty_service_permit());
+
+    const auto cache_key = qp.compute_id(req, "", cql3::internal_dialect());
+    auto ps_ptr = qp.get_prepared(cache_key);
+    if (!ps_ptr) {
+        const auto msg_ptr = co_await qp.prepare(req, qs, cql3::internal_dialect());
+        ps_ptr = std::move(msg_ptr->get_prepared());
+        if (!ps_ptr) {
+            on_internal_error(paxos_state::logger, "prepared statement is null");
+        }
+    }
+    const auto qo = qp.make_internal_options(ps_ptr, values, db::consistency_level::ONE);
+    const auto st = ps_ptr->statement;
+
+    const auto msg_ptr = co_await st->execute(qp, qs, qo, std::nullopt);
+    co_return cql3::untyped_result_set(msg_ptr);
+}
+
 template <typename... Args>
-future<::shared_ptr<cql3::untyped_result_set>> paxos_store::execute_cql_with_timeout(sstring req,
+future<cql3::untyped_result_set> paxos_store::execute_cql_with_timeout(sstring req,
         db::timeout_clock::time_point timeout,
         Args&&... args) {
-    const db::timeout_clock::time_point now = db::timeout_clock::now();
-    const db::timeout_clock::duration d =
-        now < timeout ?
-            timeout - now :
-            // let the `storage_proxy` time out the query down the call chain
-            db::timeout_clock::duration::zero();
-
-    struct timeout_context {
-        std::unique_ptr<service::client_state> client_state;
-        service::query_state query_state;
-        timeout_context(db::timeout_clock::duration d)
-                : client_state(std::make_unique<service::client_state>(service::client_state::internal_tag{}, timeout_config{d, d, d, d, d, d, d}))
-                , query_state(*client_state, empty_service_permit())
-        {}
-    };
-    return do_with(timeout_context(d), [this, req = std::move(req), &args...] (auto& tctx) {
-        return _sys_ks.query_processor().execute_internal(req,
-            ::cql3::query_options::DEFAULT.get_consistency(),
-            tctx.query_state,
-            { data_value(std::forward<Args>(args))... },
-            ::cql3::query_processor::cache_internal::yes);
-    });
+    return do_execute_cql_with_timeout(std::move(req),
+        timeout,
+        { data_value(std::forward<Args>(args))... },
+        _sys_ks.query_processor()
+    );
 }
 
 future<column_mapping> paxos_store::get_column_mapping(table_id table_id, table_schema_version version) {
@@ -354,10 +366,10 @@ future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema
         timeout,
         to_legacy(*key.get_compound_type(*s), key.representation())
     );
-    if (results->empty()) {
+    if (results.empty()) {
         co_return service::paxos::paxos_state();
     }
-    auto& row = results->one();
+    auto& row = results.one();
     auto promised = row.has("promise")
                     ? row.get_as<utils::UUID>("promise") : utils::UUID_gen::min_time_UUID();
 
