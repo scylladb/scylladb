@@ -67,29 +67,21 @@ Examples
 Manual Recovery Procedure
 ===========================
 
-You can follow the manual recovery procedure when:
+.. note::
 
-* The majority of nodes (for example, 2 out of 3) failed and are irrecoverable.
-* .. scylladb_include_flag:: enabling-consistent-topology-failure.rst
+   This recovery procedure assumes that consistent topology changes are enabled for your cluster, which is mandatory in
+   versions 2025.2 and later. If you failed to enable consistent topology changes during the upgrade to 2025.2, you need
+   to follow the `previous recovery procedure <https://docs.scylladb.com/manual/branch-2025.1/troubleshooting/handling-node-failures.html#manual-recovery-procedure>`_.
 
-.. warning::
+   See :ref:`Verifying that consistent topology changes are enabled <verifying-consistent-topology-changes-enabled>`.
 
-   Perform the manual recovery procedure **only** if you're dealing with 
-   **irrecoverable** nodes. If possible, restart your nodes, and use the manual 
-   recovery procedure as a last resort.
+You can follow the manual recovery procedure when the majority of nodes (for example, 2 out of 3) failed and are irrecoverable.
 
-.. warning::
-
-  The manual recovery procedure is not supported :doc:`if tablets are enabled on any of your keyspaces </architecture/tablets/>`. 
-  In such a case, you need to :doc:`restore from backup </operating-scylla/procedures/backup-restore/restore>`. 
-
-During the manual recovery procedure you'll enter a special ``RECOVERY`` mode, remove 
-all faulty nodes (using the standard :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`), 
-delete the internal Raft data, and restart the cluster. This will cause the cluster to 
-perform the Raft upgrade procedure again, initializing the Raft algorithm from scratch.
-
-The manual recovery procedure is applicable both to clusters that were not running Raft 
-in the past and then had Raft enabled, and to clusters that were bootstrapped using Raft.
+During the manual recovery procedure you'll restart live nodes in a special recovery mode, which will cause the
+cluster to initialize the Raft algorithm from scratch. However, this time, faulty nodes will not participate in the
+algorithm. Then, you will replace all faulty nodes (using the standard
+:doc:`node replacement procedure </operating-scylla/procedures/cluster-management/replace-dead-node/>`). Finally, you
+will leave the recovery mode and remove the obsolete internal Raft data.
 
 **Prerequisites**
 
@@ -102,53 +94,86 @@ in the past and then had Raft enabled, and to clusters that were bootstrapped us
   to life and communicate with the rest of the cluster, setup firewall rules or otherwise 
   isolate your alive nodes to reject any communication attempts from these dead nodes.
 
-* Prepare your service for downtime before proceeding.
-  Entering ``RECOVERY`` mode requires a node restart. Restarting an additional node while 
-  some nodes are already dead may lead to unavailability of data queries (assuming that 
-  you haven't lost it already). For example, if you're using the standard RF=3, 
-  CL=QUORUM setup, and you're recovering from a stuck upgrade procedure because one 
-  of your nodes is dead, restarting another node will cause temporary data query 
-  unavailability (until the node finishes restarting). 
+* Ensure all live nodes are in the normal state using
+  :doc:`nodetool status </operating-scylla/nodetool-commands/status>`. If there is a node
+  that is joining or leaving, it cannot be recovered. You must permanently stop it. After
+  performing the recovery procedure, use
+  :doc:`nodetool status </operating-scylla/nodetool-commands/status>` ony any other node.
+  If the stopped node appears in the output, it means that other nodes still consider it
+  a member of the cluster, and you should remove it with the
+  :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`.
+
+* Check if the cluster lost data. If the number of dead nodes is equal or larger than your
+  keyspaces RF, then some of the data is lost, and you need to retrieve it from backup. After
+  completing the manual recovery procedure
+  :doc:`restore the data from backup </operating-scylla/procedures/backup-restore/restore/>`.
+
+* Decide whether to shut down your service for the manual recovery procedure. ScyllaDB
+  serves data queries during the procedure, however, you may not want to rely on it if:
+
+  * you lost some data, or
+
+  * restarting a single node could lead to unavailability of data queries (the procedure involves
+    a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart>`). For
+    example, if you are using the standard RF=3, CL=QUORUM setup, you have two datacenters, all
+    nodes in one of the datacenters are dead and one node in the other datacenter is dead,
+    restarting another node in the other datacenter will cause temporary data query
+    unavailability (until the node finishes restarting).
 
 **Procedure**
 
-#. Perform the following query on **every alive node** in the cluster, using e.g. ``cqlsh``:
+#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of your live nodes.
+
+#. Find the group 0 ID by performing the following query on any live node, using e.g. ``cqlsh``:
 
    .. code-block:: cql
 
-        cqlsh> UPDATE system.scylla_local SET value = 'recovery' WHERE key = 'group0_upgrade_state';
+        cqlsh> SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id';
 
-#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of your alive nodes.
+   The group 0 ID is needed in the following steps.
 
-#. Verify that all the nodes have entered ``RECOVERY`` mode when restarting; look for one of the following messages in their logs:
-
-    .. code-block:: console
-
-        group0_client - RECOVERY mode.
-        raft_group0 - setup_group0: Raft RECOVERY mode, skipping group 0 setup.
-        raft_group0_upgrade - RECOVERY mode. Not attempting upgrade.
-
-#. Remove all your dead nodes using the :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`.
-
-#. Remove existing Raft cluster data by performing the following queries on **every alive node** in the cluster, using e.g. ``cqlsh``:
+#. Find ``commit_idx`` of all live nodes by performing the following query on **every live node**:
 
    .. code-block:: cql
 
-        cqlsh> TRUNCATE TABLE system.topology;
+        cqlsh> SELECT commit_idx FROM system.raft WHERE group_id = <group 0 ID>;
+
+   Choose a node with the largest ``commit_idx``. If there are multiple such nodes, choose any of them.
+   The chosen node will be the *recovery leader*.
+
+#. Perform the following queries on **every live node**:
+
+   .. code-block:: cql
+
         cqlsh> TRUNCATE TABLE system.discovery;
-        cqlsh> TRUNCATE TABLE system.group0_history;
         cqlsh> DELETE value FROM system.scylla_local WHERE key = 'raft_group0_id';
 
-#. Make sure that schema is synchronized in the cluster by executing :doc:`nodetool describecluster </operating-scylla/nodetool-commands/describecluster>` on each node and verifying that the schema version is the same on all nodes.
+#. Add the ``recovery_leader`` property to the ``scylla.yaml`` file and set it to the host ID of the recovery leader on
+   **every live node**. Make sure the change is applied on all nodes by sending the ``SIGHUP`` signal to all ScyllaDB
+   processes.
 
-#. We can now leave ``RECOVERY`` mode. On **every alive node**, perform the following query:
+#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of all live nodes,
+   however, this time **the recovery leader must be restarted first**.
+
+   After completing this step, Raft should be fully functional.
+
+#. Replace all dead nodes from the cluster using the
+   :doc:`node replacement procedure </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
+
+   .. note::
+
+        Removing some of the dead nodes with the
+        :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>` is also possible,
+        but it may require decreasing RF of your keyspaces. With tablets enabled, ``nodetool removenode`` is rejected
+        if there are not enough nodes to satisfy RF of any tablet keyspace in the node's datacenter.
+
+#. Remove the ``recovery_leader`` property from the ``scylla.yaml`` file on all nodes. Send the ``SIGHUP`` signal to all
+   ScyllaDB processes to ensure the change is applied.
+
+#. Perform the following queries on **every live node**:
 
    .. code-block:: cql
 
-        cqlsh> DELETE FROM system.scylla_local WHERE key = 'group0_upgrade_state';
-
-#. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of your alive nodes.
-
-#. The Raft upgrade procedure will start anew. :ref:`Verify <verify-raft-procedure>` that it finishes successfully.
-
-#. .. scylladb_include_flag:: enable-consistent-topology.rst
+        cqlsh> DELETE FROM system.raft WHERE group_id = <group 0 ID>;
+        cqlsh> DELETE FROM system.raft_snapshots WHERE group_id = <group 0 ID>;
+        cqlsh> DELETE FROM system.raft_snapshot_config WHERE group_id = <group 0 ID>;
