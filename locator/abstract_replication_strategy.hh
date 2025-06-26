@@ -44,8 +44,6 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
-using can_yield = utils::can_yield;
-
 using replication_strategy_config_options = std::map<sstring, sstring>;
 struct replication_strategy_params {
     const replication_strategy_config_options options;
