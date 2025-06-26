@@ -47,6 +47,7 @@
 #include "replica/query.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "utils/phased_barrier.hh"
 #include "utils/shared_dict.hh"
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
@@ -2696,12 +2697,12 @@ future<::shared_ptr<cql3::untyped_result_set>> system_keyspace::execute_cql_with
     struct timeout_context {
         std::unique_ptr<service::client_state> client_state;
         service::query_state query_state;
-        timeout_context(db::timeout_clock::duration d)
+        timeout_context(db::timeout_clock::duration d, utils::phased_barrier::operation op)
                 : client_state(std::make_unique<service::client_state>(service::client_state::internal_tag{}, timeout_config{d, d, d, d, d, d, d}))
-                , query_state(*client_state, empty_service_permit())
+                , query_state(*client_state, make_service_permit(std::move(op)))
         {}
     };
-    return do_with(timeout_context(d), [this, req = std::move(req), &args...] (auto& tctx) {
+    return do_with(timeout_context(d, _qp.start_operation()), [this, req = std::move(req), &args...] (auto& tctx) {
         return _qp.execute_internal(req,
             cql3::query_options::DEFAULT.get_consistency(),
             tctx.query_state,
@@ -2953,18 +2954,18 @@ future<std::optional<mutation>> system_keyspace::get_auth_version_mutation() {
     return get_scylla_local_mutation(_db, AUTH_VERSION_KEY);
 }
 
-static service::query_state& internal_system_query_state() {
+service::query_state system_keyspace::internal_system_query_state() const {
     using namespace std::chrono_literals;
     const auto t = 10s;
     static timeout_config tc{ t, t, t, t, t, t, t };
     static thread_local service::client_state cs(service::client_state::internal_tag{}, tc);
-    static thread_local service::query_state qs(cs, empty_service_permit());
-    return qs;
+    return service::query_state(cs, make_service_permit(_qp.start_operation()));
 };
 
 future<mutation> system_keyspace::make_auth_version_mutation(api::timestamp_type ts, db::system_keyspace::auth_version_t version) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
-    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {AUTH_VERSION_KEY, std::to_string(int64_t(version))});
+    auto qs = internal_system_query_state();
+    auto muts = co_await _qp.get_mutations_internal(query, qs, ts, {AUTH_VERSION_KEY, std::to_string(int64_t(version))});
     if (muts.size() != 1) {
          on_internal_error(slogger, fmt::format("expected 1 auth_version mutation got {}", muts.size()));
     }
@@ -2997,7 +2998,8 @@ future<std::optional<mutation>> system_keyspace::get_view_builder_version_mutati
 
 future<mutation> system_keyspace::make_view_builder_version_mutation(api::timestamp_type ts, db::system_keyspace::view_builder_version_t version) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
-    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), ts, {VIEW_BUILDER_VERSION_KEY, std::to_string(int64_t(version))});
+    auto qs = internal_system_query_state();
+    auto muts = co_await _qp.get_mutations_internal(query, qs, ts, {VIEW_BUILDER_VERSION_KEY, std::to_string(int64_t(version))});
     if (muts.size() != 1) {
          on_internal_error(slogger, fmt::format("expected 1 view_builder_version mutation got {}", muts.size()));
     }
@@ -3012,7 +3014,8 @@ future<std::optional<mutation>> system_keyspace::get_service_levels_version_muta
 
 future<mutation> system_keyspace::make_service_levels_version_mutation(int8_t version, api::timestamp_type timestamp) {
     static sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
-    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), timestamp, {SERVICE_LEVELS_VERSION_KEY, format("{}", version)});
+    auto qs = internal_system_query_state();
+    auto muts = co_await _qp.get_mutations_internal(query, qs, timestamp, {SERVICE_LEVELS_VERSION_KEY, format("{}", version)});
 
     if (muts.size() != 1) {
         on_internal_error(slogger, format("expecting single insert mutation, got {}", muts.size()));
@@ -3565,7 +3568,8 @@ future<mutation> system_keyspace::get_insert_dict_mutation(
     slogger.debug("Publishing new compression dictionary: {} {} {}", name, dict_ts, host_id);
 
     static sstring insert_new = format("INSERT INTO {}.{} (name, timestamp, origin, data) VALUES (?, ?, ?, ?);", NAME, DICTS);
-    auto muts = co_await _qp.get_mutations_internal(insert_new, internal_system_query_state(), write_ts, {
+    auto qs = internal_system_query_state();
+    auto muts = co_await _qp.get_mutations_internal(insert_new, qs, write_ts, {
         data_value(name),
         data_value(dict_ts),
         data_value(host_id.uuid()),
@@ -3589,8 +3593,9 @@ mutation system_keyspace::get_delete_dict_mutation(std::string_view name, api::t
 future<std::vector<sstring>> system_keyspace::query_all_dict_names() const {
     std::vector<sstring> result;
     sstring query = format("SELECT name from {}.{}", NAME, DICTS);
+    auto qs = internal_system_query_state();
     auto rs = co_await _qp.execute_internal(
-        query, db::consistency_level::ONE, internal_system_query_state(), {}, cql3::query_processor::cache_internal::yes);
+        query, db::consistency_level::ONE, qs, {}, cql3::query_processor::cache_internal::yes);
     for (const auto& row : *rs) {
         result.push_back(row.get_as<sstring>("name"));
     }
@@ -3599,8 +3604,9 @@ future<std::vector<sstring>> system_keyspace::query_all_dict_names() const {
 
 future<utils::shared_dict> system_keyspace::query_dict(std::string_view name) const {
     static sstring query = format("SELECT * FROM {}.{} WHERE name = ?;", NAME, DICTS);
+    auto qs = internal_system_query_state();
     auto result_set = co_await _qp.execute_internal(
-        query, db::consistency_level::ONE, internal_system_query_state(), {name}, cql3::query_processor::cache_internal::yes);
+        query, db::consistency_level::ONE, qs, {name}, cql3::query_processor::cache_internal::yes);
     if (!result_set->empty()) {
         auto &&row = result_set->one();
         auto content = row.get_as<bytes>("data");
@@ -3620,8 +3626,9 @@ future<utils::shared_dict> system_keyspace::query_dict(std::string_view name) co
 
 future<std::optional<db_clock::time_point>> system_keyspace::query_dict_timestamp(std::string_view name) const {
     static sstring query = format("SELECT timestamp FROM {}.{} WHERE name = ?;", NAME, DICTS);
+    auto qs = internal_system_query_state();
     auto result_set = co_await _qp.execute_internal(
-        query, db::consistency_level::ONE, internal_system_query_state(), {name}, cql3::query_processor::cache_internal::yes);
+        query, db::consistency_level::ONE, qs, {name}, cql3::query_processor::cache_internal::yes);
     if (!result_set->empty()) {
         auto &&row = result_set->one();
         auto timestamp = row.get_as<db_clock::time_point>("timestamp");

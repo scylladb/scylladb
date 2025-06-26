@@ -117,7 +117,7 @@ public:
     }
 };
 
-service::query_state& qos_query_state(qos::query_context ctx = qos::query_context::unspecified);
+service::query_state qos_query_state(cql3::query_processor& qp, qos::query_context ctx = qos::query_context::unspecified);
 
 future<service_levels_info> get_service_levels(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, db::consistency_level cl, qos::query_context ctx);
 future<service_levels_info> get_service_level(cql3::query_processor& qp, std::string_view ks_name, std::string_view cf_name, sstring service_level_name, db::consistency_level cl);

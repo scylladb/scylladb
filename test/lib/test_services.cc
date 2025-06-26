@@ -147,7 +147,7 @@ table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, c
 {
     cfg.cf_stats = &_data->cf_stats;
     _data->s = s ? s : make_default_schema();
-    _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), make_lw_shared<replica::storage_options>(storage), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
+    _data->cf = make_lw_shared<replica::column_family>(_data->s, std::move(cfg), _data->abort, make_lw_shared<replica::storage_options>(storage), cm, sstables_manager, _data->cl_stats, sstables_manager.get_cache_tracker(), nullptr);
     _data->cf->mark_ready_for_writes(nullptr);
     _data->table_s = std::make_unique<table_state>(*_data, sstables_manager);
     cm.add(*_data->table_s);
@@ -161,6 +161,7 @@ compaction::table_state& table_for_tests::as_table_state() noexcept {
 future<> table_for_tests::stop() {
     auto data = _data;
     co_await data->cf->get_compaction_manager().remove(*data->table_s);
+    data->abort.request_abort();
     co_await data->cf->stop();
 }
 

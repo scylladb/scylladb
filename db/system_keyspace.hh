@@ -28,6 +28,7 @@
 #include "virtual_tables.hh"
 #include "types/types.hh"
 #include "auth_version.hh"
+#include "cql3/query_processor.hh"
 
 namespace utils {
     class shared_dict;
@@ -674,6 +675,7 @@ public:
 
     virtual_tables_registry& get_virtual_tables_registry() { return _virtual_tables_registry; }
 private:
+    service::query_state internal_system_query_state() const;
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql(const sstring& query_string, const data_value_list& values);
     template <typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> execute_cql_with_timeout(sstring req, db::timeout_clock::time_point timeout, Args&&... args);

@@ -861,7 +861,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             const auto t = 5min;
             const timeout_config tc{t, t, t, t, t, t, t};
             ::service::client_state cs(::service::client_state::internal_tag{}, tc);
-            ::service::query_state qs(cs, empty_service_permit());
+            ::service::query_state qs(cs, make_service_permit(qp.start_operation()));
 
             auto rows = co_await qp.execute_internal(
                     seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, cf_name),
@@ -880,6 +880,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
             for (size_t i = 1; i < col_names.size(); ++i) {
                 val_binders_str += ", ?";
             }
+            auto q_state = internal_distributed_query_state(qp);
             for (const auto& row : *rows) {
                 std::vector<data_value_or_unset> values;
                 for (const auto& col : schema->all_columns()) {
@@ -896,7 +897,7 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                                 cf_name,
                                 fmt::join(col_names, ", "),
                                 val_binders_str),
-                        internal_distributed_query_state(),
+                        q_state,
                         ts,
                         std::move(values));
                 if (muts.size() != 1) {

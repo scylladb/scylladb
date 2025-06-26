@@ -799,7 +799,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
     const auto t = 5min;
     const timeout_config tc{t, t, t, t, t, t, t};
     service::client_state cs(::service::client_state::internal_tag{}, tc);
-    service::query_state qs(cs, empty_service_permit());
+    service::query_state qs(cs, make_service_permit(qp.start_operation()));
     
     // `system_distributed` keyspace has RF=3 and we need to scan it with CL=ALL
     // To support migration on cluster with 1 or 2 nodes, set appropriate CL
@@ -831,6 +831,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
     auto guard = co_await group0_client.start_operation(as);
 
     std::vector<mutation> migration_muts;
+    auto qs_internal = qos_query_state(qp);
     for (const auto& row: *rows) {
         std::vector<data_value_or_unset> values;
         for (const auto& col: schema->all_columns()) {
@@ -847,7 +848,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
                 db::system_keyspace::SERVICE_LEVELS_V2,
                 col_names_str,
                 val_binders_str), 
-            qos_query_state(),
+            qs_internal,
             guard.write_timestamp(),
             std::move(values));
         if (muts.size() != 1) {

@@ -40,6 +40,7 @@ struct table_for_tests {
         schema_ptr s;
         replica::cf_stats cf_stats{0};
         cell_locker_stats cl_stats;
+        abort_source abort;
         lw_shared_ptr<replica::column_family> cf;
         std::unique_ptr<table_state> table_s;
         data_dictionary::storage_options storage;

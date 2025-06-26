@@ -33,6 +33,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 #include "db/auth_version.hh"
+#include "utils/phased_barrier.hh"
 
 
 namespace lang { class manager; }
@@ -109,6 +110,7 @@ private:
     service::migration_notifier& _mnotifier;
     memory_config _mcfg;
     const cql_config& _cql_config;
+    utils::phased_barrier _pending_operations;
 
     struct remote;
     std::unique_ptr<remote> _remote;
@@ -168,6 +170,10 @@ public:
 
     service::storage_proxy& proxy() {
         return _proxy;
+    }
+
+    utils::phased_barrier::operation start_operation() {
+        return _pending_operations.start();
     }
 
     cql_stats& get_cql_stats() {
@@ -472,6 +478,8 @@ private:
             const std::vector<data_value_or_unset>& values,
             db::consistency_level,
             int32_t page_size = -1) const;
+
+    service::query_state query_state_for_internal_call();
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);

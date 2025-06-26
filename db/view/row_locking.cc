@@ -9,6 +9,7 @@
 #include "utils/assert.hh"
 #include "row_locking.hh"
 #include "utils/log.hh"
+#include "utils/composite_abort_source.hh"
 
 static logging::logger mylog("row_locking");
 
@@ -68,48 +69,95 @@ void row_locker::latency_stats_tracker::lock_acquired() {
 }
 
 future<row_locker::lock_holder>
-row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
-    mylog.debug("taking {} lock on entire partition {}", (exclusive ? "exclusive" : "shared"), pk);
-    auto tracker = latency_stats_tracker(exclusive ? stats.exclusive_partition : stats.shared_partition);
+row_locker::lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats) {
+    mylog.debug("lock_pk: taking {} lock on entire partition {}", (exclusive ? "exclusive" : "shared"), pk);
     auto i = _two_level_locks.try_emplace(pk, this).first;
-    auto f = exclusive ? i->second._partition_lock.write_lock(timeout) : i->second._partition_lock.read_lock(timeout);
-    // Note: we rely on the fact that &i->first, the pointer to a key, never
-    // becomes invalid (as long as the item is actually in the hash table),
-    // even in the case of rehashing.
-    return f.then([this, pk = &i->first, exclusive, tracker = std::move(tracker)] () mutable {
-        tracker.lock_acquired();
-        return lock_holder(this, pk, exclusive);
-    });
+    auto* pk_ptr = &i->first;
+    auto could_lock = exclusive ? i->second._partition_lock.try_write_lock() : i->second._partition_lock.try_read_lock();
+    if (could_lock) {
+        mylog.trace("lock_ck: acquired {} lock on partition {}", (exclusive ? "exclusive" : "shared"), pk);
+        auto& s = exclusive ? stats.exclusive_partition : stats.shared_partition;
+        s.lock_acquisitions++;
+        return make_ready_future<lock_holder>(this, pk_ptr, exclusive);
+    }
+    return wait_and_lock_pk(pk, exclusive, timeout, abort, stats);
 }
 
 future<row_locker::lock_holder>
-row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout, stats& stats) {
-    mylog.debug("taking shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
-    auto tracker = latency_stats_tracker(exclusive ? stats.exclusive_row : stats.shared_row);
+row_locker::wait_and_lock_pk(const dht::decorated_key& pk, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats) {
+    auto i = _two_level_locks.try_emplace(pk, this).first;
+    auto* pk_ptr = &i->first;
+    mylog.trace("wait_and_lock_pk: waiting for {} lock on entire partition {}", (exclusive ? "exclusive" : "shared"), pk);
+    auto tracker = latency_stats_tracker(exclusive ? stats.exclusive_partition : stats.shared_partition);
+    utils::composite_abort_source composite_as;
+    abort_on_expiry<> expiry{timeout};
+    composite_as.add(expiry.abort_source());
+    composite_as.add(abort);
+    co_await (exclusive ? i->second._partition_lock.write_lock(composite_as.abort_source()) : i->second._partition_lock.read_lock(composite_as.abort_source()));
+    mylog.trace("wait_and_lock_pk: acquired {} lock on partition {}", (exclusive ? "exclusive" : "shared"), pk);
+    // Note: we rely on the fact that &i->first, the pointer to a key, never
+    // becomes invalid (as long as the item is actually in the hash table),
+    // even in the case of rehashing.
+    tracker.lock_acquired();
+    co_return lock_holder(this, pk_ptr, exclusive);
+}
+
+future<row_locker::lock_holder>
+row_locker::lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats) {
+    mylog.debug("lock_ck: taking shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
     auto ck = cpk;
     // Create a two-level lock entry for the partition if it doesn't exist already.
     auto i = _two_level_locks.try_emplace(pk, this).first;
     // The two-level lock entry we've just created is guaranteed to be kept alive as long as it's locked.
-    // Initiating read locking in the background below ensures that even if the two-level lock is currently
-    // write-locked, releasing the write-lock will synchronously engage any waiting
-    // locks and will keep the entry alive.
-    future<lock_type::holder> lock_partition = i->second._partition_lock.hold_read_lock(timeout);
-    return lock_partition.then([this, pk = &i->first, row_locks = &i->second._row_locks, ck = std::move(ck), exclusive, tracker = std::move(tracker), timeout] (auto lock1) mutable {
-        // Create a row_lock entry if it doesn't exist already.
-        auto j = row_locks->try_emplace(std::move(ck), lock_type()).first;
-        auto* cpk = &j->first;
+    auto pk_holder = i->second._partition_lock.try_hold_read_lock();
+    if (pk_holder) {
+        mylog.trace("lock_ck: acquired shared lock on partition {}", pk);
+        auto *pk_ptr = &i->first;
+        auto j = i->second._row_locks.try_emplace(std::move(ck), lock_type()).first;
+        auto* cpk_ptr = &j->first;
         auto& row_lock = j->second;
         // Like to the two-level lock entry above, the row_lock entry we've just created
         // is guaranteed to be kept alive as long as it's locked.
         // Initiating read/write locking in the background below ensures that.
-        auto lock_row = exclusive ? row_lock.hold_write_lock(timeout) : row_lock.hold_read_lock(timeout);
-        return lock_row.then([this, pk, cpk, exclusive, tracker = std::move(tracker), lock1 = std::move(lock1)] (auto lock2) mutable {
-            lock1.release();
-            lock2.release();
-            tracker.lock_acquired();
-            return lock_holder(this, pk, cpk, exclusive);
-        });
-    });
+        auto could_lock = exclusive ? row_lock.try_write_lock() : row_lock.try_read_lock();
+        if (could_lock) {
+            mylog.debug("lock_ck: acquired {} lock on row {}", pk, (exclusive ? "exclusive" : "shared"), cpk);
+            pk_holder->release();
+            auto& s = exclusive ? stats.exclusive_partition : stats.shared_partition;
+            s.lock_acquisitions++;
+            return make_ready_future<lock_holder>(this, pk_ptr, cpk_ptr, exclusive);
+        }
+    }
+    return wait_and_lock_ck(pk, cpk, exclusive, timeout, abort, stats);
+}
+
+future<row_locker::lock_holder>
+row_locker::wait_and_lock_ck(const dht::decorated_key& pk, const clustering_key_prefix& cpk, bool exclusive, db::timeout_clock::time_point timeout, abort_source& abort, stats& stats) {
+    mylog.debug("wait_and_lock_ck: wait for shared lock on partition {}, and {} lock on row {} in it", pk, (exclusive ? "exclusive" : "shared"), cpk);
+    auto tracker = latency_stats_tracker(exclusive ? stats.exclusive_row : stats.shared_row);
+    auto ck = cpk;
+    // Create a two-level lock entry for the partition if it doesn't exist already.
+    auto i = _two_level_locks.try_emplace(pk, this).first;
+    utils::composite_abort_source composite_as;
+    abort_on_expiry<> expiry{timeout};
+    composite_as.add(expiry.abort_source());
+    composite_as.add(abort);
+    // The two-level lock entry we've just created is guaranteed to be kept alive as long as it's locked.
+    auto pk_holder = co_await i->second._partition_lock.hold_read_lock(composite_as.abort_source());
+    mylog.trace("wait_and_lock_ck: acquired shared lock on partition {}", pk);
+    // Create a row_lock entry if it doesn't exist already.
+    auto *pk_ptr = &i->first;
+    auto j = i->second._row_locks.try_emplace(std::move(ck), lock_type()).first;
+    auto* cpk_ptr = &j->first;
+    auto& row_lock = j->second;
+    // Like to the two-level lock entry above, the row_lock entry we've just created
+    // is guaranteed to be kept alive as long as it's locked.
+    // Initiating read/write locking in the background below ensures that.
+    co_await (exclusive ? row_lock.write_lock(composite_as.abort_source()) : row_lock.read_lock(composite_as.abort_source()));
+    mylog.debug("wait_and_lock_ck: acquired {} lock on row {}", pk, (exclusive ? "exclusive" : "shared"), cpk);
+    pk_holder.release();
+    tracker.lock_acquired();
+    co_return lock_holder(this, pk_ptr, cpk_ptr, exclusive);
 }
 
 row_locker::lock_holder::lock_holder(row_locker::lock_holder&& old) noexcept
@@ -161,7 +209,7 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
                 return;
             }
             SCYLLA_ASSERT(&rli->first == cpk);
-            mylog.debug("releasing {} lock for row {} in partition {}", (row_exclusive ? "exclusive" : "shared"), *cpk, *pk);
+            mylog.debug("unlock: releasing {} lock for row {} in partition {}", (row_exclusive ? "exclusive" : "shared"), *cpk, *pk);
             auto& lock = rli->second;
             if (row_exclusive) {
                 lock.write_unlock();
@@ -169,11 +217,11 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
                 lock.read_unlock();
             }
             if (!lock.locked()) {
-                mylog.debug("Erasing lock object for row {} in partition {}", *cpk, *pk);
+                mylog.debug("unlock: erasing lock object for row {} in partition {}", *cpk, *pk);
                 pli->second._row_locks.erase(rli);
             }
         }
-        mylog.debug("releasing {} lock for entire partition {}", (partition_exclusive ? "exclusive" : "shared"), *pk);
+        mylog.debug("unlock: releasing {} lock for entire partition {}", (partition_exclusive ? "exclusive" : "shared"), *pk);
         auto& lock = pli->second._partition_lock;
         if (partition_exclusive) {
             lock.write_unlock();
@@ -181,7 +229,7 @@ row_locker::unlock(const dht::decorated_key* pk, bool partition_exclusive,
             lock.read_unlock();
         }
         if (!lock.locked()) {
-            mylog.debug("Erasing lock object for partition {}", *pk);
+            mylog.debug("unlock: erasing lock object for partition {}", *pk);
             _two_level_locks.erase(pli);
         }
      }

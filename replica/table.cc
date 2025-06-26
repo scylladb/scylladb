@@ -356,7 +356,7 @@ mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
     SCYLLA_ASSERT(m.schema() == _counter_cell_locks->schema());
-    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout);
+    return _counter_cell_locks->lock_cells(m.decorated_key(), partition_cells_range(m.partition()), timeout, _abort_source);
 }
 
 void table::for_each_active_memtable(noncopyable_function<void(memtable&)> action) {
@@ -2495,7 +2495,7 @@ void storage_group::clear_sstables() {
     }
 }
 
-table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction_manager& compaction_manager,
+table::table(schema_ptr schema, config config, abort_source& abort, lw_shared_ptr<const storage_options> sopts, compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)
     : _schema(std::move(schema))
@@ -2506,6 +2506,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
                          keyspace_label(_schema->ks_name()),
                          column_family_label(_schema->cf_name())
                         )
+    , _abort_source(abort)
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _sg_manager(make_storage_group_manager())
@@ -3402,14 +3403,14 @@ table::local_base_lock(
     _row_locker.upgrade(s);
     if (rows.size() == 1 && rows[0].is_singular() && rows[0].start() && !rows[0].start()->value().is_empty(*s)) {
         // A single clustering row is involved.
-        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _row_locker_stats);
+        return _row_locker.lock_ck(pk, rows[0].start()->value(), true, timeout, _abort_source, _row_locker_stats);
     } else {
         // More than a single clustering row is involved. Most commonly it's
         // the entire partition, so let's lock the entire partition. We could
         // lock less than the entire partition in more elaborate cases where
         // just a few individual rows are involved, or row ranges, but we
         // don't think this will make a practical difference.
-        return _row_locker.lock_pk(pk, true, timeout, _row_locker_stats);
+        return _row_locker.lock_pk(pk, true, timeout, _abort_source, _row_locker_stats);
     }
 }
 
@@ -3849,7 +3850,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     const bool need_static = db::view::needs_static_row(m.partition(), views);
     if (!need_regular && !need_static) {
         tracing::trace(tr_state, "View updates do not require read-before-write");
-        co_await gen->generate_and_propagate_view_updates(*this, base, sem.make_tracking_only_permit(s, "push-view-updates-no-read-before-write", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now, timeout);
+        co_await gen->generate_and_propagate_view_updates(*this, base, sem.make_tracking_only_permit(s, "push-view-updates-no-read-before-write", timeout, tr_state), std::move(views), std::move(m), { }, tr_state, now, timeout, _abort_source);
         // In this case we are not doing a read-before-write, just a
         // write, so no lock is needed.
         co_return row_locker::lock_holder();
@@ -3884,7 +3885,7 @@ future<row_locker::lock_holder> table::do_push_view_replica_updates(shared_ptr<d
     auto pk = dht::partition_range::make_singular(m.decorated_key());
     auto permit = co_await sem.obtain_permit(base, "push-view-updates-read-before-write", estimate_read_memory_cost(), timeout, tr_state);
     auto reader = source.make_mutation_reader(base, permit, pk, slice, tr_state, streamed_mutation::forwarding::no, mutation_reader::forwarding::no);
-    co_await gen->generate_and_propagate_view_updates(*this, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now, timeout);
+    co_await gen->generate_and_propagate_view_updates(*this, base, std::move(permit), std::move(views), std::move(m), std::move(reader), tr_state, now, timeout, _abort_source);
     tracing::trace(tr_state, "View updates for {}.{} were generated and propagated", base->ks_name(), base->cf_name());
     // return the local partition/row lock we have taken so it
     // remains locked until the caller is done modifying this
