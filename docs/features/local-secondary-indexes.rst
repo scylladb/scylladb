@@ -24,7 +24,7 @@ When using a Token Aware Driver, the same node is likely the coordinator, and th
 How Local Secondary Index Queries Work
 ......................................
 
-Lets explore the example above, first with Global Secondary Index (GSI) and then with Local Secondary Index (LSI)
+Let's explore the example above, first with Global Secondary Index (GSI) and then with Local Secondary Index (LSI)
 
 **Global Secondary Index Example**
 
@@ -50,7 +50,7 @@ The create Index does **not** include the base partition key. As a result, the f
 
           SELECT * FROM menus WHERE location = 'Warsaw' and dish_type = 'Polish soup';
 
-With GSI, ``dish_type`` acts as the partition key of the index table and the query requires two inter-node hops
+With GSI, ``dish_type`` acts as the partition key of the index table, and the query requires two inter-node hops
 
 .. image:: /features/images/global-sec-index-example.png
 
@@ -63,7 +63,7 @@ GSI flow:
 Note, that partition keys from the base table and underlying materialized view are different, which means that their data is likely to be stored on different nodes.
 
 **Local Secondary Index Example**
-Now let's create an LSI, using the base table partition key, in this case ``location`` as partition key for the Index
+Now let's create an LSI, using the base table partition key, in this case ``location`` as the partition key for the Index
 
 .. code-block:: cql
           
@@ -83,7 +83,7 @@ LSI flow:
 * An indexing subquery (2) is used  to fetch all matching base keys from the underlying materialized view.
 * The coordinator uses the resulting base key set to request appropriate rows from the base table (3), located in the **same node** as the Index
 
-Both the base table and the underlying materialized view have the same partition keys for corresponding rows. That means that their data resides on the same node and can thus be executed locally, without having to contact another node. When using a **token aware policy**, the entire query will be done with zero inter-node communication.
+Both the base table and the underlying materialized view have the same partition keys for corresponding rows. That means that their data resides on the same node and can thus be executed locally, without having to contact another node. When using a **token-aware policy**, the entire query will be executed with zero inter-node communication.
 
 .. image:: /features/images/local-sec-index-token-aware-exaple.png
 
