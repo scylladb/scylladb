@@ -5776,12 +5776,13 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         tracing::trace_state_ptr trace_state,
         const host_id_vector_replica_set& preferred_endpoints,
         bool& is_read_non_local,
-        service_permit permit) {
+        service_permit permit,
+        node_local_only node_local_only) {
     const dht::token& token = partition_range.start()->value().token();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     std::optional<locator::host_id> extra_replica;
 
-    host_id_vector_replica_set all_replicas = get_endpoints_for_reading(schema->ks_name(), *erm, token);
+    host_id_vector_replica_set all_replicas = get_endpoints_for_reading(schema->ks_name(), *erm, token, node_local_only);
     // Check for a non-local read before heat-weighted load balancing
     // reordering of endpoints happens. The local endpoint, if
     // present, is always first in the list, as get_endpoints_for_reading()
@@ -5960,7 +5961,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
         auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, repair_decision,
                                                  query_options.trace_state, replicas, is_read_non_local,
-                                                 query_options.permit);
+                                                 query_options.permit,
+                                                 query_options.node_local_only);
         if (!r_read_executor) {
             co_return std::move(r_read_executor).as_failure();
         }
@@ -6065,7 +6067,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         uint64_t remaining_row_count,
         uint32_t remaining_partition_count,
         replicas_per_token_range preferred_replicas,
-        service_permit permit) {
+        service_permit permit,
+        node_local_only node_local_only) {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     auto p = shared_from_this();
@@ -6096,7 +6099,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
         while (i != ranges.end()) {
             dht::partition_range& range = *i;
-            host_id_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
+            host_id_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range), node_local_only);
             host_id_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
             host_id_vector_replica_set filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, merged_preferred_replicas, pcf);
             std::vector<dht::token_range> merged_ranges{to_token_range(range)};
@@ -6112,7 +6115,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 {
                     const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
                     dht::partition_range& next_range = *i;
-                    host_id_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
+                    host_id_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range), node_local_only);
                     host_id_vector_replica_set next_filtered_endpoints = filter_replicas_for_read(cl, *erm, next_endpoints, current_range_preferred_replicas, pcf);
 
                     // Origin has this to say here:
@@ -6306,7 +6309,8 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             cmd->get_row_limit(),
             cmd->partition_limit,
             std::move(query_options.preferred_replicas),
-            std::move(query_options.permit));
+            std::move(query_options.permit),
+            query_options.node_local_only);
 
     if (!wrapped_result) {
         co_return bo::failure(std::move(wrapped_result).assume_error());
@@ -6727,11 +6731,14 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::effective_replica
     }
 }
 
-host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
+host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token, node_local_only node_local_only) const {
     auto endpoints = erm.get_replicas_for_reading(token);
     validate_read_replicas(erm, endpoints);
     auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm)))).begin();
     endpoints.erase(it, endpoints.end());
+    if (node_local_only) {
+        remove_non_local_host_ids(endpoints, erm);
+    }
     sort_endpoints_by_proximity(erm, endpoints);
     return endpoints;
 }
