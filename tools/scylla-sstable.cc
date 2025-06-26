@@ -1788,7 +1788,7 @@ void shard_of_operation(schema_ptr schema, reader_permit permit,
     }
 }
 
-void print_query_results_text(const cql3::result& result) {
+void print_query_results_text(std::ostream& os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
 
@@ -1838,18 +1838,18 @@ void print_query_results_text(const cql3::result& result) {
             const auto& format = r == 0 ? columns[i].header_format : columns[i].row_format;
             row.push_back(fmt::format(fmt::runtime(std::string_view(format)), columns[i].values[r]));
         }
-        fmt::print("{}\n", fmt::join(row, "|"));
+        fmt::print(os, "{}\n", fmt::join(row, "|"));
         if (!r) {
-            fmt::print("-{}-\n", fmt::join(separators, "-+-"));
+            fmt::print(os, "-{}-\n", fmt::join(separators, "-+-"));
         }
     }
 }
 
-void print_query_results_json(const cql3::result& result) {
+void print_query_results_json(std::ostream& os, const cql3::result& result) {
     const auto& metadata = result.get_metadata();
     const auto& column_metadata = metadata.get_names();
 
-    rjson::streaming_writer writer(std::cout);
+    rjson::streaming_writer writer(os);
 
     writer.StartArray();
     for (const auto& row : result.result_set().rows()) {
@@ -1888,10 +1888,10 @@ public:
         const auto& result = rows.rs();
         switch (_output_format) {
             case output_format::text:
-                print_query_results_text(result);
+                print_query_results_text(std::cout, result);
                 break;
             case output_format::json:
-                print_query_results_json(result);
+                print_query_results_json(std::cout, result);
                 break;
         }
     }
