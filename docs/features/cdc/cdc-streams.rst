@@ -46,7 +46,7 @@ Thus, choosing a stream proceeds in two steps:
 
    base partition key |--- partitioner ---> token |--- stream ID mapping ---> stream ID
 
-Therefore, at any given moment, the stream ID chosen for a single base partition key will be the same, but two different partition keys might get mapped to two different streams IDs. 
+Therefore, at any given moment, the stream ID chosen for a single base partition key will be the same, but two different partition keys might get mapped to two different stream IDs. 
 But the set of used stream IDs is much smaller than the set of all tokens, so we will often see two base partitions appearing in a single stream:
 
 .. code-block:: cql
@@ -67,11 +67,11 @@ returns:
 
     (2 rows)
 
-.. note:: To make the above example we simply kept inserting rows with different partition keys until we found two that went to the same stream. 
+.. note:: To make the above example, we simply kept inserting rows with different partition keys until we found two that went to the same stream. 
 
 .. note:: For a given stream there is no straightforward way to find a partition key which will get mapped to this stream, because of the partitioner, which uses the murmur3 hash function underneath (the truth is you can efficiently find such a key, as murmur3 is not a cryptographic hash, but it's not completely obvious).
 
-The set of used stream IDs is independent from the table. It's a global property of the ScyllaDB cluster:
+The set of used stream IDs is independent of the table. It's a global property of the ScyllaDB cluster:
 
 .. code-block:: cql
       
@@ -140,4 +140,4 @@ returns:
 
     (6 rows)
 
-Therefore there is no global time ordering between all writes in the CDC log; you only get time-based ordering within a stream, for each stream.
+Therefore, there is no global time ordering between all writes in the CDC log; you only get time-based ordering within a stream, for each stream.
