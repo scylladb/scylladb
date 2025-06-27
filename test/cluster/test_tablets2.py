@@ -547,6 +547,10 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
 
     servers = [await manager.server_add(cmdline=cmdline)]
 
+    # Disable load balancing, so that after the move_tablet API the load balancer does
+    # not attempt to migrate the tablet back to the first node.
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
     cql = manager.get_cql()
     n_tablets = 1
     n_partitions = 1000

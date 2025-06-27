@@ -448,7 +448,13 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_migration_running_concurrently_to_merge_completion_handling(manager: ManagerClient):
     cmdline = []
-    cfg = {}
+    # Size based balancing can attempt to migrate the merged tablet as soon as the merge is complete
+    # because of a lower transient effective_capacity on the node with the merged tablet.
+    # This migration will timeout on cleanup because the compaction group still has an active task,
+    # which is held by the merge_completion_fiber injection, so the tablet's compaction group gate
+    # can not be closed, resulting in cleanup getting stuck. We force capacity based balancing to
+    # avoid this problem.
+    cfg = {'force_capacity_based_balancing': True}
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
