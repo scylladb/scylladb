@@ -521,6 +521,8 @@ public:
     bool is_me(gms::inet_address addr) const noexcept;
     bool is_me(const locator::effective_replication_map& erm, locator::host_id id) const noexcept;
 
+    future<> cancel_all_write_response_handlers();
+
 private:
     bool only_me(const locator::effective_replication_map& erm, const host_id_vector_replica_set& replicas) const noexcept;
 
