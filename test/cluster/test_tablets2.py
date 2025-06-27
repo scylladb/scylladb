@@ -6,6 +6,7 @@
 from typing import Any
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest
+from cassandra import WriteFailure
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import HostID, ServerInfo, ServerNum
@@ -2221,3 +2222,51 @@ async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
             await cql.run_async(f"DELETE FROM {ks}.test WHERE key = 1 IF EXISTS")
         res = await cql.run_async(f"SELECT val FROM {ks}.test WHERE key = 1")
         assert res[0].val == 0
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
+    # The test checks that the node doesn't crash when the base table is recreated
+    # during LWT execution. A no_such_column_family exception is thrown, and the LWT
+    # fails as a result.
+
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    config = {
+        'rf_rack_valid_keyspaces': False
+    }
+
+    server = await manager.server_add(cmdline=cmdline, config=config)
+    cql = manager.get_cql()
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        async def recreate_table():
+            logger.info(f"Drop table if exists {ks}.test")
+            await cql.run_async(f"DROP TABLE IF EXISTS {ks}.test;")
+            logger.info(f"Create table {ks}.test")
+            await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        await recreate_table()
+
+        logger.info("Inject load_paxos_state-enter")
+        await inject_error_one_shot_on(manager, "load_paxos_state-enter", [server])
+
+        logger.info("Start LWT")
+        lwt_task = cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        logger.info("Open log")
+        log = await manager.server_open_log(server.server_id)
+
+        logger.info("Wait for load_paxos_state-enter injection")
+        await log.wait_for('load_paxos_state-enter: waiting for message')
+
+        await recreate_table()
+
+        logger.info("Trigger load_paxos_state-enter")
+        await manager.api.message_injection(server.ip_addr, "load_paxos_state-enter")
+
+        with pytest.raises(WriteFailure):
+            await lwt_task
