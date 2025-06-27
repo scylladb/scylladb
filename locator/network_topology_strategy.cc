@@ -384,7 +384,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
     candidates_list existing_racks;
 
     // We use this list to start allocating from an
-    // unpoplated rack.
+    // unpopulated rack.
     candidates_list new_racks;
 
     for (const auto& [rack, nodes] : all_dc_racks) {
@@ -401,7 +401,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             }
             const auto& host_id = node.get().host_id();
             if (!existing.contains(host_id)) {
-                candidate.nodes.emplace_back(host_id, load.get_avg_shard_load(host_id));
+                candidate.nodes.emplace_back(host_id, load.get_avg_tablet_count(host_id));
             }
         }
         if (candidate.nodes.empty()) {

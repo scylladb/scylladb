@@ -190,6 +190,14 @@ rebalance_stats rebalance_tablets(cql_test_env& e, lw_shared_ptr<locator::load_s
 
         auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
 
+        simlblog.debug("balance emited {} migrations", plan.migrations().size());
+        for (const auto& mig : plan.migrations()) {
+            dht::token_range range {stm.get()->tablets().get_tablet_map(mig.tablet.table).get_token_range(mig.tablet.tablet)};
+            sstring kind = mig.src.host == mig.dst.host ? "intra" : "     ";
+            simlblog.debug("  {} mig: {} src: {} dst: {} size: {}", kind, mig.tablet, mig.src, mig.dst,
+                            bytes2gb(load_stats->get_tablet_size(mig.src.host, {mig.tablet.table, range}, service::default_target_tablet_size)));
+        }
+
         auto end_time = std::chrono::steady_clock::now();
         auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;
 
@@ -242,7 +250,6 @@ struct params {
 
 struct table_balance {
     double shard_overcommit;
-    double best_shard_overcommit;
     double node_overcommit;
 };
 
@@ -263,8 +270,8 @@ template<>
 struct fmt::formatter<table_balance> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const table_balance& b, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{shard={:.2f} (best={:.2f}), node={:.2f}}}",
-                              b.shard_overcommit, b.best_shard_overcommit, b.node_overcommit);
+        return fmt::format_to(ctx.out(), "{{shard={:.2f} node={:.2f}}}",
+                              b.shard_overcommit, b.node_overcommit);
     }
 };
 
@@ -335,6 +342,7 @@ future<results> test_load_balancing_with_many_tables(params p) {
         lw_shared_ptr<locator::load_stats> stats = make_lw_shared<locator::load_stats>();
         stats->tablet_stats = tablet_load_stats_map{};
 
+        uint64_t total_capacity = 0;
         auto add_host = [&] {
             static int added_hosts = 0;
             auto host = topo.add_node(service::node_state::normal, shard_count);
@@ -342,6 +350,7 @@ future<results> test_load_balancing_with_many_tables(params p) {
             const uint64_t capacity = p.capacities[added_hosts % p.capacities.size()] * 1024L * 1024L * 1024L * shard_count;
             stats->capacity[host] = capacity;
             stats->tablet_stats[host].effective_capacity = capacity;
+            total_capacity += capacity;
             simlblog.info("Added new node: {}", host);
             added_hosts++;
         };
@@ -370,6 +379,7 @@ future<results> test_load_balancing_with_many_tables(params p) {
             topo.set_node_state(host, service::node_state::left);
             simlblog.info("Node decommissioned: {}", host);
             hosts.erase(hosts.begin() + i);
+            total_capacity -= stats->capacity.at(host);
             stats->tablet_stats.erase(host);
         };
 
@@ -379,6 +389,8 @@ future<results> test_load_balancing_with_many_tables(params p) {
         auto id2 = add_table(e, ks2).get();
         schema_ptr s1 = e.local_db().find_schema(id1);
         schema_ptr s2 = e.local_db().find_schema(id2);
+
+        std::unordered_map<table_id, uint64_t> table_sizes;
 
         // generate tablet sizes
         std::unordered_map<host_id, uint64_t> used_disk_space;
@@ -394,6 +406,7 @@ future<results> test_load_balancing_with_many_tables(params p) {
                     }
                     locator::range_based_tablet_id rb_tid {table, tmap->get_token_range(tid)};
                     tls.tablet_sizes[rb_tid] = tablet_size;
+                    table_sizes[table] += tablet_size;
                     simlblog.debug("generated tablet size {} for {}:{}", tablet_size, table, tid);
                 }
                 return make_ready_future<>();
@@ -407,41 +420,37 @@ future<results> test_load_balancing_with_many_tables(params p) {
 
             int table_index = 0;
             for (auto s : {s1, s2}) {
-                load_sketch load(stm.get());
+                load_sketch load(stm.get(), stats);
                 load.populate(std::nullopt, s->id()).get();
 
-                min_max_tracker<uint64_t> shard_load_minmax;
-                min_max_tracker<uint64_t> node_load_minmax;
-                uint64_t sum_node_load = 0;
-                uint64_t shard_count = 0;
+                auto ideal_load = double(table_sizes[s->id()]) / total_capacity;
+                min_max_tracker<double> shard_load_minmax;
+                min_max_tracker<double> node_load_minmax;
+                double sum_node_load = 0;
                 for (auto h: hosts) {
                     auto minmax = load.get_shard_minmax(h);
                     auto node_load = load.get_load(h);
-                    auto avg_shard_load = load.get_real_avg_shard_load(h);
-                    auto overcommit = double(minmax.max()) / avg_shard_load;
+                    auto avg_tablet_count = load.get_real_avg_tablet_count(h);
+                    auto overcommit = minmax.max() / ideal_load;
                     shard_load_minmax.update(minmax.max());
-                    shard_count += load.get_shard_count(h);
-                    simlblog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
-                                 h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), avg_shard_load, overcommit);
+                    simlblog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, avg_tablets={:.2f}, overcommit={:.2f}",
+                                 h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), avg_tablet_count, overcommit);
                     node_load_minmax.update(node_load);
                     sum_node_load += node_load;
                 }
 
-                auto avg_shard_load = double(sum_node_load) / shard_count;
-                auto shard_overcommit = shard_load_minmax.max() / avg_shard_load;
-                // Overcommit given the best distribution of tablets given current number of tablets.
-                auto best_shard_overcommit = div_ceil(sum_node_load, shard_count) / avg_shard_load;
-                simlblog.info("Shard overcommit: {:.2f}, best={:.2f}", shard_overcommit, best_shard_overcommit);
+                // Overcommit given the best distribution of tablets given current table size.
+                auto avg_node_load = sum_node_load / hosts.size();
+                auto shard_overcommit = shard_load_minmax.max() / ideal_load;
+                simlblog.info("Shard overcommit: {}", shard_overcommit);
 
                 auto node_imbalance = node_load_minmax.max() - node_load_minmax.min();
-                auto avg_node_load = double(sum_node_load) / hosts.size();
-                auto node_overcommit = node_load_minmax.max() / avg_node_load;
+                auto node_overcommit = node_load_minmax.max() / ideal_load;
                 simlblog.info("Node imbalance: min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
                               node_load_minmax.min(), node_load_minmax.max(), node_imbalance, avg_node_load, node_overcommit);
 
                 res.tables[table_index++] = {
                     .shard_overcommit = shard_overcommit,
-                    .best_shard_overcommit = best_shard_overcommit,
                     .node_overcommit = node_overcommit
                 };
             }
