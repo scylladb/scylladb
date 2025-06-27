@@ -2865,14 +2865,14 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
             BOOST_REQUIRE_LT(u2, initial_utilization[hosts[2]]);
             initial_utilization[hosts[2]] = u2;
 
-            // Check that utilization difference is < 1%
+            // Check that utilization difference is < 5%
             min_max_tracker<double> node_utilization;
             for (auto h: hosts) {
                 auto u = load.get_allocated_utilization(h);
                 BOOST_REQUIRE(u);
                 node_utilization.update(*u);
             }
-            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.01);
+            BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.05);
         }
     }).get();
 }

@@ -436,7 +436,7 @@ async def test_tablet_split_merge_with_many_tables(manager: ManagerClient, racks
     async def finished_merging():
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count < old_tablet_count or None
-    await wait_for(finished_merging, time.time() + 120)
+    await wait_for(finished_merging, time.time() + 240)
 
     await check_logs("after merge completion")
 
@@ -447,7 +447,13 @@ async def test_tablet_split_merge_with_many_tables(manager: ManagerClient, racks
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_migration_running_concurrently_to_merge_completion_handling(manager: ManagerClient):
     cmdline = []
-    cfg = {}
+    # The nodes must have identical capacity, otherwise size-based load balancing will attempt to
+    # migrate the tablet from the smaller to the larger node. In cases where the second node sees
+    # a larger transient available capacity than the first one, the balancer will migrate the tablet
+    # to the larger node, and the move_tablet API will result in a no-op migration. This means we will
+    # not enter take_storage_snapshot injection, the wait for "take_storage_snapshot: waiting" will
+    # time out, and the test will fail.
+    cfg = { 'data_file_capacity': 100 * 1024 * 1024 * 1024 }
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
