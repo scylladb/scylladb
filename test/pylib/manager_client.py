@@ -27,6 +27,7 @@ from cassandra.cluster import Cluster as CassandraCluster  # type: ignore # pyli
 from cassandra.auth import AuthProvider
 import aiohttp
 import asyncio
+import allure
 
 import universalasync
 
@@ -177,7 +178,9 @@ class ManagerClient:
         for server in await self.all_servers():
             log_file = await self.server_open_log(server_id=server.server_id)
             shutil.copyfile(log_file.file, failed_test_path_dir / f"{pathlib.Path(log_file.file).name}")
+            allure.attach(log_file.file.read_bytes(), name=log_file.file.name, attachment_type=allure.attachment_type.TEXT)
         for name, log in logs.items():
+            allure.attach(log.read_bytes(), name=name, attachment_type=allure.attachment_type.TEXT) if name != "pytest.log" else None
             shutil.copyfile(log, failed_test_path_dir / name)
 
     async def is_manager_up(self) -> bool:

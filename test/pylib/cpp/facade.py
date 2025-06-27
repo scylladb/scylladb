@@ -78,7 +78,7 @@ class CppTestFacade(ABC):
                     env: dict = None) -> \
             tuple[bool, Path, int]:
         root_log_dir = self.temp_dir / mode
-        stdout_file_path = root_log_dir / f"{test_name}_stdout.log"
+        stdout_file_path = root_log_dir / f"{test_name}_stdout.{self.run_id}.log"
         test = make_test_object(test_name, file_name.parent.name, self.run_id, mode, log_dir=self.temp_dir)
 
         resource_gather = get_resource_gather(self.gather_metrics, test=test)
