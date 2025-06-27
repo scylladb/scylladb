@@ -46,9 +46,11 @@ public:
     class parameters final {
     public:
         using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering>>;
+        using ann_orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, expr::expression>>;
         enum class statement_subtype { REGULAR, JSON, PRUNE_MATERIALIZED_VIEW, MUTATION_FRAGMENTS };
     private:
         const orderings_type _orderings;
+        const ann_orderings_type _ann_orderings;
         const bool _is_distinct;
         const bool _allow_filtering;
         const statement_subtype _statement_subtype;
@@ -56,9 +58,11 @@ public:
     public:
         parameters();
         parameters(orderings_type orderings,
+            ann_orderings_type ann_orderings,
             bool is_distinct,
             bool allow_filtering);
         parameters(orderings_type orderings,
+            ann_orderings_type ann_orderings,
             bool is_distinct,
             bool allow_filtering,
             statement_subtype statement_subtype,
@@ -70,11 +74,13 @@ public:
         bool bypass_cache() const;
         bool is_prune_materialized_view() const;
         orderings_type const& orderings() const;
+        ann_orderings_type const& ann_orderings() const;
     };
     template<typename T>
     using compare_fn = std::function<bool(const T&, const T&)>;
 
     using result_row_type = std::vector<managed_bytes_opt>;
+    using prepared_ann_ordering_type = std::pair<const column_definition*, expr::expression>;
     using ordering_comparator_type = compare_fn<result_row_type>;
 protected:
     virtual audit::statement_category category() const override;
@@ -125,6 +131,10 @@ private:
     prepared_orderings_type prepare_orderings(const schema& schema) const;
 
     void verify_ordering_is_valid(const prepared_orderings_type&, const schema&, const restrictions::statement_restrictions& restrictions) const;
+
+    void verify_ann_ordering_is_valid(const parameters& params, const std::optional<expr::expression>& limit, const std::optional<expr::expression>& per_partition_limit, const selection::selection& selection) const;
+    
+    prepared_ann_ordering_type prepare_ann_ordering(const schema& schema, const parameters& params, prepare_context& ctx, data_dictionary::database db) const;
 
     // Checks whether this ordering reverses all results.
     // We only allow leaving select results unchanged or reversing them.

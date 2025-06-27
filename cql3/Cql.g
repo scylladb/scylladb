@@ -408,6 +408,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         std::optional<expression> limit;
         std::optional<expression> per_partition_limit;
         raw::select_statement::parameters::orderings_type orderings;
+        raw::select_statement::parameters::ann_orderings_type ann_orderings;
         bool allow_filtering = false;
         raw::select_statement::parameters::statement_subtype statement_subtype = raw::select_statement::parameters::statement_subtype::REGULAR;
         bool bypass_cache = false;
@@ -425,14 +426,14 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
              )
       ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
-      ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
+      ( K_ORDER K_BY orderByClause[orderings, ann_orderings] ( ',' orderByClause[orderings, ann_orderings] )* )?
       ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
       ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
       ( K_BYPASS K_CACHE { bypass_cache = true; })?
       ( usingTimeoutServiceLevelClause[attrs] )?
       {
-          auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
+          auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), std::move(ann_orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
           $expr = std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
             std::move(sclause), std::move(wclause), std::move(limit), std::move(per_partition_limit),
             std::move(gbcolumns), std::move(attrs));
@@ -484,11 +485,24 @@ whereClause returns [uexpression clause]
         { clause = conjunction{std::move(terms)}; }
     ;
 
-orderByClause[raw::select_statement::parameters::orderings_type& orderings]
+orderByClause[raw::select_statement::parameters::orderings_type& orderings, raw::select_statement::parameters::ann_orderings_type& ann_orderings]
     @init{
         raw::select_statement::ordering ordering = raw::select_statement::ordering::ascending;
+        std::optional<expression> ann_ordering;
     }
-    : c=cident (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })? { orderings.emplace_back(c, ordering); }
+    : c=cident (K_ANN K_OF t=term {ann_ordering=std::move(t);})? (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })?
+    { 
+        if (!ann_ordering)
+        {
+            orderings.emplace_back(c, ordering);
+        } else {
+            if (ordering != raw::select_statement::ordering::ascending) {
+                throw exceptions::invalid_request_exception(
+                    "Descending ANN ordering is not supported");
+            }
+            ann_orderings.emplace_back(c, ann_ordering.value());
+        }
+    }
     ;
 
 jsonValue returns [uexpression value]
@@ -660,6 +674,7 @@ pruneMaterializedViewStatement returns [std::unique_ptr<raw::select_statement> e
         std::optional<expression> limit;
         std::optional<expression> per_partition_limit;
         raw::select_statement::parameters::orderings_type orderings;
+        raw::select_statement::parameters::ann_orderings_type ann_orderings;
         bool allow_filtering = false;
         raw::select_statement::parameters::statement_subtype statement_subtype = raw::select_statement::parameters::statement_subtype::PRUNE_MATERIALIZED_VIEW;
         bool bypass_cache = false;
@@ -668,7 +683,7 @@ pruneMaterializedViewStatement returns [std::unique_ptr<raw::select_statement> e
     }
 	: K_PRUNE K_MATERIALIZED K_VIEW cf=columnFamilyName (K_WHERE w=whereClause { wclause = std::move(w); } )? ( usingClause[attrs] )?
 	  {
-	        auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
+	        auto params = make_lw_shared<raw::select_statement::parameters>(std::move(orderings), std::move(ann_orderings), is_distinct, allow_filtering, statement_subtype, bypass_cache);
 	        return std::make_unique<raw::select_statement>(std::move(cf), std::move(params),
             std::vector<shared_ptr<raw_selector>>(), std::move(wclause), std::move(limit), std::move(per_partition_limit),
             std::vector<::shared_ptr<cql3::column_identifier::raw>>(), std::move(attrs));
@@ -2243,6 +2258,7 @@ K_ORDER:       O R D E R;
 K_BY:          B Y;
 K_ASC:         A S C;
 K_DESC:        D E S C;
+K_ANN:         A N N;
 K_ALLOW:       A L L O W;
 K_FILTERING:   F I L T E R I N G;
 K_IF:          I F;
