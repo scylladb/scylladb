@@ -1,4 +1,5 @@
 type: Approval
 extra_scylla_cmdline_options:
+  - '--rf-rack-valid-keyspaces=true'
   # required for cdc_compact_storage_test.cql
   - '--enable-create-table-with-compact-storage=true'
