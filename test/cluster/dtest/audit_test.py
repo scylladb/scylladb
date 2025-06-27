@@ -63,6 +63,8 @@ class AuditTester(Tester):
 
         cluster = self.cluster
 
+        cluster.set_configuration_options(values={"logger_log_level": {"audit": "debug"}})
+
         if helper is None:
             self.helper = AuditBackendTable()
         else:
