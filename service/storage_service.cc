@@ -2877,6 +2877,17 @@ future<> storage_service::stop_transport() {
             _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
             slogger.info("Stop transport: shutdown stream_manager done");
 
+            // There may still be write handlers waiting for background writes in the storage_proxy
+            // that hold the ERM. After the transport is shut down, replies cannot be received.
+            // If any RPC commands are executing barrier_and_drain at the same time,
+            // they will get stuck waiting for these writes to complete, which will block
+            // messaging server shutdown.
+            // Therefore, all write handlers should be cancelled here.
+            if(_cancel_write_response_handlers) {
+                _cancel_write_response_handlers().get();
+            }
+            slogger.info("Stop transport: shutdown write handlers done");
+
             slogger.info("Stop transport: done");
         }).forward_to(std::move(stopped));
     }
