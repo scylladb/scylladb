@@ -544,7 +544,14 @@ async def test_tablet_cleanup(manager: ManagerClient):
 async def test_tablet_cleanup_failure(manager: ManagerClient):
     cmdline = ['--smp=1']
 
-    servers = [await manager.server_add(cmdline=cmdline)]
+    # Force capacity based balancing, so that after the move_tablet API the load balancer does
+    # not attempt to migrate the tablet back to the first node.
+    # Without this, the second node might have a slightly lower transient effective disk
+    # capacity, the size based load balancer will compute a higher load, and move the tablet
+    # back to the first node.
+    config = { 'force_capacity_based_balancing': True }
+
+    servers = [await manager.server_add(cmdline=cmdline, config=config)]
 
     cql = manager.get_cql()
     n_tablets = 1
@@ -560,7 +567,7 @@ async def test_tablet_cleanup_failure(manager: ManagerClient):
         s0_log = await manager.server_open_log(servers[0].server_id)
         s0_mark = await s0_log.mark()
 
-        servers.append(await manager.server_add())
+        servers.append(await manager.server_add(config=config))
 
         tablet_token = 0
         replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
@@ -1356,7 +1363,13 @@ async def test_decommission_rack_basic(manager: ManagerClient):
     # We need to disable this option to be able to create a keyspace. This can be ditched
     # once we've implemented scylladb/scylladb#23426 and we can add new racks with the option enabled.
     # Then we can create `rf` nodes, create the keyspace, and add another node.
-    config = {"rf_rack_valid_keyspaces": False}
+    rf_rack_valid_cfg = {"rf_rack_valid_keyspaces": False}
+
+    # Tablet size-based balancing will attempt to balance the DC based on tablet sizes, leading
+    # to imbalance on tablet count per shard, which fails the test during verify_replicas_per_server()
+    force_capacity_lb_cfg = {'force_capacity_based_balancing': True}
+
+    config = rf_rack_valid_cfg | force_capacity_lb_cfg
 
     all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
@@ -1396,7 +1409,13 @@ async def test_decommission_rack_after_adding_new_rack(manager: ManagerClient):
 
     # We can't add a new rack if we create a keyspace.
     # Once scylladb/scylladb#23426 has been implemented, this can be ditched.
-    config = {"rf_rack_valid_keyspaces": False}
+    rf_rack_valid_cfg = {"rf_rack_valid_keyspaces": False}
+
+    # Tablet size-based balancing will attempt to balance the DC based on tablet sizes, leading
+    # to imbalance on tablet count per shard, which fails the test during verify_replicas_per_server()
+    force_capacity_lb_cfg = {'force_capacity_based_balancing': True}
+
+    config = rf_rack_valid_cfg | force_capacity_lb_cfg
 
     initial_servers = await create_cluster(manager, 1, initial_num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
@@ -1450,7 +1469,12 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
     nodes_per_rack = 2
     rf = num_racks
 
-    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack)
+    # In rare cases, size based load balancing can lead to an imbalance in tablet count after
+    # decommission (18 and 15 tablets per shard on a node). So, we force capacity based balancing
+    # to keep the tablet count within what verify_replicas_per_server() expects
+    config = { "force_capacity_based_balancing": True }
+
+    all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack, config)
     async with create_and_populate_table(manager, rf=rf) as ctx:
         logger.info("Verify tablet replicas distribution")
         tables = {ctx.ks: [ctx.table]}
