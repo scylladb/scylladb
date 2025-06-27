@@ -541,6 +541,8 @@ future<schema_ptr> paxos_store::get_paxos_state_schema(const schema& s, db::time
 future<paxos_state> paxos_store::load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
     db::timeout_clock::time_point timeout)
 {
+    co_await utils::get_local_injector().inject("load_paxos_state-enter", utils::wait_for_message(60s));
+
     const auto state_schema = co_await get_paxos_state_schema(*s, timeout);
     // FIXME: we need execute_cql_with_now()
     (void)now;
