@@ -3320,3 +3320,19 @@ auto fmt::formatter<service::tablet_migration_info>::format(const service::table
         -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "{{tablet: {}, src: {}, dst: {}}}", mig.tablet, mig.src, mig.dst);
 }
+
+void locator::load_sketch::dump(sstring reason) {
+    service::lblogger.info("------ load_sketch {}", reason);
+    uint64_t total_used = 0;
+    uint64_t total_capacity = 0;
+    for (const auto& [host, n] : _nodes) {
+        service::lblogger.info(" node: {} tablets: {} du: {}", host, n._tablet_count, n._du);
+        for (const shard_id shard: n._shards_by_load) {
+            const shard_load& sload = n._shards[shard];
+            service::lblogger.info("  shard: {} tablets: {} du: {}", shard, sload.tablet_count, sload.du);
+            total_used += sload.du.used;
+            total_capacity += sload.du.capacity;
+        }
+    }
+    service::lblogger.info("total_load: {} total used: {} total available: {}", double(total_used) / total_capacity, bytes2gb(total_used), bytes2gb(total_capacity));
+}
