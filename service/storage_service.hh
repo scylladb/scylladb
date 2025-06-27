@@ -369,6 +369,9 @@ private:
     endpoint_lifecycle_notifier& _lifecycle_notifier;
     sharded<db::batchlog_manager>& _batchlog_manager;
 
+    // A callback to storage proxy to cancel all write handlers (needed on shutdown).
+    std::function<future<> ()> _cancel_write_response_handlers;
+
 public:
     // should only be called via JMX
     future<> stop_gossiping();
@@ -385,8 +388,11 @@ public:
     const std::vector<protocol_server*>& protocol_servers() const {
         return _protocol_servers;
     }
-private:
     future<> shutdown_protocol_servers();
+
+    void set_shutdown_write_handlers(std::function<future<> ()> fn) {
+        _cancel_write_response_handlers = std::move(fn);
+    }
 
     struct replacement_info {
         std::unordered_set<token> tokens;

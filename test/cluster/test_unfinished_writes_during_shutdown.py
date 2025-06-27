@@ -23,7 +23,6 @@ from cassandra.cluster import ConnectionException, NoHostAvailable  # type: igno
 logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="#23665")
 async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     # Test a simultaneous topology change and write query during shutdown, which may cause the node to get stuck (see https://github.com/scylladb/scylladb/issues/23665#issuecomment-2935421243).
 
