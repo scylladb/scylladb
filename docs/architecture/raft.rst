@@ -58,112 +58,12 @@ of nodes in the cluster is available. The following examples illustrate how Raft
 
 In summary, Raft makes schema changes safe, but it requires that a quorum of nodes in the cluster is available.
 
-.. _verify-raft-procedure:
-
-Verifying that the Raft upgrade procedure finished successfully
-========================================================================
-
-You may need to perform the following procedure as part of
-the :ref:`manual recovery procedure <recovery-procedure>`.
-
-The Raft upgrade procedure requires **full cluster availability** to correctly setup the Raft algorithm; after the setup finishes, Raft can proceed with only a majority of nodes, but this initial setup is an exception.
-An unlucky event, such as a hardware failure, may cause one of your nodes to fail. If this happens before the Raft upgrade procedure finishes, the procedure will get stuck and your intervention will be required.
-
-To verify that the procedure finishes, look at the log of every ScyllaDB node (using ``journalctl _COMM=scylla``). Search for the following patterns:
-
-* ``Starting internal upgrade-to-raft procedure`` denotes the start of the procedure,
-* ``Raft upgrade finished`` denotes the end.
-
-The following is an example of a log from a node which went through the procedure correctly. Some parts were truncated for brevity:
-
-.. code-block:: console
-
-    features - Feature SUPPORTS_RAFT_CLUSTER_MANAGEMENT is enabled
-    raft_group0 - finish_setup_after_join: SUPPORTS_RAFT feature enabled. Starting internal upgrade-to-raft procedure.
-    raft_group0_upgrade - starting in `use_pre_raft_procedures` state.
-    raft_group0_upgrade - Waiting until everyone is ready to start upgrade...
-    raft_group0_upgrade - Joining group 0...
-    raft_group0 - server 624fa080-8c0e-4e3d-acf6-10af473639ca joined group 0 with group id 8f8a1870-5c4e-11ed-bb13-fe59693a23c9
-    raft_group0_upgrade - Waiting until every peer has joined Raft group 0...
-    raft_group0_upgrade - Every peer is a member of Raft group 0.
-    raft_group0_upgrade - Waiting for schema to synchronize across all nodes in group 0...
-    raft_group0_upgrade - synchronize_schema: my version: a37a3b1e-5251-3632-b6b4-a9468a279834
-    raft_group0_upgrade - synchronize_schema: schema mismatches: {}. 3 nodes had a matching version.
-    raft_group0_upgrade - synchronize_schema: finished.
-    raft_group0_upgrade - Entering synchronize state.
-    raft_group0_upgrade - Schema changes are disabled in synchronize state. If a failure makes us unable to proceed, manual recovery will be required.
-    raft_group0_upgrade - Waiting for all peers to enter synchronize state...
-    raft_group0_upgrade - All peers in synchronize state. Waiting for schema to synchronize...
-    raft_group0_upgrade - synchronize_schema: collecting schema versions from group 0 members...
-    raft_group0_upgrade - synchronize_schema: collected remote schema versions.
-    raft_group0_upgrade - synchronize_schema: my version: a37a3b1e-5251-3632-b6b4-a9468a279834
-    raft_group0_upgrade - synchronize_schema: schema mismatches: {}. 3 nodes had a matching version.
-    raft_group0_upgrade - synchronize_schema: finished.
-    raft_group0_upgrade - Schema synchronized.
-    raft_group0_upgrade - Raft upgrade finished.
-
-In a functioning cluster with good network connectivity the procedure should take no more than a few seconds.
-Network issues may cause the procedure to take longer, but if all nodes are alive and the network is eventually functional (each pair of nodes is eventually connected), the procedure will eventually finish.
-
-Note the following message, which appears in the log presented above:
-
-.. code-block:: console
-
-    Schema changes are disabled in synchronize state. If a failure makes us unable to proceed, manual recovery will be required.
-
-During the procedure, there is a brief window while schema changes are disabled. This is when the schema change mechanism switches from the older unsafe algorithm to the safe Raft-based algorithm. If everything runs smoothly, this window will be unnoticeable; the procedure is designed to minimize that window's length. However, if the procedure gets stuck e.g. due to network connectivity problem, ScyllaDB will return the following error when trying to perform a schema change during this window:
-
-.. code-block:: console
-
-    Cannot perform schema or topology changes during this time; the cluster is currently upgrading to use Raft for schema operations.
-    If this error keeps happening, check the logs of your nodes to learn the state of upgrade. The upgrade procedure may get stuck
-    if there was a node failure.
-
-In the next example, one of the nodes had a power outage before the procedure could finish. The following shows a part of another node's logs:
-
-.. code-block:: console
-
-    raft_group0_upgrade - Entering synchronize state.
-    raft_group0_upgrade - Schema changes are disabled in synchronize state. If a failure makes us unable to proceed, manual recovery will be required.
-    raft_group0_upgrade - Waiting for all peers to enter synchronize state...
-    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.3 not in synchronize state yet...
-    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.1 not in synchronize state yet...
-    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: retrying in a while...
-    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.1 not in synchronize state yet...
-    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: retrying in a while...
-    ...
-    raft_group0_upgrade - Raft upgrade procedure taking longer than expected. Please check if all nodes are live and the network is healthy. If the upgrade procedure does not progress even though the cluster is healthy, try performing a rolling restart of the cluster. If that doesn 't help or some nodes are dead and irrecoverable, manual recovery may be required. Consult the relevant documentation.
-    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: node 127.90.69.1 not in synchronize state yet...
-    raft_group0_upgrade - wait_for_peers_to_enter_synchronize_state: retrying in a while...
-
-.. TODO: the 'Consult the relevant documentation' message must be updated to point to this doc.
-
-Note the following message:
-
-.. code-block:: console
-
-    raft_group0_upgrade - Raft upgrade procedure taking longer than expected. Please check if all nodes are live and the network is healthy. If the upgrade procedure does not progress even though the cluster is healthy, try performing a rolling restart of the cluster. If that doesn 't help or some nodes are dead and irrecoverable, manual recovery may be required. Consult the relevant documentation.
-
-If the Raft upgrade procedure is stuck, this message will appear periodically in each node's logs.
-
-The message suggests the initial course of action:
-
-* Check if all nodes are alive.
-* If a node is down but can be restarted, restart it.
-* If all nodes are alive, ensure that the network is healthy: that every node is reachable from every other node.
-* If all nodes are alive and the network is healthy, perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of the cluster.
-
-One of the reasons why the procedure may get stuck is a pre-existing problem in schema definitions which causes schema to be unable to synchronize in the cluster. The procedure cannot proceed unless it ensures that schema is synchronized.
-If **all nodes are alive and the network is healthy**, you performed a rolling restart, but the issue still persists, contact `ScyllaDB support <https://www.scylladb.com/product/support/>`_ for assistance.
-
-If some nodes are **dead and irrecoverable**, you'll need to perform a manual recovery procedure. Consult :ref:`the section about Raft recovery <recovery-procedure>`.
-
 .. _raft-topology-changes:
 
 Consistent Topology with Raft
 -----------------------------------------------------------------
 
-ScyllaDB can use Raft to manage cluster topology. With Raft-managed topology 
+ScyllaDB uses Raft to manage cluster topology. With Raft-managed topology 
 enabled, all topology operations are internally sequenced in a consistent 
 way. A centralized coordination process ensures that topology metadata is 
 synchronized across the nodes on each step of a topology change procedure. 
@@ -173,42 +73,18 @@ will safely drive all of them to completion. For example, multiple nodes can
 be bootstrapped concurrently, which couldn't be done with the old 
 gossip-based topology.
 
-The feature is automatically enabled in new clusters.
+.. note::
 
-Verifying that Raft is Enabled
-----------------------------------
+    Enabling consistent topology changes is mandatory in versions 2025.2 and later. If consistent topology changes are
+    disabled in your cluster, you need to follow the instructions in
+    `Enable Consistent Topology Updates <https://docs.scylladb.com/manual/branch-2025.1/upgrade/upgrade-guides/upgrade-guide-from-2024.x-to-2025.1/enable-consistent-topology.html>`_.
 
-.. _schema-on-raft-enabled:
-
-**Schema on Raft**
-
-You can verify that Raft is enabled on your cluster by performing the following query on each node:
-
-.. code-block:: sql
-
-   cqlsh> SELECT * FROM system.scylla_local WHERE key = 'group0_upgrade_state';
-
-The query should return:
-
-   .. code-block:: console
-
-     key                  | value
-    ----------------------+--------------------------
-     group0_upgrade_state | use_post_raft_procedures
-
-    (1 rows)
-
-on every node.
-
-If the query returns 0 rows, or ``value`` is ``synchronize`` or ``use_pre_raft_procedures``, it means that the cluster is in the middle of the Raft upgrade procedure; consult the :ref:`relevant section <verify-raft-procedure>`.
-
-If ``value`` is ``recovery``, it means that the cluster is in the middle of the manual recovery procedure. The procedure must be finished. Consult :ref:`the section about Raft recovery <recovery-procedure>`.
-
-If ``value`` is anything else, it might mean data corruption or a mistake when performing the manual recovery procedure. The value will be treated as if it was equal to ``recovery`` when the node is restarted.
+    If you are uncertain whether consistent topology changes are enabled, refer to the guide below.
 
 .. _verifying-consistent-topology-changes-enabled:
 
-**Consistent topology changes**
+Verifying that consistent topology changes are enabled
+-----------------------------------------------------------------
 
 You can verify that consistent topology management is enabled on your cluster in two ways:
 
