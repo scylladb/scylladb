@@ -320,6 +320,11 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
 
     servers = await manager.servers_add(2, config=cfg)
 
+    # Make sure both nodes see the same disk capacity, so that the tablet moved by the move_tablet API
+    # is still on the host we attempt to move it from. Without this, the load balancer might move
+    # the tablet after we query the tablet location and before we attempt to move it.
+    cfg['data_file_capacity'] = 100 * 1024 * 1024 * 1024
+
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH"
