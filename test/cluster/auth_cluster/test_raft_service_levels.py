@@ -428,7 +428,7 @@ async def test_service_levels_over_limit(manager: ManagerClient):
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 
-    SL_LIMIT = 7
+    SL_LIMIT = 6
     sls = []
     for i in range(SL_LIMIT + 1):
         sl = f"sl_{i}_{unique_name()}"

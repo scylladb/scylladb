@@ -1430,7 +1430,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , replication_strategy_warn_list(this, "replication_strategy_warn_list", liveness::LiveUpdate, value_status::Used, {locator::replication_strategy_type::simple}, "Controls which replication strategies to warn about when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , replication_strategy_fail_list(this, "replication_strategy_fail_list", liveness::LiveUpdate, value_status::Used, {}, "Controls which replication strategies are disallowed to be used when creating/altering a keyspace. Doesn't affect the pre-existing keyspaces.")
     , service_levels_interval(this, "service_levels_interval_ms", liveness::LiveUpdate, value_status::Used, 10000, "Controls how often service levels module polls configuration table")
-
+    , backup_throughput_mb_per_sec(this, "backup_throughput_mb_per_sec", value_status::Used, 0,
+        "Throttles backup throughput to the specified value. The recommendation is 75% of the disk maximum IO or network throughput, whichever is smaller. Setting the value to 0 disables backup throttling, making backup throughput unlimited.")
     , audit(this, "audit", value_status::Used, "none",
         "Controls the audit feature:\n"
         "\n"

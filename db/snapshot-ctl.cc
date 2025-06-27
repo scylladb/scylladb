@@ -34,6 +34,20 @@ snapshot_ctl::snapshot_ctl(sharded<replica::database>& db, tasks::task_manager& 
     , _storage_manager(sstm)
 {
     tm.register_module("snapshot", _task_manager_module);
+    if (this_shard_id() == 0) {
+        if (_config.backup_io_throughput_mbs != 0) {
+            auto gh = _ops.hold();
+            (void)_config.backup_sched_group.update_io_bandwidth(_config.backup_io_throughput_mbs << 20).then_wrapped([value_mbs = _config.backup_io_throughput_mbs, gh = std::move(gh)] (auto f) {
+                if (f.failed()) {
+                    snap_log.warn("Couldn't update backup bandwidth: {}", f.get_exception());
+                } else {
+                    snap_log.info("Set backup bandwidth to {}MB/s", value_mbs);
+                }
+            });
+        } else {
+            snap_log.info("Backup bandwidth is not limited");
+        }
+    }
 }
 
 future<> snapshot_ctl::stop() {
