@@ -1691,11 +1691,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
         load_sketch load(stm.get());
         load.populate().get();
         BOOST_REQUIRE_EQUAL(load.get_load(host1), 4);
-        BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
+        BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host1), 2);
         BOOST_REQUIRE_EQUAL(load.get_load(host2), 4);
-        BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host2), 2);
+        BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host2), 2);
         BOOST_REQUIRE_EQUAL(load.get_load(host3), 0);
-        BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+        BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host3), 0);
     }
 
     rebalance_tablets(e);
@@ -1708,8 +1708,8 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
             testlog.debug("Checking host {}", h);
             BOOST_REQUIRE_LE(load.get_load(h), 3);
             BOOST_REQUIRE_GT(load.get_load(h), 1);
-            BOOST_REQUIRE_LE(load.get_avg_shard_load(h), 2);
-            BOOST_REQUIRE_GT(load.get_avg_shard_load(h), 0);
+            BOOST_REQUIRE_LE(load.get_avg_tablet_count(h), 2);
+            BOOST_REQUIRE_GT(load.get_avg_tablet_count(h), 0);
         }
     }
   }).get();
@@ -1849,11 +1849,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
         load_sketch load(stm.get());
         load.populate().get();
         BOOST_REQUIRE_EQUAL(load.get_load(host1), 4);
-        BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
+        BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host1), 2);
         BOOST_REQUIRE_EQUAL(load.get_load(host2), 4);
-        BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host2), 2);
+        BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host2), 2);
         BOOST_REQUIRE_EQUAL(load.get_load(host3), 0);
-        BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+        BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host3), 0);
     }
 
     rebalance_tablets(e, &topo.get_shared_load_stats(), {host3});
@@ -1862,7 +1862,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
         load_sketch load(stm.get());
         load.populate().get();
         BOOST_REQUIRE_EQUAL(load.get_load(host3), 0);
-        BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+        BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host3), 0);
     }
   }).get();
 }
@@ -1993,9 +1993,9 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         {
             load_sketch load(stm.get());
             load.populate().get();
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host2), 2);
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host1), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host2), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host3), 0);
         }
 
         topo.set_node_state(host3, node_state::left);
@@ -2005,9 +2005,9 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         {
             load_sketch load(stm.get());
             load.populate().get();
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host2), 2);
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host1), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host2), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host3), 0);
         }
     }).get();
 }
@@ -2135,10 +2135,10 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         {
             load_sketch load(stm.get());
             load.populate().get();
-            BOOST_REQUIRE_GE(load.get_avg_shard_load(host1), 2);
-            BOOST_REQUIRE_GE(load.get_avg_shard_load(host2), 2);
-            BOOST_REQUIRE_GE(load.get_avg_shard_load(host3), 2);
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host4), 0);
+            BOOST_REQUIRE_GE(load.get_avg_tablet_count(host1), 2);
+            BOOST_REQUIRE_GE(load.get_avg_tablet_count(host2), 2);
+            BOOST_REQUIRE_GE(load.get_avg_tablet_count(host3), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(host4), 0);
         }
 
         // Verify replicas are not collocated on racks
@@ -2297,7 +2297,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
 
         for (auto h : {host1, host2, host3}) {
             testlog.debug("Checking host {}", h);
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 2);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(h), 2);
         }
     }
 
@@ -2390,7 +2390,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
 
         for (auto h : {host1, host2, host3, host4}) {
             testlog.debug("Checking host {}", h);
-            BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 4);
+            BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(h), 4);
             BOOST_REQUIRE_LE(load.get_shard_imbalance(h), 1);
         }
     }
@@ -2435,7 +2435,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_asymmetric_node_capacity) {
 
           for (auto h: {host2, host3}) {
               testlog.debug("Checking host {}", h);
-              BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 2); // 16 tablets / 8 shards = 2 tablets / shard
+              BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(h), 2); // 16 tablets / 8 shards = 2 tablets / shard
               BOOST_REQUIRE_EQUAL(load.get_shard_imbalance(h), 0);
           }
         }
@@ -2621,7 +2621,7 @@ SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
 
             for (auto h : {host2, host3}) {
                 testlog.debug("Checking host {}", h);
-                BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(h), 1);
+                BOOST_REQUIRE_EQUAL(load.get_avg_tablet_count(h), 1);
             }
         }
     }).get();
@@ -2739,7 +2739,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
 
             min_max_tracker<unsigned> min_max_load;
             for (auto h: hosts) {
-                auto l = load.get_avg_shard_load(h);
+                auto l = load.get_avg_tablet_count(h);
                 testlog.info("Load on host {}: {}", h, l);
                 min_max_load.update(l);
                 BOOST_REQUIRE_LE(load.get_shard_imbalance(h), 1);
@@ -2798,10 +2798,10 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
         std::unordered_map<host_id, double> initial_utilization;
         auto& hosts = topo.hosts();
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate().get();
             for (auto h: hosts) {
-                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                auto u = load.get_allocated_utilization(h);
                 BOOST_REQUIRE(u);
                 initial_utilization[h] = *u;
             }
@@ -2812,15 +2812,15 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
         testlog.info("Expanded capacity in rack1");
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate().get();
-            auto u0 = *load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size);
+            auto u0 = *load.get_allocated_utilization(hosts[0]);
             BOOST_REQUIRE_LT(u0, initial_utilization[hosts[0]]);
             initial_utilization[hosts[0]] = u0;
             // rack2 and rack3 are not changed, to keep racks not overloaded (RF=rack_count)
-            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size),
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1]),
                              initial_utilization[hosts[1]]);
-            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size),
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2]),
                              initial_utilization[hosts[2]]);
         }
 
@@ -2829,14 +2829,14 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
         testlog.info("Expanded capacity in rack2");
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate().get();
-            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size),
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0]),
                              initial_utilization[hosts[0]]);
-            auto u1 = *load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size);
+            auto u1 = *load.get_allocated_utilization(hosts[1]);
             BOOST_REQUIRE_LT(u1, initial_utilization[hosts[1]]);
             initial_utilization[hosts[1]] = u1;
-            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size),
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[2]),
                              initial_utilization[hosts[2]]);
         }
 
@@ -2845,20 +2845,20 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
         testlog.info("Expanded capacity in rack3");
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate().get();
-            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0], *topo.get_load_stats(), default_target_tablet_size),
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[0]),
                              initial_utilization[hosts[0]]);
-            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1], *topo.get_load_stats(), default_target_tablet_size),
+            BOOST_REQUIRE_EQUAL(*load.get_allocated_utilization(hosts[1]),
                              initial_utilization[hosts[1]]);
-            auto u2 = *load.get_allocated_utilization(hosts[2], *topo.get_load_stats(), default_target_tablet_size);
+            auto u2 = *load.get_allocated_utilization(hosts[2]);
             BOOST_REQUIRE_LT(u2, initial_utilization[hosts[2]]);
             initial_utilization[hosts[2]] = u2;
 
             // Check that utilization difference is < 1%
             min_max_tracker<double> node_utilization;
             for (auto h: hosts) {
-                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                auto u = load.get_allocated_utilization(h);
                 BOOST_REQUIRE(u);
                 node_utilization.update(*u);
             }
@@ -2899,13 +2899,13 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables) {
         auto& hosts = topo.hosts();
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate(std::nullopt, table2).get();
 
             // Check that utilization difference is < 4%
             min_max_tracker<double> node_utilization;
             for (auto h: hosts) {
-                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                auto u = load.get_allocated_utilization(h);
                 BOOST_REQUIRE(u);
                 testlog.info("table2: {}: {}", h, u);
                 node_utilization.update(*u);
@@ -2949,12 +2949,12 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
         auto& hosts = topo.hosts();
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate(std::nullopt, table2).get();
 
             min_max_tracker<double> node_utilization;
             for (auto h : hosts) {
-                auto u = load.get_allocated_utilization(h, *topo.get_load_stats(), default_target_tablet_size);
+                auto u = load.get_allocated_utilization(h);
                 testlog.info("table2: {}: {}", h, u);
                 node_utilization.update(u.value_or(0));
             }
@@ -2975,6 +2975,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
         auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
 
         topology_builder topo(e);
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
 
         std::vector<endpoint_dc_rack> racks = {
             topo.rack(),
@@ -3013,7 +3014,7 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
             BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table1).tablet_count(), 256);
             BOOST_REQUIRE_EQUAL(tm->tablets().get_tablet_map(table2).tablet_count(), 64);
 
-            load_sketch load(tm);
+            load_sketch load(tm, load_stats.get());
             load.populate().get();
 
             for (auto h: hosts) {
@@ -3192,7 +3193,7 @@ SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) 
         auto& stm = e.shared_token_metadata().local();
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate().get();
             testlog.info("max load: {}", load.get_shard_minmax(host1).max());
             // The value 415 was determined empirically. If there was lack of scaling, it would be 1'600.
@@ -3202,7 +3203,7 @@ SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) 
         rebalance_tablets(e, &load_stats);
 
         {
-            load_sketch load(stm.get());
+            load_sketch load(stm.get(), load_stats.get());
             load.populate().get();
             testlog.info("max load: {}", load.get_shard_minmax(host1).max());
             BOOST_REQUIRE(load.get_shard_minmax(host1).max() <= 200);
