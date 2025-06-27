@@ -6979,4 +6979,16 @@ future<utils::chunked_vector<dht::token_range_endpoints>> storage_proxy::describ
     return locator::describe_ring(_db.local(), _remote->gossiper(), keyspace, include_only_local_dc);
 }
 
+future<> storage_proxy::cancel_all_write_response_handlers() {
+    return async([this] {
+        while (!_response_handlers.empty()) {
+            _response_handlers.begin()->second->timeout_cb();
+
+            if (!_response_handlers.empty() && need_preempt()) {
+                seastar::thread::yield();
+            }
+        }
+    });
+}
+
 }
