@@ -361,6 +361,11 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
     if build_mode != "release":
         cfg['error_injections_at_startup'] = [{'name': 'querier-cache-ttl-seconds', 'value': 999999999}]
 
+    # Force capacity based balancing, so that the tablet moved by the move_tablet API
+    # is still on the host we attempt to move it from. Without this, the load balancer might migrate
+    # the tablet after we query the tablet location and before this test attempts to move it.
+    cfg['force_capacity_based_balancing'] = True
+
     servers = await manager.servers_add(2, config=cfg)
 
     cql = manager.get_cql()

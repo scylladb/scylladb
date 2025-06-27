@@ -17,6 +17,7 @@ import asyncio
 import logging
 import time
 import random
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +324,33 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
                 await manager.api.keyspace_compaction(server.ip_addr, ks)
             await check()
 
+# This function returns the total number of sibling tablet pairs that can be colocated,
+# and the number of sibling tablet pairs that are currenty colocated.
+async def get_colocated_siblings_count(cql, table_id, rf):
+    res = await cql.run_async(f"SELECT last_token, replicas, new_replicas FROM system.tablets WHERE table_id = {table_id}")
+    tablets_on_shard = defaultdict(list)
+    tablet_id = 0
+    # make a map of replicas to a list of tablet ids located on those replicas
+    for row in res:
+        replicas = row.new_replicas if row.new_replicas is not None else row.replicas
+        for replica in replicas:
+            tablets_on_shard[replica].append(tablet_id)
+        tablet_id += 1
+
+    # count the colocated sibling pairs
+    colocated_count = 0
+    for replica, table_ids in tablets_on_shard.items():
+        ndx = 0
+        while ndx < len(table_ids) - 1:
+            # check sibling colocation
+            if table_ids[ndx] % 2 == 0 and table_ids[ndx + 1] == table_ids[ndx] + 1:
+                colocated_count += 1
+                ndx += 2
+            else:
+                ndx += 1
+
+    return (len(res) * rf // 2, colocated_count)
+
 @pytest.mark.parametrize("racks", [2, 3])
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -370,10 +398,27 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
         await manager.api.flush_keyspace(server.ip_addr, ks)
         await manager.api.keyspace_compaction(server.ip_addr, ks)
 
+    table_id = await manager.get_table_or_view_id(ks, "test")
+
+    async def colocation_progress():
+        nonlocal colocation
+        new_colocation = await get_colocated_siblings_count(cql, table_id, rf)
+        logger.debug(f"previous colocation: {colocation} new_colocation: {new_colocation}")
+        (new_coloc_target, new_coloc_current) = new_colocation
+        (prev_coloc_target, prev_coloc_current) = colocation
+        colocation = new_colocation
+        return new_coloc_target < prev_coloc_target or new_coloc_current > prev_coloc_current or None
+
+    # wait for colocation of all tablet siblings
+    colocation = await get_colocated_siblings_count(cql, table_id, rf)
+    while colocation[0] != colocation[1]:
+        await wait_for(colocation_progress, time.time() + 60)
+
+    # wait for merge to complete
     async def finished_merging():
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count < old_tablet_count or None
-    await wait_for(finished_merging, time.time() + 120)
+    await wait_for(finished_merging, time.time() + 60)
 
 # Reproduces #23284
 @pytest.mark.asyncio
@@ -434,10 +479,27 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
         await manager.api.flush_keyspace(server.ip_addr, ks)
         await manager.api.keyspace_compaction(server.ip_addr, ks)
 
+    table_id = await manager.get_table_or_view_id(ks, "test")
+
+    async def colocation_progress():
+        nonlocal colocation
+        new_colocation = await get_colocated_siblings_count(cql, table_id, rf)
+        logger.debug(f"previous colocation: {colocation} new_colocation: {new_colocation}")
+        (new_coloc_target, new_coloc_current) = new_colocation
+        (prev_coloc_target, prev_coloc_current) = colocation
+        colocation = new_colocation
+        return new_coloc_target < prev_coloc_target or new_coloc_current > prev_coloc_current or None
+
+    # wait for colocation of all tablet siblings
+    colocation = await get_colocated_siblings_count(cql, table_id, rf)
+    while colocation[0] != colocation[1]:
+        await wait_for(colocation_progress, time.time() + 60)
+
+    # wait for merge to complete
     async def finished_merging():
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         return tablet_count < old_tablet_count or None
-    await wait_for(finished_merging, time.time() + 120)
+    await wait_for(finished_merging, time.time() + 60)
 
     await check_logs("after merge completion")
 
@@ -448,7 +510,13 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Man
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_migration_running_concurrently_to_merge_completion_handling(manager: ManagerClient):
     cmdline = []
-    cfg = {}
+    # We force capacity based balancing, otherwise size-based load balancing will attempt to
+    # migrate the tablet from the smaller to the larger node. In cases where the second node sees
+    # a larger transient available capacity than the first one, the balancer will migrate the tablet
+    # to the larger node, and the move_tablet API will result in a no-op migration. This means we will
+    # not enter take_storage_snapshot injection, the wait for "take_storage_snapshot: waiting" will
+    # time out, and the test will fail.
+    cfg = { 'force_capacity_based_balancing': True }
     servers = [await manager.server_add(cmdline=cmdline, config=cfg)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)

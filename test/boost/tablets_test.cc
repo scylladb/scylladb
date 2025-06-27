@@ -4228,6 +4228,37 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_drain_node_without_capacity) {
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+
+        const uint64_t node_capacity = 100UL * 1024UL * 1024UL * 1024UL;
+        topo.get_shared_load_stats().set_capacity(host1, node_capacity);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto table = add_table(e, ks_name).get();
+
+        topo.set_node_state(host2, node_state::removing);
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        // check that all tablets have been migrated from host2 to host1
+        auto& stm = e.shared_token_metadata().local();
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+        tmap.for_each_tablet([&](auto tid, auto& tinfo) {
+            for (auto& replica : tinfo.replicas) {
+                BOOST_REQUIRE_EQUAL(replica.host, host1);
+            }
+            return make_ready_future<>();
+        }).get();
+  }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tablet_range_splitter) {
     simple_schema ss;
 
