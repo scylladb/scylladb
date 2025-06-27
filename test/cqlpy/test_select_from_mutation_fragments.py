@@ -178,7 +178,7 @@ def test_many_partition_scan(cql, test_keyspace, scylla_only):
     The former uses paging, reading 1000 partition keys in a page. Stress this
     logic a bit.
     """
-    with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v text') as test_table:
+    with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v text', " WITH tombstone_gc = {'mode': 'disabled'}") as test_table:
         insert_stmt = cql.prepare(f"INSERT INTO {test_table} (pk, v) VALUES (?, ?)")
         delete_stmt = cql.prepare(f"DELETE FROM {test_table} WHERE pk = ?")
         partitions = []
@@ -471,7 +471,7 @@ def test_ck_in_query(cql, test_table, scylla_only):
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_many_partitions(cql, test_keyspace, scylla_only):
     num_partitions = 5000
-    with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
+    with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v text', " WITH tombstone_gc = {'mode': 'disabled'}") as table:
         delete_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
         for pk in range(num_partitions):
             cql.execute(delete_id, (pk,))
