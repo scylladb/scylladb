@@ -1796,6 +1796,7 @@ future<json::json_return_type>
 rest_get_schema_versions(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         return ss.local().describe_schema_versions().then([] (auto result) {
             std::vector<sp::mapper_list> res;
+            res.reserve(result.size());
             for (auto e : result) {
                 sp::mapper_list entry;
                 entry.key = std::move(e.first);
