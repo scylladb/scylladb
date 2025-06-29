@@ -1158,6 +1158,10 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 co_await _client->make_request(
                     std::move(req),
                     [this](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+                        utils::get_local_injector().inject("kill_s3_inflight_req", [] {
+                            // Inject non-retryable error to emulate source failure
+                            throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
+                        });
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
