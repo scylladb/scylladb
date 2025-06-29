@@ -1160,7 +1160,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
                         }
-                        if (_range == s3::full_range && reply.get_header("Content-Range").empty()) {
+                        if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
                             s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header",
