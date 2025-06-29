@@ -335,17 +335,20 @@ void tablet_metadata::drop_tablet_map(table_id id) {
 }
 
 future<> tablet_metadata::clear_gently() {
-    for (auto&& [id, map] : _tablets) {
-        const auto shard = map.get_owner_shard();
-        co_await smp::submit_to(shard, [map = std::move(map)] () mutable {
-            auto map_ptr = map.release();
-            // Others copies exist, we simply drop ours, no need to clear anything.
-            if (map_ptr.use_count() > 1) {
-                return make_ready_future<>();
+    tablet_logger.debug("tablet_metadata::clear_gently {}", fmt::ptr(this));
+    // The following loop looks on each shard for all tablet_map_ptrs that
+    // are owned by this shard, and releases them.
+    // Releasing the foreign lw_shared_ptr does not cause reallocation of
+    // the _tablets map, so we can safely iterate over it.
+    co_await smp::invoke_on_all([this] -> future<> {
+        auto this_shard = this_shard_id();
+        for (auto& [_, map_ptr] : _tablets) {
+            if (map_ptr.get_owner_shard() == this_shard) {
+                auto map = map_ptr.release();
+                co_await utils::clear_gently(map);
             }
-            return const_cast<tablet_map&>(*map_ptr).clear_gently().finally([map_ptr = std::move(map_ptr)] { });
-        });
-    }
+        }
+    });
     _tablets.clear();
     co_return;
 }

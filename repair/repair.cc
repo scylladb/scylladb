@@ -2244,7 +2244,7 @@ future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator
     auto reason = streaming::stream_reason::replace;
     // update a cloned version of tmptr
     // no need to set the original version
-    auto cloned_tmptr = make_token_metadata_ptr(std::move(cloned_tm));
+    auto cloned_tmptr = _db.local().get_shared_token_metadata().make_token_metadata_ptr(std::move(cloned_tm));
     cloned_tmptr->update_topology(tmptr->get_my_id(), myloc, locator::node::state::replacing);
     co_await cloned_tmptr->update_normal_tokens(replacing_tokens, tmptr->get_my_id());
     auto source_dc = utils::optional_param(myloc.dc);
