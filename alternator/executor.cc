@@ -285,7 +285,7 @@ static void validate_table_name(const std::string& name) {
 // instead of each component individually as DynamoDB does.
 // The view_name() function assumes the table_name has already been validated
 // but validates the legality of index_name and the combination of both.
-static std::string view_name(std::string_view table_name, std::string_view index_name, const std::string& delim = ":") {
+static std::string view_name(std::string_view table_name, std::string_view index_name, const std::string& delim = ":", bool validate_len = true) {
     if (index_name.length() < 3) {
         throw api_error::validation("IndexName must be at least 3 characters long");
     }
@@ -294,7 +294,7 @@ static std::string view_name(std::string_view table_name, std::string_view index
                 fmt::format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
     }
     std::string ret = std::string(table_name) + delim + std::string(index_name);
-    if (ret.length() > max_table_name_length) {
+    if (ret.length() > max_table_name_length && validate_len) {
         throw api_error::validation(
                 fmt::format("The total length of TableName ('{}') and IndexName ('{}') cannot exceed {} characters",
                         table_name, index_name, max_table_name_length - delim.size()));
@@ -302,8 +302,8 @@ static std::string view_name(std::string_view table_name, std::string_view index
     return ret;
 }
 
-static std::string lsi_name(std::string_view table_name, std::string_view index_name) {
-    return view_name(table_name, index_name, "!:");
+static std::string lsi_name(std::string_view table_name, std::string_view index_name, bool validate_len = true) {
+    return view_name(table_name, index_name, "!:", validate_len);
 }
 
 /** Extract table name from a request.
@@ -1828,7 +1828,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                             co_return api_error::validation(fmt::format(
                                 "GSI {} already exists in table {}", index_name, table_name));
                         }
-                        if (p.local().data_dictionary().has_schema(keyspace_name, lsi_name(table_name, index_name))) {
+                        if (p.local().data_dictionary().has_schema(keyspace_name, lsi_name(table_name, index_name, false))) {
                             co_return api_error::validation(fmt::format(
                                 "LSI {} already exists in table {}, can't use same name for GSI", index_name, table_name));
                         }

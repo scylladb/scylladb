@@ -15,7 +15,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from .util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table, wait_for_gsi
+from .util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table, wait_for_gsi, unique_table_name
 
 # GSIs only support eventually consistent reads, so tests that involve
 # writing to a table and then expect to read something from it cannot be
@@ -1474,12 +1474,25 @@ def test_gsi_non_scylla_name(dynamodb):
     create_gsi(dynamodb, '.alternator_test')
 
 # Index names with 255 characters are allowed in Dynamo. In Scylla, the
-# limit is different - the sum of both table and index length cannot
-# exceed 211 characters. So we test a much shorter limit.
-# (compare test_create_and_delete_table_very_long_name()).
-def test_gsi_very_long_name(dynamodb):
-    #create_gsi(dynamodb, 'n' * 255)   # works on DynamoDB, but not on Scylla
-    create_gsi(dynamodb, 'n' * 190)
+# limit is different - the sum of both table and index length plus an extra 1
+# cannot exceed 222 characters.
+# (compare test_create_and_delete_table_255/222()).
+@pytest.mark.xfail(reason="Alternator limits table name length + GSI name length to 221")
+def test_gsi_very_long_name_255(dynamodb):
+    create_gsi(dynamodb, 'n' * 255)
+def test_gsi_very_long_name_256(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException'):
+        create_gsi(dynamodb, 'n' * 256)
+def test_gsi_very_long_name_222(dynamodb, scylla_only):
+    # If we subtract from 222 the table's name length (we assume that
+    # unique_table_name() always returns the same length) and an extra 1,
+    # this is how long the GSI's name may be:
+    max = 222 - len(unique_table_name()) - 1
+    # This max length should work:
+    create_gsi(dynamodb, 'n' * max)
+    # But a name one byte longer should fail:
+    with pytest.raises(ClientError, match='ValidationException.*total length'):
+        create_gsi(dynamodb, 'n' * (max+1))
 
 # Verify that ListTables does not list materialized views used for indexes.
 # This is hard to test, because we don't really know which table names
