@@ -727,3 +727,41 @@ def test_gsi_backfill_key_limits(dynamodb):
         # to 1024 bytes), only item 0 should appear.
         assert multiset([{'p': p[i], 'c': c, 'x': x[i]} for i in range(3)]) == multiset(full_scan(table, ConsistentRead=False, IndexName='index1'))
         assert [{'p': p[0], 'c': c, 'x': x[0]}] == full_scan(table, ConsistentRead=False, IndexName='index2')
+
+# Index names with 255 characters are allowed in Dynamo. In Scylla, the
+# limit is different - the sum of both table and index length plus an extra 1
+# cannot exceed 222 characters.
+# (test_gsi_very_long_name_* check the same thing for a GSI created at the
+# same time as the table.
+
+def add_and_delete_gsi(table, gsi_name):
+    table.meta.client.update_table(TableName=table.name,
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        GlobalSecondaryIndexUpdates=[ {  'Create':
+            {   'IndexName': gsi_name,
+                'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+                    'Projection': { 'ProjectionType': 'ALL' }
+                }}])
+    wait_for_gsi(table, gsi_name)
+    table.meta.client.update_table(TableName=table.name,
+        GlobalSecondaryIndexUpdates=[{  'Delete':
+            { 'IndexName': gsi_name } }])
+    wait_for_gsi_gone(table, gsi_name)
+
+@pytest.mark.xfail(reason="Alternator limits table name length + GSI name length to 221")
+def test_gsi_updatetable_very_long_name_255(table1):
+    add_and_delete_gsi(table1, 'n' * 255)
+
+def test_gsi_updatetable_very_long_name_256(table1):
+    with pytest.raises(ClientError, match='ValidationException'):
+        add_and_delete_gsi(table1, 'n' * 256)
+
+def test_gsi_updatetable_very_long_name_222(table1, scylla_only):
+    # If we subtract from 222 the table's name length and an extra 1,
+    # this is how long the GSI's name may be:
+    max = 222 - len(table1.name) - 1
+    # This max length should work:
+    add_and_delete_gsi(table1, 'n' * max)
+    # But a name one byte longer should fail:
+    with pytest.raises(ClientError, match='ValidationException.*total length'):
+        add_and_delete_gsi(table1, 'n' * (max+1))

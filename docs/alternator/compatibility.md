@@ -238,7 +238,17 @@ is different, or can be configured in Alternator:
 
 * DynamoDB limits each BatchWriteItem request to 25 items. In Alternator,
   this limit defaults to 100 but can be changed with 
-  the alternator_max_items_in_batch_write configuration parameter.
+  the `alternator_max_items_in_batch_write` configuration parameter.
+
+* DynamoDB limits the name of tables, GSIs and LSIs, to 255 characters each.
+  In Alternator, the limit is different:
+    * A table's name is limited to 192 characters.
+    * For a GSI, the sum of the length of the table name and the GSI name,
+      plus one, is limited to 222 characters.
+    * For an LSI, the sum of the length of the table name and the LSI name,
+      plus two, is limited to 222 characters.
+  So for example, if you create a table whose name 192 characters, you
+  can't create a GSI whose name is longer than 29 characters.
 
 ## Experimental API features
 

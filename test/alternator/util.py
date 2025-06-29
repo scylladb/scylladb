@@ -136,8 +136,9 @@ def unique_table_name():
     return test_table_prefix + str(current_ms)
 unique_table_name.last_ms = 0
 
-def create_test_table(dynamodb, **kwargs):
-    name = unique_table_name()
+def create_test_table(dynamodb, name=None, **kwargs):
+    if name is None:
+        name = unique_table_name()
     BillingMode = 'PAY_PER_REQUEST'
     if 'BillingMode' in kwargs:
         BillingMode = kwargs['BillingMode']
