@@ -1180,6 +1180,10 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         std::exception_ptr ex;
                         try {
                             while (_buffers_size < _max_buffers_size && !_is_finished) {
+                                utils::get_local_injector().inject("kill_s3_inflight_req", [] {
+                                    // Inject non-retryable error to emulate source failure
+                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
+                                });
                                 auto start = s3_clock::now();
                                 s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
                                 auto buf = co_await in.read();

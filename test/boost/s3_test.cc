@@ -27,6 +27,7 @@
 #include "test/lib/tmpdir.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "utils/s3/aws_error.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/s3/utils/manip_s3.hh"
@@ -728,9 +729,30 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
         BOOST_REQUIRE_EQUAL(memcmp(buf.begin(), file_buf.begin(), buf.size()), 0);
     }
 
+    BOOST_REQUIRE_EQUAL(total_size, object_size);
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    utils::get_local_injector().enable("kill_s3_inflight_req");
+    auto in_throw = input_stream<char>(cln->make_chunked_download_source(object_name, s3::full_range));
+    auto close_throw = seastar::deferred_close(in_throw);
+
+    auto reader = [&in_throw] {
+        while (true) {
+            auto buf = in_throw.read().get();
+            if (buf.empty()) {
+                break;
+            }
+        }
+    };
+    BOOST_REQUIRE_EXCEPTION(
+        reader(), storage_io_error, [](const storage_io_error& e) {
+            return e.what() == "S3 request failed. Code: 16. Reason: "sv;
+        });
+#else
+    testlog.info("Skipping error injection test, as it requires SCYLLA_ENABLE_ERROR_INJECTION to be enabled");
+#endif
+
     cln->delete_object(object_name).get();
     cln->close().get();
-    BOOST_REQUIRE_EQUAL(total_size, object_size);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_minio) {
