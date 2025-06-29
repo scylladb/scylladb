@@ -90,6 +90,10 @@ struct stats {
     std::time_t last_modified;
 };
 
+struct filler_exception final : std::runtime_error {
+    explicit filler_exception(const char* msg) : std::runtime_error(msg) {}
+};
+
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
