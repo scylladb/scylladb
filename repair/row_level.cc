@@ -3317,6 +3317,8 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
 future<> repair_service::start() {
     _load_history_done = load_history();
     co_await init_ms_handlers();
+
+    _state = state::running;
 }
 
 future<> repair_service::stop() {
@@ -3331,15 +3333,32 @@ future<> repair_service::stop() {
         rlogger.debug("Unregistering gossiper helper");
         co_await _gossiper.local().unregister_(_gossip_helper);
     }
-    _stopped = true;
+    _state = state::stopped;
     rlogger.info("Stopped repair_service");
   } catch (...) {
     on_fatal_internal_error(rlogger, format("Failed stopping repair_service: {}", std::current_exception()));
   }
 }
 
+void repair_service::enable() {
+    SCYLLA_ASSERT(_state == state::running);
+
+    if (_disabled_state_count > 0 && --_disabled_state_count > 0) {
+        rlogger.debug("Repair service is still disabled, requires {} more call(s) to enable()", _disabled_state_count);
+    }
+}
+
+future<> repair_service::drain() {
+    rlogger.info("Asked to drain");
+    ++_disabled_state_count;
+    // Abort ongoing repairs
+    return abort_all();
+}
+
 repair_service::~repair_service() {
-    SCYLLA_ASSERT(_stopped);
+    // Assert that repair service was explicitly stopped, if started.
+    // Otherwise, fiber(s) will be alive after the object is stopped.
+    SCYLLA_ASSERT(_state == state::none || _state == state::stopped);
 }
 
 static shard_id repair_id_to_shard(tasks::task_id& repair_id) {
