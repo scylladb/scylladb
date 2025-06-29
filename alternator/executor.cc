@@ -38,7 +38,6 @@
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
-#include <seastar/json/json_elements.hh>
 #include "collection_mutation.hh"
 #include "schema/schema.hh"
 #include "db/tags/extension.hh"
@@ -105,6 +104,7 @@ static const column_definition& attrs_column(const schema& schema) {
     return *cdef;
 }
 
+<<<<<<< HEAD
 make_jsonable::make_jsonable(rjson::value&& value)
     : _value(std::move(value))
 {}
@@ -120,52 +120,60 @@ json::json_return_type make_streamed(rjson::value&& value) {
         // move objects to coroutine frame.
         auto los = std::move(os);
         auto lrs = std::move(rs);
-        std::exception_ptr ex;
-        try {
-            co_await rjson::print(*lrs, los);
-        } catch (...) {
-            // at this point, we cannot really do anything. HTTP headers and return code are
-            // already written, and quite potentially a portion of the content data.
-            // just log + rethrow. It is probably better the HTTP server closes connection
-            // abruptly or something...
-            ex = std::current_exception();
-            elogger.error("Exception during streaming HTTP response: {}", ex);
+||||||| parent of d8fab2a01a (alternator: clean up and simplify request_return_type)
+
+static lw_shared_ptr<stats> get_stats_from_schema(service::storage_proxy& sp, const schema& schema) {
+    try {
+        replica::table& table = sp.local_db().find_column_family(schema.id());
+        if (!table.get_stats().alternator_stats) {
+            table.get_stats().alternator_stats = seastar::make_shared<table_stats>(schema.ks_name(), schema.cf_name());
         }
-        co_await los.close();
-        co_await rjson::destroy_gently(std::move(*lrs));
-        if (ex) {
-            co_await coroutine::return_exception_ptr(std::move(ex));
-        }
-        co_return;
-    };
-    return func;
+        return table.get_stats().alternator_stats->_stats;
+    } catch (std::runtime_error&) {
+        // If we're here it means that a table we are currently working on was deleted before the
+        // operation completed, returning a temporary object is fine, if the table get deleted so will its metrics
+        return make_lw_shared<stats>();
+    }
 }
 
-// make_streamed_with_extra_array() is variant of make_streamed() above, which
-// builds a response from a JSON object (rjson::value) but adds to it at the
-// end an additional array. The extra array is given a separate chunked_vector
-// to avoid putting it inside the rjson::value - because RapidJSON does
-// contiguous allocations for arrays which we want to avoid for potentially
-// long arrays in Query/Scan responses (see #23535).
-// If we ever fix RapidJSON to avoid contiguous allocations for arrays, or
-// replace it entirely (#24458), we can remove this function and the function
-// rjson::print_with_extra_array() which it calls.
-json::json_return_type make_streamed_with_extra_array(rjson::value&& value,
-    std::string array_name, utils::chunked_vector<rjson::value>&& array) {
+make_jsonable::make_jsonable(rjson::value&& value)
+    : _value(std::move(value))
+{}
+std::string make_jsonable::to_json() const {
+    return rjson::print(_value);
+}
+
+json::json_return_type make_streamed(rjson::value&& value) {
     // CMH. json::json_return_type uses std::function, not noncopyable_function.
     // Need to make a copyable version of value. Gah.
     auto rs = make_shared<rjson::value>(std::move(value));
-    auto ns = make_shared<std::string>(std::move(array_name));
-    auto as = make_shared<utils::chunked_vector<rjson::value>>(std::move(array));
-    std::function<future<>(output_stream<char>&&)> func = [rs, ns, as](output_stream<char>&& os) mutable -> future<> {
+    std::function<future<>(output_stream<char>&&)> func = [rs](output_stream<char>&& os) mutable -> future<> {
         // move objects to coroutine frame.
         auto los = std::move(os);
         auto lrs = std::move(rs);
-        auto lns = std::move(ns);
-        auto las = std::move(as);
+=======
+
+static lw_shared_ptr<stats> get_stats_from_schema(service::storage_proxy& sp, const schema& schema) {
+    try {
+        replica::table& table = sp.local_db().find_column_family(schema.id());
+        if (!table.get_stats().alternator_stats) {
+            table.get_stats().alternator_stats = seastar::make_shared<table_stats>(schema.ks_name(), schema.cf_name());
+        }
+        return table.get_stats().alternator_stats->_stats;
+    } catch (std::runtime_error&) {
+        // If we're here it means that a table we are currently working on was deleted before the
+        // operation completed, returning a temporary object is fine, if the table get deleted so will its metrics
+        return make_lw_shared<stats>();
+    }
+}
+
+executor::body_writer make_streamed(rjson::value&& value) {
+    return [value = std::move(value)](output_stream<char>&& _out) mutable -> future<> {
+        auto out = std::move(_out);
+>>>>>>> d8fab2a01a (alternator: clean up and simplify request_return_type)
         std::exception_ptr ex;
         try {
-            co_await rjson::print_with_extra_array(*lrs, *lns, *las, los);
+            co_await rjson::print(value, out);
         } catch (...) {
             // at this point, we cannot really do anything. HTTP headers and return code are
             // already written, and quite potentially a portion of the content data.
@@ -174,22 +182,46 @@ json::json_return_type make_streamed_with_extra_array(rjson::value&& value,
             ex = std::current_exception();
             elogger.error("Exception during streaming HTTP response: {}", ex);
         }
-        co_await los.close();
-        co_await rjson::destroy_gently(std::move(*lrs));
-        // TODO: can/should we also destroy the array (*las) gently?
+        co_await out.close();
+        co_await rjson::destroy_gently(std::move(value));
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        co_return;
     };
-    return func;
 }
 
-json_string::json_string(std::string&& value)
-    : _value(std::move(value))
-{}
-std::string json_string::to_json() const {
-    return _value;
+// make_streamed_with_extra_array() is variant of make_streamed() above, which
+// builds a streaming response (a function writing to an output stream) from a
+// JSON object (rjson::value) but adds to it at the end an additional array.
+// The extra array is given a separate chunked_vector to avoid putting it
+// inside the rjson::value - because RapidJSON does contiguous allocations for
+// arrays which we want to avoid for potentially long arrays in Query/Scan
+// responses (see #23535).
+// If we ever fix RapidJSON to avoid contiguous allocations for arrays, or
+// replace it entirely (#24458), we can remove this function and the function
+// rjson::print_with_extra_array() which it calls.
+executor::body_writer make_streamed_with_extra_array(rjson::value&& value,
+    std::string array_name, utils::chunked_vector<rjson::value>&& array) {
+    return [value = std::move(value), array_name = std::move(array_name), array = std::move(array)](output_stream<char>&& _out) mutable -> future<> {
+        auto out = std::move(_out);
+        std::exception_ptr ex;
+        try {
+            co_await rjson::print_with_extra_array(value, array_name, array, out);
+        } catch (...) {
+            // at this point, we cannot really do anything. HTTP headers and return code are
+            // already written, and quite potentially a portion of the content data.
+            // just log + rethrow. It is probably better the HTTP server closes connection
+            // abruptly or something...
+            ex = std::current_exception();
+            elogger.error("Exception during streaming HTTP response: {}", ex);
+        }
+        co_await out.close();
+        co_await rjson::destroy_gently(std::move(value));
+        // TODO: can/should we also destroy the array gently?
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    };
 }
 
 executor::executor(gms::gossiper& gossiper,
@@ -742,7 +774,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 // Check CQL's Role-Based Access Control (RBAC) permission_to_check (MODIFY,
@@ -859,7 +891,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TableDescription", std::move(table_description));
     elogger.trace("returning {}", response);
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 static data_type parse_key_type(std::string_view type) {
@@ -1142,7 +1174,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
-    co_return json_string("");
+    co_return ""; // empty response
 }
 
 future<executor::request_return_type> executor::untag_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -1162,7 +1194,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
     });
-    co_return json_string("");
+    co_return ""; // empty response
 }
 
 future<executor::request_return_type> executor::list_tags_of_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -1188,7 +1220,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
         rjson::push_back(tags, std::move(new_entry));
     }
 
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
 struct billing_mode_type {
@@ -1649,7 +1681,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     rjson::value status = rjson::empty_object();
     executor::supplement_table_info(request, *schema, sp);
     rjson::add(status, "TableDescription", std::move(request));
-    co_return make_jsonable(std::move(status));
+    co_return rjson::print(std::move(status));
 }
 
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
@@ -1926,7 +1958,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         rjson::value status = rjson::empty_object();
         supplement_table_info(request, *schema, p.local());
         rjson::add(status, "TableDescription", std::move(request));
-        co_return make_jsonable(std::move(status));
+        co_return rjson::print(std::move(status));
     });
 }
 
@@ -2391,7 +2423,7 @@ static future<executor::request_return_type> rmw_operation_return(rjson::value&&
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
 static future<std::unique_ptr<rjson::value>> get_previous_item(
@@ -2946,7 +2978,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         rjson::add(ret, "ConsumedCapacity", std::move(consumed_capacity));
     }
     _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    co_return make_jsonable(std::move(ret));
+    co_return rjson::print(std::move(ret));
 }
 
 static std::string get_item_type_string(const rjson::value& v) {
@@ -4187,8 +4219,22 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
 
         _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+<<<<<<< HEAD
 
         return make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, _stats.rcu_half_units_total)));
+||||||| parent of d8fab2a01a (alternator: clean up and simplify request_return_type)
+        uint64_t rcu_half_units = 0;
+        auto res = make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units)));
+        per_table_stats->rcu_half_units_total += rcu_half_units;
+        _stats.rcu_half_units_total += rcu_half_units;
+        return res;
+=======
+        uint64_t rcu_half_units = 0;
+        auto res = make_ready_future<executor::request_return_type>(rjson::print(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units)));
+        per_table_stats->rcu_half_units_total += rcu_half_units;
+        _stats.rcu_half_units_total += rcu_half_units;
+        return res;
+>>>>>>> d8fab2a01a (alternator: clean up and simplify request_return_type)
     });
 }
 
@@ -4430,7 +4476,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
     } else {
-        co_return make_jsonable(std::move(response));
+        co_return rjson::print(std::move(response));
     }
 }
 
@@ -4843,7 +4889,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
             // There are many items, better print the JSON and the array of
             // items (opt_items) separately to avoid RapidJSON's contiguous
             // allocation of arrays.
-            co_return executor::request_return_type(make_streamed_with_extra_array(std::move(items_descr), "Items", std::move(*opt_items)));
+            co_return make_streamed_with_extra_array(std::move(items_descr), "Items", std::move(*opt_items));
         }
         // There aren't many items in the chunked vector opt_items,
         // let's just insert them into the JSON object and print the
@@ -4855,9 +4901,9 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         rjson::add(items_descr, "Items", std::move(items_json));
     }
     if (is_big(items_descr)) {
-        co_return executor::request_return_type(make_streamed(std::move(items_descr)));
+        co_return make_streamed(std::move(items_descr));
     }
-    co_return executor::request_return_type(make_jsonable(std::move(items_descr)));
+    co_return rjson::print(std::move(items_descr));
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {
@@ -5494,7 +5540,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
         rjson::add(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
 
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(response)));
 }
 
 future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header) {
@@ -5524,7 +5570,7 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     rjson::push_back(response["Endpoints"], rjson::empty_object());
     rjson::add(response["Endpoints"][0], "Address", rjson::from_string(host_header));
     rjson::add(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(response)));
 }
 
 static std::map<sstring, sstring> get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
@@ -5559,7 +5605,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     rjson::add(desc, "PointInTimeRecoveryDescription", std::move(pitr));
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ContinuousBackupsDescription", std::move(desc));
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 // Create the metadata for the keyspace in which we put the alternator
