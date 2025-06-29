@@ -55,29 +55,26 @@ def wait_for_any_log(nodes: list[ScyllaNode],
     :return: The first node in whose log the pattern was found, if not dispersed.
              Otherwise, if dispersed=True, return a list of all nodes with any of the patterns.
     """
+    if isinstance(patterns, str):
+        patterns = [patterns]
+
     if dispersed:
         patterns = patterns.copy()
         ret = set()
         for _ in range(timeout):
             for node in nodes:
                 for p in patterns.copy():
-                    try:
-                        if node.watch_log_for(p, timeout=0.1):
-                            patterns.remove(p)
-                            ret.add(node)
-                    except TimeoutError:
-                        pass
+                    if node.scylla_log_file.grep(expr=p, max_count=1):
+                        patterns.remove(p)
+                        ret.add(node)
             if not patterns:
                 return list(ret)
             time.sleep(1)
     else:
         for _ in range(timeout):
             for node in nodes:
-                try:
-                    if node.watch_log_for(patterns, timeout=0.1):
-                        return node
-                except TimeoutError:
-                    pass
+                if all(node.scylla_log_file.grep(expr=p, max_count=1) for p in patterns):
+                    return node
             time.sleep(1)
 
     raise TimeoutError(f"{datetime.now():%d %b %Y %H:%M:%S} Unable to find :{patterns} in any node log within {timeout}s")

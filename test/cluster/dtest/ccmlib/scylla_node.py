@@ -104,6 +104,24 @@ class ScyllaNode:
         self.__global_log_level = "info"
         self.__classes_log_level = {}
 
+        self.bootstrap = True
+
+    def set_configuration_options(self,
+                                  values: dict | None = None,
+                                  batch_commitlog: bool | None = None) -> None:
+        """Set DB node configuration options.
+
+        Example:
+            node.set_configuration_options(values={
+                'hinted_handoff_enabled' : True,
+                'concurrent_writes' : 64,
+            })
+
+        The batch_commitlog option gives an easier way to switch to batch
+        commitlog (since it requires setting 2 options and unsetting one).
+        """
+        self.cluster.set_configuration_options(values=values, batch_commitlog=batch_commitlog, nodes=self)
+
     def set_log_level(self, new_level: str, class_name: str | None = None) -> ScyllaNode:
         if new_log_level := KNOWN_LOG_LEVELS.get(new_level):
             if class_name is None:
@@ -415,6 +433,7 @@ class ScyllaNode:
 
         self.cluster.manager.server_start(
             server_id=self.server_id,
+            seeds=None if self.bootstrap else [self.address()],
             expected_server_up_state=ServerUpState.PROCESS_STARTED,
             cmdline_options_override=scylla_args,
             append_env_override=scylla_env,

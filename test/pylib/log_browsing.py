@@ -99,12 +99,15 @@ class ScyllaLogFile:
     async def grep(self,
                    expr: str | re.Pattern[str],
                    filter_expr: str | re.Pattern[str] | None = None,
-                   from_mark: int | None = None) -> list[tuple[str, re.Match[str]]]:
+                   from_mark: int | None = None,
+                   max_count: int = 0) -> list[tuple[str, re.Match[str]]]:
         """Search the log for lines matching the regular expression.
 
         If `filter_expr` argument is given, only lines which do not match it are returned.
 
         If `from_mark` argument is given, the log is searched from that position, otherwise from the beginning.
+
+        If `max_count` is greater than 0, return list of matches when it'll reach `max_count` length.
 
         Return a list of tuples (line, match), where line is the full line from the log, and match is the re.Match[str]
         object for the matching expression.
@@ -121,6 +124,8 @@ class ScyllaLogFile:
             while line := await self._run_in_executor(log_file.readline, loop=loop):
                 if match := not filter_func(line) and expr.search(line):
                     matches.append((line, match))
+                    if len(matches) == max_count:
+                        break
 
         return matches
 
