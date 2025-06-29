@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/when_any.hh>
 #include "raft_group0_client.hh"
 #include "raft_group_registry.hh"
 
@@ -255,8 +256,26 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
         throw exceptions::configuration_exception{"cannot start group0 operation in the maintenance mode"};
     }
 
-    auto [upgrade_lock_holder, upgrade_state] = co_await get_group0_upgrade_state();
+    std::pair<rwlock::holder, group0_upgrade_state> upgrade_lock_and_state = co_await get_group0_upgrade_state();
+    auto [upgrade_lock_holder, upgrade_state] = std::move(upgrade_lock_and_state);
     switch (upgrade_state) {
+        case group0_upgrade_state::synchronize:
+            logger.info("start_operation: waiting until local node leaves synchronize state to start a group 0 operation");
+            upgrade_lock_holder.release();
+            co_await when_any(wait_until_group0_upgraded(as), sleep_abortable(std::chrono::seconds{10}, as));
+            // Checks whether above wait returned due to sleep timeout, which confirms the upgrade procedure stuck case.
+            // Returns the corresponding runtime error in such cases.
+            upgrade_lock_and_state = co_await get_group0_upgrade_state();
+            upgrade_lock_holder = std::move(upgrade_lock_and_state.first);
+            upgrade_state = std::move(upgrade_lock_and_state.second);
+            upgrade_lock_holder.release();
+            if (upgrade_state != group0_upgrade_state::use_post_raft_procedures) {
+                throw std::runtime_error{
+                    "Cannot perform schema or topology changes during this time; the cluster is currently upgrading to use Raft for schema operations."
+                    " If this error keeps happening, check the logs of your nodes to learn the state of upgrade. The upgrade procedure may get stuck"
+                    " if there was a node failure."};
+            }
+            [[fallthrough]];
         case group0_upgrade_state::use_post_raft_procedures: {
             auto operation_holder = co_await get_units(_operation_mutex, 1, as);
             co_await _raft_gr.group0_with_timeouts().read_barrier(&as, timeout);
@@ -280,12 +299,6 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
                 )
             };
        }
-
-        case group0_upgrade_state::synchronize:
-            throw std::runtime_error{
-                "Cannot perform schema or topology changes during this time; the cluster is currently upgrading to use Raft for schema operations."
-                " If this error keeps happening, check the logs of your nodes to learn the state of upgrade. The upgrade procedure may get stuck"
-                " if there was a node failure."};
 
         case group0_upgrade_state::recovery:
             logger.warn("starting operation in RECOVERY mode (using old procedures)");
