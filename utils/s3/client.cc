@@ -1163,7 +1163,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         if (_range == s3::full_range && reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
-                            s3l.trace("No range for object '{}' was provided. Setting the range to {} form the Content-Range header",
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header",
                                       _object_name,
                                       _range);
                         }
