@@ -15,6 +15,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -673,6 +674,62 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_minio) {
 
 SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_proxy) {
     test_download_data_source(make_proxy_client, true, 3 * 1024);
+}
+
+void test_chunked_download_data_source(const client_maker_function& client_maker, size_t object_size) {
+    const sstring base_name(fmt::format("test_object-{}", ::getpid()));
+
+    tmpdir tmp;
+    const auto file_path = tmp.path() / base_name;
+
+    file f = open_file_dma(file_path.native(), open_flags::create | open_flags::wo).get();
+    auto output = make_file_output_stream(std::move(f)).get();
+
+    for (size_t bytes_written = 0; bytes_written < object_size;) {
+        auto rnd = tests::random::get_bytes(std::min(object_size - bytes_written, 1024ul));
+        output.write(reinterpret_cast<char*>(rnd.data()), rnd.size()).get();
+        bytes_written += rnd.size();
+    }
+    output.close().get();
+
+    testlog.info("Make client\n");
+    semaphore mem(16 << 20);
+    auto cln = client_maker(mem);
+    auto close_client = deferred_close(*cln);
+    const auto object_name = fmt::format("/{}/{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), base_name);
+    auto delete_object = deferred_delete_object(cln, object_name);
+    cln->upload_file(file_path, object_name).get();
+
+    testlog.info("Download object");
+    auto in = input_stream<char>(cln->make_chunked_download_source(object_name, s3::full_range));
+    auto close = seastar::deferred_close(in);
+
+    file rf = open_file_dma(file_path.native(), open_flags::ro).get();
+    auto file_input = make_file_input_stream(std::move(rf));
+    auto close_file = seastar::deferred_close(file_input);
+
+    size_t total_size = 0;
+    while (true) {
+        auto buf = in.read().get();
+        total_size += buf.size();
+        if (buf.empty()) {
+            break;
+        }
+        auto file_buf = file_input.read_exactly(buf.size()).get();
+        BOOST_REQUIRE_EQUAL(memcmp(buf.begin(), file_buf.begin(), buf.size()), 0);
+    }
+
+    cln->delete_object(object_name).get();
+    cln->close().get();
+    BOOST_REQUIRE_EQUAL(total_size, object_size);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_minio) {
+    test_chunked_download_data_source(make_minio_client, 20_MiB);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
+    test_chunked_download_data_source(make_proxy_client, 20_MiB);
 }
 
 void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {
