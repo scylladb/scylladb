@@ -107,6 +107,13 @@ public:
     virtual future<> stop() = 0;
 
     ///
+    /// Ensure that superuser role exists.
+    ///
+    /// \returns a future once it is ensured that the superuser role exists.
+    ///
+    virtual future<> ensure_superuser_is_created() = 0;
+
+    ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.
     ///
     virtual future<> create(std::string_view role_name, const role_config&, ::service::group0_batch&) = 0;

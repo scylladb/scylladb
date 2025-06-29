@@ -241,41 +241,50 @@ future<> standard_role_manager::migrate_legacy_metadata() {
 }
 
 future<> standard_role_manager::start() {
-    return once_among_shards([this] {
-        return futurize_invoke([this] () {
-            if (legacy_mode(_qp)) {
-                return create_legacy_metadata_tables_if_missing();
-            }
-            return make_ready_future<>();
-        }).then([this] {
-            _stopped = auth::do_after_system_ready(_as, [this] {
-                return seastar::async([this] {
-                    if (legacy_mode(_qp)) {
-                        _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
+    return once_among_shards([this] () -> future<> {
+        if (legacy_mode(_qp)) {
+            co_await create_legacy_metadata_tables_if_missing();
+        }
 
-                        if (any_nondefault_role_row_satisfies(_qp, &has_can_login).get()) {
-                            if (legacy_metadata_exists()) {
-                                log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
-                            }
+        auto handler = [this] () -> future<> {
+            const bool legacy = legacy_mode(_qp);
+            if (legacy) {
+                if (!_superuser_created_promise.available()) {
+                    _superuser_created_promise.set_value();
+                }
+                co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
 
-                            return;
-                        }
-
-                        if (legacy_metadata_exists()) {
-                            migrate_legacy_metadata().get();
-                            return;
-                        }
+                if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
+                    if (legacy_metadata_exists()) {
+                        log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                     }
-                    create_default_role_if_missing().get();
-                });
-            });
-        });
+                    co_return;
+                }
+
+                if (legacy_metadata_exists()) {
+                    co_await migrate_legacy_metadata();
+                    co_return;
+                }
+            }
+            co_await create_default_role_if_missing();
+            if (!legacy) {
+                _superuser_created_promise.set_value();
+            }
+        };
+
+        _stopped = auth::do_after_system_ready(_as, handler);
+        co_return;
     });
 }
 
 future<> standard_role_manager::stop() {
     _as.request_abort();
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
+}
+
+future<> standard_role_manager::ensure_superuser_is_created() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    return _superuser_created_promise.get_shared_future();
 }
 
 future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {

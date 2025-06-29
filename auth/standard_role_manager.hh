@@ -37,6 +37,7 @@ class standard_role_manager final : public role_manager {
     future<> _stopped;
     abort_source _as;
     std::string _superuser;
+    shared_promise<> _superuser_created_promise;
 
 public:
     standard_role_manager(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
@@ -48,6 +49,8 @@ public:
     virtual future<> start() override;
 
     virtual future<> stop() override;
+
+    virtual future<> ensure_superuser_is_created() override;
 
     virtual future<> create(std::string_view role_name, const role_config&, ::service::group0_batch&) override;
 

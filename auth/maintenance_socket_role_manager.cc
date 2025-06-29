@@ -43,6 +43,10 @@ future<> maintenance_socket_role_manager::stop() {
     return make_ready_future<>();
 }
 
+future<> maintenance_socket_role_manager::ensure_superuser_is_created() {
+    return make_ready_future<>();
+}
+
 template<typename T = void>
 future<T> operation_not_supported_exception(std::string_view operation) {
     return make_exception_future<T>(
