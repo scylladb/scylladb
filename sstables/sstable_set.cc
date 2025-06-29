@@ -793,6 +793,14 @@ class incremental_reader_selector : public reader_selector {
         tracing::trace(_trace_state, "Reading partition range {} from sstable {}", *_pr, seastar::value_of([&sst] { return sst->get_filename(); }));
         return _fn(sst, *_pr);
     }
+
+    dht::ring_position_view pr_end() const {
+        return dht::ring_position_view::for_range_end(*_pr);
+    }
+
+    bool end_of_stream() const {
+        return _selector_position.is_max() || dht::ring_position_tri_compare(*_s, _selector_position, pr_end()) > 0;
+    }
 public:
     explicit incremental_reader_selector(schema_ptr s,
             lw_shared_ptr<const sstable_set> sstables,
@@ -827,13 +835,13 @@ public:
             auto selection = _selector->select({_selector_position, _pr});
             _selector_position = selection.next_position;
 
-            irclogger.trace("{}: {} sstables to consider, advancing selector to {}", fmt::ptr(this), selection.sstables.size(),
-                    _selector_position);
+            irclogger.trace("{}: {} sstables to consider, advancing selector to {}, eos={}", fmt::ptr(this), selection.sstables.size(),
+                    _selector_position, end_of_stream());
 
             readers = std::ranges::to<std::vector<mutation_reader>>(selection.sstables
                     | std::views::filter([this] (auto& sst) { return _read_sstable_gens.emplace(sst->generation()).second; })
                     | std::views::transform([this] (auto& sst) { return this->create_reader(sst); }));
-        } while (!_selector_position.is_max() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
+        } while (!end_of_stream() && readers.empty() && (!pos || dht::ring_position_tri_compare(*_s, *pos, _selector_position) >= 0));
 
         irclogger.trace("{}: created {} new readers", fmt::ptr(this), readers.size());
 
@@ -850,8 +858,14 @@ public:
         _pr = &pr;
 
         auto pos = dht::ring_position_view::for_range_start(*_pr);
+
         if (dht::ring_position_tri_compare(*_s, pos, _selector_position) >= 0) {
             return create_new_readers(pos);
+        }
+        // If selector position Y is contained in new range [X, Z], then we should try selecting new
+        // sstables since it might have sstables that overlap with that range.
+        if (!_selector_position.is_max() && dht::ring_position_tri_compare(*_s, _selector_position, pr_end()) <= 0) {
+            return create_new_readers(std::nullopt);
         }
 
         return {};
