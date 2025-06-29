@@ -35,6 +35,7 @@
 #include "utils/class_registrator.hh"
 #include "service/migration_manager.hh"
 #include "password_authenticator.hh"
+#include "utils/managed_string.hh"
 
 namespace auth {
 
@@ -774,18 +775,20 @@ future<std::vector<cql3::description>> standard_role_manager::describe_role_gran
         const auto formatted_grantee = cql3::util::maybe_quote(grantee_role);
         const auto formatted_granted = cql3::util::maybe_quote(granted_role);
 
+        sstring create_statement = seastar::format("GRANT {} TO {};", formatted_granted, formatted_grantee);
+
         result.push_back(cql3::description {
             // Role grants do not belong to any keyspace.
             .keyspace = std::nullopt,
             .type = "grant_role",
             .name = granted_role,
-            .create_statement = seastar::format("GRANT {} TO {};", formatted_granted, formatted_grantee)
+            .create_statement = managed_string(create_statement)
         });
 
         co_await coroutine::maybe_yield();
     }
 
-    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) noexcept {
+    std::ranges::sort(result, std::less<>{}, [] (const cql3::description& desc) {
         return std::make_tuple(std::ref(desc.name), std::ref(*desc.create_statement));
     });
 
