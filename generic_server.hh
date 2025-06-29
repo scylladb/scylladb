@@ -122,6 +122,7 @@ protected:
     shared_ptr<seastar::tls::server_credentials> _credentials;
 private:
     utils::updateable_value<uint32_t> _conns_cpu_concurrency;
+    utils::observer<uint32_t> _conns_cpu_concurrency_observer;
     uint32_t _prev_conns_cpu_concurrency;
     named_semaphore _conns_cpu_concurrency_semaphore;
 public:
