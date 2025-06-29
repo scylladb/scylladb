@@ -26,8 +26,3 @@ class position_in_partition {
     bound_weight get_bound_weight();
     std::optional<clustering_key_prefix> get_clustering_key_prefix();
 };
-
-struct full_position {
-    partition_key partition;
-    position_in_partition position;
-};
