@@ -600,6 +600,8 @@ private:
         ++p->get_stats().received_mutations;
         p->get_stats().forwarded_mutations += forward_host_id.size();
 
+        co_await utils::get_local_injector().inject("storage_proxy_response_pause", utils::wait_for_message(5min));
+
         if (auto stale = _sp.apply_fence(fence, src_addr)) {
             errors.count += (forward_host_id.size() + 1);
             errors.local = std::move(*stale);
@@ -6975,6 +6977,18 @@ locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexce
 
 future<utils::chunked_vector<dht::token_range_endpoints>> storage_proxy::describe_ring(const sstring& keyspace, bool include_only_local_dc) const {
     return locator::describe_ring(_db.local(), _remote->gossiper(), keyspace, include_only_local_dc);
+}
+
+future<> storage_proxy::cancel_all_write_response_handlers() {
+    return async([this] {
+        while (!_response_handlers.empty()) {
+            _response_handlers.begin()->second->timeout_cb();
+
+            if (!_response_handlers.empty() && need_preempt()) {
+                seastar::thread::yield();
+            }
+        }
+    });
 }
 
 }
