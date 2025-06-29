@@ -48,10 +48,13 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/cql_test_env.hh"
 #include "readers/from_mutations.hh"
 #include "readers/from_fragments.hh"
+#include "readers/combined.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/exception_utils.hh"
+#include "test/lib/cql_assertions.hh"
 
 namespace fs = std::filesystem;
 
@@ -3280,5 +3283,132 @@ SEASTAR_TEST_CASE(sstable_identifier_correctness) {
 
         BOOST_REQUIRE(sst->sstable_identifier());
         BOOST_REQUIRE_EQUAL(sst->sstable_identifier()->uuid(), sst->generation().as_uuid());
+    });
+}
+
+SEASTAR_TEST_CASE(test_non_full_and_empty_row_keys) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto seed = tests::random::get_int<uint32_t>();
+        auto random_spec = tests::make_random_schema_specification(
+                "ks",
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(1, 4),
+                std::uniform_int_distribution<size_t>(2, 8),
+                std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema(seed, *random_spec);
+
+        testlog.info("Random schema:\n{}", random_schema.cql());
+
+        random_schema.create_with_cql(env).get();
+
+        auto schema = random_schema.schema();
+
+        auto& db = env.local_db();
+        auto& table = db.find_column_family(schema);
+        auto& manager = db.get_user_sstables_manager();
+
+        const auto generated_mutations = tests::generate_random_mutations(random_schema).get();
+
+        auto mutation_description = random_schema.new_mutation(0);
+        auto engine = std::mt19937(seed);
+        random_schema.add_row(engine, mutation_description, 0, [] (std::mt19937& engine, tests::timestamp_destination destination, api::timestamp_type min_timestamp) {
+            switch (destination) {
+            case tests::timestamp_destination::partition_tombstone:
+            case tests::timestamp_destination::row_tombstone:
+            case tests::timestamp_destination::collection_tombstone:
+            case tests::timestamp_destination::range_tombstone:
+                return api::missing_timestamp;
+            default:
+                return api::timestamp_type(100);
+            }
+        });
+
+        const auto row_mutation = mutation_description.build(schema);
+
+        auto check = [&] (const clustering_key& ck) {
+            testlog.info("check({})", ck);
+
+            auto permit = db.obtain_reader_permit(schema, "test_non_full_and_empty_row_keys::write", db::no_timeout, {}).get();
+
+            const auto dk = generated_mutations.front().decorated_key();
+
+            const auto row_mutation_fragment = mutation_fragment_v2(*schema, permit,
+                    clustering_row(ck, deletable_row(*schema, row_mutation.partition().clustered_rows().begin()->row())));
+
+            std::deque<mutation_fragment_v2> fragments;
+            fragments.emplace_back(*schema, permit, partition_start(dk, {}));
+            fragments.emplace_back(*schema, permit, row_mutation_fragment);
+            fragments.emplace_back(*schema, permit, partition_end());
+
+            const auto original_mutation_fragment = mutation_fragment_v2(*schema, permit, fragments[1]);
+
+            auto reader = make_combined_reader(schema, permit,
+                    make_mutation_reader_from_mutations(schema, permit, generated_mutations, query::full_partition_range),
+                    make_mutation_reader_from_fragments(schema, permit, std::move(fragments)));
+
+            auto sst = table.make_sstable();
+            auto& corrupt_data_handler = sst->get_corrupt_data_handler();
+            const auto stats_before = corrupt_data_handler.get_stats();
+
+            sst->write_components(std::move(reader), generated_mutations.size(), schema, manager.configure_writer("test"), encoding_stats{}).get();
+            sst->load(schema->get_sharder(), {}).get();
+
+            testlog.info("mutations written to : {}", sst->get_filename());
+
+            // The sstable should not contain the row with the bad key -- that should be passed to the corrupt_data_handler.
+            assert_that(sst->make_reader(schema, permit, query::full_partition_range, schema->full_slice()))
+                .produces(generated_mutations);
+
+            const auto stats_after = corrupt_data_handler.get_stats();
+
+            for (const uint64_t db::corrupt_data_handler::stats::* member : {
+                    &db::corrupt_data_handler::stats::corrupt_data_reported,
+                    &db::corrupt_data_handler::stats::corrupt_data_recorded,
+                    &db::corrupt_data_handler::stats::corrupt_clustering_rows_reported,
+                    &db::corrupt_data_handler::stats::corrupt_clustering_rows_recorded}) {
+                BOOST_REQUIRE_EQUAL(stats_after.*member, stats_before.*member + 1);
+            }
+
+            auto res = env.execute_cql(format("SELECT * FROM {}.{} WHERE keyspace_name = '{}' AND table_name = '{}'",
+                        db::system_keyspace::NAME, db::system_keyspace::CORRUPT_DATA, schema->ks_name(), schema->cf_name())).get();
+
+            assert_that(res)
+                .is_rows()
+                .with_size(1)
+                .with_columns_of_row(0)
+                .with_typed_column<timeuuid_native_type>("id", [] (const timeuuid_native_type& v) { return !v.uuid.is_null(); })
+                .with_typed_column<bytes>("partition_key", [&] (const bytes& v) {
+                    return partition_key::from_bytes(v).equal(*schema, dk.key());
+                })
+                .with_typed_column<bytes>("clustering_key", [&] (const bytes& v) {
+                    return clustering_key::from_bytes(v).equal(*schema, ck);
+                })
+                .with_typed_column<sstring>("mutation_fragment_kind", "clustering row")
+                .with_typed_column<bytes>("frozen_mutation_fragment", [&] (const bytes& v) {
+                    bytes_ostream fmf_bytes;
+                    fmf_bytes.write(v);
+
+                    frozen_mutation_fragment_v2 fmf(std::move(fmf_bytes));
+
+                    const auto unfreezed_mutation_fragment = fmf.unfreeze(*schema, permit);
+
+                    return unfreezed_mutation_fragment.equal(*schema, original_mutation_fragment);
+                })
+                .with_typed_column<sstring>("origin", "sstable-write")
+                .with_typed_column<sstring>("sstable_name", fmt::to_string(sst->get_filename()))
+                ;
+
+            // Clear the corrupt data table so that it doesn't affect other checks.
+            env.execute_cql(format("DELETE FROM {}.{} WHERE keyspace_name = '{}' AND table_name = '{}'",
+                    db::system_keyspace::NAME, db::system_keyspace::CORRUPT_DATA, schema->ks_name(), schema->cf_name())).get();
+        };
+
+        check(clustering_key::make_empty());
+
+        if (schema->clustering_key_size() > 1) {
+            auto full_ckey = random_schema.make_ckey(0);
+            full_ckey.erase(full_ckey.end() - 1);
+            check(clustering_key::from_exploded(*schema, full_ckey));
+        }
     });
 }

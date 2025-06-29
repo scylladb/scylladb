@@ -28,6 +28,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
+#include "db/corrupt_data_handler.hh"
 #include "gms/feature_service.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/combined.hh"
@@ -71,8 +72,6 @@ namespace {
 const auto app_name = "sstable";
 
 logging::logger sst_log(format("scylla-{}", app_name));
-
-db::nop_large_data_handler large_data_handler;
 
 struct decorated_key_hash {
     std::size_t operator()(const dht::decorated_key& dk) const {
@@ -3570,9 +3569,13 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         sstm.start(std::ref(dbcfg), stm_cfg).get();
         auto stop_sstm = defer([&sstm] { sstm.stop().get(); });
 
+        db::nop_large_data_handler large_data_handler;
+        db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
+
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,
+            corrupt_data_handler,
             dbcfg,
             feature_service,
             tracker,

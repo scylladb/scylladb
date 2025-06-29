@@ -11,6 +11,7 @@
 
 #include "idl/uuid.idl.hh"
 #include "idl/keys.idl.hh"
+#include "idl/position_in_partition.idl.hh"
 
 class counter_id final {
     utils::UUID uuid();
@@ -114,6 +115,12 @@ class range_tombstone [[writable]] {
     bound_kind end_kind [[version 1.3]] = bound_kind::incl_end;
 };
 
+class range_tombstone_change stub [[writable]] {
+    clustering_key_prefix key;
+    bound_weight weight; // we are trying to move away from bound_kind
+    tombstone tomb;
+};
+
 class mutation_partition stub [[writable]] {
     tombstone tomb;
     row static_row;
@@ -168,3 +175,7 @@ class mutation_fragment stub [[writable]] {
                    partition_start, partition_end> fragment;
 };
 
+class mutation_fragment_v2 stub [[writable]] {
+    std::variant<clustering_row, static_row, range_tombstone_change,
+                   partition_start, partition_end> fragment;
+};
