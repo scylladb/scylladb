@@ -287,6 +287,8 @@ client::group_client& client::find_or_create_client() {
         }
 
         throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
+    } catch (const filler_exception&) {
+        throw;
     } catch (...) {
         auto e = std::current_exception();
         throw storage_io_error {EIO, format("S3 error ({})", e)};
@@ -1168,6 +1170,8 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                       _range);
                         }
                         auto in = std::move(in_);
+                        std::exception_ptr ex;
+                        try {
                         while (_buffers_size < _max_buffers_size && !_is_finished) {
                             auto start = s3_clock::now();
                             s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
@@ -1190,12 +1194,31 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
                             _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                             _get_cv.signal();
+                            utils::get_local_injector().inject("break_s3_inflight_req", [] {
+                                // Inject retryable error after some data was already downloaded
+                                throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
+                            });
+                            }
+                        } catch (...) {
+                            ex = std::current_exception();
                         }
                         co_await in.close();
+                        if (ex) {
+                            try {
+                                std::rethrow_exception(ex);
+                            } catch (const aws::aws_exception& aws_ex) {
+                                if (aws_ex.error().is_retryable()) {
+                                    throw filler_exception(format("{}", std::current_exception()).c_str());
+                                }
+                                throw;
+                            }
+                        }
                     },
                     {},
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
+            } catch (const filler_exception& ex) {
+                s3l.warn("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex.what());
             } catch (...) {
                 s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
                 _get_cv.broken(std::current_exception());

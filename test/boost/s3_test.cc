@@ -26,6 +26,7 @@
 #include "test/lib/test_utils.hh"
 #include "test/lib/tmpdir.hh"
 #include "utils/assert.hh"
+#include "utils/error_injection.hh"
 #include "utils/s3/client.hh"
 #include "utils/s3/creds.hh"
 #include "utils/s3/utils/manip_s3.hh"
@@ -709,12 +710,20 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
     auto close_file = seastar::deferred_close(file_input);
 
     size_t total_size = 0;
+    size_t trigger_counter = 0;
     while (true) {
+        // We want the background fiber to fill the buffer queue and start waiting to drain it
+        seastar::sleep(100us).get();
         auto buf = in.read().get();
         total_size += buf.size();
         if (buf.empty()) {
             break;
         }
+        ++trigger_counter;
+        if (trigger_counter % 10 == 0) {
+            utils::get_local_injector().enable("break_s3_inflight_req", true);
+        }
+
         auto file_buf = file_input.read_exactly(buf.size()).get();
         BOOST_REQUIRE_EQUAL(memcmp(buf.begin(), file_buf.begin(), buf.size()), 0);
     }
