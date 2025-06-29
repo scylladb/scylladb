@@ -131,6 +131,8 @@ public:
 
     future<> stop();
 
+    future<> ensure_superuser_is_created();
+
     void update_cache_config();
 
     void reset_authorization_cache();
