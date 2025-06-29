@@ -1144,12 +1144,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                               _object_name,
                               current_range);
                 } else if (_is_contiguous_mode) {
-                    s3l.trace("Setting contiguous download mode for '{}'", _object_name);
                     current_range = _range;
+                    s3l.trace("Setting contiguous download mode for '{}', range: {}", _object_name, current_range);
                 } else {
                     // In non-contiguous mode we download the object in chunks of _max_buffers_size
-                    s3l.trace("Setting ranged download mode for '{}'", _object_name);
                     current_range = {_range.offset(), std::min(_range.length(), _max_buffers_size - _buffers_size)};
+                    s3l.trace("Setting ranged download mode for '{}', range: {}", _object_name, current_range);
                 }
                 req._headers["Range"] = current_range.to_header_string();
                 s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
