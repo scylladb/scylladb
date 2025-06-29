@@ -14,7 +14,7 @@ import pytest
 import requests
 from botocore.exceptions import ClientError
 
-from test.alternator.util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset
+from test.alternator.util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, unique_table_name
 
 
 # LSIs support strongly-consistent reads, so the following functions do not
@@ -611,3 +611,40 @@ def test_lsi_missing_attribute(test_table_lsi_1):
             'b': {'AttributeValueList': [b1], 'ComparisonOperator': 'EQ'},
         })
     assert not any([i['p'] == p2 and i['c'] == c2 for i in full_scan(test_table_lsi_1, ConsistentRead=False, IndexName='hello')])
+
+# Utility function for creating a new table (whose name is chosen by
+# unique_table_name()) with an LSI with the given name. If creation was
+# successful, the table is deleted. Useful for testing which LSI names work.
+def create_lsi(dynamodb, index_name):
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'S' }],
+        LocalSecondaryIndexes=[
+            {   'IndexName': index_name,
+                'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ]) as table:
+        # Verify that the LSI wasn't just ignored
+        assert 'LocalSecondaryIndexes' in table.meta.client.describe_table(TableName=table.name)['Table']
+
+# Index names with 255 characters are allowed in Dynamo. In Scylla, the
+# limit is different - the sum of both table and index length plus an extra 2
+# cannot exceed 222 characters.
+# (compare test_create_and_delete_table_255/222() and test_gsi_very_long_name*).
+@pytest.mark.xfail(reason="Alternator limits table name length + LSI name length to 220")
+def test_lsi_very_long_name_255(dynamodb):
+    create_lsi(dynamodb, 'n' * 255)
+def test_lsi_very_long_name_256(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException'):
+        create_lsi(dynamodb, 'n' * 256)
+def test_lsi_very_long_name_222(dynamodb, scylla_only):
+    # If we subtract from 222 the table's name length (we assume that
+    # unique_table_name() always returns the same length) and an extra 2,
+    # this is how long the LSI's name may be:
+    max = 222 - len(unique_table_name()) - 2
+    # This max length should work:
+    create_lsi(dynamodb, 'n' * max)
+    # But a name one byte longer should fail:
+    with pytest.raises(ClientError, match='ValidationException.*total length'):
+        create_lsi(dynamodb, 'n' * (max+1))
