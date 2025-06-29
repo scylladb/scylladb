@@ -6,9 +6,9 @@ Local Secondary Indexes is an enhancement to :doc:`Global Secondary Indexes <sec
 which allows ScyllaDB to optimize workloads where the partition key of the base table and the index are the same key.
 
 .. note::
-   As of ScyllaDB Open Source 4.0, updates for local secondary indexes are performed **synchronously**. When updates are synchronous, the client acknowledges the write
+   Updates for local secondary indexes are performed **synchronously**. When updates are synchronous, the client acknowledges the write
    operation only **after both** the base table modification **and** the view update are written.
-   This is important to note because the process is no longer asynchronous and the modifications are immediately reflected in the index.
+   This is important to note because the process is no longer asynchronous, and the modifications are immediately reflected in the index.
    In addition, if the view update fails, the client receives a write error.
 
 Example:
