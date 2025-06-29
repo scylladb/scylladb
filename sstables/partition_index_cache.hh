@@ -207,7 +207,7 @@ public:
             return with_allocator(_region.allocator(), [&] {
                 auto it_and_flag = _cache.emplace(key, this, key);
                 entry &cp = *it_and_flag.first;
-                SCYLLA_ASSERT(it_and_flag.second);
+                parse_assert(it_and_flag.second);
                 try {
                     return share(cp);
                 } catch (...) {

@@ -12,7 +12,6 @@
 #include "sstables/column_translation.hh"
 #include "parsers.hh"
 #include "schema/schema.hh"
-#include "utils/assert.hh"
 #include "utils/cached_file.hh"
 #include "utils/to_string.hh"
 
@@ -107,13 +106,13 @@ public:
         const schema& _s;
 
         bool operator()(const promoted_index_block& lhs, position_in_partition_view rhs) const {
-            SCYLLA_ASSERT(lhs.start);
+            parse_assert(bool(lhs.start));
             position_in_partition::less_compare less(_s);
             return less(*lhs.start, rhs);
         }
 
         bool operator()(position_in_partition_view lhs, const promoted_index_block& rhs) const {
-            SCYLLA_ASSERT(rhs.start);
+            parse_assert(bool(rhs.start));
             position_in_partition::less_compare less(_s);
             return less(lhs, *rhs.start);
         }
