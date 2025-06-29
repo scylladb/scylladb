@@ -11,6 +11,7 @@ add_custom_command(
   DEPENDS
     ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
@@ -57,6 +58,8 @@ add_custom_command(
   DEPENDS $<OUTPUT_CONFIG:${iotune_src}>)
 add_stripped("${iotune_dst}")
 
+add_stripped("${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf")
+
 find_program(TAR_COMMAND tar
   REQUIRED)
 execute_process(
@@ -99,6 +102,7 @@ add_custom_command(
       ${stripped_dist_pkg}
   DEPENDS
     ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla.stripped
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf.stripped
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune.stripped
     ${CMAKE_BINARY_DIR}/node_exporter/node_exporter.stripped
     ${CMAKE_BINARY_DIR}/debian
