@@ -2532,6 +2532,11 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
         tlogger.warn("Writes disabled, column family no durable.");
     }
 
+    // we initialize 0 for 30 seconds, because those values are used in DescribeTable
+    // which is used on start to check if table is created and we don't want to increment response time
+    // on startup, when table is empty anyway
+    table_size_in_bytes().set_now(0, std::chrono::seconds{ 30 });
+
     recalculate_tablet_count_stats();
     set_metrics();
 }

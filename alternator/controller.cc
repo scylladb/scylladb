@@ -28,6 +28,7 @@ static logging::logger logger("alternator_controller");
 controller::controller(
         sharded<gms::gossiper>& gossiper,
         sharded<service::storage_proxy>& proxy,
+        sharded<service::storage_service>& ss,
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<cdc::generation_service>& cdc_gen_svc,
@@ -39,6 +40,7 @@ controller::controller(
     : protocol_server(sg)
     , _gossiper(gossiper)
     , _proxy(proxy)
+    , _ss(ss)
     , _mm(mm)
     , _sys_dist_ks(sys_dist_ks)
     , _cdc_gen_svc(cdc_gen_svc)
@@ -89,7 +91,7 @@ future<> controller::start_server() {
         auto get_timeout_in_ms = [] (const db::config& cfg) -> utils::updateable_value<uint32_t> {
             return cfg.alternator_timeout_in_ms;
         };
-        _executor.start(std::ref(_gossiper), std::ref(_proxy), std::ref(_mm), std::ref(_sys_dist_ks),
+        _executor.start(std::ref(_gossiper), std::ref(_proxy), std::ref(_ss), std::ref(_mm), std::ref(_sys_dist_ks),
                         sharded_parameter(get_cdc_metadata, std::ref(_cdc_gen_svc)), _ssg.value(),
                         sharded_parameter(get_timeout_in_ms, std::ref(_config))).get();
         _server.start(std::ref(_executor), std::ref(_proxy), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sl_controller)).get();
