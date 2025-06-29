@@ -17,6 +17,7 @@
 
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "timeout_config.hh"
 
 using namespace std::chrono_literals;
 
@@ -76,6 +77,8 @@ future<> create_legacy_metadata_table_if_missing(
 /// Time-outs for internal, non-local CQL queries.
 ///
 ::service::query_state& internal_distributed_query_state() noexcept;
+
+::service::raft_timeout get_raft_timeout() noexcept;
 
 // Execute update query via group0 mechanism, mutations will be applied on all nodes.
 // Use this function when need to perform read before write on a single guard or if
