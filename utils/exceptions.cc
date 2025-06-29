@@ -13,7 +13,8 @@
 
 #include <exception>
 #include <system_error>
-#include "exceptions.hh"
+#include "utils/exceptions.hh"
+#include "exceptions/exceptions.hh"
 #include "utils/abi/eh_ia64.hh"
 
 bool check_exception(system_error_lambda_t f)
@@ -65,6 +66,8 @@ bool is_timeout_exception(std::exception_ptr e) {
         return true;
     } else if (const auto* ex = try_catch<const std::nested_exception>(e)) {
         return is_timeout_exception(ex->nested_ptr());
+    } else if (try_catch<exceptions::request_timeout_exception>(e)) {
+        return true;
     }
     return false;
 }
