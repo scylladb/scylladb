@@ -9,6 +9,7 @@ import pytest
 import itertools
 import time
 import contextlib
+import typing
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, HTTPError
 from cassandra.cluster import ConsistencyLevel, Session as CassandraSession
@@ -46,6 +47,17 @@ async def get_data_size_for_server(manager: ManagerClient, server: ServerInfo, k
 
 async def get_total_data_size(manager: ManagerClient, servers: list[ServerInfo], ks: str, cf: str) -> int:
     return sum(await asyncio.gather(*[get_data_size_for_server(manager, s, ks, cf) for s in servers]))
+
+async def with_retries(test_once: typing.Callable[[], typing.Awaitable], timeout: float, period: float):
+    async with asyncio.timeout(timeout):
+        while True:
+            try:
+                return await test_once()
+            except AssertionError as e:
+                logger.info(f"test attempt failed with {e}, retrying")
+                await asyncio.sleep(period)
+            else:
+                break
 
 common_debug_cli_options = [
     '--logger-log-level=storage_service=debug',
@@ -290,6 +302,19 @@ async def test_dict_memory_limit(manager: ManagerClient):
         f'--sstable-compression-dictionaries-memory-budget-fraction={mem_fraction}',
     ]))
 
+    async def assert_eventually_dict_memory_leq_than(threshold: float):
+        async def test_once():
+            mem = dict_memory(await get_metrics(manager, servers))
+            assert mem <= threshold
+            return mem
+        # After all sstables holding a given dictionary alive are deleted,
+        # the dictionary should be freed from memory.
+        # But it's only near-instantaneous, not actually instantaneous,
+        # because it might involve some cross-shard messages. (`foreign_ptr` destructor).
+        #
+        # So the test has to retry, but the retry period can be very small.
+        return await with_retries(test_once, timeout=60, period=0.01)
+
     ks_name = "test"
     cf_name = "test"
     rf = 1
@@ -321,8 +346,7 @@ async def test_dict_memory_limit(manager: ManagerClient):
             await asyncio.gather(*[cql.run_async(insert, [i, blob]) for i in range(10)])
             await asyncio.gather(*[manager.api.keyspace_flush(s.ip_addr, ks_name, cf_name) for s in servers])
             await manager.api.retrain_dict(servers[0].ip_addr, "test", "test")
-            dict_mem = dict_memory(await get_metrics(manager, servers))
-            assert dict_mem < intended_dict_memory_bugdet * 2
+            dict_mem = await assert_eventually_dict_memory_leq_than(intended_dict_memory_bugdet * 2)
             total_size = await get_total_data_size(manager, servers, ks_name, cf_name)
             logger.info(f"Round 0, step {i}: total_size={total_size}, dictmem={dict_mem}")
 
@@ -331,7 +355,10 @@ async def test_dict_memory_limit(manager: ManagerClient):
         logger.info("Rewriting sstables to latest dict")
         await asyncio.gather(*[manager.api.keyspace_upgrade_sstables(s.ip_addr, ks_name) for s in servers])
         # There should only exist 1 live dict.
-        assert dict_memory(await get_metrics(manager, servers)) < 256*1024
+        # One dict should occupy less than 256 kiB.
+        # (That's not a requirement, just a result of how big the dictionaries are
+        # at the moment of this writing. The contant might change one day).
+        await assert_eventually_dict_memory_leq_than(256*1024 - 1)
 
         logger.info("Validating query results")
         select = cql.prepare("SELECT c FROM test.test WHERE pk = ?;")
@@ -341,7 +368,7 @@ async def test_dict_memory_limit(manager: ManagerClient):
 
         logger.info("Dropping the table and checking that there are no leftovers")
         await cql.run_async("DROP TABLE test.test")
-        assert dict_memory(await get_metrics(manager, servers)) == 0
+        await assert_eventually_dict_memory_leq_than(0)
 
 async def test_sstable_compression_dictionaries_enable_writing(manager: ManagerClient):
     """
