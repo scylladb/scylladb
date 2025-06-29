@@ -963,8 +963,8 @@ future<> gossiper::failure_detector_loop_for_node(locator::host_id host_id, gene
     auto diff = gossiper::clk::duration(0);
     auto echo_interval = std::chrono::seconds(2);
     auto max_duration = echo_interval + std::chrono::milliseconds(_gcfg.failure_detector_timeout_ms());
-    auto node = _address_map.get(host_id);
     while (is_enabled() && !_abort_source.abort_requested()) {
+        auto node = _address_map.find(host_id);
         bool failed = false;
         try {
             logger.debug("failure_detector_loop: Send echo to node {}/{}, status = started", host_id, node);
