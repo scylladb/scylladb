@@ -13,7 +13,6 @@
 #include <seastar/http/function_handlers.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/core/coroutine.hh>
-#include <seastar/json/json_elements.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include "seastarx.hh"
@@ -124,22 +123,22 @@ public:
              }
              auto res = resf.get();
              std::visit(overloaded_functor {
-                 [&] (const json::json_return_type& json_return_value) {
-                     slogger.trace("api_handler success case");
-                     if (json_return_value._body_writer) {
-                         // Unfortunately, write_body() forces us to choose
-                         // from a fixed and irrelevant list of "mime-types"
-                         // at this point. But we'll override it with the
-                         // one (application/x-amz-json-1.0) below.
-                         rep->write_body("json", std::move(json_return_value._body_writer));
-                     } else {
-                         rep->_content += json_return_value._res;
-                     }
-                 },
-                 [&] (const api_error& err) {
-                     generate_error_reply(*rep, err);
-                 }
-             }, res);
+                [&] (std::string&& str) {
+                    // Note that despite the move, there is a copy here -
+                    // as str is std::string and rep->_content is sstring.
+                    rep->_content = std::move(str);
+                },
+                [&] (executor::body_writer&& body_writer) {
+                    // Unfortunately, write_body() forces us to choose
+                    // from a fixed and irrelevant list of "mime-types"
+                    // at this point. But we'll override it with the
+                    // correct one (application/x-amz-json-1.0) below.
+                    rep->write_body("json", std::move(body_writer));
+                },
+                [&] (const api_error& err) {
+                    generate_error_reply(*rep, err);
+                }
+             }, std::move(res));
 
              return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
          });
