@@ -118,7 +118,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     // basically identical to the request's
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TimeToLiveSpecification", std::move(*spec));
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 future<executor::request_return_type> executor::describe_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
@@ -135,7 +135,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
     }
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TimeToLiveDescription", std::move(desc));
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 // expiration_service is a sharded service responsible for cleaning up expired
