@@ -1454,3 +1454,13 @@ SEASTAR_TEST_CASE(mutation_dump_generated_schema_deterministic_id_version) {
 
     return make_ready_future<>();
 }
+
+SEASTAR_TEST_CASE(enable_drained_compaction_manager) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.db().invoke_on_all([] (replica::database& db) -> future<> {
+            auto& cm = db.get_compaction_manager();
+            co_await cm.drain();
+            cm.enable();
+        }).get();
+    });
+}
