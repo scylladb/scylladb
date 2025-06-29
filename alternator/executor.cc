@@ -174,12 +174,7 @@ executor::body_writer make_streamed(rjson::value&& value) {
         try {
             co_await rjson::print(value, out);
         } catch (...) {
-            // at this point, we cannot really do anything. HTTP headers and return code are
-            // already written, and quite potentially a portion of the content data.
-            // just log + rethrow. It is probably better the HTTP server closes connection
-            // abruptly or something...
             ex = std::current_exception();
-            elogger.error("Exception during streaming HTTP response: {}", ex);
         }
         co_await out.close();
         co_await rjson::destroy_gently(std::move(value));
@@ -207,12 +202,7 @@ executor::body_writer make_streamed_with_extra_array(rjson::value&& value,
         try {
             co_await rjson::print_with_extra_array(value, array_name, array, out);
         } catch (...) {
-            // at this point, we cannot really do anything. HTTP headers and return code are
-            // already written, and quite potentially a portion of the content data.
-            // just log + rethrow. It is probably better the HTTP server closes connection
-            // abruptly or something...
             ex = std::current_exception();
-            elogger.error("Exception during streaming HTTP response: {}", ex);
         }
         co_await out.close();
         co_await rjson::destroy_gently(std::move(value));
