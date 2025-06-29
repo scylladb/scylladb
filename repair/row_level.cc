@@ -1448,7 +1448,9 @@ private:
         size_t row_bytes = co_await get_repair_rows_size(row_list);
         _metrics.tx_row_nr += row_list.size();
         _metrics.tx_row_bytes += row_bytes;
-        for (repair_row& r : row_list) {
+        while (!row_list.empty()) {
+            repair_row r = std::move(row_list.front());
+            row_list.pop_front();
             const auto& dk_with_hash = r.get_dk_with_hash();
             // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
             if (rows.empty()) {
