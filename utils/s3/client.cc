@@ -1172,32 +1172,32 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         auto in = std::move(in_);
                         std::exception_ptr ex;
                         try {
-                        while (_buffers_size < _max_buffers_size && !_is_finished) {
-                            auto start = s3_clock::now();
-                            s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
-                            auto buf = co_await in.read();
-                            auto buff_size = buf.size();
-                            gc.read_stats.update(buff_size, s3_clock::now() - start);
-                            _range += buff_size;
-                            _buffers_size += buff_size;
-                            if (buff_size == 0 && _range.length() == 0) {
-                                s3l.trace("Fiber for object '{}' signals EOS", _object_name);
+                            while (_buffers_size < _max_buffers_size && !_is_finished) {
+                                auto start = s3_clock::now();
+                                s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
+                                auto buf = co_await in.read();
+                                auto buff_size = buf.size();
+                                gc.read_stats.update(buff_size, s3_clock::now() - start);
+                                _range += buff_size;
+                                _buffers_size += buff_size;
+                                if (buff_size == 0 && _range.length() == 0) {
+                                    s3l.trace("Fiber for object '{}' signals EOS", _object_name);
+                                    _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
+                                    _get_cv.signal();
+                                    _is_finished = true;
+                                    break;
+                                }
+                                if (buff_size == 0) {
+                                    // The requested range is fully downloaded
+                                    break;
+                                }
+                                s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
                                 _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                                 _get_cv.signal();
-                                _is_finished = true;
-                                break;
-                            }
-                            if (buff_size == 0) {
-                                // The requested range is fully downloaded
-                                break;
-                            }
-                            s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                            _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
-                            _get_cv.signal();
-                            utils::get_local_injector().inject("break_s3_inflight_req", [] {
-                                // Inject retryable error after some data was already downloaded
-                                throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
-                            });
+                                utils::get_local_injector().inject("break_s3_inflight_req", [] {
+                                    // Inject retryable error after some data was already downloaded
+                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
+                                });
                             }
                         } catch (...) {
                             ex = std::current_exception();
