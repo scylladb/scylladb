@@ -4026,3 +4026,109 @@ SEASTAR_THREAD_TEST_CASE(test_to_data_query_results_with_distinct_and_per_partit
         BOOST_REQUIRE_EQUAL(result.row_count(), pkeys.size() * 2);
     }
 }
+
+// Max-purgeable has two values: one for regular and one for shadowable
+// tombstones. Check that the value is not sticky -- if a shadowable is requested
+// first, it won't apply to regular tombstones and vice-versa.
+SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_sticky_max_purgeable) {
+    simple_schema ss;
+    auto s = ss.schema();
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+
+    auto dk = ss.make_pkey(1);
+
+    const auto& v_def = *s->get_column_definition(to_bytes("v"));
+    const auto value = serialized("v");
+
+    const auto deletion_time = gc_clock::now() - std::chrono::hours(1) - s->gc_grace_seconds();
+    const auto compaction_time = gc_clock::now();
+    const api::timestamp_type shadowable_max_purgeable = 110;
+    const api::timestamp_type regular_max_purgeable = 50;
+    const api::timestamp_type timestamp = 100;
+
+    class mutation_rebuilding_consumer {
+        mutation_rebuilder_v2 _mr;
+
+    public:
+        explicit mutation_rebuilding_consumer(schema_ptr s) : _mr(std::move(s)) { }
+        void consume_new_partition(dht::decorated_key dk) { _mr.consume_new_partition(std::move(dk)); }
+        void consume(tombstone t) { _mr.consume(t); }
+        stop_iteration consume(static_row&& sr, tombstone, bool) { return _mr.consume(std::move(sr)); }
+        stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _mr.consume(std::move(cr)); }
+        stop_iteration consume(range_tombstone_change&& rtc) { return _mr.consume(std::move(rtc)); }
+        stop_iteration consume_end_of_partition() { return _mr.consume_end_of_partition(); }
+        mutation_opt consume_end_of_stream() { return _mr.consume_end_of_stream(); }
+    };
+
+    auto get_max_purgeable = [] (const dht::decorated_key&, is_shadowable is) {
+        const auto ts = is == is_shadowable::yes ? shadowable_max_purgeable : regular_max_purgeable;
+        return max_purgeable{ts, max_purgeable::timestamp_source::none};
+    };
+
+    auto compact_and_expire = [&] (mutation mut) {
+        auto reader = make_mutation_reader_from_mutations(s, permit, std::move(mut));
+        auto close_reader = deferred_close(reader);
+
+        auto compactor = compact_for_compaction<mutation_rebuilding_consumer>(
+                *s,
+                compaction_time,
+                get_max_purgeable,
+                tombstone_gc_state(nullptr),
+                mutation_rebuilding_consumer(s));
+        auto mut_opt = reader.consume(std::move(compactor)).get();
+
+        BOOST_REQUIRE(mut_opt);
+
+        return *mut_opt;
+    };
+
+    // max-purgeable returned for shadowable tombstone becomes sticky and applies to row tombstone after it
+    {
+        mutation mut(s, dk);
+        mutation mut_compacted(s, dk);
+
+        auto row1 = clustering_row(ss.make_ckey(1));
+        row1.apply(shadowable_tombstone(timestamp, deletion_time));
+
+        auto row2 = clustering_row(ss.make_ckey(2));
+        row2.apply(tombstone(timestamp, deletion_time));
+
+        auto row3 = clustering_row(ss.make_ckey(3));
+        row3.cells().apply(v_def, atomic_cell::make_live(*v_def.type, timestamp, value));
+
+        mut_compacted.apply(mutation_fragment(*s, permit, clustering_row(*s, row2)));
+        mut_compacted.apply(mutation_fragment(*s, permit, clustering_row(*s, row3)));
+
+        mut.apply(mutation_fragment(*s, permit, std::move(row1)));
+        mut.apply(mutation_fragment(*s, permit, std::move(row2)));
+        mut.apply(mutation_fragment(*s, permit, std::move(row3)));
+
+        assert_that(compact_and_expire(std::move(mut))).is_equal_to(mut_compacted);
+    }
+
+    // max-purgeable returned for regular tombstone becomes sticky and applies to shadowable tombstone after it
+    {
+        mutation mut(s, dk);
+        mutation mut_compacted(s, dk);
+
+        auto row1 = clustering_row(ss.make_ckey(1));
+        row1.apply(tombstone(timestamp, deletion_time));
+
+        auto row2 = clustering_row(ss.make_ckey(2));
+        row2.apply(shadowable_tombstone(timestamp, deletion_time));
+
+        auto row3 = clustering_row(ss.make_ckey(3));
+        row3.cells().apply(v_def, atomic_cell::make_live(*v_def.type, timestamp, value));
+
+        mut_compacted.apply(mutation_fragment(*s, permit, clustering_row(*s, row1)));
+        mut_compacted.apply(mutation_fragment(*s, permit, clustering_row(*s, row3)));
+
+        mut.apply(mutation_fragment(*s, permit, std::move(row1)));
+        mut.apply(mutation_fragment(*s, permit, std::move(row2)));
+        mut.apply(mutation_fragment(*s, permit, std::move(row3)));
+
+        assert_that(compact_and_expire(std::move(mut))).is_equal_to(mut_compacted);
+    }
+}
