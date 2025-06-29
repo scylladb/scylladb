@@ -117,7 +117,8 @@ future<> password_authenticator::migrate_legacy_metadata() const {
     });
 }
 
-future<> password_authenticator::create_default_if_missing() {
+future<> password_authenticator::legacy_create_default_if_missing() {
+    SCYLLA_ASSERT(legacy_mode(_qp));
     const auto exists = co_await default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
     if (exists) {
         co_return;
@@ -127,18 +128,75 @@ future<> password_authenticator::create_default_if_missing() {
         salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
     }
     const auto query = update_row_query();
-    if (legacy_mode(_qp)) {
-        co_await _qp.execute_internal(
+    co_await _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
             internal_distributed_query_state(),
             {salted_pwd, _superuser},
             cql3::query_processor::cache_internal::no);
-        plogger.info("Created default superuser authentication record.");
-    } else {
-        co_await announce_mutations(_qp, _group0_client, query,
-            {salted_pwd, _superuser}, _as, ::service::raft_timeout{});
-        plogger.info("Created default superuser authentication record.");
+    plogger.info("Created default superuser authentication record.");
+}
+
+future<> password_authenticator::maybe_create_default_password() {
+    auto needs_password = [this] () -> future<bool> {
+        const sstring query = seastar::format("SELECT * FROM {}.{} WHERE is_superuser = true ALLOW FILTERING", get_auth_ks_name(_qp), meta::roles_table::name);
+        auto results = co_await _qp.execute_internal(query,
+                db::consistency_level::LOCAL_ONE,
+                internal_distributed_query_state(), cql3::query_processor::cache_internal::yes);
+        // Don't add default password if
+        // - there is no default superuser
+        // - there is a superuser with a password.
+        bool has_default = false;
+        bool has_superuser_with_password = false;
+        for (auto& result : *results) {
+            if (result.get_as<sstring>(meta::roles_table::role_col_name) == _superuser) {
+                has_default = true;
+            }
+            if (has_salted_hash(result)) {
+                has_superuser_with_password = true;
+            }
+        }
+        co_return has_default && !has_superuser_with_password;
+    };
+    if (!co_await needs_password()) {
+        co_return;
+    }
+    // We don't want to start operation earlier to avoid quorum requirement in
+    // a common case.
+    ::service::group0_batch batch(
+            co_await _group0_client.start_operation(_as, get_raft_timeout()));
+    // Check again as the state may have changed before we took the guard (batch).
+    if (!co_await needs_password()) {
+        co_return;
+    }
+    // Set default superuser's password.
+    std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
+    if (salted_pwd.empty()) {
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+    }
+    const auto update_query = update_row_query();
+    co_await collect_mutations(_qp, batch, update_query, {salted_pwd, _superuser});
+    co_await std::move(batch).commit(_group0_client, _as, get_raft_timeout());
+    plogger.info("Created default superuser authentication record.");
+}
+
+future<> password_authenticator::maybe_create_default_password_with_retries() {
+    size_t retries = _migration_manager.get_concurrent_ddl_retries();
+    while (true)  {
+        try {
+            co_return co_await maybe_create_default_password();
+        } catch (const ::service::group0_concurrent_modification& ex) {
+            plogger.warn("Failed to execute maybe_create_default_password due to guard conflict.{}.", retries ? " Retrying" : " Number of retries exceeded, giving up");
+            if (retries--) {
+                continue;
+            }
+            // Log error but don't crash the whole node startup sequence.
+            plogger.error("Failed to create default superuser password due to guard conflict.");
+            co_return;
+        } catch (const ::service::raft_operation_timeout_error& ex) {
+            plogger.error("Failed to create default superuser password due to exception: {}", ex.what());
+            co_return;
+        }
     }
 }
 
@@ -161,8 +219,9 @@ future<> password_authenticator::start() {
                         migrate_legacy_metadata().get();
                         return;
                     }
+                    legacy_create_default_if_missing().get();
                 }
-                create_default_if_missing().get();
+                    maybe_create_default_password_with_retries().get();
             });
         });
 
