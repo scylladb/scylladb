@@ -224,10 +224,11 @@ class ManagerClient():
 
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            wait_others: int = 0, wait_interval: float = 45, seeds: Optional[List[IPAddress]] = None,
-                           timeout: Optional[float] = None, connect_driver: bool = True) -> None:
+                           timeout: Optional[float] = None, connect_driver: bool = True,
+                           auth_provider: Optional[dict] = None) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
         logger.debug("ManagerClient starting %s", server_id)
-        data = {"expected_error": expected_error, "seeds": seeds}
+        data = {"expected_error": expected_error, "seeds": seeds, "auth_provider": auth_provider}
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
         if expected_error is None and connect_driver:
