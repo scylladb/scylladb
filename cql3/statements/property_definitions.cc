@@ -8,6 +8,8 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <ranges>
+
 #include <seastar/core/format.hh>
 #include "cql3/statements/property_definitions.hh"
 #include "exceptions/exceptions.hh"
@@ -26,7 +28,7 @@ void property_definitions::add_property(const sstring& name, sstring value) {
     }
 }
 
-void property_definitions::add_property(const sstring& name, const std::map<sstring, sstring>& value) {
+void property_definitions::add_property(const sstring& name, const extended_map_type& value) {
     if (auto [ignored, added] = _properties.try_emplace(name, value); !added) {
         throw exceptions::syntax_exception(format("Multiple definition for property '{}'", name));
     }
@@ -60,16 +62,39 @@ std::optional<sstring> property_definitions::get_simple(const sstring& name) con
     }
 }
 
-std::optional<std::map<sstring, sstring>> property_definitions::get_map(const sstring& name) const {
+std::optional<property_definitions::extended_map_type> property_definitions::get_extended_map(const sstring& name) const {
     auto it = _properties.find(name);
     if (it == _properties.end()) {
         return std::nullopt;
     }
     try {
-        return std::get<map_type>(it->second);
+        return std::get<extended_map_type>(it->second);
     } catch (const std::bad_variant_access& e) {
         throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a map.", name));
     }
+}
+
+std::optional<property_definitions::map_type> property_definitions::get_map(const sstring& name) const {
+    auto xmap = get_extended_map(name);
+    if (!xmap) {
+        return std::nullopt;
+    }
+    return to_simple_map(std::move(*xmap));
+}
+
+property_definitions::map_type property_definitions::to_simple_map(const extended_map_type& xmap) {
+    return xmap | std::views::transform([](const auto& x) {
+        // Convert each pair to a string key and value
+        try {
+            return std::make_pair(x.first, std::get<sstring>(x.second));
+        } catch (const std::bad_variant_access& e) {
+            throw exceptions::syntax_exception(seastar::format("Invalid map value '{}' for key '{}'. It should be a simple string.", std::get<list_type>(x.second), x.first));
+        }
+    }) | std::ranges::to<map_type>();
+}
+
+property_definitions::extended_map_type property_definitions::to_extended_map(const map_type& map) {
+    return map | std::ranges::to<extended_map_type>();
 }
 
 bool property_definitions::has_property(const sstring& name) const {
@@ -162,7 +187,7 @@ void property_definitions::remove_from_map_if_exists(const sstring& name, const 
         return;
     }
     try {
-        auto map = std::get<map_type>(it->second);
+        auto map = std::get<extended_map_type>(it->second);
         map.erase(key);
         _properties[name] = map;
     } catch (const std::bad_variant_access& e) {

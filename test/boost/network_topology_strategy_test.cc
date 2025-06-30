@@ -86,7 +86,7 @@ static future<> check_ranges_are_sorted(vnode_effective_replication_map_ptr erm,
 void strategy_sanity_check(
     replication_strategy_ptr ars_ptr,
     const token_metadata_ptr& tm,
-    const std::map<sstring, sstring>& options) {
+    const replication_strategy_config_options& options) {
 
     const network_topology_strategy* nts_ptr =
         dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
@@ -159,7 +159,7 @@ void endpoints_check(
  * Run in a seastar thread.
  */
 void full_ring_check(const std::vector<ring_point>& ring_points,
-                     const std::map<sstring, sstring>& options,
+                     replication_strategy_config_options& options,
                      replication_strategy_ptr ars_ptr,
                      locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
@@ -305,10 +305,10 @@ void simple_test() {
 
     /////////////////////////////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options323 = {
-        {"dc100", "rack10,rack20,rack30"},
-        {"dc101", "rack10,rack20"},
-        {"dc102", "rack10,rack20,rack30"}
+    replication_strategy_config_options options323 = {
+        {"dc100", std::vector<sstring>{"rack10", "rack20", "rack30"}},
+        {"dc101", std::vector<sstring>{"rack10", "rack20"}},
+        {"dc102", std::vector<sstring>{"rack10", "rack20", "rack30"}}
     };
     locator::replication_strategy_params params323(options323, std::nullopt);
 
@@ -319,9 +319,9 @@ void simple_test() {
 
     ///////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options320 = {
-        {"dc100", "rack10,rack20,rack30"},
-        {"dc101", "rack10,rack20"},
+    replication_strategy_config_options options320 = {
+        {"dc100", std::vector<sstring>{"rack10", "rack20", "rack30"}},
+        {"dc101", std::vector<sstring>{"rack10", "rack20"}},
         {"dc102", "0"}
     };
     locator::replication_strategy_params params320(options320, std::nullopt);
@@ -364,9 +364,13 @@ void heavy_origin_test() {
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
-    std::vector<sstring> dc_replication = {"rack0,rack1", "rack0,rack1,rack2,rack3", "rack0,rack1,rack2,rack3,rack4,rack5"};
+    std::vector<std::vector<sstring>> dc_replication = {
+        {"rack0", "rack1"},
+        {"rack0", "rack1", "rack2", "rack3"},
+        {"rack0", "rack1", "rack2", "rack3", "rack4", "rack5"}
+    };
 
-    std::map<sstring, sstring> config_options;
+    replication_strategy_config_options config_options;
     std::unordered_map<inet_address, std::unordered_set<token>> tokens;
     std::vector<ring_point> ring_points;
 
@@ -432,9 +436,9 @@ namespace {
 
 auto& random_engine = seastar::testing::local_random_engine;
 
-std::map<sstring, sstring> make_random_options(const std::map<sstring, size_t>& rack_count_per_dc) {
+replication_strategy_config_options make_random_options(const std::map<sstring, size_t>& rack_count_per_dc) {
     auto option_dcs = rack_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
-    std::map<sstring, sstring> options;
+    replication_strategy_config_options options;
     std::ranges::shuffle(option_dcs, random_engine);
     size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
     for (size_t i = 0; i < num_option_dcs; ++i) {
@@ -446,8 +450,7 @@ std::map<sstring, sstring> make_random_options(const std::map<sstring, size_t>& 
             racks.emplace_back(fmt::format("rack{}", 10 + rack));
         }
         std::ranges::shuffle(racks, random_engine);
-        size_t node_count = 1 + tests::random::get_int(racks.size() - 1);
-        options.emplace(fmt::format("dc{}", dc), fmt::format("{}", fmt::join(racks.begin(), racks.begin() + node_count, ",")));
+        options.emplace(fmt::format("dc{}", dc), racks);
     }
     return options;
 };
@@ -605,9 +608,9 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     }
 
     auto make_options = [&] (size_t rf_per_dc) {
-        std::map<sstring, sstring> options;
+        replication_strategy_config_options options;
         for (const auto& dc : dcs) {
-            options.emplace(fmt::format("dc{}", dc), fmt::format("{}", fmt::join(rf_racks, ",")));
+            options.emplace(fmt::format("dc{}", dc), std::move(rf_racks));
         }
         return options;
     };
@@ -832,13 +835,13 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    std::map<sstring, sstring> rf_options;
+    replication_strategy_config_options rf_options;
     const auto& dc_racks = topo.get_datacenter_racks();
     for (auto& [dc, dc_rf] : datacenters) {
         auto racks = dc_racks.at(dc) | std::views::keys | std::ranges::to<std::vector<sstring>>();
         dc_rf = std::min(dc_rf, racks.size());
         racks.resize(dc_rf);
-        rf_options.emplace(dc, fmt::format("{}", fmt::join(racks, ",")));
+        rf_options.emplace(dc, racks);
     }
 
     my_network_topology_strategy nts(replication_strategy_params(rf_options,
@@ -970,13 +973,13 @@ SEASTAR_TEST_CASE(test_rack_aware_rf) {
 
         unsigned shard_count = 2;
         topo.add_node(service::node_state::normal, shard_count);
-        auto s = "CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1a'} AND tablets = {'enabled':true}";
+        auto s = "CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']} AND tablets = {'enabled':true}";
         testlog.info("{}", s);
         e.execute_cql(s).get();
 
         topo.start_new_rack();
         topo.add_node(service::node_state::normal, shard_count);
-        s = "CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1a,rack1b'} AND tablets = {'enabled':true}";
+        s = "CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']} AND tablets = {'enabled':true}";
         testlog.info("{}", s);
         e.execute_cql(s).get();
 
@@ -984,7 +987,7 @@ SEASTAR_TEST_CASE(test_rack_aware_rf) {
         topo.add_node(service::node_state::normal, shard_count);
         topo.start_new_rack();
         topo.add_node(service::node_state::normal, shard_count);
-        s = "CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1':'rack1a,rack1b', 'dc2':'rack2a,rack2b'} AND tablets = {'enabled':true}";
+        s = "CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b'], 'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}";
         testlog.info("{}", s);
         e.execute_cql(s).get();
     });

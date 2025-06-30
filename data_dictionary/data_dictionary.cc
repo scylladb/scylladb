@@ -22,6 +22,7 @@
 #include <ostream>
 #include <array>
 #include "replica/database.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace data_dictionary {
 
@@ -318,7 +319,7 @@ bool storage_options::is_local_type() const noexcept {
     return std::holds_alternative<local>(value);
 }
 
-storage_options::value_type storage_options::from_map(std::string_view type, std::map<sstring, sstring> values) {
+storage_options::value_type storage_options::from_map(std::string_view type, const std::map<sstring, sstring>& values) {
     if (type == local::name) {
         return local::from_map(values);
     }
@@ -414,7 +415,22 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
         os << "CREATE KEYSPACE " << cql3::util::maybe_quote(_name)
            << " WITH replication = {'class': " << cql3::util::single_quote(_strategy_name);
         for (const auto& opt: _strategy_options) {
-            os << ", " << cql3::util::single_quote(opt.first) << ": " << cql3::util::single_quote(opt.second);
+            os << ", " << cql3::util::single_quote(opt.first) << ": ";
+            std::visit(overloaded_functor{
+                [&os] (const sstring& str) {
+                    os << cql3::util::single_quote(str);
+                },
+                [&os] (const std::vector<sstring>& vec) {
+                    os << "[";
+                    for (auto it = vec.begin(); it != vec.end(); ++it) {
+                        if (it != vec.begin()) {
+                            os << ", ";
+                        }
+                        cql3::util::single_quote(*it);
+                    }
+                    os << "]";
+                }
+            }, opt.second);
         }
         if (!_storage_options->is_local_type()) {
             os << "} AND storage = {'type': " << cql3::util::single_quote(sstring(_storage_options->type_string()));

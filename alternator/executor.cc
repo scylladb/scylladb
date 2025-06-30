@@ -16,6 +16,7 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -5653,8 +5654,8 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     co_return rjson::print(std::move(response));
 }
 
-static std::map<sstring, sstring> get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
-    std::map<sstring, sstring> options;
+static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
+    locator::replication_strategy_config_options options;
     for (const auto& dc : sp.get_token_metadata_ptr()->get_topology().get_datacenters()) {
         options.emplace(dc, std::to_string(rf));
     }
@@ -5696,7 +5697,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // manually create the keyspace to override this predefined behavior.
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
     auto& topo = sp.get_token_metadata_ptr()->get_topology();
-    std::map<sstring, sstring> opts;
+    locator::replication_strategy_config_options opts;
     if (topo.get_config().force_rack_valid_keyspaces) {
         for (const auto& [dc, hosts_by_rack] : topo.get_datacenter_racks()) {
             auto racks = hosts_by_rack | std::views::keys | std::ranges::to<std::vector>();
@@ -5710,7 +5711,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
                 elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} in dc {} because it has this many racks.",
                              keyspace_name, racks.size(), dc);
             }
-            opts.emplace(dc, fmt::format("{}", fmt::join(racks, ",")));
+            opts.emplace(dc, std::move(racks));
         }
     } else {
         int endpoint_count = gossiper.num_endpoints();

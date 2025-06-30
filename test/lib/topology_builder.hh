@@ -77,6 +77,7 @@ private:
     sstring _rack;
     shared_load_stats _load_stats;
     std::vector<locator::host_id> _hosts;
+    std::unordered_map<sstring, std::vector<sstring>> _dc_racks;
 private:
     inet_address make_node_address(int n) {
         assert(n > 0);
@@ -165,6 +166,10 @@ public:
         return start_new_rack();
     }
 
+    std::unordered_map<sstring, std::vector<sstring>> get_dc_racks() const {
+        return _dc_racks;
+    }
+
     locator::load_stats_ptr get_load_stats() const {
         return _load_stats.get();
     }
@@ -228,6 +233,7 @@ public:
             }
         }
         _hosts.push_back(id);
+        _dc_racks[dc_rack.dc].push_back(dc_rack.rack);
         return id;
     }
 

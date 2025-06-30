@@ -50,7 +50,10 @@ enum class replication_strategy_type {
 
 using can_yield = utils::can_yield;
 
-using replication_strategy_config_options = std::map<sstring, sstring>;
+using rack_list = std::vector<sstring>;
+
+using replication_strategy_config_option = std::variant<sstring, rack_list>;
+using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
 struct replication_strategy_params {
     const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;
@@ -67,13 +70,11 @@ class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
 class effective_replication_map;
 
-using rack_list = std::vector<sstring>;
-
 class replication_factor_data {
-    std::variant<size_t, rack_list> _data;
+    std::variant<size_t, std::vector<sstring>> _data;
 
 public:
-    explicit replication_factor_data(const sstring& rf, const std::unordered_set<sstring>& allowed_racks) {
+    explicit replication_factor_data(const replication_strategy_config_option& rf, const std::unordered_set<sstring>& allowed_racks) {
         parse(rf, allowed_racks);
     }
 
@@ -93,7 +94,7 @@ public:
     }
 
 private:
-    void parse(const sstring& rf, const std::unordered_set<sstring>& allowed_racks);
+    void parse(const replication_strategy_config_option& rf, const std::unordered_set<sstring>& allowed_racks);
 };
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
@@ -148,7 +149,7 @@ public:
     static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology& topo) {
         return create_replication_strategy(strategy_name, std::move(params), &topo);
     }
-    static replication_factor_data parse_replication_factor(sstring rf, const std::unordered_set<sstring>& racks);
+    static replication_factor_data parse_replication_factor(const replication_strategy_config_option& rf, const std::unordered_set<sstring>& racks);
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 
@@ -161,7 +162,7 @@ public:
     // appear in the pending_endpoints.
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const = 0;
     replication_strategy_type get_type() const noexcept { return _my_type; }
-    const replication_strategy_config_options get_config_options() const noexcept { return _config_options; }
+    const replication_strategy_config_options& get_config_options() const noexcept { return _config_options; }
 
     // If returns true then tables governed by this replication strategy have separate
     // effective_replication_maps.
@@ -508,7 +509,16 @@ struct appending_hash<locator::vnode_effective_replication_map::factory_key> {
         feed_hash(h, key.ring_version);
         for (const auto& [opt, val] : key.rs_config_options) {
             h.update(opt.c_str(), opt.size());
-            h.update(val.c_str(), val.size());
+            std::visit(overloaded_functor {
+                [&h] (const sstring& str) {
+                    h.update(str.c_str(), str.size());
+                },
+                [&h] (const std::vector<sstring>& vec) {
+                    for (const auto& v : vec) {
+                        h.update(v.c_str(), v.size());
+                    }
+                }
+            }, val);
         }
     }
 };
@@ -564,4 +574,30 @@ private:
     friend class vnode_effective_replication_map;
 };
 
-}
+} // namespace locator
+
+template <>
+struct fmt::formatter<locator::replication_strategy_config_option> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const locator::replication_strategy_config_option& opt, FormatContext& ctx) const {
+        return std::visit(overloaded_functor{
+            [&ctx] (const sstring& s) {
+                return fmt::format_to(ctx.out(), "'{}'", s);
+            },
+            [&ctx] (const std::vector<sstring>& v) {
+                return fmt::format_to(ctx.out(), "[{}]", fmt::join(v | std::views::transform([] (auto& s) { return fmt::format("'{}'", s); }), ","));
+            }
+        }, opt);
+    }
+};
+
+template <>
+struct fmt::formatter<locator::replication_strategy_config_options> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+    template <typename FormatContext>
+    auto format(const locator::replication_strategy_config_options& opts, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(), "{{{}}}", fmt::join(opts |
+                std::views::transform([] (const auto& x) { return fmt::format("'{}':{}", x.first, x.second); }), ", "));
+    }
+};

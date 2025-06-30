@@ -24,6 +24,7 @@
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
 #include "timestamp.hh"
+#include "types/vector.hh"
 #include "utils/assert.hh"
 #include "utils/hashers.hh"
 #include "utils/log.hh"

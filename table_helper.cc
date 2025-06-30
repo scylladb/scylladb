@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "cql3/statements/property_definitions.hh"
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -158,7 +159,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
 
     data_dictionary::database db = qp.db();
 
-    std::map<sstring, sstring> opts;
+    locator::replication_strategy_config_options opts;
     opts["replication_factor"] = replication_factor;
     auto ksm = keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.SimpleStrategy", std::move(opts), std::nullopt);
 
@@ -167,7 +168,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
         auto ts = group0_guard.write_timestamp();
 
         if (!db.has_keyspace(keyspace_name)) {
-            std::map<sstring, sstring> opts;
+            locator::replication_strategy_config_options opts;
             if (replication_strategy_name == "org.apache.cassandra.locator.NetworkTopologyStrategy") {
                 for (const auto &dc: qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters())
                     opts[dc] = replication_factor;

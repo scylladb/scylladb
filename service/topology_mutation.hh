@@ -114,7 +114,7 @@ public:
     topology_mutation_builder& set_tablet_balancing_enabled(bool);
     topology_mutation_builder& set_new_cdc_generation_data_uuid(const utils::UUID& value);
     topology_mutation_builder& set_committed_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
-    topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, sstring> &rf_per_dc);
+    topology_mutation_builder& set_new_keyspace_rf_change_data(const sstring &ks_name, const std::map<sstring, std::variant<sstring, std::vector<sstring>>>& rf_per_dc);
     topology_mutation_builder& set_unpublished_cdc_generations(const std::vector<cdc::generation_id_v2>& values);
     topology_mutation_builder& set_global_topology_request(global_topology_request);
     topology_mutation_builder& set_global_topology_request_id(const utils::UUID&);
@@ -155,7 +155,7 @@ public:
     topology_request_tracking_mutation_builder& set(const char* cell, global_topology_request value);
     topology_request_tracking_mutation_builder& done(std::optional<sstring> error = std::nullopt);
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
-    topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
+    topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, std::variant<sstring, std::vector<sstring>>>& rf_per_dc);
 
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

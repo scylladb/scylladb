@@ -10,6 +10,8 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
+#include <algorithm>
+#include <exception>
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -19,6 +21,9 @@
 
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <stdexcept>
+#include <sys/types.h>
+#include <variant>
 
 namespace locator {
 
@@ -155,77 +160,37 @@ const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as
     return dynamic_cast<const tablet_aware_replication_strategy*>(this);
 }
 
-// Get the next string, optionally surrounded in single or double quates
-// using comma or space delimiters.
-static std::pair<std::string_view, std::optional<std::string_view>> next_token(std::string_view s) {
-    const char* begin;
-    const char* end = s.end();
-
-    auto isdelim = [] (char ch) -> bool {
-        return ch == ',' || isspace(ch);
-    };
-
-    auto isvalid = [] (char ch) -> bool {
-        static const std::unordered_set<char> special_chars({'-', '_', '.', ':', '/', '@', '#', '$', '%', '^', '&', '*', '(', ')', '+', '=', '?', '!', '~'});
-        return isalnum(ch) || special_chars.contains(ch);
-    };
-
-    for (begin = s.begin(); begin != s.end() && isdelim(*begin); ++begin) {
-    }
-    if (begin == s.end()) {
-    }
-    if (!isalnum(*begin)) {
-        throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': must start with an alphanumeric character", s));
-    }
-    for (end = begin; end != s.end() && !isdelim(*end); ++end) {
-        auto ch = *end;
-        if (ch == '\\') {
-            if (++end == s.end()) {
-                throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': bad terminator '{}'", s, *(end - 1)));
+void replication_factor_data::parse(const replication_strategy_config_option& rf, const std::unordered_set<sstring>& allowed_racks) {
+    rslogger.info("replication_factor_data::parse: {}: allowed_racks={}", rf, allowed_racks);
+    std::visit(overloaded_functor {
+        [&] (const sstring& rf) {
+            if (rf.empty()) {
+                throw exceptions::configuration_exception("Replication factor must be non-empty");
             }
-        }
-        if (!isvalid(ch)) {
-            throw exceptions::configuration_exception(fmt::format("Invalid string token '{}': invalid character '{}'", s, ch));
-        }
-    }
-    return std::make_pair(std::string_view(begin, end), end == s.end() ? std::nullopt : std::make_optional<std::string_view>(end + 1, s.end()));
-}
-
-void replication_factor_data::parse(const sstring& rf, const std::unordered_set<sstring>& allowed_racks) {
-    bool is_numeric = std::all_of(rf.begin(), rf.end(), [] (char c) {return isdigit(c);});
-    rslogger.info("replication_factor_data::parse: {}: is_numeric={} allowed_racks={}", rf, is_numeric, allowed_racks);
-    if (rf.empty()) {
-        throw exceptions::configuration_exception("Replication factor must be non-empty");
-    }
-    if (is_numeric && allowed_racks.contains(rf)) {
-        throw exceptions::configuration_exception(
-            fmt::format("Numeric replication factor '{}' is ambiguous. allowed_racks='{}'", rf, fmt::join(allowed_racks, ",")));
-    }
-    try {
-        if (is_numeric) {
-            _data.emplace<size_t>(std::stol(rf));
-        } else {
-            std::vector<sstring> racks;
-
-            for (std::optional<std::string_view> opt = rf; opt; ) {
-                auto [name, next_opt] = next_token(*opt);
-                if (!allowed_racks.contains(sstring(name)) && !allowed_racks.empty()) {
+            ssize_t rf_value = 0;
+            char* endptr = nullptr;
+            rf_value = std::strtol(rf.c_str(), &endptr, 0);
+            if (endptr && *endptr) {
+                throw exceptions::configuration_exception(format("Replication factor must be numeric: found '{}'", rf));
+            }
+            if (rf_value < 0) {
+                throw exceptions::configuration_exception(format("Replication factor must greater than or equal to 0: found '{}'", rf));
+            }
+            _data.emplace<size_t>(rf_value);
+        },
+        [&] (const std::vector<sstring>& racks) {
+            for (const auto& rack : racks) {
+                if (!allowed_racks.contains(rack) && !allowed_racks.empty()) {
                     throw exceptions::configuration_exception(
-                        fmt::format("Unrecognized rack name '{}'. allowed_racks={}", name, allowed_racks));
+                        fmt::format("Unrecognized rack name '{}'. allowed_racks={}", rack, allowed_racks));
                 }
-                racks.emplace_back(name);
-                opt = next_opt;
             }
-
-            _data.emplace<std::vector<sstring>>(std::move(racks));
+            _data.emplace<std::vector<sstring>>(racks);
         }
-    } catch (...) {
-        throw exceptions::configuration_exception(
-            format("Replication factor must be numeric or a comma-separated list of rack names; found '{}': {}", rf, std::current_exception()));
-    }
+    }, rf);
 }
 
-replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf, const std::unordered_set<sstring>& racks) {
+replication_factor_data abstract_replication_strategy::parse_replication_factor(const replication_strategy_config_option& rf, const std::unordered_set<sstring>& racks) {
     return replication_factor_data(rf, racks);
 }
 

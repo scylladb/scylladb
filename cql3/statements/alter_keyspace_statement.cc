@@ -14,7 +14,9 @@
 #include <stdexcept>
 #include <vector>
 #include "alter_keyspace_statement.hh"
+#include "cql3/statements/property_definitions.hh"
 #include "locator/tablets.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "mutation/canonical_mutation.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -29,6 +31,7 @@
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
+#include "utils/overloaded_functor.hh"
 
 using namespace std::string_literals;
 
@@ -49,16 +52,22 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-static unsigned get_abs_rf_diff(const std::string& curr_rf, const std::string& new_rf) {
-    try {
-        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
-    } catch (std::invalid_argument const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
-    } catch (std::out_of_range const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments to fit into `int` type, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
-    }
+static unsigned get_abs_rf_diff(const locator::replication_strategy_config_option& curr_rf, const locator::replication_strategy_config_option& new_rf) {
+    auto get_rf = [](const locator::replication_strategy_config_option& rf_opt) -> long {
+        return std::visit<long>(overloaded_functor{
+            [] (const sstring& rf) {
+                try {
+                    return std::stol(rf);
+                } catch (const std::invalid_argument&) {
+                    on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, but got '{}'", rf));
+                }
+            },
+            [] (const locator::rack_list& rf) {
+                return rf.size();
+            }
+        }, rf_opt);
+    };
+    return std::abs(get_rf(curr_rf) - get_rf(new_rf));
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
@@ -85,18 +94,18 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                         current_options.type_string(), new_options.type_string()));
             }
 
-            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features());
+            auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features(), qp.db().get_config());
 
             auto tmptr = qp.proxy().get_token_metadata_ptr();
             const auto& topo = tmptr->get_topology();
 
             if (ks.get_replication_strategy().uses_tablets()) {
-                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
+                auto& current_rf_per_dc = ks.metadata()->strategy_options();
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
                 unsigned total_abs_rfs_diff = 0;
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
-                    sstring old_rf = "0";
+                    auto old_rf = locator::replication_strategy_config_option(sstring("0"));
                     if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
                              new_dc_in_current_mapping != current_rf_per_dc.end()) {
                         old_rf = new_dc_in_current_mapping->second;
@@ -146,15 +155,38 @@ namespace {
 // so that the output map contains entries like: "replication:dc1" -> "3".
 // This is done to avoid key conflicts and to be able to de-flatten the map back into the original structure.
 
-void add_prefixed_key(const sstring& prefix, const std::map<sstring, sstring>& in, std::map<sstring, sstring>& out) {
+template <typename Map>
+void add_prefixed_key(const sstring& prefix, const Map& in, cql3::statements::property_definitions::extended_map_type& out) {
     for (const auto& [in_key, in_value]: in) {
         out[prefix + ":" + in_key] = in_value;
     }
 };
 
-std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::statements::ks_prop_defs>& ks,
+template <>
+void add_prefixed_key(const sstring& prefix, const cql3::statements::property_definitions::extended_map_type& in, cql3::statements::property_definitions::extended_map_type& out) {
+    for (const auto& [in_key, in_value]: in) {
+        std::visit(overloaded_functor{
+            [&] (const sstring& value) {
+                out[prefix + ":" + in_key] = value;
+            },
+            [&] (const locator::rack_list& list) {
+                if (list.empty()) {
+                    out[prefix + ":" + in_key] = "0"; // If the list is empty, we store "0" to indicate no racks.
+                } else {
+                    // flatten the rack list in multiple entries
+                    for (size_t i = 0; i < list.size(); ++i) {
+                        const auto& v = list[i];
+                        out[prefix + ":" + in_key + ":" + std::to_string(i)] = v;
+                    }
+                }
+            }
+        }, in_value);
+    }
+};
+
+cql3::statements::property_definitions::extended_map_type get_current_options_flattened(const shared_ptr<cql3::statements::ks_prop_defs>& ks,
                                                          const gms::feature_service& feat) {
-    std::map<sstring, sstring> all_options;
+    cql3::statements::property_definitions::extended_map_type all_options;
 
     add_prefixed_key(ks->KW_REPLICATION, ks->get_replication_options(), all_options);
     add_prefixed_key(ks->KW_STORAGE, ks->get_storage_options().to_map(), all_options);
@@ -163,31 +195,33 @@ std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::
     if (ks->has_property(ks->KW_TABLETS)) {
         auto initial_tablets = ks->get_initial_tablets(std::nullopt);
         add_prefixed_key(ks->KW_TABLETS,
-                         {{"enabled", initial_tablets ? "true" : "false"},
-                         {"initial", std::to_string(initial_tablets.value_or(0))}},
+                         cql3::statements::property_definitions::map_type{
+                            {"enabled", initial_tablets ? "true" : "false"},
+                            {"initial", std::to_string(initial_tablets.value_or(0))}},
                          all_options);
     }
     add_prefixed_key(ks->KW_DURABLE_WRITES,
-                     {{sstring(ks->KW_DURABLE_WRITES), to_sstring(ks->get_boolean(ks->KW_DURABLE_WRITES, true))}},
+                     cql3::statements::property_definitions::map_type{{sstring(ks->KW_DURABLE_WRITES), to_sstring(ks->get_boolean(ks->KW_DURABLE_WRITES, true))}},
                      all_options);
 
     return all_options;
 }
 
-std::map<sstring, sstring> get_old_options_flattened(const data_dictionary::keyspace& ks) {
-    std::map<sstring, sstring> all_options;
+cql3::statements::property_definitions::extended_map_type get_old_options_flattened(const data_dictionary::keyspace& ks) {
+    cql3::statements::property_definitions::extended_map_type all_options;
 
     using namespace cql3::statements;
     add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options(), all_options);
     add_prefixed_key(ks_prop_defs::KW_STORAGE, ks.metadata()->get_storage_options().to_map(), all_options);
     if (ks.metadata()->initial_tablets()) {
         add_prefixed_key(ks_prop_defs::KW_TABLETS,
-                         {{"enabled", ks.metadata()->initial_tablets() ? "true" : "false"},
-                          {"initial", std::to_string(ks.metadata()->initial_tablets().value_or(0))}},
+                         cql3::statements::property_definitions::map_type{
+                            {"enabled", ks.metadata()->initial_tablets() ? "true" : "false"},
+                            {"initial", std::to_string(ks.metadata()->initial_tablets().value_or(0))}},
                          all_options);
     }
     add_prefixed_key(ks_prop_defs::KW_DURABLE_WRITES,
-                     {{sstring(ks_prop_defs::KW_DURABLE_WRITES), to_sstring(ks.metadata()->durable_writes())}},
+                     cql3::statements::property_definitions::map_type{{sstring(ks_prop_defs::KW_DURABLE_WRITES), to_sstring(ks.metadata()->durable_writes())}},
                      all_options);
 
     return all_options;
@@ -204,7 +238,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         const auto tmptr = qp.proxy().get_token_metadata_ptr();
         const auto& topo = tmptr->get_topology();
         const auto& feat = qp.proxy().features();
-        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat);
+        auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat, qp.db().get_config());
         utils::chunked_vector<mutation> muts;
         std::vector<sstring> warnings;
         auto old_ks_options = get_old_options_flattened(ks);
@@ -223,7 +257,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             // Only valid options are replication_factor, class and per-dc rf:s. We want to
             // filter out any dcN=0 entries.
             auto& [key, val] = i;
-            if (key.starts_with(replication_prefix) && val == "0") {
+            if (key.starts_with(replication_prefix) && std::get<sstring>(val) == "0") {
                 std::string_view v(key);
                 v.remove_prefix(replication_prefix.size());
                 return v != ks_prop_defs::REPLICATION_FACTOR_KEY 

@@ -60,6 +60,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/join.hpp>
+#include <vector>
 
 #include "compaction/compaction_strategy.hh"
 #include "view_info.hh"
@@ -1167,7 +1168,7 @@ static atomic_cell_or_collection
 make_map_mutation(const Map& map,
                   const column_definition& column,
                   api::timestamp_type timestamp,
-                  noncopyable_function<map_type_impl::native_type::value_type (const typename Map::value_type&)> f)
+                  noncopyable_function<void (noncopyable_function<void(map_type_impl::native_type::value_type)>)> func)
 {
     auto column_type = static_pointer_cast<const map_type_impl>(column.type);
     auto ktyp = column_type->get_keys_type();
@@ -1176,16 +1177,19 @@ make_map_mutation(const Map& map,
     if (column_type->is_multi_cell()) {
         collection_mutation_description mut;
 
-        for (auto&& entry : map) {
-            auto te = f(entry);
-            mut.cells.emplace_back(ktyp->decompose(data_value(te.first)), atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(te.second)), atomic_cell::collection_member::yes));
-        }
+        func([&] (const map_type_impl::native_type::value_type& te) {
+            auto key = ktyp->decompose(data_value(te.first));
+            auto value = atomic_cell::make_live(*vtyp, timestamp, vtyp->decompose(data_value(te.second)), atomic_cell::collection_member::yes);
+            mut.cells.emplace_back(key, std::move(value));
+        });
 
         return mut.serialize(*column_type);
     } else {
         map_type_impl::native_type tmp;
         tmp.reserve(map.size());
-        std::transform(map.begin(), map.end(), std::inserter(tmp, tmp.end()), std::move(f));
+        func([&] (map_type_impl::native_type::value_type te) {
+            tmp.emplace_back(std::move(te));
+        });
         return atomic_cell::make_live(*column.type, timestamp, column_type->decompose(make_map_value(column_type, std::move(tmp))));
     }
 }
@@ -1196,8 +1200,35 @@ make_map_mutation(const Map& map,
                   const column_definition& column,
                   api::timestamp_type timestamp)
 {
-    return make_map_mutation(map, column, timestamp, [](auto&& p) {
-        return std::make_pair(data_value(p.first), data_value(p.second));
+    return make_map_mutation(map, column, timestamp, [&map] (noncopyable_function<void(map_type_impl::native_type::value_type)> push_mut) {
+        for (const auto& [key, value] : map) {
+            push_mut(std::make_pair(data_value(key), data_value(value)));
+        }
+    });
+}
+
+static atomic_cell_or_collection
+make_extended_map_mutation(const std::map<sstring, std::variant<sstring, std::vector<sstring>>>& map,
+                  const column_definition& column,
+                  api::timestamp_type timestamp)
+{
+    return make_map_mutation(map, column, timestamp, [&map] (noncopyable_function<void(map_type_impl::native_type::value_type)> push_mut) {
+        for (const auto& [key, value] : map) {
+            std::visit(overloaded_functor{
+                [&] (const sstring& s) {
+                    push_mut(std::make_pair(data_value(key), data_value(s)));
+                },
+                [&] (const std::vector<sstring>& v) {
+                    if (v.empty()) {
+                        push_mut(std::make_pair(data_value(key + ":"), data_value("")));
+                    } else {
+                        for (size_t i = 0; i < v.size(); ++i) {
+                            push_mut(std::make_pair(data_value(fmt::format("{}:{}", key, i)), data_value(v[i])));
+                        }
+                    }
+                }
+            }, value);
+        }
     });
 }
 
@@ -1207,6 +1238,14 @@ static void store_map(mutation& m, const K& ckey, const bytes& name, api::timest
     auto column = s->get_column_definition(name);
     SCYLLA_ASSERT(column);
     set_cell_or_clustered(m, ckey, *column, make_map_mutation(map, *column, timestamp));
+}
+
+template<typename K>
+static void store_extended_map(mutation& m, const K& ckey, const bytes& name, api::timestamp_type timestamp, const std::map<sstring, std::variant<sstring, std::vector<sstring>>>& map) {
+    auto s = m.schema();
+    auto column = s->get_column_definition(name);
+    SCYLLA_ASSERT(column);
+    set_cell_or_clustered(m, ckey, *column, make_extended_map_mutation(map, *column, timestamp));
 }
 
 /*
@@ -1224,7 +1263,7 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
 
     auto map = keyspace->strategy_options();
     map["class"] = keyspace->strategy_name();
-    store_map(m, ckey, "replication", timestamp, map);
+    store_extended_map(m, ckey, "replication", timestamp, map);
 
     if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
         schema_ptr scylla_keyspaces_s = scylla_keyspaces();
@@ -1295,11 +1334,23 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
     // (or screw up shared pointers)
     const auto& replication = row.get_nonnull<map_type_impl::native_type>("replication");
 
-    std::map<sstring, sstring> strategy_options;
-    for (auto& p : replication) {
-        strategy_options.emplace(value_cast<sstring>(p.first), value_cast<sstring>(p.second));
+    locator::replication_strategy_config_options strategy_options;
+    for (const auto& p : replication) {
+        auto key = value_cast<sstring>(p.first);
+        auto value = value_cast<sstring>(p.second);
+        auto pos = key.find(':');
+        if (pos == sstring::npos) {
+            strategy_options.emplace(key, std::move(value));
+        } else {
+            // This is part of a dc:rack_list option
+            auto dc = key.substr(0, pos);
+            auto [it, _] = strategy_options.try_emplace(dc, std::vector<sstring>());
+            if (!value.empty()) {
+                std::get<std::vector<sstring>>(it->second).emplace_back(std::move(value));
+            }
+        }
     }
-    auto strategy_name = strategy_options["class"];
+    auto strategy_name = std::get<sstring>(strategy_options["class"]);
     strategy_options.erase("class");
     bool durable_writes = row.get_nonnull<bool>("durable_writes");
 

@@ -17,6 +17,7 @@
 #include "exceptions/exceptions.hh"
 #include "gms/feature_service.hh"
 #include "db/config.hh"
+#include <random>
 
 namespace cql3 {
 
@@ -24,17 +25,18 @@ namespace statements {
 
 static logging::logger logger("ks_prop_defs");
 
-static std::map<sstring, sstring> prepare_options(
+static locator::replication_strategy_config_options prepare_options(
         const sstring& strategy_class,
         const locator::token_metadata& tm,
-        std::map<sstring, sstring> options,
-        const std::map<sstring, sstring>& old_options = {}) {
+        bool rf_rack_valid_keyspaces,
+        locator::replication_strategy_config_options options,
+        const locator::replication_strategy_config_options& old_options = {}) {
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
     const auto& all_dcs = tm.get_topology().get_datacenter_racks();
 
-    logger.info("prepare_options: {}: is_nts={} {{{}}}: all_dcs={}", strategy_class, is_nts,
+    logger.info("prepare_options: {}: is_nts={} rf_rack_valid_keyspaces={} {{{}}}: all_dcs={}", strategy_class, is_nts, rf_rack_valid_keyspaces,
             fmt::join(options | std::views::transform([] (auto& x) {
                             return fmt::format("{}:{}", x.first, x.second);
                     }),
@@ -52,51 +54,47 @@ static std::map<sstring, sstring> prepare_options(
     auto it = options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
     if (it != options.end()) {
         // Expand: the user explicitly provided a 'replication_factor'.
-        rf = it->second;
+        try {
+            rf = std::get<sstring>(it->second);
+        } catch (...) {
+            throw exceptions::configuration_exception(fmt::format("Invalid replication factor: {}: must be a string holding a numerical value", it->second));
+        }
         options.erase(it);
     } else if (options.empty()) {
         auto it = old_options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
         if (it != old_options.end()) {
             // Expand: the user switched from another strategy that specified a 'replication_factor'
             // and didn't provide any additional options.
-            rf = it->second;
+            rf = std::get<sstring>(it->second);
         }
     }
 
-    auto expand_dc_racks = [&] (const sstring& dc, const sstring& rf) {
-        if (!std::all_of(rf.begin(), rf.end(), [] (char c) {return isdigit(c);})) {
-            return;
-        }
-
+    auto expand_dc_racks = [&] (const sstring& dc, const locator::replication_strategy_config_option& rf, bool rf_rack_valid_keyspaces) {
+        logger.info("expand_dc_racks: dc={} rf={} rf_rack_valid_keyspaces={} all_dcs={}", dc, rf, rf_rack_valid_keyspaces, all_dcs);
         auto it = all_dcs.find(dc);
         if (it == all_dcs.end()) {
             return;
         }
-        if (options.count(dc)) {
+        auto opt = options.find(dc);
+        if (opt != options.end() && (std::holds_alternative<locator::rack_list>(opt->second) || !rf_rack_valid_keyspaces)) {
             return;
         }
-        const auto& dc_racks = it->second;
-        auto ordered_racks = dc_racks | std::views::transform([] (const auto& x) { return x.first; }) | std::ranges::to<std::vector<sstring>>();
-        std::ranges::sort(ordered_racks);
+        auto dc_racks = it->second | std::views::keys | std::ranges::to<std::vector<sstring>>();
+        auto data = locator::abstract_replication_strategy::parse_replication_factor(rf, dc_racks | std::ranges::to<std::unordered_set<sstring>>());
 
-        auto allowed_racks = std::ranges::to<std::unordered_set<sstring>>(ordered_racks);
-        locator::abstract_replication_strategy::parse_replication_factor(rf, allowed_racks);
-
-        sstring val;
-        size_t nr_racks = std::stol(rf);
-        if (nr_racks > dc_racks.size()) {
-            if (tm.get_topology().get_config().force_rack_valid_keyspaces) {
-                throw exceptions::configuration_exception(fmt::format(
-                        "Replication factor {} exceeds the number of racks ({}) in dc {}", nr_racks, dc_racks.size(), dc));
+        if (data.is_rack_based()) {
+            options[dc] = data.get_rack_list();
+        } else if (rf_rack_valid_keyspaces) {
+            // If the replication factor is less than the number of racks, pick rf racks at random.
+            if (data.count() < dc_racks.size()) {
+                static thread_local auto gen = std::default_random_engine(std::random_device{}());
+                std::ranges::shuffle(dc_racks, gen);
+                dc_racks.resize(data.count());
             }
-            logger.warn("Cannot expand rf={}: dc_racks={}", rf, fmt::join(dc_racks | std::views::keys, ","));
-            val = rf;
+            options[dc] = dc_racks;
         } else {
-            ordered_racks.resize(nr_racks);
-            val = fmt::format("{}", fmt::join(ordered_racks, ","));
+            options.emplace(dc, std::get<sstring>(rf));
         }
-        logger.debug("Expanding {}: {}", dc, val);
-        options[dc] = val;
     };
 
     if (rf.has_value()) {
@@ -109,11 +107,11 @@ static std::map<sstring, sstring> prepare_options(
         }
 
         for (const auto& dc : all_dcs | std::views::keys) {
-            expand_dc_racks(dc, *rf);
+            expand_dc_racks(dc, *rf, rf_rack_valid_keyspaces);
         }
-    } else {
+    } else if (rf_rack_valid_keyspaces) {
         for (const auto& [dc, dc_rf] : options) {
-            expand_dc_racks(dc, dc_rf);
+            expand_dc_racks(dc, dc_rf, true);
         }
     }
 
@@ -131,17 +129,35 @@ static std::map<sstring, sstring> prepare_options(
 }
 
 ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
-    std::map<sstring, sstring> replication_opts, storage_opts, tablets_opts, durable_writes_opts;
+    extended_map_type replication_opts;
+    map_type storage_opts, tablets_opts, durable_writes_opts;
 
     auto read_property_into = [] (auto& map, const sstring& name, const sstring& value, const sstring& tag) {
         map[name.substr(sstring(tag).size() + 1)] = value;
     };
 
+    auto read_extended_property_into = [] (extended_map_type& map, const sstring& name, const sstring& value, const sstring& tag) {
+        auto key = name.substr(tag.size() + 1);
+        auto pos = key.find(':');
+        if (pos == sstring::npos) {
+            map[key] = value;
+        } else {
+            key.resize(pos);
+            if (auto it = map.find(key); it != map.end()) {
+                // If the key already exists, we append the value to the existing one.
+                std::get<std::vector<sstring>>(it->second).emplace_back(value);
+            } else {
+                // Otherwise, we create a new entry.
+                map.emplace(key, std::vector<sstring>{value});
+            }
+        }
+};
+
     for (const auto& [name, value] : options) {
         if (name.starts_with(KW_DURABLE_WRITES)) {
             read_property_into(durable_writes_opts, name, value, KW_DURABLE_WRITES);
         } else if (name.starts_with(KW_REPLICATION)) {
-            read_property_into(replication_opts, name, value, KW_REPLICATION);
+            read_extended_property_into(replication_opts, name, value, KW_REPLICATION);
         } else if (name.starts_with(KW_TABLETS)) {
             read_property_into(tablets_opts, name, value, KW_TABLETS);
         } else if (name.starts_with(KW_STORAGE)) {
@@ -171,16 +187,20 @@ void ks_prop_defs::validate() {
 
     auto replication_options = get_replication_options();
     if (replication_options.contains(REPLICATION_STRATEGY_CLASS_KEY)) {
-        _strategy_class = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
+        const auto& class_name = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
+        if (!std::holds_alternative<sstring>(class_name)) {
+            throw exceptions::configuration_exception(seastar::format("Invalid replication strategy class: {}", class_name));
+        }
+        _strategy_class = std::get<sstring>(class_name);
     }
 }
 
-std::map<sstring, sstring> ks_prop_defs::get_replication_options() const {
-    auto replication_options = get_map(KW_REPLICATION);
+locator::replication_strategy_config_options ks_prop_defs::get_replication_options() const {
+    auto replication_options = get_extended_map(KW_REPLICATION);
     if (replication_options) {
         return replication_options.value();
     }
-    return std::map<sstring, sstring>{};
+    return {};
 }
 
 data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
@@ -253,17 +273,17 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     std::optional<unsigned> default_initial_tablets = enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy"
             ? std::optional<unsigned>(0) : std::nullopt;
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
-    auto options = prepare_options(sc, tm, get_replication_options());
+    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), get_replication_options());
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
 
-lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat) {
-    std::map<sstring, sstring> options;
+lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
+    locator::replication_strategy_config_options options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
     if (sc) {
-        options = prepare_options(*sc, tm, get_replication_options(), old_options);
+        options = prepare_options(*sc, tm, cfg.rf_rack_valid_keyspaces(), get_replication_options(), old_options);
     } else {
         sc = old->strategy_name();
         options = old_options;

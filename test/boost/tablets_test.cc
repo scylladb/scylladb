@@ -110,12 +110,20 @@ future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "") {
 
 // Run in a seastar thread
 static
-sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
+sstring add_keyspace(cql_test_env& e, const std::unordered_map<sstring, std::vector<sstring>>& dc_racks, std::unordered_map<sstring, size_t> dc_rf, int initial_tablets = 0) {
     static std::atomic<int> ks_id = 0;
     auto ks_name = fmt::format("keyspace{}", ks_id.fetch_add(1));
     sstring rf_options;
     for (auto& [dc, rf] : dc_rf) {
-        rf_options += format(", '{}': {}", dc, rf);
+        auto all_racks = dc_racks.at(dc);
+        if (rf > all_racks.size()) {
+            rf_options += fmt::format(", '{}': '{}'", dc, rf);
+            continue;
+        }
+        if (rf < all_racks.size()) {
+            all_racks.resize(rf);
+        }
+        rf_options += fmt::format(", '{}': [{}]", dc, fmt::join(all_racks | std::views::transform([] (const auto& rack) { return fmt::format("'{}'", rack); }), ","));
     }
     e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy'{}}}"
                               " and tablets = {{'enabled': true, 'initial': {}}}",
@@ -1647,7 +1655,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
     auto host2 = topo.add_node(node_state::normal, shard_count);
     auto host3 = topo.add_node(node_state::normal, shard_count);
 
-    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+    auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 4);
     auto table1 = add_table(e, ks_name).get();
 
     mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -1756,7 +1764,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
         auto host3 = topo.add_node(node_state::normal, 1, rack1);
         auto host4 = topo.add_node(node_state::normal, 1, rack3);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 2); // RF=2
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 2}}, 2); // RF=2
         auto table1 = add_table(e, ks_name).get();
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -1805,7 +1813,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
     auto host2 = topo.add_node(node_state::normal, shard_count);
     auto host3 = topo.add_node(node_state::normal, shard_count);
 
-    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+    auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 4);
     auto table1 = add_table(e, ks_name).get();
 
     mutate_tablets(e, [&] (tablet_metadata& tmeta) {
@@ -1884,7 +1892,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets) {
     auto host1 = topo.add_node(node_state::normal, shard_count);
     auto host2 = topo.add_node(node_state::normal, shard_count);
 
-    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+    auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 1);
     auto table1 = add_table(e, ks_name).get();
     auto table2 = add_table(e, ks_name).get();
     auto table3 = add_table(e, ks_name).get();
@@ -1949,7 +1957,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
         auto host2 = topo.add_node(node_state::normal, shard_count);
         auto host3 = topo.add_node(node_state::decommissioning, shard_count);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 4);
         auto table1 = add_table(e, ks_name).get();
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2019,6 +2027,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
     // to achieve the desired tablet count per shard in a DC.
     auto cfg = tablet_cql_test_config();
     cfg.db_config->tablets_initial_scale_factor(1);
+
     do_with_cql_env_thread([](auto& e) {
         topology_builder topo(e);
         topo.add_node(node_state::normal);
@@ -2026,7 +2035,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_decommission) {
         auto host3 = topo.add_node(node_state::decommissioning);
         auto host4 = topo.add_node(node_state::left);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}});
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}});
         auto table1 = add_table(e, ks_name).get();
         auto s = e.local_db().find_schema(table1);
 
@@ -2058,7 +2067,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_rack_decommission) {
         auto host3 = topo.add_node(node_state::decommissioning);
         auto host4 = topo.add_node(node_state::left);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 8);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 8);
         auto table1 = add_table(e, ks_name).get();
 
         rebalance_tablets(e);
@@ -2073,7 +2082,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_creation_during_rack_decommission) {
             }
             return make_ready_future<>();
         }).get();
-    }, tablet_cql_test_config()).get();
+    }).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
@@ -2091,7 +2100,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_two_racks) {
         auto host2 = topo.add_node(node_state::normal);
         auto host4 = topo.add_node(node_state::decommissioning);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 4);
         auto table1 = add_table(e, ks_name).get();
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2170,7 +2179,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         racks.push_back(topo.rack());
         auto host4 = topo.add_node(node_state::decommissioning);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 4);
         auto table1 = add_table(e, ks_name).get();
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2220,7 +2229,7 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rf_not_met) {
         auto host2 = topo.add_node(node_state::normal, 2);
         auto host3 = topo.add_node(node_state::decommissioning, 2);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 1);
         auto table1 = add_table(e, ks_name).get();
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2256,7 +2265,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_works_with_in_progress_transitions)
     auto host2 = topo.add_node(node_state::normal, 1);
     auto host3 = topo.add_node(node_state::normal, 1);
 
-    auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 4);
+    auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 2}}, 4);
     auto table1 = add_table(e, ks_name).get();
 
     mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2316,7 +2325,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     auto host2 = topo.add_node(node_state::normal, 1);
     topo.add_node(node_state::normal, 2);
 
-    auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 4);
+    auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 2}}, 4);
     auto table1 = add_table(e, ks_name).get();
 
     mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2363,7 +2372,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {
     auto host3 = topo.add_node(node_state::normal, shard_count, rack1);
     auto host4 = topo.add_node(node_state::normal, shard_count, rack2);
 
-    auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, 16);
+    auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 2}}, 16);
     auto table1 = add_table(e, ks_name).get();
 
     mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2405,7 +2414,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_asymmetric_node_capacity) {
         auto host2 = topo.add_node(node_state::normal, 1);
         auto host3 = topo.add_node(node_state::normal, 7);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 16);
         auto table1 = add_table(e, ks_name).get();
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2448,7 +2457,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_disabling) {
         auto host1 = topo.add_node(node_state::normal, 2);
         topo.add_node(node_state::normal, 2);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 16);
         auto table1 = add_table(e, ks_name).get();
 
         abort_source as;
@@ -2525,7 +2534,7 @@ SEASTAR_THREAD_TEST_CASE(test_drained_node_is_not_balanced_internally) {
         auto host1 = topo.add_node(node_state::removing, 2);
         topo.add_node(node_state::normal, 2);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 16);
         auto table1 = add_table(e, ks_name).get();
 
         abort_source as;
@@ -2558,7 +2567,7 @@ SEASTAR_THREAD_TEST_CASE(test_plan_fails_when_removing_last_replica) {
         topology_builder topo(e);
         auto host1 = topo.add_node();
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 1);
         auto table1 = add_table(e, ks_name).get();
 
         topo.set_node_state(host1, node_state::removing);
@@ -2594,7 +2603,7 @@ SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
         auto host2 = topo.add_node(node_state::normal);
         auto host3 = topo.add_node(node_state::normal);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 2);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 2);
         auto table1 = add_table(e, ks_name).get();
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
@@ -2704,7 +2713,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
                 continue;
             }
             auto initial_tablets = 1 << log2_tablets;
-            keyspaces.push_back(add_keyspace(e, {{topo.dc(), rf}}, initial_tablets));
+            keyspaces.push_back(add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), rf}}, initial_tablets));
             auto table = add_table(e, keyspaces.back()).get();
             mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
                 tablet_map tmap(initial_tablets);
@@ -2788,7 +2797,7 @@ SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
 
         auto& stm = e.shared_token_metadata().local();
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 3}});
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 3}});
         auto table1 = add_table(e, ks_name).get();
 
         load_stats.set_size(table1, 0.9 * topo.get_capacity() / 3);
@@ -2882,7 +2891,7 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables) {
 
         auto& stm = e.shared_token_metadata().local();
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 128);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 3}}, 128);
         auto table1 = add_table(e, ks_name).get();
         load_stats.set_size(table1, 0);
         testlog.info("Initial cluster ready");
@@ -2893,7 +2902,7 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables) {
         rebalance_tablets(e, &load_stats);
         testlog.info("Expanded capacity");
 
-        auto ks2_name = add_keyspace(e, {{topo.dc(), 3}}, 128);
+        auto ks2_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 3}}, 128);
         auto table2 = add_table(e, ks2_name).get();
 
         auto& hosts = topo.hosts();
@@ -2933,7 +2942,7 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
 
         auto& stm = e.shared_token_metadata().local();
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 3}}, 512);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 3}}, 512);
         auto table1 = add_table(e, ks_name).get();
         load_stats.set_size(table1, topo.get_capacity() * 0.8 / 3);
         testlog.info("Initial cluster ready");
@@ -2943,7 +2952,7 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
         topo.add_i4i_large(rack3);
         testlog.info("Expanded capacity");
 
-        auto ks2_name = add_keyspace(e, {{topo.dc(), 3}});
+        auto ks2_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 3}});
         auto table2 = add_table(e, ks2_name).get();
 
         auto& hosts = topo.hosts();
@@ -2965,6 +2974,11 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
 
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     cql_test_config cfg = tablet_cql_test_config();
+    // FIXME: This test creates two keyspaces with two different replication factors.
+    //        What's more, we distribute the nodes across only two racks. Because of that,
+    //        we won't be able to enable `rf_rack_valid_keyspaces`. That would require
+    //        increasing the number of racks to three, as well as implementing scylladb/scylladb#23426.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
 
     do_with_cql_env_thread([] (auto& e) {
         auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
@@ -2984,8 +2998,8 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
         topo.start_new_rack();
         hosts.push_back(topo.add_node(node_state::normal, 1));
 
-        auto ks_name1 = add_keyspace(e, {{dc1, 3}});
-        auto ks_name2 = add_keyspace(e, {{dc2, 2}});
+        auto ks_name1 = add_keyspace(e, topo.get_dc_racks(), {{dc1, 3}});
+        auto ks_name2 = add_keyspace(e, topo.get_dc_racks(), {{dc2, 2}});
 
         // table1 overflows per-shard goal in dc1, should be scaled down.
         // wants 400 tablets (3 nodes * 2 shards * 200 tablets/shard / rf=3 = 400 tablets)
@@ -3029,7 +3043,7 @@ SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
 
         auto host1 = topo.add_node(node_state::normal, shard_count);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 1}}, 1);
         auto table1 = add_table(e, ks_name).get();
         auto table2 = add_table(e, ks_name).get();
 
@@ -3094,7 +3108,7 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_option_and_config_changes) {
         // keyspace 'initial' wants 2 tablets.
         topo.add_node(node_state::normal, 3);
 
-        auto ks_name1 = add_keyspace(e, {{dc, 1}}, 2);
+        auto ks_name1 = add_keyspace(e, topo.get_dc_racks(), {{dc, 1}}, 2);
         e.execute_cql(fmt::format("CREATE TABLE {}.table1 (p1 text, r1 int, PRIMARY KEY (p1))", ks_name1)).get();
         auto table1 = e.local_db().find_schema(ks_name1, "table1")->id();
 
@@ -3170,7 +3184,7 @@ SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) 
 
         auto host1 = topo.add_node(node_state::normal, 16);
 
-        auto ks_name1 = add_keyspace(e, {{dc, 1}});
+        auto ks_name1 = add_keyspace(e, topo.get_dc_racks(), {{dc, 1}});
         std::vector<table_id> tables;
         shared_load_stats& load_stats = topo.get_shared_load_stats();
 
@@ -3294,7 +3308,7 @@ static void do_test_load_balancing_merge_colocation(cql_test_env& e, const int n
         hosts_by_rack[rack.rack].push_back(h);
     }
 
-    auto ks_name = add_keyspace(e, {{topo.dc(), rf}}, initial_tablets);
+    auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), rf}}, initial_tablets);
     auto table1 = add_table(e, ks_name).get();
     auto& stm = e.shared_token_metadata().local();
 
@@ -3530,7 +3544,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_resize_requests) {
         topo.add_node(node_state::normal, 2);
 
         const size_t initial_tablets = 2;
-        auto ks_name = add_keyspace(e, {{topo.dc(), 2}}, initial_tablets);
+        auto ks_name = add_keyspace(e, topo.get_dc_racks(), {{topo.dc(), 2}}, initial_tablets);
         auto table1 = add_table(e, ks_name).get();
 
         auto& stm = e.shared_token_metadata().local();
@@ -3755,8 +3769,8 @@ struct calculate_tablet_replicas_for_new_rf_config
         host_id id = host_id::create_random_id();
     };
     std::vector<ring_point> ring_points;
-    std::map<sstring, sstring> options;
-    std::map<sstring, sstring> new_dc_rep_factor;
+    replication_strategy_config_options options;
+    replication_strategy_config_options new_dc_rep_factor;
     std::map<sstring, size_t> expected_rep_factor;
 };
 
@@ -3839,7 +3853,14 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
 
     std::map<sstring, size_t> initial_rep_factor;
     for (auto const& [dc, shard_count] : test_config.options) {
-        initial_rep_factor[dc] = std::stoul(shard_count);
+        std::visit(overloaded_functor{
+            [&] (const sstring& s) {
+                initial_rep_factor[dc] = std::stoul(s);
+            },
+            [&] (const std::vector<sstring>& v) {
+                initial_rep_factor[dc] = v.size();
+            }
+        }, shard_count);
     }
 
     auto tablets = stm.get()->tablets().get_tablet_map(s->id());

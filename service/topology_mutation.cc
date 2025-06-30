@@ -221,11 +221,22 @@ topology_mutation_builder& topology_mutation_builder::set_committed_cdc_generati
 }
 
 topology_mutation_builder& topology_mutation_builder::set_new_keyspace_rf_change_data(
-        const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
+        const sstring& ks_name, const std::map<sstring, std::variant<sstring, std::vector<sstring>>>& rf_per_dc) {
     apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
+    std::map<sstring, sstring> flattented_map;
+    for (const auto& [dc, rf] : rf_per_dc) {
+        std::visit(overloaded_functor{
+            [&flattented_map, &dc] (const sstring& rf) {
+                flattented_map[dc] = rf;
+            },
+            [&flattented_map, &dc] (const std::vector<sstring>& rfs) {
+                flattented_map[dc] = fmt::format("[{}]", fmt::join(rfs, ","));
+            }
+        }, rf);
+    }
     apply_atomic("new_keyspace_rf_change_data",
                  make_map_value(schema().get_column_definition("new_keyspace_rf_change_data")->type,
-                                map_type_impl::native_type(rf_per_dc.begin(), rf_per_dc.end())));
+                                map_type_impl::native_type(flattented_map.begin(), flattented_map.end())));
     return *this;
 }
 
@@ -340,11 +351,22 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_new_keyspace_rf_change_data(
-        const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc) {
+        const sstring& ks_name, const std::map<sstring, std::variant<sstring, std::vector<sstring>>>& rf_per_dc) {
     apply_atomic("new_keyspace_rf_change_ks_name", ks_name);
+    std::map<sstring, sstring> flattented_map;
+    for (const auto& [dc, rf] : rf_per_dc) {
+        std::visit(overloaded_functor{
+            [&flattented_map, &dc] (const sstring& rf) {
+                flattented_map[dc] = rf;
+            },
+            [&flattented_map, &dc] (const std::vector<sstring>& rfs) {
+                flattented_map[dc] = fmt::format("[{}]", fmt::join(rfs, ","));
+            }
+        }, rf);
+    }
     apply_atomic("new_keyspace_rf_change_data",
                  make_map_value(schema().get_column_definition("new_keyspace_rf_change_data")->type,
-                                map_type_impl::native_type(rf_per_dc.begin(), rf_per_dc.end())));
+                                map_type_impl::native_type(flattented_map.begin(), flattented_map.end())));
     return *this;
 }
 

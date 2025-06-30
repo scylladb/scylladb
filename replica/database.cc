@@ -990,7 +990,7 @@ future<> database::create_local_system_table(
         bool durable = _cfg.data_file_directories().size() > 0;
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
-                std::map<sstring, sstring>{},
+                locator::replication_strategy_config_options{},
                 std::nullopt,
                 durable
                 );

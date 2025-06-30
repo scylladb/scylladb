@@ -259,6 +259,67 @@ using uexpression = uninitialized<expression>;
         return res;
     }
 
+    std::map<sstring, std::variant<sstring, std::vector<sstring>>> convert_extended_property_map(const collection_constructor& map) {
+        if (map.elements.empty()) {
+            return {};
+        }
+        std::map<sstring, std::variant<sstring, std::vector<sstring>>> res;
+        for (auto&& entry : map.elements) {
+            auto entry_tuple = expr::as_if<tuple_constructor>(&entry);
+            // Because the parser tries to be smart and recover on error (to
+            // allow displaying more than one error I suppose), we have default-constructed
+            // entries in map.elements. Just skip those, a proper error will be thrown in the end.
+            if (!entry_tuple || entry_tuple->elements.size() != 2) {
+                break;
+            }
+            auto left = expr::as_if<untyped_constant>(&entry_tuple->elements[0]);
+            if (!left) {
+                sstring msg = fmt::format("Invalid property name: {}", entry_tuple->elements[0]);
+                if (expr::is<bind_variable>(entry_tuple->elements[0])) {
+                    msg += " (bind variables are not supported in DDL queries)";
+                }
+                add_recognition_error(msg);
+                break;
+            }
+            auto right_str = expr::as_if<untyped_constant>(&entry_tuple->elements[1]);
+            if (right_str) {
+                if (!res.emplace(left->raw_text, right_str->raw_text).second) {
+                    sstring msg = fmt::format("Multiple definition for property {}", left->raw_text);
+                    add_recognition_error(msg);
+                    break;
+                }
+            } else {
+                auto right_vec = expr::as_if<collection_constructor>(&entry_tuple->elements[1]);
+                if (!right_vec) {
+                    sstring msg = fmt::format("Invalid property value: {} for property: {}", entry_tuple->elements[1], entry_tuple->elements[0]);
+                    if (expr::is<bind_variable>(entry_tuple->elements[1])) {
+                        msg += " (bind variables are not supported in DDL queries)";
+                    }
+                    add_recognition_error(msg);
+                    break;
+                }
+                auto values = right_vec->elements | std::views::transform([&] (const auto& x) -> sstring {
+                    auto elem = expr::as_if<untyped_constant>(&x);
+                    if (!elem) {
+                        sstring msg = fmt::format("Invalid property vector value: {} for property: {}", x, entry_tuple->elements[0]);
+                        if (expr::is<bind_variable>(x)) {
+                            msg += " (bind variables are not supported in DDL queries)";
+                        }
+                        add_recognition_error(msg);
+                        return "<invalid>";
+                    }
+                    return elem->raw_text;
+                }) | std::ranges::to<std::vector<sstring>>();
+                if (!res.emplace(left->raw_text, std::move(values)).second) {
+                    sstring msg = fmt::format("Multiple definition for property {}", left->raw_text);
+                    add_recognition_error(msg);
+                    break;
+                }
+            }
+        }
+        return res;
+    }
+
     sstring to_lower(std::string_view s) {
         sstring lower_s(s.size(), '\0');
         std::transform(s.cbegin(), s.cend(), lower_s.begin(), &::tolower);
@@ -1807,7 +1868,7 @@ properties[cql3::statements::property_definitions& props]
 
 property[cql3::statements::property_definitions& props]
     : k=ident '=' simple=propertyValue { try { $props.add_property(k->to_string(), simple); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
-    | k=ident '=' map=mapLiteral { try { $props.add_property(k->to_string(), convert_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
+    | k=ident '=' map=mapLiteral { try { $props.add_property(k->to_string(), convert_extended_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
     ;
 
 propertyValue returns [sstring str]
