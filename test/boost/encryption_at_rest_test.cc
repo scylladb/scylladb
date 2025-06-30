@@ -303,6 +303,9 @@ static future<> kmip_test_helper(const std::function<future<>(const kmip_test_in
 
     std::future<void> pykmip_status;
 
+    std::promise<int> port_promise;
+    auto fut = port_promise.get_future();
+
     static const char* def_resourcedir = "./test/resource/certs";
     const char* resourcedir = std::getenv("KMIP_RESOURCE_DIR");
     if (resourcedir == nullptr) {
@@ -366,9 +369,6 @@ database_path={}/pykmip.db
             bp::env["TMPDIR"]=tmp.path().string()
         );
 
-        std::promise<int> port_promise;
-        auto f = port_promise.get_future();
-
         pykmip_status = std::async([&] {
             static std::regex port_ex("Listening on (\\d+)");
 
@@ -391,10 +391,10 @@ database_path={}/pykmip.db
             }
         });
         // arbitrary timeout of 20s for the server to make some output. Very generous.
-        if (f.wait_for(20s) == std::future_status::timeout) {
+        if (fut.wait_for(20s) == std::future_status::timeout) {
             throw std::runtime_error("Could not start pykmip");
         }
-        auto port = f.get();
+        auto port = fut.get();
         if (port <= 0) {
             throw std::runtime_error("Invalid port");
         }
