@@ -157,7 +157,7 @@ will leave the recovery mode and remove the obsolete internal Raft data.
 
    After completing this step, Raft should be fully functional.
 
-#. Replace all dead nodes from the cluster using the
+#. Replace all dead nodes in the cluster using the
    :doc:`node replacement procedure </operating-scylla/procedures/cluster-management/replace-dead-node/>`.
 
    .. note::
