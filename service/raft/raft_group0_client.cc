@@ -317,7 +317,9 @@ future<group0_guard> raft_group0_client::start_operation(seastar::abort_source& 
     }
 }
 
-void raft_group0_client::validate_change(const topology_change& change) {
+template<typename Command>
+requires std::same_as<Command, topology_change> || std::same_as<Command, mixed_change>
+void raft_group0_client::validate_change(const Command& change) {
     replica::validate_tablet_metadata_change(_token_metadata.get()->tablets(), change.mutations);
 }
 
@@ -514,6 +516,9 @@ void raft_group0_client::set_query_result(utils::UUID query_id, service::broadca
         it->second = std::move(qr);
     }
 }
+
+template void raft_group0_client::validate_change(const topology_change& change);
+template void raft_group0_client::validate_change(const mixed_change& change);
 
 template group0_command raft_group0_client::prepare_command(schema_change change, group0_guard& guard, std::string_view description);
 template group0_command raft_group0_client::prepare_command(topology_change change, group0_guard& guard, std::string_view description);
