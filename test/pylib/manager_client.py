@@ -599,6 +599,13 @@ class ManagerClient:
         rows = await self.cql.run_async(f"select id from system_schema.views where keyspace_name = '{keyspace}' and view_name = '{view}'")
         return rows[0].id
 
+    async def get_table_or_view_id(self, keyspace: str, table: str):
+        rows = await self.cql.run_async(f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'")
+        if len(rows) > 0:
+            return rows[0].id
+        rows = await self.cql.run_async(f"select id from system_schema.views where keyspace_name = '{keyspace}' and view_name = '{table}'")
+        return rows[0].id
+
     async def server_sees_others(self, server_id: ServerNum, count: int, interval: float = 45.):
         """Wait till a server sees a minimum given count of other servers"""
         if count < 1:
