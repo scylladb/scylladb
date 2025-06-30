@@ -10,6 +10,7 @@
 
 #include "seastarx.hh"
 #include "service/paxos/cas_request.hh"
+#include "service/cas_shard.hh"
 #include "utils/rjson.hh"
 #include "consumed_capacity.hh"
 #include "executor.hh"
@@ -114,6 +115,7 @@ public:
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
     future<executor::request_return_type> execute(service::storage_proxy& proxy,
+            std::optional<service::cas_shard> cas_shard,
             service::client_state& client_state,
             tracing::trace_state_ptr trace_state,
             service_permit permit,
@@ -121,7 +123,7 @@ public:
             stats& global_stats,
             stats& per_table_stats,
             uint64_t& wcu_total);
-    std::optional<shard_id> shard_for_execute(bool needs_read_before_write);
+    std::optional<service::cas_shard> shard_for_execute(bool needs_read_before_write);
 };
 
 } // namespace alternator

@@ -15,6 +15,7 @@
 #include "cql3/selection/selection.hh"
 #include "service/query_state.hh"
 #include "exceptions/coordinator_result.hh"
+#include "service/cas_shard.hh"
 
 namespace service {
 
@@ -30,7 +31,8 @@ using query_function = std::function<future<exceptions::coordinator_result<servi
         lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector&& partition_ranges,
         db::consistency_level cl,
-        service::storage_proxy_coordinator_query_options optional_params)>;
+        service::storage_proxy_coordinator_query_options optional_params,
+        std::optional<service::cas_shard> cas_shard)>;
 
 /**
  * Perform a query, paging it by page of a given size.
@@ -79,6 +81,7 @@ protected:
     const cql3::query_options& _options;
     lw_shared_ptr<query::read_command> _cmd;
     dht::partition_range_vector _ranges;
+    std::optional<service::cas_shard> _cas_shard;
     paging_state::replicas_per_token_range _last_replicas;
     std::optional<db::read_repair_decision> _query_read_repair_decision;
     uint64_t _rows_fetched_for_last_partition = 0;
@@ -92,6 +95,7 @@ public:
                 const cql3::query_options& options,
                 lw_shared_ptr<query::read_command> cmd,
                 dht::partition_range_vector ranges,
+                std::optional<service::cas_shard> cas_shard,
                 query_function query_function_override = {});
     virtual ~query_pager() {}
 

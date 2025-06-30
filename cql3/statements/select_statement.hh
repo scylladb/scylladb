@@ -19,6 +19,7 @@
 #include "index/secondary_index_manager.hh"
 #include "exceptions/coordinator_result.hh"
 #include "locator/host_id.hh"
+#include "service/cas_shard.hh"
 
 namespace service {
     class client_state;
@@ -125,11 +126,13 @@ public:
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message_non_aggregate_unpaged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
-         const query_options& options, gc_clock::time_point now) const;
+        const query_options& options, gc_clock::time_point now,
+        std::optional<service::cas_shard> cas_shard) const;
 
     future<::shared_ptr<cql_transport::messages::result_message>> execute_without_checking_exception_message_aggregate_or_paged(query_processor& qp,
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
-         const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering, uint64_t limit) const;
+         const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering, uint64_t limit,
+        std::optional<service::cas_shard> cas_shard) const;
 
 
     struct primary_key {
