@@ -938,7 +938,7 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [ '--target-tablet-size-in-bytes', '8192',
                 '--smp', '2' ]
-    config = { 'error_injections_at_startup': ['short_tablet_stats_refresh_interval'] }
+    config = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = [await manager.server_add(config=config, cmdline=cmdline)]
 
     s0_log = await manager.server_open_log(servers[0].server_id)
@@ -1026,10 +1026,10 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     cfg = {
         'enable_user_defined_functions': False, 'enable_tablets': True,
         'error_injections_at_startup': [
-            'short_tablet_stats_refresh_interval',
             # intially disable transitioning into tablet_resize_finalization topology state
             'tablet_split_finalization_postpone',
-            ]
+            ],
+        'tablet_load_stats_refresh_interval_in_seconds': 1
         }
     cmdline = [
         '--logger-log-level', 'raft_topology=debug',

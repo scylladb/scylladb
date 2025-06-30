@@ -611,6 +611,8 @@ public:
 
     named_value<bool> rf_rack_valid_keyspaces;
 
+    named_value<uint32_t> tablet_load_stats_refresh_interval_in_seconds;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>

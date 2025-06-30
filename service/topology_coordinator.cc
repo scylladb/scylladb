@@ -39,6 +39,7 @@
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
+#include "db/config.hh"
 #include "db/view/view_builder.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
@@ -61,6 +62,7 @@
 #include "replica/exceptions.hh"
 #include "service/paxos/prepare_response.hh"
 #include "idl/storage_proxy.dist.hh"
+#include "utils/updateable_value.hh"
 
 #include "service/topology_coordinator.hh"
 
@@ -114,6 +116,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     locator::shared_token_metadata& _shared_tm;
     db::system_keyspace& _sys_ks;
     replica::database& _db;
+    utils::updateable_value<uint32_t> _tablet_load_stats_refresh_interval_in_seconds;
     service::raft_group0& _group0;
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
@@ -131,9 +134,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
     std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
-    // FIXME: make frequency per table in order to reduce work in each iteration.
-    //  Bigger tables will take longer to be resized. similar-sized tables can be batched into same iteration.
-    static constexpr std::chrono::seconds tablet_load_stats_refresh_interval = std::chrono::seconds(60);
 
     std::chrono::milliseconds _ring_delay;
 
@@ -3022,6 +3022,7 @@ public:
             topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
+        , _tablet_load_stats_refresh_interval_in_seconds(db.get_config().tablet_load_stats_refresh_interval_in_seconds)
         , _group0(group0), _topo_sm(topo_sm), _as(as)
         , _feature_service(feature_service)
         , _raft(raft_server), _term(raft_server.get_current_term())
@@ -3250,8 +3251,7 @@ future<> topology_coordinator::start_tablet_load_stats_refresher() {
         } catch (...) {
             rtlogger.warn("Found error while refreshing load stats for tablets: {}, retrying...", std::current_exception());
         }
-        auto refresh_interval = utils::get_local_injector().is_enabled("short_tablet_stats_refresh_interval") ?
-                std::chrono::seconds(1) : tablet_load_stats_refresh_interval;
+        auto refresh_interval = std::chrono::seconds(_tablet_load_stats_refresh_interval_in_seconds.get());
         if (sleep && can_proceed()) {
             try {
                 co_await seastar::sleep_abortable(refresh_interval, _as);

@@ -397,7 +397,7 @@ async def test_tablet_resize_task(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     servers = [await manager.server_add(cmdline=cmdline, config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     })]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -437,7 +437,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     servers = [await manager.server_add(cmdline=cmdline, config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     })]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -452,7 +452,7 @@ async def test_tablet_resize_list(manager: ManagerClient):
         await prepare_split(manager, servers[0], keyspace, table1, keys)
 
         servers.append(await manager.server_add(cmdline=cmdline, config={
-            'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+            'tablet_load_stats_refresh_interval_in_seconds': 1
         }))
 
         s1_log = await manager.server_open_log(servers[0].server_id)
@@ -495,7 +495,7 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
     module_name = "tablets"
     tm = TaskManagerClient(manager.api)
     servers = [await manager.server_add(cmdline=cmdline, config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     })]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
