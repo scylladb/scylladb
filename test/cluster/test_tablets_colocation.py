@@ -190,7 +190,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
         '--target-tablet-size-in-bytes', '30000',
     ]
     servers = [await manager.server_add(config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -309,7 +309,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
 @skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.parametrize("wait_stage", [("streaming", "stream_tablet_wait"), ("cleanup", "cleanup_tablet_wait")])
 async def test_create_colocated_table_while_base_is_migrating(manager: ManagerClient, wait_stage):
-    cfg = {'enable_tablets': True, 'error_injections_at_startup': ['short_tablet_stats_refresh_interval'] }
+    cfg = {'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'raft_topology=debug',

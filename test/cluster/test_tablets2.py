@@ -623,7 +623,7 @@ async def test_tablet_split(manager: ManagerClient, injection_error: str):
         '--target-tablet-size-in-bytes', '1024',
     ]
     servers = [await manager.server_add(config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -692,7 +692,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         '--target-tablet-size-in-bytes', '1024',
     ]
     servers = [await manager.server_add(config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval'],
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -737,7 +737,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
 
         # Delays refresh of tablet stats, so balancer works with whichever it got last.
         await manager.api.disable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing")
-        await manager.api.disable_injection(servers[0].ip_addr, "short_tablet_stats_refresh_interval")
+        await manager.server_update_config(servers[0].server_id, 'tablet_load_stats_refresh_interval_in_seconds', 60)
         time.sleep(1)
         await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
@@ -1200,7 +1200,7 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
         '--target-tablet-size-in-bytes', '5000',
     ]
     servers = [await manager.server_add(config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)

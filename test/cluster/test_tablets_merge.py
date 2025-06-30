@@ -45,7 +45,7 @@ async def test_tablet_merge_simple(manager: ManagerClient):
         '--target-tablet-size-in-bytes', '30000',
     ]
     servers = [await manager.server_add(config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -191,7 +191,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
         '--target-tablet-size-in-bytes', '30000',
     ]
     config = {
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }
     servers = [await manager.server_add(config=config, cmdline=cmdline),
                await manager.server_add(config=config, cmdline=cmdline),
@@ -328,8 +328,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks):
     cmdline = ['--target-tablet-size-in-bytes', '30000',]
-    config = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
-
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     servers = []
     rf = racks
     for rack_id in range(0, racks):
@@ -381,7 +380,7 @@ async def test_tablet_merge_cross_rack_migrations(manager: ManagerClient, racks)
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_split_merge_with_many_tables(manager: ManagerClient, racks = 2):
     cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200',]
-    config = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
 
     servers = []
     rf = racks
@@ -522,8 +521,8 @@ async def test_missing_data(manager: ManagerClient):
 
     logger.info('Bootstrapping cluster')
     cfg = { 'enable_tablets': True,
-            'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
-            }
+            'tablet_load_stats_refresh_interval_in_seconds': 1
+    }
     cmdline = [
         '--logger-log-level', 'load_balancer=debug',
         '--logger-log-level', 'debug_error_injection=debug',
