@@ -418,11 +418,11 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 console.print_progress(result)
         return failed
 
-    await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
     total_tests = 0
     max_failures = options.max_failures
     failed = 0
     try:
+        await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
         for i in range(1, options.repeat + 1):
             result = run_pytest(options, run_id=i)
             total_tests += result[0]
