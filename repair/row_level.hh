@@ -18,6 +18,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include <seastar/core/distributed.hh>
 #include <seastar/util/bool_class.hh>
+#include <seastar/core/rwlock.hh>
 #include "utils/user_provided_param.hh"
 #include "locator/tablet_metadata_guard.hh"
 
@@ -130,6 +131,9 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
             std::unordered_set<locator::host_id> ignore_nodes);
 
 public:
+    std::unordered_map<service::session_id, std::vector<seastar::rwlock::holder>> _repair_compaction_locks;
+
+public:
     repair_service(sharded<service::topology_state_machine>& tsm,
             distributed<gms::gossiper>& gossiper,
             netw::messaging_service& ms,
@@ -180,7 +184,7 @@ private:
 public:
     future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<locator::host_id> hosts = {}, std::unordered_set<locator::host_id> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
 
-    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas);
+    future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage);
 private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
@@ -245,14 +249,16 @@ public:
             streaming::stream_reason reason,
             gc_clock::time_point compaction_time,
             abort_source& as,
-            service::frozen_topology_guard topo_guard);
+            service::frozen_topology_guard topo_guard,
+            std::optional<int64_t> repaired_at);
 
     future<>
     remove_repair_meta(const locator::host_id& from,
             uint32_t repair_meta_id,
             sstring ks_name,
             sstring cf_name,
-            dht::token_range range);
+            dht::token_range range,
+            bool mark_incremental_repair);
 
     future<> remove_repair_meta(locator::host_id from);
 

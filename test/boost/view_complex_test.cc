@@ -844,7 +844,8 @@ void test_commutative_row_deletion(cql_test_env& e, std::function<void()>&& mayb
         }});
     });
 
-    e.local_db().get_compaction_manager().perform_major_compaction(e.local_db().find_column_family("ks", "vcf").try_get_table_state_with_static_sharding(), tasks::task_info{}).get();
+    auto tsv = make_unrepaired_table_state_view(&e.local_db().find_column_family("ks", "vcf").try_get_table_state_with_static_sharding());
+    e.local_db().get_compaction_manager().perform_major_compaction(tsv, tasks::task_info{}).get();
 }
 
 SEASTAR_TEST_CASE(test_commutative_row_deletion_without_flush) {
@@ -1080,7 +1081,8 @@ void test_update_with_column_timestamp_bigger_than_pk(cql_test_env& e, std::func
         }});
     });
 
-    e.local_db().get_compaction_manager().perform_major_compaction(e.local_db().find_column_family("ks", "vcf").try_get_table_state_with_static_sharding(), tasks::task_info{}).get();
+    auto tsv = make_unrepaired_table_state_view(&e.local_db().find_column_family("ks", "vcf").try_get_table_state_with_static_sharding());
+    e.local_db().get_compaction_manager().perform_major_compaction(tsv, tasks::task_info{}).get();
     eventually([&] {
         auto msg = e.execute_cql("select * from vcf limit 1").get();
         assert_that(msg).is_rows().with_rows({{
