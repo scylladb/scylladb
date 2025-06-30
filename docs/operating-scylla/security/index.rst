@@ -22,7 +22,7 @@ Security
    encryption-at-rest
    ldap-authentication
    ldap-authorization
-
+   sbom
 .. panel-box::
   :title: Security
   :id: "getting-started"
@@ -57,3 +57,10 @@ Security
   * :doc:`Encryption at Rest </operating-scylla/security/encryption-at-rest>`
 
 Also check out the `Security Features lesson <https://university.scylladb.com/courses/scylla-operations/lessons/security-features/topic/security-features/>`_ on ScyllaDB University.
+
+.. panel-box::
+  :title: Software Bill Of Materials (SBOM)
+  :id: "getting-started"
+  :class: my-panel
+
+  * :doc:`Software Bill Of Materials (SBOM) </operating-scylla/security/sbom/>`
