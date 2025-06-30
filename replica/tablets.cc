@@ -456,6 +456,10 @@ static void do_validate_tablet_metadata_change(const locator::tablet_metadata& t
         return;
     }
 
+    if (mp.row_count() && !tm.is_base_table(table_id)) {
+        throw std::runtime_error(fmt::format("Table {} is a co-located table, it cannot have clustering rows.", table_id));
+    }
+
     auto& r_cdef = *s.get_column_definition("replicas");
     auto& nr_cdef = *s.get_column_definition("new_replicas");
 
