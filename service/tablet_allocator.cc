@@ -674,6 +674,14 @@ class load_balancer {
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
     std::unordered_set<host_id> _hosts_with_missing_tablet_sizes;
+
+    // This is the maximum load delta between the most and least loaded nodes,
+    // below which the balancer considers the DC balanced
+    double _size_based_balance_threshold = 0.05;
+
+    // When this is set to true, the balancer assumes all tablets
+    // have the same size: _target_tablet_size
+    bool _force_capacity_based_balancing = false;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -755,6 +763,8 @@ public:
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
         , _skiplist(std::move(skiplist))
+        , _size_based_balance_threshold(db.get_config().size_based_balance_threshold_percentage() / 100.0)
+        , _force_capacity_based_balancing(db.get_config().force_capacity_based_balancing())
     { }
 
     future<migration_plan> make_plan() {

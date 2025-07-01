@@ -585,6 +585,8 @@ public:
     named_value<bool> rf_rack_valid_keyspaces;
 
     named_value<uint32_t> tablet_load_stats_refresh_interval_in_seconds;
+    named_value<bool> force_capacity_based_balancing;
+    named_value<float> size_based_balance_threshold_percentage;
 
     static const sstring default_tls_priority;
 private:
