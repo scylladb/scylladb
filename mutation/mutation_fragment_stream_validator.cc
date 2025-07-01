@@ -325,7 +325,7 @@ bool mutation_fragment_stream_validating_filter::operator()(mutation_fragment_v2
         res = _validator(kind, new_current_tombstone);
     }
 
-    if (__builtin_expect(!res->is_valid(), false)) {
+    if (!res->is_valid()) [[unlikely]] {
         return on_validation_error(validator_log, *this, *res);
     }
 

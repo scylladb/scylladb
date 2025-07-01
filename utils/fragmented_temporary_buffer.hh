@@ -337,7 +337,7 @@ private:
     template<typename ExceptionThrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     void check_out_of_range(ExceptionThrower& exceptions, size_t n) {
-        if (__builtin_expect(bytes_left() < n, false)) {
+        if (bytes_left() < n) [[unlikely]] {
             exceptions.throw_out_of_range(n, bytes_left());
             // Let's allow skipping this check if the user trusts its input
             // data.
@@ -398,7 +398,7 @@ public:
     }
 
     void skip(size_t n) noexcept {
-        if (__builtin_expect(contig_remain() < n, false)) {
+        if (contig_remain() < n) [[unlikely]] {
             return skip_slow(n);
         }
         _current_position += n;
@@ -407,7 +407,7 @@ public:
     template<typename T, typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     T read(ExceptionThrower&& exceptions = default_exception_thrower()) {
-        if (__builtin_expect(contig_remain() < sizeof(T), false)) {
+        if (contig_remain() < sizeof(T)) [[unlikely]] {
             return read_slow<T>(std::forward<ExceptionThrower>(exceptions));
         }
         T obj;
@@ -419,7 +419,7 @@ public:
     template<typename Output, typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     Output read_to(size_t n, Output out, ExceptionThrower&& exceptions = default_exception_thrower()) {
-        if (__builtin_expect(contig_remain() >= n, true)) {
+        if (contig_remain() >= n) [[likely]] {
             out = std::copy_n(_current_position, n, out);
             _current_position += n;
             return out;
@@ -441,7 +441,7 @@ public:
     template<typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     view read_view(size_t n, ExceptionThrower&& exceptions = default_exception_thrower()) {
-        if (__builtin_expect(contig_remain() >= n, true)) {
+        if (contig_remain() >= n) [[likely]] {
             auto v = view(_current, _current_position - _current->get(), n);
             _current_position += n;
             return v;
@@ -461,7 +461,7 @@ public:
     template<typename ExceptionThrower = default_exception_thrower>
     requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
     bytes_view read_bytes_view(size_t n, bytes_ostream& linearization_buffer, ExceptionThrower&& exceptions = default_exception_thrower()) {
-        if (__builtin_expect(contig_remain() >= n, true)) {
+        if (contig_remain() >= n) [[likely]] {
             auto v = bytes_view(reinterpret_cast<const bytes::value_type*>(_current_position), n);
             _current_position += n;
             return v;

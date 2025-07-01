@@ -136,7 +136,7 @@ u32 mul_by_x_pow_mul8(u32 p, u64 e) {
 
     u32 x0 = crc32_x_pow_radix_8_table_base_0[e & 0xff];
 
-    if (__builtin_expect(e < 0x100, false)) {
+    if (e < 0x100) [[unlikely]] {
         return pmul_mod(p, x0);
     }
 
@@ -148,14 +148,14 @@ u32 mul_by_x_pow_mul8(u32 p, u64 e) {
     u32 z0 = crc32_fold_barrett_u64(y0);
     u32 z1 = crc32_fold_barrett_u64(y1);
 
-    if (__builtin_expect(e < 0x1000000, true)) {
+    if (e < 0x1000000) [[likely]] {
         return pmul_mod(z0, z1);
     }
 
     u32 x3 = crc32_x_pow_radix_8_table_base_24[(e >> 24) & 0xff];
     z1 = pmul_mod(z1, x3);
 
-    if (__builtin_expect(e < 0x100000000, true)) {
+    if (e < 0x100000000) [[likely]] {
         return pmul_mod(z0, z1);
     }
 
