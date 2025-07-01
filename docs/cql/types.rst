@@ -481,7 +481,8 @@ Creating a new user-defined type is done using a ``CREATE TYPE`` statement defin
    field_definition: `identifier` `cql_type`
 
 A UDT has a name (``udt_name``), which is used to declare columns of that type and is a set of named and typed fields. The ``udt_name`` can be any
-type, including collections or other UDTs. UDTs and collections inside collections must always be frozen (no matter which version of ScyllaDB you are using). 
+type, including collections or other UDTs.
+Similar to collections, a UDT can be frozen or non-frozen. A frozen UDT is immutable and can only be updated as a whole. Nested UDTs or UDTs used in keys must always be frozen.
 
 For example::
 
@@ -506,25 +507,14 @@ For example::
 
   CREATE TABLE superheroes (
        name frozen<full_name> PRIMARY KEY,
-       home frozen<address>
+       home address
   );
 
 .. note::
 
    - Attempting to create an already existing type will result in an error unless the ``IF NOT EXISTS`` option is used. If it is used, the statement will be a no-op if the type already exists.
    - A type is intrinsically bound to the keyspace in which it is created and can only be used in that keyspace. At creation, if the type name is prefixed by a keyspace name, it is created in that keyspace. Otherwise, it is created in the current keyspace.
-   - As of ScyllaDB Open Source 3.2, UDTs not inside collections do not have to be frozen, but in all versions prior to ScyllaDB Open Source 3.2, and in all ScyllaDB Enterprise versions, UDTs **must** be frozen. 
 
-
-A non-frozen UDT example with ScyllaDB Open Source 3.2 and higher::
-
-   CREATE TYPE ut (a int, b int);
-   CREATE TABLE cf (a int primary key, b ut);
-
-Same UDT in versions prior::
-
-   CREATE TYPE ut (a int, b int);
-   CREATE TABLE cf (a int primary key, b frozen<ut>);
 
 UDT literals
 ~~~~~~~~~~~~
