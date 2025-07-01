@@ -122,7 +122,7 @@ uint64_t unsigned_vint::deserialize(bytes_view v) {
     uint64_t value;
     // If we can overread do that. It is cheaper to have a single 64-bit read and
     // then mask out the unneeded part than to do 8x 1 byte reads.
-    if (__builtin_expect(len >= sizeof(uint64_t) + 1, true)) {
+    if (len >= sizeof(uint64_t) + 1) [[likely]] {
         std::copy_n(src + 1, sizeof(uint64_t), reinterpret_cast<int8_t*>(&value));
     } else {
         value = 0;

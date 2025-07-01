@@ -136,7 +136,7 @@ decltype(auto) with_linearized(const FragmentedBuffer& buffer, Function&& fn)
 {
     bytes b;
     bytes_view bv;
-    if (__builtin_expect(!buffer.empty() && std::next(buffer.begin()) == buffer.end(), true)) {
+    if (!buffer.empty() && std::next(buffer.begin()) == buffer.end()) [[likely]] {
         bv = *buffer.begin();
     } else if (!buffer.empty()) {
         b = linearized(buffer);

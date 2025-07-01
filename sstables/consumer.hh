@@ -344,7 +344,7 @@ public:
     // Feeds data into the state machine.
     // After the call, when data is not empty then active() can be assumed to be false.
     read_status consume(Buffer& data) {
-        if (__builtin_expect(_prestate == prestate::NONE, true)) {
+        if (_prestate == prestate::NONE) [[likely]] {
             return read_status::ready;
         }
         // We're in the middle of reading a basic type, which crossed
@@ -556,12 +556,12 @@ public:
     inline processing_result process(temporary_buffer<char>& data) {
         while (data || (!primitive_consumer::active() && non_consuming())) {
             // The primitive_consumer must finish before the enclosing state machine can continue.
-            if (__builtin_expect(primitive_consumer::consume(data) == read_status::waiting, false)) {
+            if (primitive_consumer::consume(data) == read_status::waiting) [[unlikely]] {
                 sstables::parse_assert(data.size() == 0);
                 return proceed::yes;
             }
             auto ret = state_processor().process_state(data);
-            if (__builtin_expect(ret != proceed::yes, 0)) {
+            if (ret != proceed::yes) [[unlikely]] {
                 return ret;
             }
         }

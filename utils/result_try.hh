@@ -567,7 +567,7 @@ result_futurize_try(Fun&& fun, Handlers&&... handlers) {
         }, handlers...);
     });
 
-    if (!__builtin_expect(no_exceptions, true)) {
+    if (!no_exceptions) [[unlikely]] {
         // There were C++ exceptions, and we handled them already
         return f;
     }

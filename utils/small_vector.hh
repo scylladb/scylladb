@@ -106,7 +106,7 @@ private:
     }
 
     void reserve_at_least(size_t n) {
-        if (__builtin_expect(n > capacity(), false)) {
+        if (n > capacity()) [[unlikely]] {
             expand(std::max(n, capacity() * 2));
         }
     }
@@ -202,7 +202,7 @@ public:
     small_vector& operator=(small_vector&& other) noexcept {
         clear();
         if (other.uses_internal_storage()) {
-            if (__builtin_expect(!uses_internal_storage(), false)) {
+            if (!uses_internal_storage()) [[unlikely]] {
                 std::free(_begin);
                 _begin = _internal.storage;
             }
@@ -222,7 +222,7 @@ public:
             }
             other._end = other._internal.storage;
         } else {
-            if (__builtin_expect(!uses_internal_storage(), false)) {
+            if (!uses_internal_storage()) [[unlikely]] {
                 std::free(_begin);
             }
             _begin = std::exchange(other._begin, other._internal.storage);
@@ -246,7 +246,7 @@ public:
 
     ~small_vector() {
         clear();
-        if (__builtin_expect(!uses_internal_storage(), false)) {
+        if (!uses_internal_storage()) [[unlikely]] {
             std::free(_begin);
         }
     }
@@ -263,7 +263,7 @@ public:
     }
 
     void reserve(size_t n) {
-        if (__builtin_expect(n > capacity(), false)) {
+        if (n > capacity()) [[unlikely]] {
             expand(n);
         }
     }
@@ -302,13 +302,13 @@ public:
     const T& operator[](size_t idx) const noexcept { return data()[idx]; }
 
     T& at(size_t idx) {
-        if (__builtin_expect(idx >= size(), false)) {
+        if (idx >= size()) [[unlikely]] {
             throw_out_of_range();
         }
         return operator[](idx);
     }
     const T& at(size_t idx) const {
-        if (__builtin_expect(idx >= size(), false)) {
+        if (idx >= size()) [[unlikely]] {
             throw_out_of_range();
         }
         return operator[](idx);
@@ -320,7 +320,7 @@ public:
 
     template<typename... Args>
     T& emplace_back(Args&&... args) {
-        if (__builtin_expect(_end == _capacity_end, false)) {
+        if (_end == _capacity_end) [[unlikely]] {
             expand(std::max<size_t>(capacity() * 2, 1));
         }
         auto& ref = *new (_end) T(std::forward<Args>(args)...);
@@ -347,7 +347,7 @@ public:
             reserve_at_least(size() + new_count);
             auto pos = _begin + idx;
             auto after = std::distance(pos, end());
-            if (__builtin_expect(pos == end(), true)) {
+            if (pos == end()) [[likely]] {
                 _end = std::uninitialized_copy(first, last, end());
                 return pos;
             } else if (after > new_count) {

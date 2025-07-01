@@ -81,7 +81,7 @@ public:
     future<bool> maybe_record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, uint64_t row_size) {
         SCYLLA_ASSERT(running());
-        if (__builtin_expect(row_size > _row_threshold_bytes, false)) {
+        if (row_size > _row_threshold_bytes) [[unlikely]] {
             return with_sem([&sst, &partition_key, clustering_key, row_size, this] {
                 return record_large_rows(sst, partition_key, clustering_key, row_size);
             }).then([] {
@@ -101,7 +101,7 @@ public:
     future<bool> maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) {
         SCYLLA_ASSERT(running());
-        if (__builtin_expect(cell_size > _cell_threshold_bytes || collection_elements > _collection_elements_count_threshold, false)) {
+        if (cell_size > _cell_threshold_bytes || collection_elements > _collection_elements_count_threshold) [[unlikely]] {
             return with_sem([&sst, &partition_key, clustering_key, &cdef, cell_size, collection_elements, this] {
                 return record_large_cells(sst, partition_key, clustering_key, cdef, cell_size, collection_elements);
             }).then([] {

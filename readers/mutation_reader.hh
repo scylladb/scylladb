@@ -639,7 +639,7 @@ public:
     // Causes this reader to conform to s.
     // Multiple calls of upgrade_schema() compose, effects of prior calls on the stream are preserved.
     void upgrade_schema(const schema_ptr& s) {
-        if (__builtin_expect(s != schema(), false)) {
+        if (s != schema()) [[unlikely]] {
             do_upgrade_schema(s);
         }
     }

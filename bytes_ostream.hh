@@ -139,7 +139,7 @@ private:
     // size must not be zero.
     [[gnu::always_inline]]
     value_type* alloc(size_type size) {
-        if (__builtin_expect(size <= current_space_left(), true)) {
+        if (size <= current_space_left()) [[likely]] {
             auto ret = _current->data + _current->frag_size;
             _current->frag_size += size;
             _size += size;
@@ -249,7 +249,7 @@ public:
         }
 
         auto this_size = std::min(v.size(), size_t(current_space_left()));
-        if (__builtin_expect(this_size, true)) {
+        if (this_size) [[likely]] {
             memcpy(_current->data + _current->frag_size, v.begin(), this_size);
             _current->frag_size += this_size;
             _size += this_size;
