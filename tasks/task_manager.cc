@@ -400,6 +400,10 @@ void task_manager::task::set_virtual_parent() noexcept {
     _impl->set_virtual_parent();
 }
 
+future<std::optional<double>> task_manager::task::expected_total_workload() const {
+    return _impl->expected_total_workload();
+}
+
 task_manager::virtual_task::impl::impl(module_ptr module) noexcept
     : _module(std::move(module))
 {}
