@@ -10,12 +10,52 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include "utils/managed_bytes.hh"
 #include "test/lib/cql_test_env.hh"
 #include "transport/messages/result_message_base.hh"
 #include "bytes.hh"
 #include <source_location>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/future.hh>
+
+class columns_assertions {
+    const cql3::metadata& _metadata;
+    const std::vector<managed_bytes_opt>& _columns;
+
+    columns_assertions& do_with_raw_column(const char* name, std::function<void(data_type, managed_bytes_view)> func);
+
+    void fail(const sstring& msg);
+
+public:
+    columns_assertions(const cql3::metadata& metadata, const std::vector<managed_bytes_opt>& columns)
+        : _metadata(metadata), _columns(columns)
+    { }
+
+    columns_assertions& with_raw_column(const char* name, std::function<bool(managed_bytes_view)> predicate);
+    columns_assertions& with_raw_column(const char* name, managed_bytes_view value);
+
+    template <typename T>
+    columns_assertions& with_typed_column(const char* name, std::function<bool(const T& value)> predicate) {
+        return do_with_raw_column(name, [this, name, predicate] (data_type type, managed_bytes_view value) {
+            if (type != data_type_for<T>()) {
+                fail(seastar::format("Column {} is not of type {}, but of type {}", name, data_type_for<T>()->name(), type->name()));
+            }
+            if (!predicate(value_cast<T>(type->deserialize(value)))) {
+                fail(seastar::format("Column {} failed predicate check: value = {}", name, value));
+            }
+        });
+    }
+
+    template <typename T>
+    columns_assertions& with_typed_column(const char* name, const T& value) {
+        return  with_typed_column<T>(name, [this, name, &value] (const T& cell_value) {
+            if (cell_value != value) {
+                fail(seastar::format("Expected column {} to have value {}, but got {}", name, value, cell_value));
+            }
+            return true;
+        });
+    }
+};
 
 class rows_assertions {
     shared_ptr<cql_transport::messages::result_message::rows> _rows;
@@ -32,6 +72,8 @@ public:
     // Verifies that the result has the following rows and only those rows.
     rows_assertions with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows);
     rows_assertions with_serialized_columns_count(size_t columns_count);
+
+    columns_assertions with_columns_of_row(size_t row_index);
 
     rows_assertions is_null();
     rows_assertions is_not_null();

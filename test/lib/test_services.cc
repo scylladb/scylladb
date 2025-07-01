@@ -13,6 +13,7 @@
 #include "test/lib/test_utils.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
+#include "db/corrupt_data_handler.hh"
 #include "dht/i_partitioner.hh"
 #include "gms/feature_service.hh"
 #include "repair/row_level.hh"
@@ -201,6 +202,7 @@ struct test_env::impl {
     ::cache_tracker cache_tracker;
     gms::feature_service feature_service;
     db::nop_large_data_handler nop_ld_handler;
+    db::nop_corrupt_data_handler nop_cd_handler;
     sstable_compressor_factory& scf;
     test_env_sstables_manager mgr;
     std::unique_ptr<test_env_compaction_manager> cmgr;
@@ -225,10 +227,22 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
     , db_config(make_db_config(dir.path().native(), cfg.storage))
     , dir_sem(1)
     , feature_service(gms::feature_config_from_db_config(*db_config))
+    , nop_cd_handler(db::corrupt_data_handler::register_metrics::no)
     , scf(scfarg)
-    , mgr("test_env", cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler, *db_config,
-        feature_service, cache_tracker, cfg.available_memory, dir_sem,
-        [host_id = locator::host_id::create_random_id()]{ return host_id; }, scf, abort, current_scheduling_group(), sstm)
+    , mgr(
+            "test_env",
+            cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler,
+            cfg.corrupt_data_handler == nullptr ? nop_cd_handler : *cfg.corrupt_data_handler,
+            *db_config,
+            feature_service,
+            cache_tracker,
+            cfg.available_memory,
+            dir_sem,
+            [host_id = locator::host_id::create_random_id()]{ return host_id; },
+            scf,
+            abort,
+            current_scheduling_group(),
+            sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
     , use_uuid(cfg.use_uuid)
     , storage(std::move(cfg.storage))
