@@ -7,7 +7,7 @@
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
-from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
+from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
 from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace
@@ -33,18 +33,6 @@ async def disable_injection_on(manager, error_name, servers):
     errs = [manager.api.disable_injection(s.ip_addr, error_name) for s in servers]
     await asyncio.gather(*errs)
 
-
-async def get_tablet_count(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str):
-    host = manager.cql.cluster.metadata.get_host(server.ip_addr)
-
-    # read_barrier is needed to ensure that local tablet metadata on the queried node
-    # reflects the finalized tablet movement.
-    await read_barrier(manager.api, server.ip_addr)
-
-    table_id = await manager.get_table_id(keyspace_name, table_name)
-    rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
-                                       f"table_id = {table_id}", host=host)
-    return rows[0].tablet_count
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')

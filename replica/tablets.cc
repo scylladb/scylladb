@@ -77,6 +77,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
+            .with_column("base_table", uuid_type, column_kind::static_column)
             .with_hash_version()
             .build();
 }
@@ -165,6 +166,23 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         co_await coroutine::maybe_yield();
     }
     co_return std::move(m);
+}
+
+mutation
+colocated_tablet_map_to_mutation(table_id id, const sstring& keyspace_name, const sstring& table_name, table_id base_table, api::timestamp_type ts) {
+    auto s = db::system_keyspace::tablets();
+    auto gc_now = gc_clock::now();
+    auto tombstone_ts = ts - 1;
+
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(id.uuid()).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(tombstone_ts, gc_now));
+    m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
+    m.set_static_cell("table_name", data_value(table_name), ts);
+    m.set_static_cell("base_table", data_value(base_table.uuid()), ts);
+
+    return m;
 }
 
 tablet_mutation_builder&
@@ -294,6 +312,12 @@ tablet_mutation_builder::del_resize_task_info(const gms::feature_service& featur
     return *this;
 }
 
+tablet_mutation_builder&
+tablet_mutation_builder::set_base_table(table_id base_table) {
+    _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
+    return *this;
+}
+
 mutation make_drop_tablet_map_mutation(table_id id, api::timestamp_type ts) {
     auto s = db::system_keyspace::tablets();
     mutation m(s, partition_key::from_single_value(*s,
@@ -361,12 +385,20 @@ locator::repair_scheduler_config deserialize_repair_scheduler_config(cql3::untyp
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
     tablet_logger.trace("Saving tablet metadata: {}", tm);
     std::vector<mutation> muts;
-    muts.reserve(tm.all_tables().size());
-    for (auto&& [id, tablets] : tm.all_tables()) {
+    muts.reserve(tm.all_tables_ungrouped().size());
+    for (auto&& [base_id, tables] : tm.all_table_groups()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
-        auto s = db.find_schema(id);
+        const auto& tablets = tm.get_tablet_map(base_id);
+        auto s = db.find_schema(base_id);
         muts.emplace_back(
-                co_await tablet_map_to_mutation(*tablets, id, s->ks_name(), s->cf_name(), ts, db.features()));
+                co_await tablet_map_to_mutation(tablets, base_id, s->ks_name(), s->cf_name(), ts, db.features()));
+        for (auto id : tables) {
+            if (id != base_id) {
+                auto s = db.find_schema(id);
+                muts.emplace_back(
+                        colocated_tablet_map_to_mutation(id, s->ks_name(), s->cf_name(), base_id, ts));
+            }
+        }
     }
     co_await db.apply(freeze(muts), db::no_timeout);
 }
@@ -422,6 +454,10 @@ static void do_validate_tablet_metadata_change(const locator::tablet_metadata& t
 
     if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.static_row().empty()) {
         return;
+    }
+
+    if (mp.row_count() && !tm.is_base_table(table_id)) {
+        throw std::runtime_error(fmt::format("Table {} is a co-located table, it cannot have clustering rows.", table_id));
     }
 
     auto& r_cdef = *s.get_column_definition("replicas");
@@ -580,6 +616,12 @@ struct tablet_metadata_builder {
     };
     std::optional<active_tablet_map> current;
 
+    // maps a co-located table to its base table.
+    // when reading the tablet metadata of a co-located table, we store it in the map, and we apply
+    // all co-located tables in on_end_of_stream. This is because we want to apply all normal tables first,
+    // to ensure the base table tablet map is already present when we apply the co-located tables.
+    std::unordered_map<table_id, table_id> base_tables;
+
     void process_row(const cql3::untyped_result_set_row& row, replica::database* db) {
         auto table = table_id(row.get_as<utils::UUID>("table_id"));
 
@@ -587,9 +629,15 @@ struct tablet_metadata_builder {
             if (current) {
                 tm.set_tablet_map(current->table, std::move(current->map));
             }
-            auto tablet_count = row.get_as<int>("tablet_count");
-            auto tmap = tablet_map(tablet_count);
-            current = active_tablet_map{table, tmap, tmap.first_tablet()};
+            if (row.has("base_table")) {
+                auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
+                base_tables[table] = base_table;
+                current = {};
+            } else {
+                auto tablet_count = row.get_as<int>("tablet_count");
+                auto tmap = tablet_map(tablet_count);
+                current = active_tablet_map{table, tmap, tmap.first_tablet()};
+            }
 
             // Resize decision fields are static columns, so set them only once per table.
             if (row.has("resize_type") && row.has("resize_seq_number")) {
@@ -609,12 +657,19 @@ struct tablet_metadata_builder {
             }
         }
 
-        current->tid = process_one_row(db, current->table, current->map, current->tid, row);
+        if (row.has("last_token")) {
+            current->tid = process_one_row(db, current->table, current->map, current->tid, row);
+        }
     }
 
-    void on_end_of_stream() {
+    future<> on_end_of_stream() {
         if (current) {
             tm.set_tablet_map(current->table, std::move(current->map));
+        }
+        // Set co-located tables after setting all other tablet maps to ensure the tablet map
+        // of the base table is found.
+        for (auto&& [table, base_table] : base_tables) {
+            co_await tm.set_colocated_table(table, base_table);
         }
     }
 };
@@ -638,7 +693,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
             std::throw_with_nested(std::runtime_error("Failed to read tablet metadata"));
         }
     }
-    builder.on_end_of_stream();
+    co_await builder.on_end_of_stream();
     tablet_logger.trace("Read tablet metadata: {}", tm);
     co_return std::move(tm);
 }
@@ -679,8 +734,7 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
 }
 
 static future<>
-do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& tm, const tablet_metadata_change_hint::table_hint& hint) {
-    tablet_metadata_builder builder{tm};
+do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& tm, const tablet_metadata_change_hint::table_hint& hint, tablet_metadata_builder& builder) {
     co_await qp.query_internal(
             "select * from system.tablets where table_id = ?",
             db::consistency_level::ONE,
@@ -692,6 +746,9 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
             });
     if (builder.current) {
         tm.set_tablet_map(builder.current->table, std::move(builder.current->map));
+        builder.current = {};
+    } else if (builder.base_tables.contains(hint.table_id)) {
+        // it's a co-located table. we handle it later, after processing all tables, by builder.on_end_of_stream().
     } else {
         tm.drop_tablet_map(hint.table_id);
     }
@@ -716,10 +773,12 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
 }
 
 future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp, tablet_metadata& tm, const locator::tablet_metadata_change_hint& hint) {
+    tablet_metadata_builder builder{tm};
+
     try {
         for (const auto& [_, table_hint] : hint.tables) {
             if (table_hint.tokens.empty()) {
-                co_await do_update_tablet_metadata_partition(qp, tm, table_hint);
+                co_await do_update_tablet_metadata_partition(qp, tm, table_hint, builder);
             } else {
                 co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
                     co_await do_update_tablet_metadata_rows(db, qp, tmap, table_hint);
@@ -729,6 +788,7 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
     } catch (...) {
         std::throw_with_nested(std::runtime_error("Failed to read tablet metadata"));
     }
+    co_await builder.on_end_of_stream();
     tablet_logger.trace("Updated tablet metadata: {}", tm);
 }
 
@@ -854,7 +914,20 @@ lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr s, const
     return tablet_sstable_set::make(std::move(s), sgm, tmap);
 }
 
+future<std::optional<table_id>> read_base_table(cql3::query_processor& qp, table_id tid) {
+    auto rs = co_await qp.execute_internal("select * from system.tablets where table_id = ?",
+            {tid.uuid()}, cql3::query_processor::cache_internal::no);
+    if (rs->empty() || !rs->front().has("base_table")) {
+        co_return std::nullopt;
+    }
+
+    co_return table_id(rs->front().get_as<utils::UUID>("base_table"));
+}
+
 future<std::optional<tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token) {
+    if (auto base_table = co_await read_base_table(qp, tid)) {
+        tid = *base_table;
+    }
     auto rs = co_await qp.execute_internal("select stage from system.tablets where table_id = ? and last_token = ?",
             {tid.uuid(), dht::token::to_int64(last_token)}, cql3::query_processor::cache_internal::no);
     if (rs->empty() || !rs->one().has("stage")) {

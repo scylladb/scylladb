@@ -81,6 +81,7 @@ public:
     // and its column families together. Therefore, listeners can't load the keyspace from the
     // database. Instead, they should use the `ksm` parameter if needed.
     virtual void on_before_create_column_family(const keyspace_metadata& ksm, const schema&, std::vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, std::vector<mutation>& mutations, api::timestamp_type timestamp);
     virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type) {}
@@ -147,6 +148,7 @@ public:
     future<> drop_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
 
     void before_create_column_family(const keyspace_metadata& ksm, const schema&, std::vector<mutation>&, api::timestamp_type);
+    void before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>&, std::vector<mutation>&, api::timestamp_type);
     void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
     void before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
     void before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type);

@@ -221,21 +221,25 @@ Holds information about all tablets in the cluster.
 Schema:
 ~~~
 CREATE TABLE system.tablets (
-    keyspace_name text,
     table_id uuid,
     last_token bigint,
+    base_table uuid STATIC,
+    keyspace_name text STATIC,
+    repair_scheduler_config frozen<repair_scheduler_config> STATIC,
+    resize_seq_number bigint STATIC,
+    resize_task_info frozen<tablet_task_info> STATIC,
+    resize_type text STATIC,
+    table_name text STATIC,
+    tablet_count int STATIC,
+    migration_task_info frozen<tablet_task_info>,
     new_replicas frozen<list<frozen<tuple<uuid, int>>>>,
-    replicas frozen<list<frozen<tuple<uuid, int>>>>,
-    stage text,
-    transition text,
-    table_name text static,
-    tablet_count int static,
-    resize_type text static,
-    resize_seq_number bigint static,
-    repair_scheduler_config frozen<repair_scheduler_config> static,
     repair_task_info frozen<tablet_task_info>,
     repair_time timestamp,
-    PRIMARY KEY ((keyspace_name, table_id), last_token)
+    replicas frozen<list<frozen<tuple<uuid, int>>>>,
+    session uuid,
+    stage text,
+    transition text,
+    PRIMARY KEY (table_id, last_token)
 )
 
 CREATE TYPE system.repair_scheduler_config (
@@ -254,12 +258,15 @@ CREATE TYPE system.tablet_task_info (
 )
 ~~~
 
-Each partition (keyspace_name, table_id) represents a tablet map of a given table.
+Each partition (table_id) represents a tablet map of a given table.
 
 Only tables which use tablet-based replication strategy have an entry here.
 
 `tablet_count` is the number of tablets in the map.
 `table_name` is the name of the table, provided for convenience.
+
+`base_table` is optionally set with the table_id of another table that this table is co-located with, meaning they always have the same tablet count and tablet replicas, and are migrated and resized together as a group.
+ When base_table is set then the rest of the tablet map is empty, and the tablet map of base_table should be read instead.
 
 `resize_type` is the resize decision type that spans all tablets of a given table, which can be one of: `merge`, `split` or `none`.
 
