@@ -5596,7 +5596,9 @@ class scylla_sstable_summary(gdb.Command):
     def invoke(self, arg, for_tty):
         arg = gdb.parse_and_eval(arg)
         typ = arg.type.strip_typedefs()
-        if typ.name.startswith("seastar::lw_shared_ptr"):
+        if typ.code == gdb.TYPE_CODE_PTR:
+            sst = arg.dereference()
+        elif typ.name.startswith("seastar::lw_shared_ptr"):
             sst = seastar_lw_shared_ptr(arg).get().dereference()
         else:
             sst = arg
@@ -5609,8 +5611,14 @@ class scylla_sstable_summary(gdb.Command):
         entries = list(chunked_vector(summary['entries']))
         for i in range(len(entries)):
             e = entries[i]
+
+            try:
+                token = e['raw_token']
+            except gdb.error:
+                token = e['token']['_data']
+
             gdb.write("[{}]: {{\n  token: {},\n  key: {},\n  position: {}}}\n".format(i,
-                e['token']['_data'],
+                token,
                 self.to_hex(e['key']['_M_str'], int(e['key']['_M_len'])),
                 e['position']))
 
