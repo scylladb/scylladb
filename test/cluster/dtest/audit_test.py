@@ -29,7 +29,7 @@ from cassandra.cluster import NoHostAvailable, Session
 from cassandra.query import SimpleStatement, named_tuple_factory
 from ccmlib.scylla_node import ScyllaNode, NodeError
 
-from dtest_class import Tester, create_ks
+from dtest_class import Tester, create_ks, wait_for
 from tools.assertions import assert_invalid
 from tools.cluster import run_rest_api
 from tools.data import rows_to_list, run_in_parallel
@@ -122,6 +122,9 @@ class AuditEntry:
     def __hash__(self):
         return hash(tuple(self.__dict__.values()))
 
+    def __lt__(self, other):
+        return (self.category, self.cl, self.error, self.ks, self.statement, self.table, self.user) < \
+               (other.category, other.cl, other.error, other.ks, other.statement, other.table, other.user)
 
 class AuditBackend:
     def __init__(self) -> None:
@@ -475,26 +478,30 @@ class TestCQLAudit(AuditTester):
 
         yield
 
-        # Remember audit entries after executing the query.
-        rows_after = self.get_audit_log_list(session)
-        set_of_rows_after = set(rows_after)
-        assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
+        new_rows = []
+        def is_number_of_new_rows_correct():
+            rows_after = self.get_audit_log_list(session)
+            set_of_rows_after = set(rows_after)
+            assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
 
-        new_rows = rows_after[len(rows_before) :]
-        assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
+            new_rows = rows_after[len(rows_before) :]
+            assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
 
-        if merge_duplicate_rows:
-            new_rows = self.deduplicate_audit_entries(new_rows)
+            if merge_duplicate_rows:
+                new_rows = self.deduplicate_audit_entries(new_rows)
 
-        new_rows = self.filter_out_noise(
-            new_rows,
-            filter_out_auth=len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0,
-            filter_out_use=len([entry for entry in expected_entries if "USE " in entry.statement]) == 0
-        )
+            new_rows = self.filter_out_noise(
+                new_rows,
+                filter_out_auth=len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0,
+                filter_out_use=len([entry for entry in expected_entries if "USE " in entry.statement]) == 0
+            )
 
-        assert len(new_rows) == len(expected_entries), f"Expected {len(expected_entries)} new audit entries, but got {len(new_rows)} new entries: {new_rows}"
+            assert len(new_rows) <= len(expected_entries)
+            return len(new_rows) == len(expected_entries)
 
-        for row, entry in zip(new_rows, expected_entries):
+        wait_for(is_number_of_new_rows_correct, timeout=60)
+        sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row_operation, row_source, row_table_name, row.username))
+        for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
             self.assert_audit_row_eq(row, entry.category, entry.statement, entry.table, entry.ks, entry.user, entry.cl, entry.error)
 
     def verify_keyspace(self, audit_settings=None, helper=None):
