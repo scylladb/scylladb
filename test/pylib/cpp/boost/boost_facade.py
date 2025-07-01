@@ -62,6 +62,8 @@ class BoostTestFacade(CppTestFacade):
             return False, [os.path.basename(os.path.splitext(executable)[0])]
         else:
             if not os.path.isfile(executable):
+                if executable.stem not in self.combined_suites[mode]:
+                    raise FileNotFoundError(f"Trying to execute {executable.stem} but it does not exist nor is it listed in the combined suites for mode {mode}.")
                 return True, self.combined_suites[mode][executable.stem]
             args = [executable, '--list_content']
             try:
@@ -190,6 +192,9 @@ def get_combined_tests(config: Config):
 
         args = [executable, '--list_content']
 
+        if not os.path.isfile(executable):
+            logger.warning(f"Combined test executable {executable} does not exist. Skipping test discovery.")
+            continue
         output = subprocess.check_output(
             args,
             stderr=subprocess.STDOUT,
