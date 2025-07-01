@@ -1153,6 +1153,13 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     current_range = {_range.offset(), std::min(_range.length(), _max_buffers_size - _buffers_size)};
                     s3l.trace("Setting ranged download mode for '{}', range: {}", _object_name, current_range);
                 }
+                if (current_range.length() == 0) {
+                    s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
+                    _buffers.emplace_back(temporary_buffer<char>(), co_await _client->claim_memory(0));
+                    _get_cv.signal();
+                    _is_finished = true;
+                    co_return;
+                }
                 req._headers["Range"] = current_range.to_header_string();
                 s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
                 co_await _client->make_request(
@@ -1218,7 +1225,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
             } catch (const filler_exception& ex) {
-                s3l.warn("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex.what());
+                s3l.warn("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex);
             } catch (...) {
                 s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
                 _get_cv.broken(std::current_exception());
