@@ -1066,6 +1066,7 @@ public:
     size_t sstables_count() const;
     std::vector<uint64_t> sstable_count_per_level() const;
     int64_t get_unleveled_sstables() const;
+    size_t compaction_group_count() const;
 
     void start_compaction();
     void trigger_compaction();
