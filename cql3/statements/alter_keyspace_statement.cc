@@ -276,14 +276,13 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             muts.insert(muts.begin(), schema_mutations.begin(), schema_mutations.end());
         }
 
-        // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to perform a schema change that
-        // would lead to an RF-rack-valid keyspace. Verify that this change does not.
-        // For more context, see: scylladb/scylladb#23071.
-        if (qp.db().get_config().rf_rack_valid_keyspaces()) {
             auto rs = locator::abstract_replication_strategy::create_replication_strategy(
                     ks_md_update->strategy_name(),
                     locator::replication_strategy_params(ks_md_update->strategy_options(), ks_md_update->initial_tablets()));
 
+            // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to perform a schema change that
+            // would lead to an RF-rack-valid keyspace. Verify that this change does not.
+            // For more context, see: scylladb/scylladb#23071.
             try {
                 // There are two things to note here:
                 // 1. We hold a group0_guard, so it's correct to check this here.
@@ -300,9 +299,23 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
                 //    disturb it (see scylladb/scylladb#23345), but we ignore that.
                 locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
             } catch (const std::exception& e) {
+            if (qp.db().get_config().rf_rack_valid_keyspaces()) {
                 // There's no guarantee what the type of the exception will be, so we need to
                 // wrap it manually here in a type that can be passed to the user.
                 throw exceptions::invalid_request_exception(e.what());
+            } else {
+                // Even when the configuration option `rf_rack_valid_keyspaces` is set to false,
+                // we'd like to inform the user that the keyspace they're altering will not
+                // satisfy the restriction after the change--but just as a warning.
+                // For more context, see issue: scylladb/scylladb#23330.
+                warnings.push_back(seastar::format(
+                    "The keyspace '{}' you're trying to alter will not satisfy the requirements "
+                    "to be RF-rack-valid after the change, i.e. it uses tablets, but the replication factor in "
+                    "at least one of the data centers does not match the number of racks in that data center. "
+                    "That may result in worse availability. Consider updating the replication factors "
+                    "to satisfy that. This limitation will be enforced in the future. For more context, see: "
+                    "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace.",
+                    _name));
             }
         }
 
