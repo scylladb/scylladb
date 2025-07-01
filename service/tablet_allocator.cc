@@ -821,6 +821,19 @@ class load_balancer {
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
+
+    // This is the maximum load delta between the most and least loaded nodes,
+    // below which the balancer considers the DC balanced
+    double _size_based_balance_threshold = 0.01;
+
+    // When this is set to true, the balancer assumes all tablets
+    // have the same size: _target_tablet_size
+    bool _force_capacity_based_balancing = false;
+
+    // The minimal tablet size the balancer will compute load with. For any tablet smaller than this,
+    // the balancer will use this size instead of the actual tablet size.
+    uint64_t _minimal_tablet_size = service::default_target_tablet_size / 100;
+
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -907,6 +920,9 @@ public:
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
         , _skiplist(std::move(skiplist))
+        , _size_based_balance_threshold(db.get_config().size_based_balance_threshold_percentage() / 100.0)
+        , _force_capacity_based_balancing(db.get_config().force_capacity_based_balancing())
+        , _minimal_tablet_size(db.get_config().minimal_tablet_size_for_balancing())
     { }
 
     bool ongoing_rack_list_colocation() const {
