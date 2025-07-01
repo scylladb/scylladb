@@ -427,6 +427,9 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
             result = run_pytest(options, run_id=i)
             total_tests += result[0]
             failed_tests.extend(result[1])
+            if len(failed_tests) >= max_failures != 0:
+                print("Too much failures, stopping")
+                break
         console.print_start_blurb()
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.all_tests():
