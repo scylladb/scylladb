@@ -1467,6 +1467,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , rf_rack_valid_keyspaces(this, "rf_rack_valid_keyspaces", liveness::MustRestart, value_status::Used, false,
         "Enforce RF-rack-valid keyspaces. Additionally, if there are existing RF-rack-invalid "
         "keyspaces, attempting to start a node with this option ON will fail.")
+    , force_capacity_based_balancing(this, "force_capacity_based_balancing", liveness::LiveUpdate, value_status::Used, false,
+        "Forces the load balancer to perform capacity based balancing, instead of size based balancing.")
+    , size_based_balance_threshold_percentage(this, "size_based_balance_threshold_percentage", liveness::LiveUpdate, value_status::Used, 5.0,
+        "Sets the maximum difference in percentages between the most loaded and least loaded nodes, below which the load balancer considers nodes balanced.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
