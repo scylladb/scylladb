@@ -16,6 +16,7 @@
 #include "cql3/functions/function_name.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
+#include <ranges>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
@@ -38,6 +39,7 @@
 #include "types/list.hh"
 #include "cql3/functions/functions.hh"
 #include "types/user.hh"
+#include "utils/managed_string.hh"
 #include "view_info.hh"
 #include "validation.hh"
 #include "index/secondary_index_manager.hh"
@@ -84,6 +86,16 @@ future<std::vector<description>> generate_descriptions(Range&& range, const Desc
     }
 
     co_return result;
+}
+
+// `cql3::description` is a move-only type at the moment, and so we cannot initialize a vector passing
+// its instances as elements of an initializer list. This function serves as an intermediary to avoid
+// unnecessarily bloating some parts of the code below.
+std::vector<description> wrap_in_vector(description desc) {
+    std::vector<description> result{};
+    result.reserve(1);
+    result.push_back(std::move(desc));
+    return result;
 }
 
 bool is_index(const data_dictionary::database& db, const schema_ptr& schema) {
@@ -241,13 +253,13 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
         return std::nullopt;
     }
 
-    std::ostringstream os;
+    fragmented_ostringstream os;
     auto schema = table->schema();
     replica::schema_describe_helper describe_helper{db};
     schema->describe_alter_with_properties(describe_helper, os);
 
     auto schema_desc = schema->describe(describe_helper, describe_option::NO_STMTS);
-    schema_desc.create_statement = std::move(os).str();
+    schema_desc.create_statement = std::move(os).to_managed_string();
     return schema_desc;
 }
 
@@ -273,12 +285,16 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
         // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
         // This way, the user learns about the internals of the table, but they're also told not to execute it.
-        table_desc.create_statement = seastar::format(
+        fragmented_ostringstream os{};
+
+        fmt::format_to(os.to_iter(),
                 "/* Do NOT execute this statement! It's only for informational purposes.\n"
                 "   A CDC log table is created automatically when the base is created.\n"
                 "\n{}\n"
                 "*/",
                 *table_desc.create_statement);
+
+        table_desc.create_statement = std::move(os).to_managed_string();
     }
     result.push_back(std::move(table_desc));
 
@@ -303,7 +319,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     if (schema->cdc_options().enabled()) {
         auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
         if (cdc_log_alter) {
-            result.push_back(*cdc_log_alter);
+            result.push_back(std::move(*cdc_log_alter));
         }
     }
 
@@ -321,7 +337,7 @@ future<std::vector<description>> tables(const data_dictionary::database& db, con
         std::vector<description> result;
         for (const auto& t: tables) {
             auto tables_desc = co_await table(db, ks->name(), t->cf_name(), *with_internals);
-            result.insert(result.end(), tables_desc.begin(), tables_desc.end());
+            result.insert(result.end(), std::make_move_iterator(tables_desc.begin()), std::make_move_iterator(tables_desc.end()));
             co_await coroutine::maybe_yield();
         }
 
@@ -368,7 +384,7 @@ future<std::vector<description>> list_elements(const data_dictionary::database& 
     case element_type::function:     co_return co_await functions(replica_db, ks, with_create_statement::no);
     case element_type::aggregate:    co_return co_await aggregates(replica_db, ks, with_create_statement::no);
     case element_type::table:        co_return co_await tables(db, ks_meta);
-    case element_type::keyspace:     co_return std::vector{ks_meta->describe(replica_db, with_create_statement::no)};
+    case element_type::keyspace:     co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::no));
     case element_type::view:
     case element_type::index:
         on_internal_error(dlogger, "listing of views and indexes is unsupported");
@@ -388,13 +404,13 @@ future<std::vector<description>> describe_element(const data_dictionary::databas
     auto& replica_db = db.real_database();
 
     switch (element) {
-    case element_type::type:             co_return std::vector{type(replica_db, ks_meta, name)};
+    case element_type::type:             co_return wrap_in_vector(type(replica_db, ks_meta, name));
     case element_type::function:         co_return co_await function(replica_db, ks, name);
     case element_type::aggregate:        co_return co_await aggregate(replica_db, ks, name);
     case element_type::table:            co_return co_await table(db, ks, name, with_internals);
-    case element_type::index:            co_return std::vector{index(db, ks, name, with_internals)};
-    case element_type::view:             co_return std::vector{view(db, ks, name, with_internals)};
-    case element_type::keyspace:         co_return std::vector{ks_meta->describe(replica_db, with_create_statement::yes)};
+    case element_type::index:            co_return wrap_in_vector(index(db, ks, name, with_internals));
+    case element_type::view:             co_return wrap_in_vector(view(db, ks, name, with_internals));
+    case element_type::keyspace:         co_return wrap_in_vector(ks_meta->describe(replica_db, with_create_statement::yes));
     }
 }
 
@@ -413,7 +429,7 @@ future<std::vector<description>> describe_all_keyspace_elements(const data_dicti
     std::vector<description> result;
 
     auto inserter = [&result] (std::vector<description>&& elements) mutable {
-        result.insert(result.end(), elements.begin(), elements.end());
+        result.insert(result.end(), std::make_move_iterator(elements.begin()), std::make_move_iterator(elements.end()));
     };
 
     result.push_back(ks_meta->describe(replica_db, with_create_statement::yes));
@@ -443,9 +459,9 @@ std::vector<lw_shared_ptr<column_specification>> get_element_column_specificatio
     return col_specs;
 }
 
-std::vector<std::vector<bytes_opt>> serialize_descriptions(std::vector<description>&& descs, bool serialize_create_statement = true) {
-    return descs | std::views::transform([serialize_create_statement] (const description& desc) {
-        return desc.serialize(serialize_create_statement);
+std::vector<std::vector<managed_bytes_opt>> serialize_descriptions(std::vector<description>&& descs, bool serialize_create_statement = true) {
+    return descs | std::views::as_rvalue | std::views::transform([serialize_create_statement] (description desc) {
+        return std::move(desc).serialize(serialize_create_statement);
     }) | std::ranges::to<std::vector>();
 }
 
@@ -525,7 +541,7 @@ bool cluster_describe_statement::should_add_range_ownership(replica::database& d
     return !ks.empty() && !is_system_keyspace(ks) && !is_internal_keyspace(ks) && !uses_tablets;
 }
 
-future<bytes_opt> cluster_describe_statement::range_ownership(const service::storage_proxy& proxy, const sstring& ks) const {
+future<managed_bytes_opt> cluster_describe_statement::range_ownership(const service::storage_proxy& proxy, const sstring& ks) const {
     auto [list_type, map_type] = range_ownership_type();
 
     auto ranges = co_await proxy.describe_ring(ks);
@@ -549,15 +565,15 @@ future<bytes_opt> cluster_describe_statement::range_ownership(const service::sto
     )).serialize();
 }
 
-future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {   
+future<std::vector<std::vector<managed_bytes_opt>>> cluster_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {   
     auto db = qp.db();
     auto& proxy = qp.proxy();
 
-    auto cluster = to_bytes(db.get_config().cluster_name());
-    auto partitioner = to_bytes(db.get_config().partitioner());
-    auto snitch = to_bytes(db.get_config().endpoint_snitch());
+    auto cluster = to_managed_bytes(db.get_config().cluster_name());
+    auto partitioner = to_managed_bytes(db.get_config().partitioner());
+    auto snitch = to_managed_bytes(db.get_config().endpoint_snitch());
 
-    std::vector<bytes_opt> row {
+    std::vector<managed_bytes_opt> row {
         {cluster},
         {partitioner},
         {snitch}
@@ -568,7 +584,7 @@ future<std::vector<std::vector<bytes_opt>>> cluster_describe_statement::describe
         row.push_back(std::move(ro_map));
     }
     
-    std::vector<std::vector<bytes_opt>> result {std::move(row)};
+    std::vector<std::vector<managed_bytes_opt>> result {std::move(row)};
     co_return result;
 }
 
@@ -587,7 +603,7 @@ std::vector<lw_shared_ptr<column_specification>> schema_describe_statement::get_
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> schema_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
 
     auto result = co_await std::visit(overloaded_functor{
@@ -610,7 +626,7 @@ future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(
                     continue;
                 }
                 auto ks_result = co_await describe_all_keyspace_elements(db, ks, _with_internals);
-                schema_result.insert(schema_result.end(), ks_result.begin(), ks_result.end());
+                schema_result.insert(schema_result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
             }
 
             if (_with_internals) {
@@ -637,7 +653,7 @@ future<std::vector<std::vector<bytes_opt>>> schema_describe_statement::describe(
                 auto ks_meta = get_keyspace_metadata(db, ks);
                 auto ks_desc = ks_meta->describe(db.real_database(), with_create_statement::yes);
 
-                co_return std::vector{ks_desc};
+                co_return wrap_in_vector(std::move(ks_desc));
             } else {
                 co_return co_await describe_all_keyspace_elements(db, ks, _with_internals);
             }
@@ -658,7 +674,7 @@ std::vector<lw_shared_ptr<column_specification>> listing_describe_statement::get
 
 }
 
-future<std::vector<std::vector<bytes_opt>>> listing_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> listing_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
     auto raw_ks = client_state.get_raw_keyspace();
 
@@ -673,7 +689,7 @@ future<std::vector<std::vector<bytes_opt>>> listing_describe_statement::describe
     std::vector<description> result;
     for (auto&& ks: keyspaces) {
         auto ks_result = co_await list_elements(db, ks, _element);
-        result.insert(result.end(), ks_result.begin(), ks_result.end());
+        result.insert(result.end(), std::make_move_iterator(ks_result.begin()), std::make_move_iterator(ks_result.end()));
         co_await coroutine::maybe_yield();
     }
 
@@ -692,7 +708,7 @@ std::vector<lw_shared_ptr<column_specification>> element_describe_statement::get
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> element_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> element_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto ks = client_state.get_raw_keyspace();
     if (_keyspace) {
         ks = *_keyspace;
@@ -715,7 +731,7 @@ std::vector<lw_shared_ptr<column_specification>> generic_describe_statement::get
     return get_element_column_specifications();
 }
 
-future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+future<std::vector<std::vector<managed_bytes_opt>>> generic_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
     auto db = qp.db();
     auto& replica_db = db.real_database();
     auto raw_ks = client_state.get_raw_keyspace();
@@ -740,7 +756,7 @@ future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe
     auto tbl = db.try_find_table(ks_name, _name);
     if (tbl) {
         if (tbl->schema()->is_view()) {
-            co_return serialize_descriptions({view(db, ks_name, _name, _with_internals)});
+            co_return serialize_descriptions(wrap_in_vector(view(db, ks_name, _name, _with_internals)));
         } else {
             co_return serialize_descriptions(co_await table(db, ks_name, _name, _with_internals));
         }
@@ -748,12 +764,12 @@ future<std::vector<std::vector<bytes_opt>>> generic_describe_statement::describe
 
     auto idx_tbl = db.find_indexed_table(ks_name, _name);
     if (idx_tbl) {
-        co_return serialize_descriptions({index(db, ks_name, _name, _with_internals)});
+        co_return serialize_descriptions(wrap_in_vector(index(db, ks_name, _name, _with_internals)));
     }
 
     auto udt_meta = ks_meta->user_types();
     if (udt_meta.has_type(to_bytes(_name))) {
-        co_return serialize_descriptions({type(replica_db, ks_meta, _name)});
+        co_return serialize_descriptions(wrap_in_vector(type(replica_db, ks_meta, _name)));
     }
 
     auto uf = functions::instance().find(functions::function_name(ks_name, _name));
