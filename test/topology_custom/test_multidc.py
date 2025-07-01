@@ -16,6 +16,7 @@ from test.cqlpy import nodetool
 from cassandra import ConsistencyLevel
 from cassandra.protocol import InvalidRequest
 from cassandra.query import SimpleStatement
+from test.pylib.async_cql import _wrap_future
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, TextType, Column
 from test.pylib.util import unique_name
@@ -462,3 +463,126 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     await try_fail([4, 1], "dc1", 4, 3)
 
     _ = await manager.server_start(s1.server_id)
+
+@pytest.mark.asyncio
+async def test_warn_create_and_alter_rf_rack_invalid_ks(manager: ManagerClient):
+    """
+    When the configuration option `rf_rack_valid_keyspaces` is enabled, the user is not
+    allowed to create an RF-rack-invalid keyspace. When the option is disabled, that limitation
+    disappears.
+
+    However, since (at some point) we're going to get rid of that option and start always
+    enforcing the restriction, we'd like to let the user know that the keyspace they're
+    creating may not be valid in the future. Verify that the warning really appears.
+
+    For more context, see issue: scylladb/scylladb#23330.
+    """
+
+    cfg = {"rf_rack_valid_keyspaces": False}
+
+    # Setup: DC1: 3 racks, DC2: 2 racks.
+    start_node_tasks = [
+        manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r1"}),
+        manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r2"}),
+        manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": "r3"}),
+        manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r4"}),
+        manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r5"}),
+    ]
+    await asyncio.gather(*start_node_tasks)
+
+    cql = manager.get_cql()
+    # We need to set `max_schema_agreement_wait` to 0 to speed up this test.
+    # Without it, the test takes 50 seconds (or 16 seconds if cases run in parallel).
+    # With it, the test takes about 9 seconds. All results on my local machine of course.
+    assert hasattr(cql.cluster, "max_schema_agreement_wait")
+    cql.cluster.max_schema_agreement_wait = 0
+
+    # Scenario 1. Creating an RF-rack-invalid keyspace.
+    ###################################################
+
+    async def do_create_test(rf1: int, rf2: int, tablets: str, ok: bool):
+        ks = unique_name()
+        warning = f"Keyspace '{ks}' is not RF-rack-valid: the replication factor doesn't match " \
+                   "the rack count in at least one datacenter. A rack failure may reduce availability. " \
+                   "For more context, see: " \
+                   "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace."
+
+        stmt = f"CREATE KEYSPACE {ks} WITH replication = " \
+               f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf1}, 'dc2': {rf2}}} AND " \
+               f"tablets = {{'enabled': {tablets}}}"
+
+        # We have to use `Session::execute_async` here to be able to obtain `warnings`.
+        # It's pretty convoluted, but we have to live with it...
+        result = cql.execute_async(stmt)
+        await _wrap_future(result)
+
+        if ok:
+            assert not hasattr(result, "warnings") or result.warnings is None or warning not in result.warnings
+        else:
+            assert hasattr(result, "warnings")
+            assert warning in result.warnings
+
+    # All of the statements below are OK: they don't use tablets.
+    await do_create_test(2, 2, "false", True)
+    await do_create_test(3, 3, "false", True)
+    await do_create_test(3, 2, "false", True)
+    await do_create_test(3, 1, "false", True)
+    await do_create_test(1, 2, "false", True)
+    await do_create_test(1, 1, "false", True)
+
+    # BAD: the RF doesn't match the number of racks in DC1.
+    await do_create_test(2, 2, "true", False)
+    # BAD: the RF doesn't match the number of racks in DC2.
+    await do_create_test(3, 3, "true", False)
+    # OK: the RFs match the number of racks in the DCs.
+    await do_create_test(3, 2, "true", True)
+    # OK: RF=#racks for DC1, RF=1 is always accepted.
+    await do_create_test(3, 1, "true", True)
+    # OK: RF=#racks for DC2, RF=1 is always accepted.
+    await do_create_test(1, 2, "true", True)
+    # OK: RF=1 is always accepted.
+    await do_create_test(1, 1, "true", True)
+
+    # Scenario 2. Altering an RF-rack-valid keyspace so that it becomes RF-rack-invalid.
+    ####################################################################################
+
+    async def do_alter_test(rf1: int, rf2: int, tablets: str, ok: bool):
+        ks = unique_name()
+        warning = f"Keyspace '{ks}' is not RF-rack-valid: the replication factor doesn't match " \
+                   "the rack count in at least one datacenter. A rack failure may reduce availability. " \
+                   "For more context, see: " \
+                   "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace."
+
+        await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = " \
+                    f"{{'class': 'NetworkTopologyStrategy', 'dc1': 3, 'dc2': 2}} AND " \
+                    f"tablets = {{'enabled': {tablets}}}")
+
+        stmt = f"ALTER KEYSPACE {ks} WITH replication = " \
+               f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf1}, 'dc2': {rf2}}} AND " \
+               f"tablets = {{'enabled': {tablets}}}"
+
+        # We have to use `Session::execute_async` here to be able to obtain `warnings`.
+        # It's pretty convoluted, but we have to live with it...
+        result = cql.execute_async(stmt)
+        await _wrap_future(result)
+
+        if ok:
+            assert not hasattr(result, "warnings") or result.warnings is None or warning not in result.warnings
+        else:
+            assert hasattr(result, "warnings")
+            assert warning in result.warnings
+
+    # All of the statements below are OK: they don't use tablets.
+    await do_alter_test(2, 2, "false", True)
+    await do_alter_test(3, 3, "false", True)
+    await do_alter_test(3, 2, "false", True)
+    await do_alter_test(3, 1, "false", True)
+
+    # BAD: the RF doesn't match the number of racks in DC1.
+    await do_alter_test(2, 2, "true", False)
+    # BAD: the RF doesn't match the number of racks in DC2.
+    await do_alter_test(3, 3, "true", False)
+    # OK: the RFs match the number of racks in the DCs.
+    await do_alter_test(3, 2, "true", True)
+    # OK: RF=#racks for DC1, RF=1 is always accepted.
+    await do_alter_test(3, 1, "true", True)
