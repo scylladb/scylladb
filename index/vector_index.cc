@@ -11,6 +11,9 @@
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
 #include "index/vector_index.hh"
+#include "index/secondary_index.hh"
+#include "index/secondary_index_manager.hh"
+#include "index/target_parser.hh"
 #include "concrete_types.hh"
 #include <seastar/core/sstring.hh>
 
@@ -72,8 +75,38 @@ void vector_index::validate(const schema &schema, cql3::statements::index_prop_d
     }
 }
 
+bool vector_index::is_vector_index() const {
+    return true;
+}
+
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {
     return std::make_unique<vector_index>();
+}
+
+bool has_vector_index(const schema& s) {
+    auto i = s.indices();
+    return std::any_of(i.begin(), i.end(), [](const auto& index) {
+        auto it = index.options().find(db::index::secondary_index::custom_index_option_name);
+        if (it != index.options().end()) {
+            auto custom_class = secondary_index_manager::get_custom_class_factory(it->second);
+            return (custom_class && (*custom_class)()->is_vector_index());
+        }
+        return false;
+    });
+}
+
+std::unordered_set<sstring> get_vector_indexed_columns(const schema& s) {
+    auto idx = s.indices();
+    std::unordered_set<sstring> vector_indexed_columns;
+    for (const auto& i : idx) {
+        auto custom_class = i.options().find(db::index::secondary_index::custom_index_option_name);
+        if (custom_class != i.options().end() && custom_class->second == "vector_index") {
+                sstring index_target = i.options().at(cql3::statements::index_target::target_option_name);
+                sstring index_target_name = secondary_index::target_parser::get_target_column_name_from_string(index_target);
+                vector_indexed_columns.insert(index_target_name);
+        }
+    }
+    return vector_indexed_columns;
 }
 
 }
