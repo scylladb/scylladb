@@ -1475,6 +1475,16 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return sstring(format("{}", ustate));
     });
 
+    ss::raft_topology_get_cmd_status.set(r, [&ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+        const auto status = co_await ss.invoke_on(0, [] (auto& ss) {
+            return ss.get_topology_cmd_status();
+        });
+        if (status.active_dst.empty()) {
+            co_return sstring("none");
+        }
+        co_return sstring(fmt::format("{}[{}]: {}", status.current, status.index, fmt::join(status.active_dst, ",")));
+    });
+
     ss::move_tablet.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto src_host_id = validate_host_id(req->get_query_param("src_host"));
         shard_id src_shard_id = validate_int(req->get_query_param("src_shard"));
