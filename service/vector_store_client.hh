@@ -17,6 +17,10 @@ namespace db {
 class config;
 }
 
+namespace seastar::net {
+class inet_address;
+}
+
 namespace service {
 
 /// A client with the vector-store service.
@@ -31,6 +35,12 @@ public:
 
     /// The vector_store_client service is disabled.
     struct disabled {};
+
+    /// The operation was aborted.
+    struct aborted {};
+
+    /// The vector-store addr is unavailable (not possible to get an addr from the dns service).
+    struct addr_unavailable {};
 
     explicit vector_store_client(config const& cfg);
     ~vector_store_client();
@@ -57,7 +67,13 @@ private:
 };
 
 /// A tester for the vector_store_client, used for testing purposes.
-struct vector_store_client_tester {};
+struct vector_store_client_tester {
+    static void set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval);
+    static void set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout);
+    static void set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<net::inet_address>>(sstring const&)> resolver);
+    static void trigger_dns_resolver(vector_store_client& vsc);
+    static auto resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::optional<net::inet_address>>;
+};
 
 } // namespace service
 
