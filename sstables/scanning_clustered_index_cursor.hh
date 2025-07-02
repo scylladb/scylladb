@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "utils/assert.hh"
 #include "sstables/index_entry.hh"
 #include "sstables/promoted_index_blocks_reader.hh"
 #include "schema/schema.hh"
@@ -97,7 +96,7 @@ private:
             // End open marker can be only engaged in SSTables 3.x ('mc' format) and never in ka/la
             auto end_pos = prev->end(_s);
             position_in_partition_view* open_rt_pos = std::get_if<position_in_partition_view>(&end_pos);
-            SCYLLA_ASSERT(open_rt_pos);
+            parse_assert(bool(open_rt_pos));
             return skip_info{offset, tombstone(*prev->end_open_marker()), position_in_partition{*open_rt_pos}};
         }
     }
