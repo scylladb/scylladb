@@ -21,6 +21,7 @@
 #include "cdc/metadata.hh"
 #include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
+#include "index/vector_index.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
@@ -57,10 +58,11 @@ using namespace std::chrono_literals;
 logging::logger cdc_log("cdc");
 
 namespace cdc {
-static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
+static schema_ptr create_log_schema(const schema&, std::optional<table_id>, schema_ptr, sstring log_name, int ttl_seconds, bool is_vsc = false);
 }
 
 static constexpr auto cdc_group_name = "cdc";
+static constexpr int VSC_TTL_SECONDS = 86400; // 24 hours
 
 void cdc::stats::parts_touched_stats::register_metrics(seastar::metrics::metric_groups& metrics, std::string_view suffix) {
     namespace sm = seastar::metrics;
@@ -167,7 +169,7 @@ public:
             ensure_that_table_uses_vnodes(ksm, schema);
 
             // in seastar thread
-            auto log_schema = create_log_schema(schema);
+            auto log_schema = create_log_schema(schema, {}, nullptr, log_name(schema.cf_name()), schema.cdc_options().ttl());
 
             auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
 
@@ -205,9 +207,40 @@ public:
             ensure_that_table_has_no_counter_columns(new_schema);
             ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
 
-            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
+            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema, log_name(new_schema.cf_name()), new_schema.cdc_options().ttl());
 
-            auto log_mut = log_schema 
+            auto log_mut = log_schema
+                ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
+                : db::schema_tables::make_create_table_mutations(new_log_schema, timestamp)
+                ;
+
+            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+        }
+
+        bool is_vsc = secondary_index::has_vector_index(new_schema);
+        bool was_vsc = secondary_index::has_vector_index(old_schema);
+
+        if (is_vsc) {
+            auto& db = _ctxt._proxy.get_db().local();
+            auto logname = vsc_log_name(old_schema.cf_name());
+            auto& keyspace = db.find_keyspace(old_schema.ks_name());
+            auto has_vsc_log = db.has_schema(old_schema.ks_name(), logname);
+            auto log_schema = has_vsc_log ? db.find_schema(old_schema.ks_name(), logname) : nullptr;
+            if (!was_vsc && has_vsc_log) {
+                // make sure the apparent log table really is a vsc log (not user table)
+                // we just check the partitioner - since user tables should _not_ be able
+                // set/use this.
+                if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                    // will throw
+                    check_that_cdc_log_table_does_not_exist(db, old_schema, logname);
+                }
+
+            }
+            ensure_that_table_has_no_counter_columns(new_schema);
+            ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
+            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema, vsc_log_name(new_schema.cf_name()), VSC_TTL_SECONDS, true);
+
+            auto log_mut = log_schema
                 ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
                 : db::schema_tables::make_create_table_mutations(new_log_schema, timestamp)
                 ;
@@ -415,6 +448,7 @@ namespace cdc {
 using operation_native_type = std::underlying_type_t<operation>;
 
 static const sstring cdc_log_suffix = "_scylla_cdc_log";
+static const sstring vsc_log_suffix = "_scylla_vsc_log";
 static const sstring cdc_meta_column_prefix = "cdc$";
 static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "deleted_";
 static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix + "deleted_elements_";
@@ -464,6 +498,10 @@ sstring log_name(std::string_view table_name) {
     return sstring(table_name) + cdc_log_suffix;
 }
 
+sstring vsc_log_name(std::string_view table_name) {
+    return sstring(table_name) + vsc_log_suffix;
+}
+
 sstring log_data_column_name(std::string_view column_name) {
     return sstring(column_name);
 }
@@ -496,12 +534,11 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
     return to_bytes(cdc_deleted_elements_column_prefix) + column_name;
 }
 
-static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uuid, schema_ptr old) {
-    schema_builder b(s.ks_name(), log_name(s.cf_name()));
+static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uuid, schema_ptr old, sstring log_name, int ttl_seconds, bool is_vsc) {
+    schema_builder b(s.ks_name(), log_name);
     b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
-    b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
-    auto ttl_seconds = s.cdc_options().ttl();
+    b.set_comment(fmt::format("{} log for {}.{}", is_vsc ? "VSC" : "CDC", s.ks_name(), s.cf_name()));
     if (ttl_seconds > 0) {
         b.set_gc_grace_seconds(0);
         auto ceil = [] (int dividend, int divisor) {
@@ -576,8 +613,19 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
     };
     add_columns(s.partition_key_columns());
     add_columns(s.clustering_key_columns());
-    add_columns(s.static_columns(), true);
-    add_columns(s.regular_columns(), true);
+
+    if (is_vsc) {
+        for (const auto& col: secondary_index::get_vector_indexed_columns(s)) {
+            auto type = s.columns_by_name().at(col.data())->type;
+            SCYLLA_ASSERT(type->is_vector());
+            b.with_column(log_data_column_name_bytes(col.data()), type);
+            b.with_column(log_data_column_deleted_name_bytes(col.data()), boolean_type);
+        }
+    } else {
+        add_columns(s.static_columns(), true);
+        add_columns(s.regular_columns(), true);
+    }
+
 
     if (uuid) {
         b.set_uuid(*uuid);
