@@ -855,3 +855,18 @@ rf_rack_valid_keyspaces: false
 # Maximum number of items in single BatchWriteItem command. Default is 100.
 # Note: DynamoDB has a hard-coded limit of 25.
 # alternator_max_items_in_batch_write: 100
+
+# 
+# io-streaming rate limiting
+# When setting this value to be non-zero scylla throttles disk throughput for
+# stream (network) activities such as backup, repair, tablet migration and more.
+# This limit is useful for user queries so the network interface does 
+# not get saturated by streaming activities.
+# The recommended value is 75% of network bandwidth
+# E.g for i4i.8xlarge (https://github.com/scylladb/scylla-machine-image/tree/next/common/aws_net_params.json):
+# network: 18.75 GiB/s --> 18750 Mib/s --> 1875 MB/s (from network bits to network bytes: divide by 10, not 8)
+# Converted to disk bytes: 1875 * 1000 / 1024 = 1831 MB/s (disk wise)
+# 75% of disk bytes is: 0.75 * 1831 = 1373 megabytes/s
+# stream_io_throughput_mb_per_sec: 1373
+# 
+
