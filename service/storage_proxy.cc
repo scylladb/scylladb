@@ -4113,6 +4113,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         future<result<>> run() {
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit, db::allow_per_partition_rate_limit::no).then(utils::result_wrap([this] (unique_response_handler_vector ids) {
                 return sync_write_to_batchlog().then(utils::result_wrap([this, ids = std::move(ids)] () mutable {
+                    utils::get_local_injector().inject("storage_proxy_fail_after_write_to_batchlog", [] { throw std::runtime_error("Error injection: failing after write to batchlog"); });
                     tracing::trace(_trace_state, "Sending batch mutations");
                     _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                     return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout);
