@@ -171,8 +171,16 @@ public:
         });
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
-        if (schema.cdc_options().enabled()) {
+    void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) override {
+        std::vector<schema_ptr> new_cfms;
+
+        for (auto sp : cfms) {
+            const auto& schema = *sp;
+
+            if (!schema.cdc_options().enabled()) {
+                continue;
+            }
+
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(schema.cf_name());
             check_that_cdc_log_table_does_not_exist(db, schema, logname);
@@ -181,11 +189,10 @@ public:
 
             // in seastar thread
             auto log_schema = create_log_schema(schema, db, ksm);
-
-            auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
-
-            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            new_cfms.push_back(std::move(log_schema));
         }
+
+        cfms.insert(cfms.end(), std::make_move_iterator(new_cfms.begin()), std::make_move_iterator(new_cfms.end()));
     }
 
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
