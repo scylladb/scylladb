@@ -842,7 +842,7 @@ public:
             db_clock::duration repair_time_diff;
         };
 
-        std::vector<repair_plan> plans;
+        utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
         for (auto&& [table, tmap_] : _tm->tablets().all_tables()) {
             auto& tmap = *tmap_;
