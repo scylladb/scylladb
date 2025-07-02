@@ -7,27 +7,46 @@
  */
 
 #include "vector_store_client.hh"
+#include "cql3/statements/select_statement.hh"
+#include "cql3/type_json.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/sequential_producer.hh"
+#include "dht/i_partitioner.hh"
+#include "keys.hh"
+#include "utils/rjson.hh"
+#include "schema/schema.hh"
 #include <charconv>
 #include <exception>
+#include <fmt/ranges.h>
 #include <regex>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/http/client.hh>
+#include <seastar/http/request.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/inet_address.hh>
+#include <seastar/net/socket_defs.hh>
+#include <seastar/util/short_streams.hh>
 
 namespace {
 
+using ann_error = service::vector_store_client::ann_error;
 using configuration_exception = exceptions::configuration_exception;
 using duration = lowres_clock::duration;
+using embedding = service::vector_store_client::embedding;
+using limit = service::vector_store_client::limit;
 using host_name = service::vector_store_client::host_name;
 using http_client = http::experimental::client;
+using http_path = sstring;
 using inet_address = seastar::net::inet_address;
+using json_content = sstring;
 using milliseconds = std::chrono::milliseconds;
+using operation_type = httpd::operation_type;
 using port_number = service::vector_store_client::port_number;
+using primary_key = service::vector_store_client::primary_key;
+using primary_keys = service::vector_store_client::primary_keys;
+using service_reply_format_error = service::vector_store_client::service_reply_format_error;
 using time_point = lowres_clock::time_point;
 
 // Wait time before retrying after an exception occurred
@@ -38,6 +57,9 @@ constexpr auto DNS_REFRESH_INTERVAL = std::chrono::seconds(5);
 
 /// Timeout for waiting for a new client to be available
 constexpr auto WAIT_FOR_CLIENT_TIMEOUT = std::chrono::seconds(5);
+
+/// How many retries to do for HTTP requests
+constexpr auto HTTP_REQUEST_RETRIES = 3;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 logging::logger vslogger("vector_store_client");
@@ -93,6 +115,97 @@ auto wait_for_signal(condition_variable& cv, time_point timeout) -> future<bool>
     co_return true;
 }
 
+auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
+    auto const& column_name = column.name_as_text();
+    auto const* keys_obj = rjson::find(item, column_name);
+    if (keys_obj == nullptr) {
+        vslogger.error("Vector Store returned invalid JSON: missing key column '{}'", column_name);
+        return std::unexpected{service_reply_format_error{}};
+    }
+    if (!keys_obj->IsArray()) {
+        vslogger.error("Vector Store returned invalid JSON: key column '{}' is not an array", column_name);
+        return std::unexpected{service_reply_format_error{}};
+    }
+    auto const& keys_arr = keys_obj->GetArray();
+    if (keys_arr.Size() <= idx) {
+        vslogger.error("Vector Store returned invalid JSON: key column '{}' array too small", column_name);
+        return std::unexpected{service_reply_format_error{}};
+    }
+    auto const& key = keys_arr[idx];
+    return from_json_object(*column.type, key);
+}
+
+auto pk_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& schema) -> std::expected<partition_key, ann_error> {
+    std::vector<bytes> raw_pk;
+    for (const column_definition& cdef : schema->partition_key_columns()) {
+        auto raw_value = get_key_column_value(item, idx, cdef);
+        if (!raw_value) {
+            return std::unexpected{raw_value.error()};
+        }
+        raw_pk.emplace_back(*raw_value);
+    }
+    return partition_key::from_exploded(raw_pk);
+}
+
+auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& schema) -> std::expected<clustering_key_prefix, ann_error> {
+    if (schema->clustering_key_size() == 0) {
+        return clustering_key_prefix::make_empty();
+    }
+
+    std::vector<bytes> raw_ck;
+    for (const column_definition& cdef : schema->clustering_key_columns()) {
+        auto raw_value = get_key_column_value(item, idx, cdef);
+        if (!raw_value) {
+            return std::unexpected{raw_value.error()};
+        }
+        raw_ck.emplace_back(*raw_value);
+    }
+
+    return clustering_key_prefix::from_exploded(raw_ck);
+}
+
+auto write_ann_json(embedding embedding, limit limit) -> json_content {
+    return seastar::format(R"({{"embedding":[{}],"limit":{}}})", fmt::join(embedding, ","), limit);
+}
+
+auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
+    if (!json.HasMember("primary_keys")) {
+        vslogger.error("Vector Store returned invalid JSON: missing 'primary_keys'");
+        return std::unexpected{service_reply_format_error{}};
+    }
+    auto const& keys_json = json["primary_keys"];
+    if (!keys_json.IsObject()) {
+        vslogger.error("Vector Store returned invalid JSON: 'primary_keys' is not an object");
+        return std::unexpected{service_reply_format_error{}};
+    }
+
+    if (!json.HasMember("distances")) {
+        vslogger.error("Vector Store returned invalid JSON: missing 'distances'");
+        return std::unexpected{service_reply_format_error{}};
+    }
+    auto const& distances_json = json["distances"];
+    if (!distances_json.IsArray()) {
+        vslogger.error("Vector Store returned invalid JSON: 'distances' is not an array");
+        return std::unexpected{service_reply_format_error{}};
+    }
+    auto const& distances_arr = json["distances"].GetArray();
+
+    auto size = distances_arr.Size();
+    auto keys = primary_keys{};
+    for (auto idx = 0U; idx < size; ++idx) {
+        auto pk = pk_from_json(keys_json, idx, schema);
+        if (!pk) {
+            return std::unexpected{pk.error()};
+        }
+        auto ck = ck_from_json(keys_json, idx, schema);
+        if (!ck) {
+            return std::unexpected{ck.error()};
+        }
+        keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck});
+    }
+    return std::move(keys);
+}
+
 } // namespace
 
 namespace service {
@@ -110,6 +223,7 @@ struct vector_store_client::impl {
     abort_source abort_refresh;
     milliseconds dns_refresh_interval = DNS_REFRESH_INTERVAL;
     milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
+    unsigned http_request_retries = HTTP_REQUEST_RETRIES;
     std::function<future<std::optional<inet_address>>(sstring const&)> dns_resolver;
     sequential_producer<lw_shared_ptr<http_client>> client_producer;
 
@@ -265,6 +379,59 @@ struct vector_store_client::impl {
         }
         co_return get_client_response{.client = client, .host = host};
     }
+
+    struct make_request_response {
+        http::reply::status_type status;             ///< The HTTP status of the response.
+        std::vector<temporary_buffer<char>> content; ///< The content of the response.
+    };
+
+    using make_request_error = std::variant<aborted, addr_unavailable, service_unavailable>;
+
+    auto make_request(operation_type method, http_path path, std::optional<json_content> content, abort_source& as)
+            -> future<std::expected<make_request_response, make_request_error>> {
+        auto resp = make_request_response{.status = http::reply::status_type::ok, .content = std::vector<temporary_buffer<char>>()};
+
+        for (auto retries = 0; retries < HTTP_REQUEST_RETRIES; ++retries) {
+            auto client_host = co_await get_client(as);
+            if (!client_host) {
+                co_return std::unexpected{std::visit(
+                        [](auto&& err) {
+                            return make_request_error{err};
+                        },
+                        client_host.error())};
+            }
+            auto [client, host] = *std::move(client_host);
+
+            auto req = http::request::make(method, host, path);
+            if (content) {
+                req.write_body("json", *content);
+            }
+
+            auto result = co_await coroutine::as_future(client->make_request(
+                    std::move(req),
+                    [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
+                        resp.status = reply._status;
+                        resp.content = co_await util::read_entire_stream(body);
+                    },
+                    std::nullopt, &as));
+            if (result.failed()) {
+                auto err = result.get_exception();
+                if (as.abort_requested()) {
+                    co_return std::unexpected{aborted{}};
+                }
+                if (try_catch<std::system_error>(err) == nullptr) {
+                    co_await coroutine::return_exception_ptr(std::move(err));
+                }
+                // std::system_error means that the server is unavailable, so we retry
+            } else {
+                co_return resp;
+            }
+
+            trigger_dns_refresh();
+        }
+
+        co_return std::unexpected{service_unavailable{}};
+    }
 };
 
 vector_store_client::vector_store_client(config const& cfg) {
@@ -323,6 +490,38 @@ auto vector_store_client::port() const -> std::expected<port_number, disabled> {
     return {_impl->port};
 }
 
+auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
+        -> future<std::expected<primary_keys, ann_error>> {
+    if (is_disabled()) {
+        vslogger.error("Disabled Vector Store while calling ann");
+        co_return std::unexpected{disabled{}};
+    }
+
+    auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
+    auto content = write_ann_json(std::move(embedding), limit);
+
+    auto resp = co_await _impl->make_request(operation_type::POST, std::move(path), std::move(content), as);
+    if (!resp) {
+        co_return std::unexpected{std::visit(
+                [](auto&& err) {
+                    return ann_error{err};
+                },
+                resp.error())};
+    }
+
+    if (resp->status != status_type::ok) {
+        vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, resp->content);
+        co_return std::unexpected{service_error{resp->status}};
+    }
+
+    try {
+        co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
+    } catch (const rjson::error& e) {
+        vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+        co_return std::unexpected{service_reply_format_error{}};
+    }
+}
+
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
     if (vsc.is_disabled()) {
         on_internal_error(vslogger, "Cannot set dns_refresh_interval on a disabled vector store client");
@@ -335,6 +534,13 @@ void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client
         on_internal_error(vslogger, "Cannot set wait_for_client_timeout on a disabled vector store client");
     }
     vsc._impl->wait_for_client_timeout = timeout;
+}
+
+void vector_store_client_tester::set_http_request_retries(vector_store_client& vsc, unsigned retries) {
+    if (vsc.is_disabled()) {
+        on_internal_error(vslogger, "Cannot set http_request_retries on a disabled vector store client");
+    }
+    vsc._impl->http_request_retries = retries;
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
