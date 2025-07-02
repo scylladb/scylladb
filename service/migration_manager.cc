@@ -587,6 +587,13 @@ void migration_notifier::before_create_column_family(const keyspace_metadata& ks
     });
 }
 
+void migration_notifier::pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) {
+    _listeners.thread_for_each([&ksm, &cfms] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_pre_create_column_families(ksm, cfms);
+    });
+}
+
 void migration_notifier::before_create_column_families(const keyspace_metadata& ksm,
         const std::vector<schema_ptr>& schemas, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
     _listeners.thread_for_each([&ksm, &schemas, &mutations, timestamp] (migration_listener* listener) {
@@ -648,20 +655,23 @@ static future<utils::chunked_vector<mutation>> include_keyspace(
 static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_announcement(storage_proxy& sp,
         const keyspace_metadata& ksm, std::vector<schema_ptr> cfms, api::timestamp_type timestamp) {
     auto& db = sp.local_db();
-    for (auto cfm : cfms) {
-        if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
-            throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
-        }
-        if (db.column_family_exists(cfm->id())) {
-            throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
-        }
-    }
 
-    for (auto cfm : cfms) {
-        mlogger.info("Create new ColumnFamily: {}", cfm);
-    }
+    return seastar::async([&db, &ksm, timestamp, cfms = std::move(cfms)] mutable {
+        db.get_notifier().pre_create_column_families(ksm, cfms);
 
-    return seastar::async([&db, &ksm, timestamp, cfms = std::move(cfms)] {
+        for (auto cfm : cfms) {
+            if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
+                throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
+            }
+            if (db.column_family_exists(cfm->id())) {
+                throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
+            }
+        }
+
+        for (auto cfm : cfms) {
+            mlogger.info("Create new ColumnFamily: {}", cfm);
+        }
+
         utils::chunked_vector<mutation> mutations;
         for (schema_ptr cfm : cfms) {
             auto table_muts = db::schema_tables::make_create_table_mutations(cfm, timestamp);
