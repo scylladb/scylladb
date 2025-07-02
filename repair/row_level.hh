@@ -22,6 +22,7 @@
 #include "utils/user_provided_param.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/disk_space_monitor.hh"
 
 using namespace seastar;
 
@@ -112,11 +113,27 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
     std::unordered_map<tasks::task_id, repair_history> _finished_ranges_history;
 
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
-    bool _stopped = false;
+    uint32_t _disabled_repair_tablet_count = 0;
+
+    // Possible states in which the repair service can be found.
+    //
+    // none: started, but not yet enabled. Once the repair service moves out of "none", it can
+    //       never legally move back
+    // stopped: stop() was called. The repair service will never be enabled or disabled again
+    //          and can no longer be used
+    // running: running, started and enabled at least once. Whether new repair requests are
+    //          accepted or not is determined by the counter
+    enum class state { none, stopped, running };
+    // The repair service is initiated in the none state. It is moved to the running state when
+    // start() is invoked and the service is immediately enabled.
+    state _state = state::none;
+    uint32_t _disabled_state_count = 0;
 
     size_t _max_repair_memory;
     seastar::semaphore _memory_sem;
     seastar::named_semaphore _load_parallelism_semaphore = {16, named_semaphore_exception_factory{"Load repair history parallelism"}};
+
+    utils::disk_space_monitor::subscription _out_of_space_subscription;
 
     future<> _load_history_done = make_ready_future<>();
 
@@ -144,9 +161,11 @@ public:
             sharded<db::system_keyspace>& sys_ks,
             db::view::view_builder& vb,
             tasks::task_manager& tm,
-            service::migration_manager& mm, size_t max_repair_memory);
+            service::migration_manager& mm,
+            size_t max_repair_memory
+            );
     ~repair_service();
-    future<> start();
+    future<> start(utils::disk_space_monitor* dsm);
     future<> stop();
 
     // shutdown() stops all ongoing repairs started on this node (and
@@ -155,6 +174,16 @@ public:
     // quickly as possible (we do not wait for repairs to finish but rather
     // stop them abruptly).
     future<> shutdown();
+
+    // Enable the repair service.
+    void enable();
+
+    // Abort all running local repairs and moves the repair service into disabled state.
+    // The repair service is still alive after drain, i.e. accepts global repair requests
+    // but it will not accept new local repairs unless it is moved back to enabled state.
+    future<> drain();
+
+    bool is_disabled() const { return _state != state::running || _disabled_state_count > 0; }
 
     future<std::optional<gc_clock::time_point>> update_history(tasks::task_id repair_id, table_id table_id, dht::token_range range, gc_clock::time_point repair_time, bool is_tablet);
     future<> cleanup_history(tasks::task_id repair_id);

@@ -1767,7 +1767,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
-            repair.invoke_on_all(&repair_service::start).get();
+            repair.invoke_on_all(&repair_service::start, only_on_shard0(&*disk_space_monitor_shard0)).get();
             api::set_server_repair(ctx, repair, gossip_address_map).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();
