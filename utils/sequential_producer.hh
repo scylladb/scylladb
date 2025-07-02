@@ -21,6 +21,7 @@ template<typename T>
 class sequential_producer {
   public:
     using factory_t = std::function<seastar::future<T>()>;
+    using time_point = seastar::shared_future<T>::time_point;
 
   private:
     factory_t _factory;
@@ -32,11 +33,18 @@ class sequential_producer {
         clear();
     }
 
-    seastar::future<T> operator()() {
+    seastar::future<T> operator()(time_point timeout = time_point::max()) {
         if (_churning.available()) {
             _churning = _factory();
         }
-        return _churning.get_future();
+        return _churning.get_future(timeout);
+    }
+
+    seastar::future<T> operator()(seastar::abort_source& as) {
+        if (_churning.available()) {
+            _churning = _factory();
+        }
+        return _churning.get_future(as);
     }
 
     void clear() {
