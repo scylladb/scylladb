@@ -20,6 +20,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
+#include "index/vector_index.hh"
 #include "service/client_state.hh"
 #include "types/types.hh"
 #include "cql3/query_processor.hh"
@@ -261,6 +262,24 @@ std::optional<description> describe_cdc_log_table(const data_dictionary::databas
     return schema_desc;
 }
 
+// `base_name` should be a table with a vector search index
+std::optional<description> describe_vsc_log_table(const data_dictionary::database& db, const sstring& ks, const sstring& base_name) {
+    auto table = db.try_find_table(ks, cdc::vsc_log_name(base_name));
+    if (!table) {
+        dlogger.warn("Couldn't find vsc log table for base table {}.{}", ks, base_name);
+        return std::nullopt;
+    }
+
+    fragmented_ostringstream os;
+    auto schema = table->schema();
+    auto describe_helper = replica::make_schema_describe_helper(schema, db);
+    schema->describe_alter_with_properties(describe_helper, os);
+
+    auto schema_desc = schema->describe(describe_helper, describe_option::NO_STMTS);
+    schema_desc.create_statement = std::move(os).to_managed_string();
+    return schema_desc;
+}
+
 future<std::vector<description>> table(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
     auto table = db.try_find_table(ks, name);
     if (!table) {
@@ -280,16 +299,27 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
     // table
     auto table_desc = schema->describe(replica::make_schema_describe_helper(schema, db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
     if (cdc::is_log_for_some_table(db.real_database(), ks, name)) {
-        // If the table the user wants to describe is a CDC log table, we want to print it as a CQL comment.
+        // If the table the user wants to describe is a CDC or VSC log table, we want to print it as a CQL comment.
         // This way, the user learns about the internals of the table, but they're also told not to execute it.
         fragmented_ostringstream os{};
 
-        fmt::format_to(os.to_iter(),
-                "/* Do NOT execute this statement! It's only for informational purposes.\n"
-                "   A CDC log table is created automatically when the base is created.\n"
-                "\n{}\n"
-                "*/",
-                *table_desc.create_statement);
+        auto base_table = cdc::get_base_table(db.real_database(), ks, name);
+        auto vsc_base_table = cdc::get_vsc_base_table(db.real_database(), ks, name);
+        if (base_table && base_table->cdc_options().enabled()) {
+            fmt::format_to(os.to_iter(),
+                    "/* Do NOT execute this statement! It's only for informational purposes.\n"
+                    "   A CDC log table is created automatically when the base is created.\n"
+                    "\n{}\n"
+                    "*/",
+                    *table_desc.create_statement);
+        } else if (vsc_base_table && secondary_index::has_vector_index(*vsc_base_table)) {
+            fmt::format_to(os.to_iter(),
+                    "/* Do NOT execute this statement! It's only for informational purposes.\n"
+                    "   A VSC log table is created automatically when the index is created.\n"
+                    "\n{}\n"
+                    "*/",
+                    *table_desc.create_statement);
+        }
 
         table_desc.create_statement = std::move(os).to_managed_string();
     }
@@ -317,6 +347,13 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
         auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
         if (cdc_log_alter) {
             result.push_back(std::move(*cdc_log_alter));
+        }
+    }
+
+    if (secondary_index::has_vector_index(*schema)) {
+        auto vsc_log_alter = describe_vsc_log_table(db, ks, name);
+        if (vsc_log_alter) {
+            result.push_back(std::move(*vsc_log_alter));
         }
     }
 
