@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <optional>
 #include <utility>
 #include <algorithm>
 
@@ -251,10 +252,21 @@ public:
 
     void on_before_drop_column_family(const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
         auto logname = log_name(schema.cf_name());
+        auto vsc_logname = vsc_log_name(schema.cf_name());
         auto& db = _ctxt._proxy.get_db().local();
         auto has_cdc_log = db.has_schema(schema.ks_name(), logname);
+        auto has_vsc_log = db.has_schema(schema.ks_name(), vsc_logname);
         if (has_cdc_log) {
             auto log_schema = db.find_schema(schema.ks_name(), logname);
+            if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                return;
+            }
+            auto& keyspace = db.find_keyspace(schema.ks_name());
+            auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
+            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+        }
+        if (has_vsc_log) {
+            auto log_schema = db.find_schema(schema.ks_name(), vsc_logname);
             if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
                 return;
             }
@@ -958,15 +970,15 @@ class log_mutation_builder {
 
 public:
     log_mutation_builder(mutation& log_mut, api::timestamp_type ts,
-                         const partition_key& base_pk, const schema& base_schema)
+                         const partition_key& base_pk, const schema& base_schema, bool is_vsc)
         : _base_schema(base_schema), _log_schema(*log_mut.schema()),
           _op_col(*_log_schema.get_column_definition(log_meta_column_name_bytes("operation"))),
           _ttl_col(*_log_schema.get_column_definition(log_meta_column_name_bytes("ttl"))),
           _base_pk(base_pk.explode_fragmented()),
           _tuuid(timeuuid_type->decompose(generate_timeuuid(ts))),
           _ts(ts),
-          _ttl(_base_schema.cdc_options().ttl()
-                  ? std::optional{std::chrono::seconds(_base_schema.cdc_options().ttl())} : std::nullopt),
+          _ttl(is_vsc ? std::chrono::seconds(VSC_TTL_SECONDS) : (_base_schema.cdc_options().ttl()
+                ? std::optional{std::chrono::seconds(_base_schema.cdc_options().ttl())} : std::nullopt)),
           _log_mut(log_mut)
     {}
 
@@ -1544,13 +1556,16 @@ private:
 
     stats::part_type_set _touched_parts;
 
+    bool _is_vsc = false;
+
 public:
-    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk)
+    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk, bool is_vsc)
         : _ctx(ctx)
         , _schema(std::move(s))
         , _dk(std::move(dk))
-        , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
+        , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), is_vsc ? vsc_log_name(_schema->cf_name()) : log_name(_schema->cf_name())))
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
+        , _is_vsc(is_vsc)
     {
     }
 
@@ -1558,7 +1573,7 @@ public:
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
         const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
-        _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
+        _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema, _is_vsc);
         _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());
     }
 
@@ -1654,7 +1669,7 @@ public:
             ._enable_updating_state = _enable_updating_state,
             ._clustering_row_states = _clustering_row_states,
             ._static_row_state = _static_row_state,
-            ._generate_delta_values = generate_delta_values(_builder->base_schema())
+            ._generate_delta_values = generate_delta_values(_builder->base_schema()) || _is_vsc
         };
         cdc::inspect_mutation(m, v);
     }
@@ -1853,7 +1868,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        auto s = m.schema();
+        return s->cdc_options().enabled() || secondary_index::has_vector_index(*s);
     });
 
     if (i == e) {
@@ -1869,11 +1885,19 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             auto& m = mutations[idx];
             auto s = m.schema();
 
-            if (!s->cdc_options().enabled()) {
+            if (!s->cdc_options().enabled() && !secondary_index::has_vector_index(*s)) {
                 return make_ready_future<>();
             }
 
-            transformer trans(_ctxt, s, m.decorated_key());
+            std::optional<transformer> trans, trans_vsc;
+
+            if (s->cdc_options().enabled()) {
+                trans.emplace(_ctxt, s, m.decorated_key(), false);
+            }
+
+            if (secondary_index::has_vector_index(*s)) {
+                trans_vsc.emplace(_ctxt, s, m.decorated_key(), true);
+            }
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
             if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
@@ -1881,7 +1905,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
                 tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
-                f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
+                f = trans->pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
                     auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
                     cdc_stats.counters_total.preimage_selects++;
                     if (f.failed()) {
@@ -1893,7 +1917,11 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state, &details] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+            return f.then([trans_ptr = trans, &mutations, idx, tr_state, &details, s] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+                if (!s->cdc_options().enabled()) {
+                    return;
+                }
+                auto trans = std::move(*trans_ptr);
                 auto& m = mutations[idx];
                 auto& s = m.schema();
 
@@ -1923,6 +1951,28 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // `m` might be invalidated at this point because of the push_back to the vector
                 tracing::trace(tr_state, "CDC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());
                 details.touched_parts.add(touched_parts);
+            }).then([trans_vsc_ptr = trans_vsc, &mutations, idx, tr_state, &details, s] () mutable {
+                if (!secondary_index::has_vector_index(*s)) {
+                    return;
+                }
+                auto trans_vsc = std::move(*trans_vsc_ptr);
+                auto& m = mutations[idx];
+                tracing::trace(tr_state, "VSC: Generating log mutations for {}", m.decorated_key());
+                if (should_split(m)) {
+                    tracing::trace(tr_state, "VSC: Splitting {}", m.decorated_key());
+                    details.was_split = true;
+                    process_changes_with_splitting(m, trans_vsc, false, false);
+                } else {
+                    tracing::trace(tr_state, "VSC: No need to split {}", m.decorated_key());
+                    process_changes_without_splitting(m, trans_vsc, false, false);
+                }
+                auto [log_mut, touched_parts] = std::move(trans_vsc).finish();
+                const int generated_count = log_mut.size();
+                mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+
+                // `m` might be invalidated at this point because of the push_back to the vector
+                tracing::trace(tr_state, "VSC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());
+                details.touched_parts.add(touched_parts);
             });
         }).then([this, tr_state, &details](utils::chunked_vector<mutation> mutations) {
             tracing::trace(tr_state, "CDC: Finished generating all log mutations");
@@ -1934,7 +1984,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
 bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations) const {
     return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        auto s = m.schema();
+        return s->cdc_options().enabled() || secondary_index::has_vector_index(*s);
     });
 }
 
