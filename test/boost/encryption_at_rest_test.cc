@@ -312,6 +312,7 @@ namespace bp = boost::process;
 
 static future<> kmip_test_helper(const std::function<future<>(const kmip_test_info&, const tmpdir&)>& f) {
     tmpdir tmp;
+    tmp.set_preserve_on_failure(true);
     bool host_set = false;
     bp::child python;
     bp::group gp;
