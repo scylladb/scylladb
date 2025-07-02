@@ -234,7 +234,9 @@ class ManagerClient:
         logger.debug("ManagerClient stopping %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop")
 
-    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 60) -> None:
+    # FIXME: change timeout back to 60 once we fix the slow flushing of tables during shutdown
+    # (see https://github.com/scylladb/scylladb/issues/12028).
+    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 180) -> None:
         """Stop specified server gracefully"""
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully", timeout=timeout)
