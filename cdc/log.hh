@@ -56,6 +56,7 @@ class db_context;
 class metadata;
 
 bool is_log_name(const std::string_view& table_name);
+bool is_log_schema(const schema& s);
 
 /// \brief CDC service, responsible for schema listeners
 ///
