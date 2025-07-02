@@ -3294,7 +3294,8 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
         db::view::view_builder& vb,
         tasks::task_manager& tm,
         service::migration_manager& mm,
-        size_t max_repair_memory)
+        size_t max_repair_memory,
+        replica::out_of_space_controller* oos_controller)
     : _tsm(tsm)
     , _gossiper(gossiper)
     , _messaging(ms)
@@ -3308,6 +3309,9 @@ repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
     , _node_ops_metrics(_repair_module)
     , _max_repair_memory(max_repair_memory)
     , _memory_sem(max_repair_memory)
+    , _out_of_space_subscription(oos_controller && (this_shard_id() == 0) ? oos_controller->subscribe([this] (auto critical_level_reached) {
+        return repair_service::set_enable_repair_tablet_rpc(container(), bool(!critical_level_reached));
+    }) : replica::out_of_space_controller::subscription())
 {
     tm.register_module("repair", _repair_module);
     if (this_shard_id() == 0) {
