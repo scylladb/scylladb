@@ -580,6 +580,13 @@ void migration_notifier::before_create_column_family(const keyspace_metadata& ks
     });
 }
 
+void migration_notifier::pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) {
+    _listeners.thread_for_each([&ksm, &cfms] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_pre_create_column_families(ksm, cfms);
+    });
+}
+
 void migration_notifier::before_create_column_families(const keyspace_metadata& ksm,
         const std::vector<schema_ptr>& schemas, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
     _listeners.thread_for_each([&ksm, &schemas, &mutations, timestamp] (migration_listener* listener) {
@@ -641,6 +648,15 @@ static future<utils::chunked_vector<mutation>> include_keyspace(
 static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_announcement(storage_proxy& sp,
         const keyspace_metadata& ksm, std::vector<schema_ptr> cfms, api::timestamp_type timestamp) {
     auto& db = sp.local_db();
+
+    // This notification allows the subscriber to modify the cfms vector before
+    // we create the tables mutations and notify about them. For example, we
+    // can add a new table here (e.g. CDC).
+    // We want to do this before calling `before_create_column_families`,
+    // because in `before_create_column_families` we want the subscriber to get
+    // the final list of tables.
+    db.get_notifier().pre_create_column_families(ksm, cfms);
+
     for (auto cfm : cfms) {
         if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
             throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
