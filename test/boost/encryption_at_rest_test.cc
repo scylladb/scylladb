@@ -314,9 +314,10 @@ struct kmip_test_info {
     std::string key;
     std::string ca;
     std::string prio;
+    std::string created_key_id;
 };
 
-static future<> kmip_test_helper(const std::function<future<>(const kmip_test_info&, const tmpdir&)>& f) {
+static future<> kmip_test_helper(const std::function<future<>(const kmip_test_info&, const tmpdir&)>& f, bool create_key = false) {
     tmpdir tmp;
     bool host_set = false;
 
@@ -331,7 +332,8 @@ static future<> kmip_test_helper(const std::function<future<>(const kmip_test_in
         .cert = get_var_or_default("KMIP_CERT", fmt::format("{}/scylla.pem", resourcedir)),
         .key = get_var_or_default("KMIP_KEY", fmt::format("{}/scylla.pem", resourcedir)),
         .ca = get_var_or_default("KMIP_CA", fmt::format("{}/cacert.pem", resourcedir)),
-        .prio = get_var_or_default("KMIP_PRIO", "SECURE128:+RSA:-VERS-TLS1.0:-ECDHE-ECDSA")
+        .prio = get_var_or_default("KMIP_PRIO", "SECURE128:+RSA:-VERS-TLS1.0:-ECDHE-ECDSA"),
+        .created_key_id = {}
     };
 
     // note: default kmip port = 5696;
@@ -367,6 +369,13 @@ database_path=:memory:
         promise<int> port_promise;
         auto port_future = port_promise.get_future();
 
+        std::optional<promise<std::string>> key_promise_opt;
+        std::optional<future<std::string>> key_future_opt;
+        if (create_key) {
+            key_promise_opt.emplace();
+            key_future_opt = key_promise_opt->get_future();
+        }
+
         auto python = co_await tests::proc::process_fixture::create(pyexec, 
             { // args
                 pyexec.string(),
@@ -374,20 +383,27 @@ database_path=:memory:
                 "-l", log,
                 "-f", cfgfile,
                 "-v", "DEBUG",
+                create_key ? "--create-key" : "",
             },
             { // env
                 fmt::format("TMPDIR={}", tmp.path().string())
             },
             // stdout handler
-            [port_promise = std::move(port_promise), b = false](std::string_view line) mutable -> future<consumption_result<char>> {
+            [create_key, port_promise = std::move(port_promise), key_promise_opt = std::move(key_promise_opt), port_found = false, key_found = false](std::string_view line) mutable -> future<consumption_result<char>> {
                 static std::regex port_ex("Listening on (\\d+)");
+                static std::regex key_ex("Created key with id: ([^\n]+)");
 
                 std::cout << line << std::endl;
                 std::match_results<typename std::string_view::const_iterator> m;
-                if (!b && std::regex_match(line.begin(), line.end(), m, port_ex)) {
+                if (!port_found && std::regex_match(line.begin(), line.end(), m, port_ex)) {
                     port_promise.set_value(std::stoi(m[1].str()));
                     BOOST_TEST_MESSAGE("Matched PyKMIP port: " + m[1].str());
-                    b = true;
+                    port_found = true;
+                }
+                if (create_key && !key_found && std::regex_match(line.begin(), line.end(), m, key_ex)) {
+                    key_promise_opt->set_value(m[1].str());
+                    BOOST_TEST_MESSAGE("Matched PyKMIP key id: " + m[1].str());
+                    key_found = true;
                 }
                 co_return continue_consuming{};
             },
@@ -398,8 +414,13 @@ database_path=:memory:
         std::exception_ptr ep;
 
         try {
-            // arbitrary timeout of 20s for the server to make some output. Very generous.
-            auto port = co_await with_timeout(std::chrono::steady_clock::now() + 20s, std::move(port_future));
+            int port;
+            try {
+                // arbitrary timeout of 20s for the server to make some output. Very generous.
+                port = co_await with_timeout(std::chrono::steady_clock::now() + 20s, std::move(port_future));
+            } catch (timed_out_error&) {
+                throw std::runtime_error("Could not start PyKMIP server");
+            }
 
             if (port <= 0) {
                 throw std::runtime_error("Invalid port");
@@ -426,10 +447,16 @@ database_path=:memory:
 
             info.host = fmt::format("127.0.0.1:{}", port);
 
+            if (create_key) {
+                try {
+                    info.created_key_id = co_await with_timeout(std::chrono::steady_clock::now() + 5s, std::move(*key_future_opt));
+                } catch (timed_out_error&) {
+                    throw std::runtime_error("Timed out waiting for PyKMIP server to create key");
+                }
+            }
+
             co_await f(info, tmp);
 
-        } catch (timed_out_error&) {
-            ep = std::make_exception_ptr(std::runtime_error("Could not start pykmip"));
         } catch (...) {
             ep = std::current_exception();
         }
@@ -442,6 +469,8 @@ database_path=:memory:
         if (ep) {
             std::rethrow_exception(ep);
         }
+    } else if (create_key) {
+        throw std::runtime_error("Key creation is not supported when using external KMIP host.");
     } else {
         co_await f(info, tmp);
     }
@@ -462,6 +491,34 @@ SEASTAR_TEST_CASE(test_kmip_provider, *check_run_test_decorator("ENABLE_KMIP_TES
         );
         co_await test_provider("'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
     });
+}
+
+SEASTAR_TEST_CASE(test_replicated_provider_with_kmip_system_key, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        // Encrypt a table with the Replicated Key Provider, using the KMIP key as system key.
+        auto sysdir = tmp.path() / "system_keys";
+        auto keyfile = tmp.path() / "secret_key";
+        auto yaml = fmt::format(R"(
+kmip_hosts:
+    kmip_test:
+        hosts: {0}
+        certificate: {1}
+        keyfile: {2}
+        truststore: {3}
+        priority_string: {4}
+system_key_directory: {5}
+)", info.host, info.cert, info.key, info.ca, info.prio, sysdir.string());
+        test_provider_args args{
+            .tmp = tmp,
+            .options = fmt::format("'key_provider': 'ReplicatedKeyProviderFactory', 'system_key_file': 'kmip://kmip_test/{}', 'secret_key_file': '{}','cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", info.created_key_id, keyfile.string()),
+            .extra_yaml = yaml,
+            .n_tables = 1,
+            .n_restarts = 1,
+            .explicit_provider = {},
+        };
+        co_await test_provider(args);
+        BOOST_REQUIRE(fs::exists(tmp.path()));
+    }, true);
 }
 
 #endif // HAVE_KMIP
