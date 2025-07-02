@@ -110,7 +110,7 @@ public:
 
     chunked_vector(std::initializer_list<T> x);
     explicit chunked_vector(size_t n, const T& value = T());
-    ~chunked_vector();
+    ~chunked_vector() noexcept;
     chunked_vector& operator=(const chunked_vector& x);
     // Moving a chunked_vector invalidates all iterators to it
     chunked_vector& operator=(chunked_vector&& x) noexcept;
@@ -446,7 +446,7 @@ chunked_vector<T, max_contiguous_allocation>::operator=(chunked_vector&& x) noex
 }
 
 template <typename T, size_t max_contiguous_allocation>
-chunked_vector<T, max_contiguous_allocation>::~chunked_vector() {
+chunked_vector<T, max_contiguous_allocation>::~chunked_vector() noexcept {
     // This assert logically belongs as a constraint on T, but then
     // we can't forward-declare typedefs that use chunked_vector<T> on
     // an incomplete type T.
