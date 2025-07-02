@@ -1475,7 +1475,29 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         co_return sstring(format("{}", ustate));
     });
 
+<<<<<<< HEAD
     ss::move_tablet.set(r, [&ctx, &ss] (std::unique_ptr<http::request> req) -> future<json_return_type> {
+||||||| parent of c8ce9d1c60 (topology coordinator: add REST endpoint to query the status of ongoing topology cmd rpc)
+static
+future<json::json_return_type>
+rest_move_tablet(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+=======
+static
+future<json::json_return_type>
+rest_raft_topology_get_cmd_status(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+        const auto status = co_await ss.invoke_on(0, [] (auto& ss) {
+            return ss.get_topology_cmd_status();
+        });
+        if (status.active_dst.empty()) {
+            co_return sstring("none");
+        }
+        co_return sstring(fmt::format("{}[{}]: {}", status.current, status.index, fmt::join(status.active_dst, ",")));
+}
+
+static
+future<json::json_return_type>
+rest_move_tablet(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+>>>>>>> c8ce9d1c60 (topology coordinator: add REST endpoint to query the status of ongoing topology cmd rpc)
         auto src_host_id = validate_host_id(req->get_query_param("src_host"));
         shard_id src_shard_id = validate_int(req->get_query_param("src_shard"));
         auto dst_host_id = validate_host_id(req->get_query_param("dst_host"));
@@ -1597,7 +1619,220 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             }
             return make_ready_future<json::json_return_type>(std::move(res));
         });
+<<<<<<< HEAD
     });
+||||||| parent of c8ce9d1c60 (topology coordinator: add REST endpoint to query the status of ongoing topology cmd rpc)
+}
+
+
+// Disambiguate between a function that returns a future and a function that returns a plain value, also
+// add std::ref() as a courtesy. Also handles ks_cf_func signatures.
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., const_req>
+    && std::same_as<seastar::json::json_return_type, std::invoke_result_t<FuncType, BindArgs&..., const_req&>>
+static
+seastar::httpd::json_request_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>
+    && std::same_as<future<seastar::json::json_return_type>, std::invoke_result_t<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>>
+static
+seastar::httpd::future_json_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
+    ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
+    ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
+    ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
+    ss::get_scylla_release_version.set(r, rest_bind(rest_get_scylla_release_version, ss));
+    ss::get_schema_version.set(r, rest_bind(rest_get_schema_version, ss));
+    ss::get_range_to_endpoint_map.set(r, rest_bind(rest_get_range_to_endpoint_map, ctx, ss));
+    ss::get_pending_range_to_endpoint_map.set(r, rest_bind(rest_get_pending_range_to_endpoint_map, ctx));
+    ss::describe_ring.set(r, rest_bind(rest_describe_ring, ctx, ss));
+    ss::get_load.set(r, rest_bind(rest_get_load, ctx));
+    ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
+    ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
+    ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
+    ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
+    ss::force_keyspace_compaction.set(r, rest_bind(rest_force_keyspace_compaction, ctx));
+    ss::force_keyspace_cleanup.set(r, rest_bind(rest_force_keyspace_cleanup, ctx, ss));
+    ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
+    ss::perform_keyspace_offstrategy_compaction.set(r, rest_bind(rest_perform_keyspace_offstrategy_compaction, ctx));
+    ss::upgrade_sstables.set(r, rest_bind(rest_upgrade_sstables, ctx));
+    ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
+    ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
+    ss::decommission.set(r, rest_bind(rest_decommission, ss));
+    ss::move.set(r, rest_bind(rest_move, ss));
+    ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
+    ss::get_removal_status.set(r, rest_bind(rest_get_removal_status, ss));
+    ss::force_remove_completion.set(r, rest_bind(rest_force_remove_completion, ss));
+    ss::set_logging_level.set(r, rest_bind(rest_set_logging_level));
+    ss::get_logging_levels.set(r, rest_bind(rest_get_logging_levels));
+    ss::get_operation_mode.set(r, rest_bind(rest_get_operation_mode, ss));
+    ss::is_starting.set(r, rest_bind(rest_is_starting, ss));
+    ss::get_drain_progress.set(r, rest_bind(rest_get_drain_progress, ctx));
+    ss::drain.set(r, rest_bind(rest_drain, ss));
+    ss::get_keyspaces.set(r, rest_bind(rest_get_keyspaces, ctx));
+    ss::stop_gossiping.set(r, rest_bind(rest_stop_gossiping, ss));
+    ss::start_gossiping.set(r, rest_bind(rest_start_gossiping, ss));
+    ss::is_gossip_running.set(r, rest_bind(rest_is_gossip_running, ss));
+    ss::stop_daemon.set(r, rest_bind(rest_stop_daemon));
+    ss::is_initialized.set(r, rest_bind(rest_is_initialized, ss));
+    ss::join_ring.set(r, rest_bind(rest_join_ring));
+    ss::is_joined.set(r, rest_bind(rest_is_joined, ss));
+    ss::is_incremental_backups_enabled.set(r, rest_bind(rest_is_incremental_backups_enabled, ctx));
+    ss::set_incremental_backups_enabled.set(r, rest_bind(rest_set_incremental_backups_enabled, ctx));
+    ss::rebuild.set(r, rest_bind(rest_rebuild, ss));
+    ss::bulk_load.set(r, rest_bind(rest_bulk_load));
+    ss::bulk_load_async.set(r, rest_bind(rest_bulk_load_async));
+    ss::reschedule_failed_deletions.set(r, rest_bind(rest_reschedule_failed_deletions));
+    ss::sample_key_range.set(r, rest_bind(rest_sample_key_range));
+    ss::reset_local_schema.set(r, rest_bind(rest_reset_local_schema, ss));
+    ss::set_trace_probability.set(r, rest_bind(rest_set_trace_probability));
+    ss::get_trace_probability.set(r, rest_bind(rest_get_trace_probability));
+    ss::get_slow_query_info.set(r, rest_bind(rest_get_slow_query_info));
+    ss::set_slow_query.set(r, rest_bind(rest_set_slow_query));
+    ss::deliver_hints.set(r, rest_bind(rest_deliver_hints));
+    ss::get_cluster_name.set(r, rest_bind(rest_get_cluster_name, ss));
+    ss::get_partitioner_name.set(r, rest_bind(rest_get_partitioner_name, ss));
+    ss::get_tombstone_warn_threshold.set(r, rest_bind(rest_get_tombstone_warn_threshold));
+    ss::set_tombstone_warn_threshold.set(r, rest_bind(rest_set_tombstone_warn_threshold));
+    ss::get_tombstone_failure_threshold.set(r, rest_bind(rest_get_tombstone_failure_threshold));
+    ss::set_tombstone_failure_threshold.set(r, rest_bind(rest_set_tombstone_failure_threshold));
+    ss::get_batch_size_failure_threshold.set(r, rest_bind(rest_get_batch_size_failure_threshold));
+    ss::set_batch_size_failure_threshold.set(r, rest_bind(rest_set_batch_size_failure_threshold));
+    ss::set_hinted_handoff_throttle_in_kb.set(r, rest_bind(rest_set_hinted_handoff_throttle_in_kb));
+    ss::get_metrics_load.set(r, rest_bind(rest_get_metrics_load, ctx));
+    ss::get_exceptions.set(r, rest_bind(rest_get_exceptions, ss));
+    ss::get_total_hints_in_progress.set(r, rest_bind(rest_get_total_hints_in_progress));
+    ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
+    ss::get_ownership.set(r, rest_bind(rest_get_ownership, ctx, ss));
+    ss::get_effective_ownership.set(r, rest_bind(rest_get_effective_ownership, ctx, ss));
+    ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client));
+    ss::estimate_compression_ratios.set(r, rest_bind(rest_estimate_compression_ratios, ctx, ss));
+    ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
+    ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
+    ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));
+    ss::raft_topology_upgrade_status.set(r, rest_bind(rest_raft_topology_upgrade_status, ss));
+    ss::move_tablet.set(r, rest_bind(rest_move_tablet, ctx, ss));
+    ss::add_tablet_replica.set(r, rest_bind(rest_add_tablet_replica, ctx, ss));
+    ss::del_tablet_replica.set(r, rest_bind(rest_del_tablet_replica, ctx, ss));
+    ss::repair_tablet.set(r, rest_bind(rest_repair_tablet, ctx, ss));
+    ss::tablet_balancing_enable.set(r, rest_bind(rest_tablet_balancing_enable, ss));
+    ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
+    sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
+=======
+}
+
+
+// Disambiguate between a function that returns a future and a function that returns a plain value, also
+// add std::ref() as a courtesy. Also handles ks_cf_func signatures.
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., const_req>
+    && std::same_as<seastar::json::json_return_type, std::invoke_result_t<FuncType, BindArgs&..., const_req&>>
+static
+seastar::httpd::json_request_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+template <typename FuncType, typename... BindArgs>
+requires std::invocable<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>
+    && std::same_as<future<seastar::json::json_return_type>, std::invoke_result_t<FuncType, BindArgs&..., std::unique_ptr<seastar::http::request>>>
+static
+seastar::httpd::future_json_function
+rest_bind(FuncType func, BindArgs&... args) {
+    return std::bind_front(func, std::ref(args)...);
+}
+
+void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_service>& ss, service::raft_group0_client& group0_client) {
+    ss::get_token_endpoint.set(r, rest_bind(rest_get_token_endpoint, ctx, ss));
+    ss::toppartitions_generic.set(r, rest_bind(rest_toppartitions_generic, ctx));
+    ss::get_release_version.set(r, rest_bind(rest_get_release_version, ss));
+    ss::get_scylla_release_version.set(r, rest_bind(rest_get_scylla_release_version, ss));
+    ss::get_schema_version.set(r, rest_bind(rest_get_schema_version, ss));
+    ss::get_range_to_endpoint_map.set(r, rest_bind(rest_get_range_to_endpoint_map, ctx, ss));
+    ss::get_pending_range_to_endpoint_map.set(r, rest_bind(rest_get_pending_range_to_endpoint_map, ctx));
+    ss::describe_ring.set(r, rest_bind(rest_describe_ring, ctx, ss));
+    ss::get_load.set(r, rest_bind(rest_get_load, ctx));
+    ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
+    ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
+    ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
+    ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
+    ss::force_keyspace_compaction.set(r, rest_bind(rest_force_keyspace_compaction, ctx));
+    ss::force_keyspace_cleanup.set(r, rest_bind(rest_force_keyspace_cleanup, ctx, ss));
+    ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
+    ss::perform_keyspace_offstrategy_compaction.set(r, rest_bind(rest_perform_keyspace_offstrategy_compaction, ctx));
+    ss::upgrade_sstables.set(r, rest_bind(rest_upgrade_sstables, ctx));
+    ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
+    ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
+    ss::decommission.set(r, rest_bind(rest_decommission, ss));
+    ss::move.set(r, rest_bind(rest_move, ss));
+    ss::remove_node.set(r, rest_bind(rest_remove_node, ss));
+    ss::get_removal_status.set(r, rest_bind(rest_get_removal_status, ss));
+    ss::force_remove_completion.set(r, rest_bind(rest_force_remove_completion, ss));
+    ss::set_logging_level.set(r, rest_bind(rest_set_logging_level));
+    ss::get_logging_levels.set(r, rest_bind(rest_get_logging_levels));
+    ss::get_operation_mode.set(r, rest_bind(rest_get_operation_mode, ss));
+    ss::is_starting.set(r, rest_bind(rest_is_starting, ss));
+    ss::get_drain_progress.set(r, rest_bind(rest_get_drain_progress, ctx));
+    ss::drain.set(r, rest_bind(rest_drain, ss));
+    ss::get_keyspaces.set(r, rest_bind(rest_get_keyspaces, ctx));
+    ss::stop_gossiping.set(r, rest_bind(rest_stop_gossiping, ss));
+    ss::start_gossiping.set(r, rest_bind(rest_start_gossiping, ss));
+    ss::is_gossip_running.set(r, rest_bind(rest_is_gossip_running, ss));
+    ss::stop_daemon.set(r, rest_bind(rest_stop_daemon));
+    ss::is_initialized.set(r, rest_bind(rest_is_initialized, ss));
+    ss::join_ring.set(r, rest_bind(rest_join_ring));
+    ss::is_joined.set(r, rest_bind(rest_is_joined, ss));
+    ss::is_incremental_backups_enabled.set(r, rest_bind(rest_is_incremental_backups_enabled, ctx));
+    ss::set_incremental_backups_enabled.set(r, rest_bind(rest_set_incremental_backups_enabled, ctx));
+    ss::rebuild.set(r, rest_bind(rest_rebuild, ss));
+    ss::bulk_load.set(r, rest_bind(rest_bulk_load));
+    ss::bulk_load_async.set(r, rest_bind(rest_bulk_load_async));
+    ss::reschedule_failed_deletions.set(r, rest_bind(rest_reschedule_failed_deletions));
+    ss::sample_key_range.set(r, rest_bind(rest_sample_key_range));
+    ss::reset_local_schema.set(r, rest_bind(rest_reset_local_schema, ss));
+    ss::set_trace_probability.set(r, rest_bind(rest_set_trace_probability));
+    ss::get_trace_probability.set(r, rest_bind(rest_get_trace_probability));
+    ss::get_slow_query_info.set(r, rest_bind(rest_get_slow_query_info));
+    ss::set_slow_query.set(r, rest_bind(rest_set_slow_query));
+    ss::deliver_hints.set(r, rest_bind(rest_deliver_hints));
+    ss::get_cluster_name.set(r, rest_bind(rest_get_cluster_name, ss));
+    ss::get_partitioner_name.set(r, rest_bind(rest_get_partitioner_name, ss));
+    ss::get_tombstone_warn_threshold.set(r, rest_bind(rest_get_tombstone_warn_threshold));
+    ss::set_tombstone_warn_threshold.set(r, rest_bind(rest_set_tombstone_warn_threshold));
+    ss::get_tombstone_failure_threshold.set(r, rest_bind(rest_get_tombstone_failure_threshold));
+    ss::set_tombstone_failure_threshold.set(r, rest_bind(rest_set_tombstone_failure_threshold));
+    ss::get_batch_size_failure_threshold.set(r, rest_bind(rest_get_batch_size_failure_threshold));
+    ss::set_batch_size_failure_threshold.set(r, rest_bind(rest_set_batch_size_failure_threshold));
+    ss::set_hinted_handoff_throttle_in_kb.set(r, rest_bind(rest_set_hinted_handoff_throttle_in_kb));
+    ss::get_metrics_load.set(r, rest_bind(rest_get_metrics_load, ctx));
+    ss::get_exceptions.set(r, rest_bind(rest_get_exceptions, ss));
+    ss::get_total_hints_in_progress.set(r, rest_bind(rest_get_total_hints_in_progress));
+    ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
+    ss::get_ownership.set(r, rest_bind(rest_get_ownership, ctx, ss));
+    ss::get_effective_ownership.set(r, rest_bind(rest_get_effective_ownership, ctx, ss));
+    ss::retrain_dict.set(r, rest_bind(rest_retrain_dict, ctx, ss, group0_client));
+    ss::estimate_compression_ratios.set(r, rest_bind(rest_estimate_compression_ratios, ctx, ss));
+    ss::sstable_info.set(r, rest_bind(rest_sstable_info, ctx));
+    ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
+    ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));
+    ss::raft_topology_upgrade_status.set(r, rest_bind(rest_raft_topology_upgrade_status, ss));
+    ss::raft_topology_get_cmd_status.set(r, rest_bind(rest_raft_topology_get_cmd_status, ss));
+    ss::move_tablet.set(r, rest_bind(rest_move_tablet, ctx, ss));
+    ss::add_tablet_replica.set(r, rest_bind(rest_add_tablet_replica, ctx, ss));
+    ss::del_tablet_replica.set(r, rest_bind(rest_del_tablet_replica, ctx, ss));
+    ss::repair_tablet.set(r, rest_bind(rest_repair_tablet, ctx, ss));
+    ss::tablet_balancing_enable.set(r, rest_bind(rest_tablet_balancing_enable, ss));
+    ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
+    sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
+>>>>>>> c8ce9d1c60 (topology coordinator: add REST endpoint to query the status of ongoing topology cmd rpc)
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {

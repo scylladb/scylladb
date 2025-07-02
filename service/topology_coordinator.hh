@@ -63,6 +63,12 @@ future<> wait_for_gossiper(raft::server_id id, const gms::gossiper& g, seastar::
 using raft_topology_cmd_handler_type = noncopyable_function<future<raft_topology_cmd_result>(
         raft::term_t, uint64_t, const raft_topology_cmd&)>;
 
+struct topology_coordinator_cmd_rpc_tracker {
+    raft_topology_cmd::command current;
+    uint64_t index;
+    std::set<raft::server_id> active_dst;
+};
+
 future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
@@ -72,6 +78,7 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
-        gms::feature_service& feature_service);
+        gms::feature_service& feature_service,
+        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);
 
 }
