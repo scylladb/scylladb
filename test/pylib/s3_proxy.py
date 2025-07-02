@@ -57,6 +57,11 @@ class LRUCache:
             if len(self.cache) > self.capacity:
                 self.cache.popitem(last=False)
 
+    def remove(self, key: str):
+        with self.lock:
+            if key in self.cache:
+                del self.cache[key]
+
 
 # Simple proxy between s3 client and minio to randomly inject errors and simulate cases when the request succeeds but the wire got "broken"
 def true_or_false():
@@ -187,6 +192,8 @@ class InjectingHandler(BaseHTTPRequestHandler):
                 policy.error_count += 1
                 self.respond_with_error(reset_connection=policy.server_should_fail)
             else:
+                # Once the request is successfully processed, we remove the policy from the cache to make following request to the resource being illegible to fail
+                self.policies.remove(self.path)
                 self.send_response(response.status_code)
                 for key, value in response.headers.items():
                     if key.upper() != 'CONTENT-LENGTH':
