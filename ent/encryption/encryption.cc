@@ -472,6 +472,14 @@ public:
             for (auto&& [id, h] : _per_thread_kmip_host_cache[this_shard_id()]) {
                 co_await h->disconnect();
             }
+            static auto stop_all = [](auto&& cache) -> future<> {
+                for (auto& [k, host] : cache) {
+                    co_await host->stop();
+                }
+            };
+            co_await stop_all(_per_thread_kms_host_cache[this_shard_id()]);
+            co_await stop_all(_per_thread_gcp_host_cache[this_shard_id()]);
+
             _per_thread_provider_cache[this_shard_id()].clear();
             _per_thread_system_key_cache[this_shard_id()].clear();
             _per_thread_kmip_host_cache[this_shard_id()].clear();
