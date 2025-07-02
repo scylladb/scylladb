@@ -111,7 +111,6 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
-#include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
@@ -1134,7 +1133,8 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _tablet_allocator.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
-                    _feature_service);
+                    _feature_service,
+                    _topology_cmd_rpc_tracker);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
