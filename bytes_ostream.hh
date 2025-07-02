@@ -268,6 +268,14 @@ public:
         write(bytes_view(reinterpret_cast<const signed char*>(ptr), size));
     }
 
+    // Writes the fragmented view
+    template<FragmentedView View>
+    void write(View v) {
+        for (bytes_view f : fragment_range(v)) {
+            write(f);
+        }
+    }
+
     bool is_linearized() const {
         return !_begin || !_begin->next;
     }
