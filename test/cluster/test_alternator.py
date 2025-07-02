@@ -894,3 +894,66 @@ async def test_zero_token_node_load_balancer(manager, tablets):
     got = await nodes_with_data(manager, 'alternator_'+table.name, table.name, zero_token_server)
     assert got == expected
     table.delete()
+
+@pytest.mark.xfail(reason="#16261")
+async def test_alternator_concurrent_rmw_same_partition_different_server(manager: ManagerClient):
+    """A reproducer for issue #16261: When sending RMW (read-modify-write)
+       operations to the same partition (different item) on different server
+       nodes (coordinators), our LWT implementation can reach an
+       "uncertainty" situation where it doesn't know whether the update
+       succceeded or passed, and returns a failure (InternalServerError)
+       almost immediately, not after a cas_contention_timeout_in_ms timeout
+       (1 second).
+    """
+    servers = await manager.servers_add(3, config=alternator_config)
+    alternator = get_alternator(servers[0].ip_addr)
+    ips = [server.ip_addr for server in await manager.running_servers()]
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH' },
+            {'AttributeName': 'c', 'KeyType': 'RANGE' },
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'N' },
+            {'AttributeName': 'c', 'AttributeType': 'N' },
+        ])
+
+    # All threads write to one partition 1, each to a different item
+    # in that partition (its clustering key is the thread's number).
+    # Each update gets sent to a random node (we have 3 nodes in ips).
+    nthreads = 3
+    def run_rmw(i):
+        rand = random.Random()
+        rand.seed(i)
+        alternators = [get_alternator(ip) for ip in ips]
+        # In about 1/10 runs, just one write from each thread is enough
+        # to elicit the error. But if I want to get the error in almost
+        # every run, I need to repeat the write more times, until two
+        # of the writes collide and cause the bug.
+        for n in range(150):
+            alternator_i = rand.randrange(len(alternators))
+            alternator = alternators[alternator_i]
+            tbl = alternator.Table(table.name)
+            start = time.time()
+            try:
+                tbl.update_item(Key={'p': 1, 'c': i},
+                    UpdateExpression='SET v = if_not_exists(v, :init) + :incr',
+                    ExpressionAttributeValues={':init': 0, ':incr': 1})
+            except ClientError:
+                # The "raise" will cause this thread to fail, and eventually
+                # the join() and therefore the whole test will fail. We also
+                # print the time it took for the failure, because it
+                # demonstrates that issue #16261 involves an immediate
+                # error (in less than 20ms), NOT a normal timeout.
+                print(f"In incrementing 1,{i} on node {alternator_i}: error after {time.time()-start}")
+                raise
+
+    threads = [ThreadWrapper(target=run_rmw, args=(i,)) for i in range(nthreads)]
+    for t in threads:
+        t.start()
+    try:
+        for t in threads:
+            t.join()
+    finally:
+        table.delete()
