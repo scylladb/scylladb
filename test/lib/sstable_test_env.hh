@@ -202,6 +202,9 @@ public:
 
     table_for_tests make_table_for_tests(schema_ptr s = nullptr);
 
+    // Must run in a thread.
+    sstables::sstable_set make_sstable_set(sstables::compaction_strategy& cs, schema_ptr s);
+
     void request_abort();
 };
 
