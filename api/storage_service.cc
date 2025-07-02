@@ -1678,6 +1678,18 @@ rest_raft_topology_upgrade_status(sharded<service::storage_service>& ss, std::un
 
 static
 future<json::json_return_type>
+rest_raft_topology_get_cmd_status(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+        const auto status = co_await ss.invoke_on(0, [] (auto& ss) {
+            return ss.get_topology_cmd_status();
+        });
+        if (status.active_dst.empty()) {
+            co_return sstring("none");
+        }
+        co_return sstring(fmt::format("{}[{}]: {}", status.current, status.index, fmt::join(status.active_dst, ",")));
+}
+
+static
+future<json::json_return_type>
 rest_move_tablet(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto src_host_id = validate_host_id(req->get_query_param("src_host"));
         shard_id src_shard_id = validate_int(req->get_query_param("src_shard"));
@@ -1907,6 +1919,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::reload_raft_topology_state.set(r, rest_bind(rest_reload_raft_topology_state, ss, group0_client));
     ss::upgrade_to_raft_topology.set(r, rest_bind(rest_upgrade_to_raft_topology, ss));
     ss::raft_topology_upgrade_status.set(r, rest_bind(rest_raft_topology_upgrade_status, ss));
+    ss::raft_topology_get_cmd_status.set(r, rest_bind(rest_raft_topology_get_cmd_status, ss));
     ss::move_tablet.set(r, rest_bind(rest_move_tablet, ctx, ss));
     ss::add_tablet_replica.set(r, rest_bind(rest_add_tablet_replica, ctx, ss));
     ss::del_tablet_replica.set(r, rest_bind(rest_del_tablet_replica, ctx, ss));
