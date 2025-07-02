@@ -1,0 +1,4627 @@
+[
+    [
+        "m6id.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "m5n.16xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "mac2-m2.metal",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "g6e.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "x2gd.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "c7i.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "i3en.12xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c6in.xlarge",
+        "Up to 30 Gigabit",
+        6.25
+    ],
+    [
+        "m7i.metal-24xl",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r6in.24xlarge",
+        "150 Gigabit",
+        150.0
+    ],
+    [
+        "c8g.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "r5a.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r6gd.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "r6a.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "g6e.48xlarge",
+        "400 Gigabit",
+        400.0
+    ],
+    [
+        "c5n.2xlarge",
+        "Up to 25 Gigabit",
+        10.0
+    ],
+    [
+        "r6idn.16xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m5a.16xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "m6id.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "r7iz.12xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c8g.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c3.8xlarge",
+        "10 Gigabit",
+        5.0
+    ],
+    [
+        "t4g.nano",
+        "Up to 5 Gigabit",
+        0.032
+    ],
+    [
+        "c7gd.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "r8gd.xlarge",
+        "Up to 12.5 Gigabit",
+        1.875
+    ],
+    [
+        "r6i.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "r7iz.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m7gd.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "m7i-flex.12xlarge",
+        "Up to 18.75 Gigabit",
+        9.375
+    ],
+    [
+        "r6id.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "g5.2xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "is4gen.xlarge",
+        "Up to 25 Gigabit",
+        6.25
+    ],
+    [
+        "x8g.24xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "m2.4xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "m6gd.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "r8g.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "m8gd.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5ad.12xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "m6idn.large",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "m5zn.2xlarge",
+        "Up to 25 Gigabit",
+        10.0
+    ],
+    [
+        "i3en.3xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "i4i.16xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r5a.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r5n.12xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "t2.2xlarge",
+        "Moderate",
+        1.0
+    ],
+    [
+        "c7g.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "c7gn.16xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "i7ie.18xlarge",
+        "Up to 75 Gigabit",
+        37.5
+    ],
+    [
+        "m6a.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "c7gn.xlarge",
+        "Up to 40 Gigabit",
+        12.5
+    ],
+    [
+        "m5d.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "f2.6xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "c8gn.4xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c7a.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "t1.micro",
+        "Very Low",
+        0.07
+    ],
+    [
+        "r6g.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "c6a.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "c3.large",
+        "Moderate",
+        0.5
+    ],
+    [
+        "m6gd.12xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "c6a.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r5.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "x2gd.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6i.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "x2iedn.2xlarge",
+        "Up to 25 Gigabit",
+        5.0
+    ],
+    [
+        "r6a.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "c6gn.16xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r6g.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m7i.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r6gd.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "x1e.8xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "i7ie.24xlarge",
+        "Up to 100 Gigabit",
+        50.0
+    ],
+    [
+        "r6a.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m4.4xlarge",
+        "High",
+        2.0
+    ],
+    [
+        "c5ad.24xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "x8g.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "c6gd.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "u7i-6tb.112xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m8g.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "d3en.2xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "f1.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r5dn.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c8gd.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r7iz.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "m6gd.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r7a.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "x1e.2xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "g6.24xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m7g.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "g5.4xlarge",
+        "Up to 25 Gigabit",
+        10.0
+    ],
+    [
+        "r8g.metal-24xl",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "is4gen.4xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "x2iezn.4xlarge",
+        "Up to 25 Gigabit",
+        15.0
+    ],
+    [
+        "c6in.24xlarge",
+        "150 Gigabit",
+        150.0
+    ],
+    [
+        "r7a.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "m8g.24xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "inf2.48xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r6in.metal",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "r8g.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "trn1.32xlarge",
+        "8x 100 Gigabit",
+        100.0
+    ],
+    [
+        "m5a.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r7iz.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c6i.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "im4gn.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r7iz.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "m5a.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "m5.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c7g.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "c7gn.8xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r7gd.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "r6g.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m7i.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "d3en.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5dn.12xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r8g.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "c7a.medium",
+        "Up to 12.5 Gigabit",
+        0.39
+    ],
+    [
+        "c8gn.16xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "x2iedn.xlarge",
+        "Up to 25 Gigabit",
+        1.875
+    ],
+    [
+        "c7i-flex.8xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "m6i.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "i3en.24xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r6id.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "x8g.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c5ad.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "c6a.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c6i.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "c7i-flex.16xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "m7i.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "c8g.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "im4gn.2xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "i7i.2xlarge",
+        "Up to 12 Gigabit",
+        4.687
+    ],
+    [
+        "r8gd.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "r8g.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "z1d.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "c6id.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "m5zn.large",
+        "Up to 25 Gigabit",
+        3.0
+    ],
+    [
+        "m8g.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "i2.2xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "r6id.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "r5ad.24xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "c6g.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r3.large",
+        "Moderate",
+        0.5
+    ],
+    [
+        "d2.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "r6in.12xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "c7i-flex.2xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "r6idn.xlarge",
+        "Up to 30 Gigabit",
+        6.25
+    ],
+    [
+        "r6idn.2xlarge",
+        "Up to 40 Gigabit",
+        12.5
+    ],
+    [
+        "c5d.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m5d.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "x1e.32xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "trn1n.32xlarge",
+        "16x 100 Gigabit",
+        100.0
+    ],
+    [
+        "m5ad.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "r4.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "hpc7g.4xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "r6id.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "c6i.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "c5ad.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "c5.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "m8g.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "i4g.xlarge",
+        "Up to 10 Gigabit",
+        1.875
+    ],
+    [
+        "r6g.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "i4g.8xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "m5dn.2xlarge",
+        "Up to 25 Gigabit",
+        8.125
+    ],
+    [
+        "c4.4xlarge",
+        "High",
+        5.0
+    ],
+    [
+        "r7a.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "x8g.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "m6id.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "m7gd.xlarge",
+        "Up to 12.5 Gigabit",
+        1.876
+    ],
+    [
+        "inf2.8xlarge",
+        "Up to 25 Gigabit",
+        16.667
+    ],
+    [
+        "t3a.2xlarge",
+        "Up to 5 Gigabit",
+        2.048
+    ],
+    [
+        "r7i.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8gd.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "c7a.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r6gd.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "c6id.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "c8g.24xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "c6i.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "m6a.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "i7i.12xlarge",
+        "Up to 28 Gigabit",
+        14.063
+    ],
+    [
+        "m6idn.12xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "m7i.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "m5zn.6xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c4.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "c5n.large",
+        "Up to 25 Gigabit",
+        3.0
+    ],
+    [
+        "x1.16xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "c7i.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "m7a.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "i7ie.xlarge",
+        "Up to 25 Gigabit",
+        4.166
+    ],
+    [
+        "trn1.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "m5dn.large",
+        "Up to 25 Gigabit",
+        2.1
+    ],
+    [
+        "r6idn.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8gd.xlarge",
+        "Up to 12.5 Gigabit",
+        1.875
+    ],
+    [
+        "c7gn.large",
+        "Up to 30 Gigabit",
+        6.25
+    ],
+    [
+        "m7gd.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "r8g.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "m6gd.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "c6a.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "i4i.24xlarge",
+        "56.25 Gigabit",
+        56.25
+    ],
+    [
+        "m7g.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "r5b.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "m6in.32xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "x2idn.24xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "d2.2xlarge",
+        "High",
+        2.5
+    ],
+    [
+        "x2iezn.8xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "r6idn.24xlarge",
+        "150 Gigabit",
+        150.0
+    ],
+    [
+        "r6in.large",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "c6id.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "c5ad.16xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "g4dn.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "c8gd.24xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "c7g.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "c7a.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "g6.48xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m6in.16xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "g5.24xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c7a.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "m5dn.xlarge",
+        "Up to 25 Gigabit",
+        4.1
+    ],
+    [
+        "c6i.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "m5.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "t3.2xlarge",
+        "Up to 5 Gigabit",
+        2.048
+    ],
+    [
+        "x2gd.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "c6g.12xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "m7g.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "m6in.12xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "m6g.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r8gd.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "c7gd.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "r7gd.xlarge",
+        "Up to 12.5 Gigabit",
+        1.876
+    ],
+    [
+        "i7i.large",
+        "Up to 10 Gigabit",
+        1.171
+    ],
+    [
+        "i7ie.12xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "m5.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "m6g.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r6gd.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "c6g.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r5a.12xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "c6gn.4xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "i7ie.3xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "c5d.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "m7a.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m7i-flex.2xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "t4g.medium",
+        "Up to 5 Gigabit",
+        0.256
+    ],
+    [
+        "r6i.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r5b.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "g6e.16xlarge",
+        "35 Gigabit",
+        35.0
+    ],
+    [
+        "m6i.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "im4gn.xlarge",
+        "Up to 25 Gigabit",
+        6.25
+    ],
+    [
+        "r7g.metal",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "g4ad.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "c6in.12xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "c8gn.8xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m7gd.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "c5a.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "r6i.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "m7a.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "hpc7g.8xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "i4g.large",
+        "Up to 10 Gigabit",
+        0.781
+    ],
+    [
+        "r7iz.metal-16xl",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r7a.medium",
+        "Up to 12.5 Gigabit",
+        0.39
+    ],
+    [
+        "m5ad.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "r8gd.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "c6gn.xlarge",
+        "Up to 25 Gigabit",
+        6.3
+    ],
+    [
+        "r7a.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "m6in.24xlarge",
+        "150 Gigabit",
+        150.0
+    ],
+    [
+        "r5a.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m6id.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8gd.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8g.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m6gd.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m6idn.4xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "a1.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "m5d.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m5.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r7a.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "m6a.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r7gd.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "r5ad.8xlarge",
+        "Up to 10 Gigabit",
+        7.5
+    ],
+    [
+        "r6id.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "c8gd.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "m5d.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m5ad.8xlarge",
+        "Up to 10 Gigabit",
+        7.5
+    ],
+    [
+        "g4ad.4xlarge",
+        "Up to 10 Gigabit",
+        8.333
+    ],
+    [
+        "i4gen.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m6i.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "r3.8xlarge",
+        "10 Gigabit",
+        5.0
+    ],
+    [
+        "c5.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r7i.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r7g.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "g6.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "inf1.xlarge",
+        "Up to 25 Gigabit",
+        5.0
+    ],
+    [
+        "c7a.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "m8gd.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "m5dn.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c5n.4xlarge",
+        "Up to 25 Gigabit",
+        15.0
+    ],
+    [
+        "r6a.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "i4i.metal",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "m5d.16xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "r5ad.12xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "i7i.xlarge",
+        "Up to 10 Gigabit",
+        2.343
+    ],
+    [
+        "t3.xlarge",
+        "Up to 5 Gigabit",
+        1.024
+    ],
+    [
+        "i8g.8xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "d3.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6gd.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "u7i-12tb.224xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r7i.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "i4i.4xlarge",
+        "Up to 25 Gigabit",
+        9.375
+    ],
+    [
+        "m7g.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "m4.xlarge",
+        "High",
+        0.75
+    ],
+    [
+        "r7g.xlarge",
+        "Up to 12.5 Gigabit",
+        1.876
+    ],
+    [
+        "m5n.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m2.2xlarge",
+        "Moderate",
+        0.7
+    ],
+    [
+        "c5a.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "a1.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "r6g.12xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "r3.2xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "r5.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "g5g.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "t3.medium",
+        "Up to 5 Gigabit",
+        0.256
+    ],
+    [
+        "g4dn.12xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c7gd.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "c8gn.xlarge",
+        "Up to 40 Gigabit",
+        12.5
+    ],
+    [
+        "a1.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "t3a.small",
+        "Up to 5 Gigabit",
+        0.128
+    ],
+    [
+        "t4g.2xlarge",
+        "Up to 5 Gigabit",
+        2.048
+    ],
+    [
+        "r5n.16xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "c7a.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "c5n.9xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r5a.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "h1.8xlarge",
+        "10 Gigabit",
+        12.0
+    ],
+    [
+        "c5.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "c8g.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "m6gd.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r3.4xlarge",
+        "High",
+        2.0
+    ],
+    [
+        "inf2.24xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "i4.16xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "t2.micro",
+        "Low to Moderate",
+        0.064
+    ],
+    [
+        "c6in.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5ad.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r5a.16xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "g5g.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "c5d.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c7i-flex.4xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "x2iedn.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "c4.large",
+        "Moderate",
+        0.625
+    ],
+    [
+        "r6a.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "x2gd.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "g4ad.2xlarge",
+        "Up to 10 Gigabit",
+        4.167
+    ],
+    [
+        "c7i-flex.xlarge",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "r7i.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "r5.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "c6gn.12xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "r6gd.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c7i.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "c1.xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "x2gd.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "t3.large",
+        "Up to 5 Gigabit",
+        0.512
+    ],
+    [
+        "c7i.metal-24xl",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r7g.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "u-3tb1.56xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m8gd.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "m5n.12xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8gd.metal-24xl",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "mac2.metal",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "c1.medium",
+        "Moderate",
+        0.3
+    ],
+    [
+        "g6e.12xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "c5d.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "c7g.xlarge",
+        "Up to 12.5 Gigabit",
+        1.876
+    ],
+    [
+        "p3.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "m5zn.3xlarge",
+        "Up to 25 Gigabit",
+        15.0
+    ],
+    [
+        "c6g.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "r5d.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "c5a.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "c8gn.12xlarge",
+        "150 Gigabit",
+        150.0
+    ],
+    [
+        "i8g.4xlarge",
+        "Up to 25 Gigabit",
+        9.375
+    ],
+    [
+        "p4de.24xlarge",
+        "4x 100 Gigabit",
+        100.0
+    ],
+    [
+        "m7gd.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "vt1.3xlarge",
+        "3.12 Gigabit",
+        3.125
+    ],
+    [
+        "r5.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6in.16xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r6g.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "m7g.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "i7ie.metal-48xl",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "z1d.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "t2.large",
+        "Low to Moderate",
+        0.512
+    ],
+    [
+        "d3en.4xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "i4g.4xlarge",
+        "Up to 25 Gigabit",
+        9.375
+    ],
+    [
+        "r5dn.xlarge",
+        "Up to 25 Gigabit",
+        4.1
+    ],
+    [
+        "c6i.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c7i.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "m8g.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "c6id.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r6a.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "d3.xlarge",
+        "Up to 15 Gigabit",
+        3.0
+    ],
+    [
+        "r5n.4xlarge",
+        "Up to 25 Gigabit",
+        16.25
+    ],
+    [
+        "r5b.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "t3a.medium",
+        "Up to 5 Gigabit",
+        0.256
+    ],
+    [
+        "mac1.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c5ad.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "u7in-24tb.224xlarge",
+        "200 Gigabit",
+        100.0
+    ],
+    [
+        "r8gd.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "c7i.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "t4g.small",
+        "Up to 5 Gigabit",
+        0.128
+    ],
+    [
+        "i4g.16xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r8gd.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "r5b.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "i8g.2xlarge",
+        "Up to 12 Gigabit",
+        4.688
+    ],
+    [
+        "i7ie.48xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r5b.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "d3.2xlarge",
+        "Up to 15 Gigabit",
+        6.0
+    ],
+    [
+        "r5b.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r7i.metal-24xl",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r7gd.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "c5a.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "c6gd.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r7gd.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "m6g.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "i4g.2xlarge",
+        "Up to 12 Gigabit",
+        4.687
+    ],
+    [
+        "r5n.24xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m6i.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c3.xlarge",
+        "Moderate",
+        0.7
+    ],
+    [
+        "m7gd.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "x2gd.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "r5d.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m5n.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "hpc7g.16xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "i2.xlarge",
+        "Moderate",
+        0.7
+    ],
+    [
+        "m8gd.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "m7gd.metal",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "p5.48xlarge",
+        "3200 Gigabit",
+        100.0
+    ],
+    [
+        "r5d.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "m8g.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "m4.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c5d.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "m6in.4xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "x8g.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m7gd.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "m4.large",
+        "Moderate",
+        0.45
+    ],
+    [
+        "r5b.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r8g.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "vt1.6xlarge",
+        "6.25 Gigabit",
+        6.25
+    ],
+    [
+        "u-6tb1.56xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r5.16xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "r5dn.large",
+        "Up to 25 Gigabit",
+        2.1
+    ],
+    [
+        "x8g.metal-24xl",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "m5zn.12xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m6g.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "i7i.metal-24xl",
+        "Up to 56.25 Gigabit",
+        28.125
+    ],
+    [
+        "d3en.6xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "u7in-16tb.224xlarge",
+        "200 Gigabit",
+        100.0
+    ],
+    [
+        "m6idn.32xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "c8gn.2xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "m6idn.xlarge",
+        "Up to 30 Gigabit",
+        6.25
+    ],
+    [
+        "m6i.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6a.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "h1.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "i8g.24xlarge",
+        "Up to 56.25 Gigabit",
+        28.125
+    ],
+    [
+        "r5ad.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m1.xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "c5a.24xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "inf1.2xlarge",
+        "Up to 25 Gigabit",
+        5.0
+    ],
+    [
+        "m6a.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "r8g.24xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "r6in.32xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "r5n.2xlarge",
+        "Up to 25 Gigabit",
+        8.125
+    ],
+    [
+        "m5n.large",
+        "Up to 25 Gigabit",
+        2.1
+    ],
+    [
+        "m6i.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "inf1.6xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "t4g.large",
+        "Up to 5 Gigabit",
+        0.512
+    ],
+    [
+        "g5.12xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "c7i-flex.12xlarge",
+        "Up to 18.75 Gigabit",
+        9.375
+    ],
+    [
+        "c6in.2xlarge",
+        "Up to 40 Gigabit",
+        12.5
+    ],
+    [
+        "i4i.2xlarge",
+        "Up to 12 Gigabit",
+        4.687
+    ],
+    [
+        "p4d.24xlarge",
+        "4x 100 Gigabit",
+        100.0
+    ],
+    [
+        "r6id.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5n.4xlarge",
+        "Up to 25 Gigabit",
+        16.25
+    ],
+    [
+        "x2gd.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "m7a.medium",
+        "Up to 12.5 Gigabit",
+        0.39
+    ],
+    [
+        "c6gn.medium",
+        "Up to 16 Gigabit",
+        1.6
+    ],
+    [
+        "c6a.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "r6a.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r7iz.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "c7gd.xlarge",
+        "Up to 12.5 Gigabit",
+        1.876
+    ],
+    [
+        "c8gd.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "m7i.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m8g.xlarge",
+        "Up to 12.5 Gigabit",
+        1.875
+    ],
+    [
+        "c7i.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r5dn.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r6gd.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "c7gn.metal",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "m6g.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m6in.metal",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "c8gn.48xlarge",
+        "600 Gigabit",
+        300.0
+    ],
+    [
+        "h1.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "r6id.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r7i.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "m3.xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "c5.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c7a.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "i8g.metal-24xl",
+        "Up to 56.25 Gigabit",
+        28.125
+    ],
+    [
+        "c6a.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c7i-flex.large",
+        "Up to 12.5 Gigabit",
+        0.39
+    ],
+    [
+        "r7gd.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "r6in.4xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "r5d.16xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "m8gd.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8gd.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "m5a.8xlarge",
+        "Up to 10 Gigabit",
+        7.5
+    ],
+    [
+        "c6id.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5ad.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "c5.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c7gd.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "c8g.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "m8gd.24xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "r7a.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c4.xlarge",
+        "High",
+        1.25
+    ],
+    [
+        "i4i.large",
+        "Up to 10 Gigabit",
+        0.781
+    ],
+    [
+        "m6i.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "t3a.large",
+        "Up to 5 Gigabit",
+        0.512
+    ],
+    [
+        "m6idn.2xlarge",
+        "Up to 40 Gigabit",
+        12.5
+    ],
+    [
+        "m8gd.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "r7g.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "c4.2xlarge",
+        "High",
+        2.5
+    ],
+    [
+        "m5dn.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "t3.micro",
+        "Up to 5 Gigabit",
+        0.064
+    ],
+    [
+        "m5d.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m5.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "is4gen.2xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "c5a.16xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "c5ad.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r7a.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r7gd.metal",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "g5g.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "g5g.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "x2idn.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "a1.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r8gd.metal-24xl",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "m7a.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "t4g.micro",
+        "Up to 5 Gigabit",
+        0.064
+    ],
+    [
+        "t3.nano",
+        "Up to 5 Gigabit",
+        0.032
+    ],
+    [
+        "r3.xlarge",
+        "Moderate",
+        0.7
+    ],
+    [
+        "c6a.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "t4g.xlarge",
+        "Up to 5 Gigabit",
+        1.024
+    ],
+    [
+        "u-6tb1.112xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "i8g.xlarge",
+        "Up to 10 Gigabit",
+        2.344
+    ],
+    [
+        "m7a.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "i7i.16xlarge",
+        "Up to 37.5 Gigabit",
+        18.75
+    ],
+    [
+        "m8g.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "m6id.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m6idn.24xlarge",
+        "150 Gigabit",
+        150.0
+    ],
+    [
+        "i7i.4xlarge",
+        "Up to 25 Gigabit",
+        9.375
+    ],
+    [
+        "i7ie.metal-24xl",
+        "Up to 100 Gigabit",
+        50.0
+    ],
+    [
+        "m6a.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r5d.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r8gd.24xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "i3.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "x8g.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "c7g.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "c7i.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r6a.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "r5.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "c7g.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "c8g.metal-24xl",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "i8g.large",
+        "Up to 10 Gigabit",
+        1.172
+    ],
+    [
+        "r7i.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "r4.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r6idn.large",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "r6i.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r5ad.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "c8gn.metal-24xl",
+        "300 Gigabit",
+        300.0
+    ],
+    [
+        "m7a.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "m8gd.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "r7gd.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "a1.metal",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "r5.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "r7g.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "m7a.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "x2iezn.12xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "c6a.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "m7i-flex.16xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "h1.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c5d.18xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "i8g.48xlarge",
+        "Up to 100 Gigabit",
+        56.25
+    ],
+    [
+        "c8gd.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "c7a.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r4.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "x2idn.16xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r5d.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "m5ad.24xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "g5.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6in.large",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "c5.9xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "m7i-flex.4xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "m5zn.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "c7a.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "c5n.18xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "x2iedn.4xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "m6id.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r6idn.4xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "x2gd.12xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "r5d.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m7g.xlarge",
+        "Up to 12.5 Gigabit",
+        1.876
+    ],
+    [
+        "is4gen.large",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "r5ad.16xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "i2.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "g6.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c5d.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "c5.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m5dn.4xlarge",
+        "Up to 25 Gigabit",
+        16.25
+    ],
+    [
+        "c3.4xlarge",
+        "High",
+        2.0
+    ],
+    [
+        "g5.xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r6id.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "r7i.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "m5d.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "u7i-8tb.112xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "c7a.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "x2idn.32xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r5n.xlarge",
+        "Up to 25 Gigabit",
+        4.1
+    ],
+    [
+        "c6id.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m8gd.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "i3.8xlarge",
+        "10 Gigabit",
+        12.0
+    ],
+    [
+        "c5n.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m7g.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "inf2.xlarge",
+        "Up to 15 Gigabit",
+        2.083
+    ],
+    [
+        "i2.4xlarge",
+        "High",
+        2.0
+    ],
+    [
+        "r6idn.32xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "r8g.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8gn.large",
+        "Up to 30 Gigabit",
+        6.25
+    ],
+    [
+        "c7a.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m4.2xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "r6a.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6gn.large",
+        "Up to 25 Gigabit",
+        3.0
+    ],
+    [
+        "g6.2xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "r7a.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "a1.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "m6g.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "x2iedn.16xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m6in.xlarge",
+        "Up to 30 Gigabit",
+        6.25
+    ],
+    [
+        "z1d.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "mac2-m1ultra.metal",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "m7a.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "r5dn.12xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m6g.12xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "x1e.16xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "r8gd.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c5.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r6idn.metal",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "m5dn.16xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "c6in.4xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "m5.16xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "m6idn.metal",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "r6in.16xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m4.10xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "m8g.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "m6gd.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "x2gd.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m3.2xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "z1d.6xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "r5.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "m8g.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c3.2xlarge",
+        "High",
+        1.0
+    ],
+    [
+        "i8g.16xlarge",
+        "Up to 37.5 Gigabit",
+        18.75
+    ],
+    [
+        "r6id.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c6in.32xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "c6gn.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5zn.xlarge",
+        "Up to 25 Gigabit",
+        5.0
+    ],
+    [
+        "z1d.12xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r6a.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "i7i.metal-48xl",
+        "Up to 100 Gigabit",
+        56.25
+    ],
+    [
+        "p5en.48xlarge",
+        "3200 Gigabit",
+        200.0
+    ],
+    [
+        "c7gd.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "m5.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "g6.12xlarge",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "m7i.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "i3.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "r5dn.16xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "m6in.large",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "r5b.16xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "r5ad.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "x8g.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "g4dn.xlarge",
+        "Up to 25 Gigabit",
+        5.0
+    ],
+    [
+        "r6gd.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m5dn.24xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "im4gn.4xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6id.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "c7gd.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "g6.xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "m5n.24xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "r6id.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "z1d.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "c7g.metal",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "x2iezn.2xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "c8g.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "r6i.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5d.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "c5d.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r6in.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "x8g.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "r6i.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "t2.medium",
+        "Low to Moderate",
+        0.256
+    ],
+    [
+        "r8g.xlarge",
+        "Up to 12.5 Gigabit",
+        1.875
+    ],
+    [
+        "r6gd.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "r7i.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "c8g.xlarge",
+        "Up to 12.5 Gigabit",
+        1.875
+    ],
+    [
+        "d2.4xlarge",
+        "High",
+        5.0
+    ],
+    [
+        "r6a.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "g6e.4xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "c5a.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "r8gd.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "m8gd.xlarge",
+        "Up to 12.5 Gigabit",
+        1.875
+    ],
+    [
+        "vt1.24xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m5ad.16xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "c7g.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "g4dn.16xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "im4gn.16xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "g6.4xlarge",
+        "Up to 25 Gigabit",
+        10.0
+    ],
+    [
+        "c6gn.2xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "c7gd.metal",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "t3a.nano",
+        "Up to 5 Gigabit",
+        0.032
+    ],
+    [
+        "c6g.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "c7g.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "t2.xlarge",
+        "Moderate",
+        0.75
+    ],
+    [
+        "c6g.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "c8gn.medium",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "c6gd.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "i3.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r5d.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "i4i.12xlarge",
+        "28.12 Gigabit",
+        28.125
+    ],
+    [
+        "x1e.xlarge",
+        "Up to 10 Gigabit",
+        0.625
+    ],
+    [
+        "t2.small",
+        "Low to Moderate",
+        0.128
+    ],
+    [
+        "c8gd.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "p3.16xlarge",
+        "25 Gigabit",
+        5.0
+    ],
+    [
+        "inf1.24xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "x2iezn.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "im4gn.large",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "i3en.large",
+        "Up to 25 Gigabit",
+        2.1
+    ],
+    [
+        "m7g.metal",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "c6id.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "t3.small",
+        "Up to 5 Gigabit",
+        0.128
+    ],
+    [
+        "g5.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m8gd.metal-24xl",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "g4ad.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c7i.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "gr6.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r6i.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r5b.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "m6idn.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m6a.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "i4.4xlarge",
+        "Up to 25 Gigabit",
+        9.375
+    ],
+    [
+        "c5ad.8xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "r7g.large",
+        "Up to 12.5 Gigabit",
+        0.937
+    ],
+    [
+        "c7i.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "r4.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "i3en.xlarge",
+        "Up to 25 Gigabit",
+        4.2
+    ],
+    [
+        "m6i.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "c8g.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "r6g.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "m7i-flex.8xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "mac2-m2pro.metal",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "c6gd.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r5dn.2xlarge",
+        "Up to 25 Gigabit",
+        8.125
+    ],
+    [
+        "m7a.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "r7a.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "gr6.4xlarge",
+        "Up to 25 Gigabit",
+        10.0
+    ],
+    [
+        "x8g.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "m5n.2xlarge",
+        "Up to 25 Gigabit",
+        8.125
+    ],
+    [
+        "f2.48xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "d3.4xlarge",
+        "Up to 15 Gigabit",
+        12.5
+    ],
+    [
+        "m6id.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "r8g.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "c7gn.12xlarge",
+        "150 Gigabit",
+        150.0
+    ],
+    [
+        "i4i.32xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "r5a.8xlarge",
+        "Up to 10 Gigabit",
+        7.5
+    ],
+    [
+        "m5a.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "r4.8xlarge",
+        "10 Gigabit",
+        12.0
+    ],
+    [
+        "r5n.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r5ad.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "m7g.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "dl1.24xlarge",
+        "4x 100 Gigabit",
+        100.0
+    ],
+    [
+        "g6e.2xlarge",
+        "Up to 20 Gigabit",
+        5.0
+    ],
+    [
+        "x2iezn.6xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "x2iedn.24xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "c5ad.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m6in.2xlarge",
+        "Up to 40 Gigabit",
+        12.5
+    ],
+    [
+        "c6a.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "r5d.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r5.12xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "m7i.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "g6e.xlarge",
+        "Up to 20 Gigabit",
+        2.5
+    ],
+    [
+        "c6i.metal",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c8gd.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "r7iz.metal-32xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "i3en.2xlarge",
+        "Up to 25 Gigabit",
+        8.4
+    ],
+    [
+        "i7i.8xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "m8g.metal-24xl",
+        "40 Gigabit",
+        40.0
+    ],
+    [
+        "r7gd.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "i4i.xlarge",
+        "Up to 10 Gigabit",
+        1.875
+    ],
+    [
+        "m5n.xlarge",
+        "Up to 25 Gigabit",
+        4.1
+    ],
+    [
+        "m6idn.16xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "x8g.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "r5a.24xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "p3.8xlarge",
+        "10 Gigabit",
+        5.0
+    ],
+    [
+        "t2.nano",
+        "Low to Moderate",
+        0.032
+    ],
+    [
+        "x1.32xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m6i.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "r6idn.12xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "p3dn.24xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m8g.medium",
+        "Up to 12.5 Gigabit",
+        0.52
+    ],
+    [
+        "m6in.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c5n.xlarge",
+        "Up to 25 Gigabit",
+        5.0
+    ],
+    [
+        "m6g.medium",
+        "Up to 10 Gigabit",
+        0.5
+    ],
+    [
+        "i7i.48xlarge",
+        "Up to 100 Gigabit",
+        56.25
+    ],
+    [
+        "r6i.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "c6id.2xlarge",
+        "Up to 12.5 Gigabit",
+        3.125
+    ],
+    [
+        "r8gd.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "x8g.xlarge",
+        "Up to 12.5 Gigabit",
+        1.875
+    ],
+    [
+        "i7ie.large",
+        "Up to 25 Gigabit",
+        2.083
+    ],
+    [
+        "m7i-flex.xlarge",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "r7g.12xlarge",
+        "22.5 Gigabit",
+        22.5
+    ],
+    [
+        "d3en.12xlarge",
+        "75 Gigabit",
+        75.0
+    ],
+    [
+        "c6id.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "c6gd.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "m3.large",
+        "Moderate",
+        0.7
+    ],
+    [
+        "c6g.8xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "c5d.9xlarge",
+        "12 Gigabit",
+        12.0
+    ],
+    [
+        "r7i.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m3.medium",
+        "Moderate",
+        0.3
+    ],
+    [
+        "r7iz.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "c8g.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "i7ie.6xlarge",
+        "Up to 25 Gigabit",
+        12.5
+    ],
+    [
+        "r6g.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r6in.2xlarge",
+        "Up to 40 Gigabit",
+        12.5
+    ],
+    [
+        "x2iedn.8xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m1.small",
+        "Low",
+        0.3
+    ],
+    [
+        "m7i.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "g4ad.xlarge",
+        "Up to 10 Gigabit",
+        2.0
+    ],
+    [
+        "m7gd.2xlarge",
+        "Up to 15 Gigabit",
+        3.75
+    ],
+    [
+        "m2.xlarge",
+        "Moderate",
+        0.3
+    ],
+    [
+        "x1e.4xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "m5a.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "m6g.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "c7gn.2xlarge",
+        "Up to 50 Gigabit",
+        25.0
+    ],
+    [
+        "r7i.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "c7i.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "z1d.3xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "is4gen.medium",
+        "Up to 25 Gigabit",
+        1.562
+    ],
+    [
+        "m7i-flex.large",
+        "Up to 12.5 Gigabit",
+        0.39
+    ],
+    [
+        "i3.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "m6a.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "r5dn.4xlarge",
+        "Up to 25 Gigabit",
+        16.25
+    ],
+    [
+        "f1.16xlarge",
+        "25 Gigabit",
+        5.0
+    ],
+    [
+        "g5g.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "r7a.16xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m6a.32xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "i8g.12xlarge",
+        "Up to 28.12 Gigabit",
+        14.063
+    ],
+    [
+        "r7a.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r6i.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "r4.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "i7i.24xlarge",
+        "Up to 56.25 Gigabit",
+        28.125
+    ],
+    [
+        "c7gn.4xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "r6gd.12xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "r6g.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "c6g.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "m6gd.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "m6id.8xlarge",
+        "12.5 Gigabit",
+        12.5
+    ],
+    [
+        "m7a.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m5a.24xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "c6a.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "f1.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "c6i.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "c8gn.metal-48xl",
+        "600 Gigabit",
+        300.0
+    ],
+    [
+        "r7g.16xlarge",
+        "30 Gigabit",
+        30.0
+    ],
+    [
+        "m8gd.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "m7i.metal-48xl",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c5a.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "i3.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "i3en.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "d2.xlarge",
+        "Moderate",
+        1.25
+    ],
+    [
+        "m6id.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "m6a.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "r7iz.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "i3.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m6id.24xlarge",
+        "37.5 Gigabit",
+        37.5
+    ],
+    [
+        "r6i.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "c8gn.24xlarge",
+        "300 Gigabit",
+        300.0
+    ],
+    [
+        "c6gd.large",
+        "Up to 10 Gigabit",
+        0.75
+    ],
+    [
+        "g5.48xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m6gd.2xlarge",
+        "Up to 10 Gigabit",
+        2.5
+    ],
+    [
+        "r6in.xlarge",
+        "Up to 30 Gigabit",
+        6.25
+    ],
+    [
+        "c7gn.medium",
+        "Up to 25 Gigabit",
+        3.125
+    ],
+    [
+        "f2.12xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m5d.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "m7i.4xlarge",
+        "Up to 12.5 Gigabit",
+        6.25
+    ],
+    [
+        "g6e.24xlarge",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "g4dn.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "u7in-32tb.224xlarge",
+        "200 Gigabit",
+        100.0
+    ],
+    [
+        "c6gd.4xlarge",
+        "Up to 10 Gigabit",
+        5.0
+    ],
+    [
+        "x2iedn.32xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "c6i.xlarge",
+        "Up to 12.5 Gigabit",
+        1.562
+    ],
+    [
+        "is4gen.8xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c7gd.4xlarge",
+        "Up to 15 Gigabit",
+        7.5
+    ],
+    [
+        "t3a.micro",
+        "Up to 5 Gigabit",
+        0.064
+    ],
+    [
+        "r5n.metal",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "i7ie.2xlarge",
+        "Up to 25 Gigabit",
+        8.333
+    ],
+    [
+        "t3a.xlarge",
+        "Up to 5 Gigabit",
+        1.024
+    ],
+    [
+        "r5dn.24xlarge",
+        "100 Gigabit",
+        100.0
+    ],
+    [
+        "m6i.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "m1.medium",
+        "Moderate",
+        0.3
+    ],
+    [
+        "m6a.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "c6in.metal",
+        "200 Gigabit",
+        200.0
+    ],
+    [
+        "d3en.xlarge",
+        "Up to 25 Gigabit",
+        6.0
+    ],
+    [
+        "g4dn.2xlarge",
+        "Up to 25 Gigabit",
+        10.0
+    ],
+    [
+        "c6g.metal",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "m5a.12xlarge",
+        "10 Gigabit",
+        10.0
+    ],
+    [
+        "g5g.xlarge",
+        "Up to 10 Gigabit",
+        1.25
+    ],
+    [
+        "c5.18xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r8g.8xlarge",
+        "15 Gigabit",
+        15.0
+    ],
+    [
+        "g4dn.4xlarge",
+        "Up to 25 Gigabit",
+        20.0
+    ],
+    [
+        "i4i.8xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "i3en.6xlarge",
+        "25 Gigabit",
+        25.0
+    ],
+    [
+        "r5n.large",
+        "Up to 25 Gigabit",
+        2.1
+    ],
+    [
+        "c6gd.12xlarge",
+        "20 Gigabit",
+        20.0
+    ],
+    [
+        "m6a.12xlarge",
+        "18.75 Gigabit",
+        18.75
+    ],
+    [
+        "r8gd.48xlarge",
+        "50 Gigabit",
+        50.0
+    ],
+    [
+        "m7a.large",
+        "Up to 12.5 Gigabit",
+        0.781
+    ],
+    [
+        "m1.large",
+        "Moderate",
+        0.7
+    ]
+]
