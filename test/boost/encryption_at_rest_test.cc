@@ -306,11 +306,12 @@ struct kmip_test_info {
     std::string key;
     std::string ca;
     std::string prio;
+    std::string created_key_id;
 };
 
 namespace bp = boost::process;
 
-static future<> kmip_test_helper(const std::function<future<>(const kmip_test_info&, const tmpdir&)>& f) {
+static future<> kmip_test_helper(const std::function<future<>(const kmip_test_info&, const tmpdir&)>& f, bool create_key = false) {
     tmpdir tmp;
     bool host_set = false;
     bp::child python;
@@ -330,7 +331,8 @@ static future<> kmip_test_helper(const std::function<future<>(const kmip_test_in
         .cert = get_var_or_default("KMIP_CERT", fmt::format("{}/scylla.pem", resourcedir)),
         .key = get_var_or_default("KMIP_KEY", fmt::format("{}/scylla.pem", resourcedir)),
         .ca = get_var_or_default("KMIP_CA", fmt::format("{}/cacert.pem", resourcedir)),
-        .prio = get_var_or_default("KMIP_PRIO", "SECURE128:+RSA:-VERS-TLS1.0:-ECDHE-ECDSA")
+        .prio = get_var_or_default("KMIP_PRIO", "SECURE128:+RSA:-VERS-TLS1.0:-ECDHE-ECDSA"),
+        .created_key_id = {}
     };
 
     auto cleanup = defer([&] {
@@ -373,47 +375,68 @@ database_path={}/pykmip.db
 
         BOOST_TEST_MESSAGE("Starting PyKMIP server"); // debug print. Why not.
 
-        python = bp::child(pyexec, gp,
+        std::vector<std::string> args = {
             "test/boost/kmip_wrapper.py",
             "-l", log,
             "-f", cfgfile,
             "-v", "DEBUG",
+        };
+
+        if (create_key) {
+            args.push_back("--create-key");
+        }
+
+        python = bp::child(pyexec, gp, args,
             (bp::std_out & bp::std_err) > is, bp::std_in.close(),
             bp::env["TMPDIR"]=tmp.path().string()
         );
 
         std::promise<int> port_promise;
-        auto f = port_promise.get_future();
+        std::promise<std::string> key_promise;
+        auto port_future = port_promise.get_future();
+        auto key_future = key_promise.get_future();
 
         pykmip_status = std::async([&] {
             static std::regex port_ex("Listening on (\\d+)");
+            static std::regex key_ex("Created key with id: ([^\n]+)");
 
             std::string line;
-            bool b = false;
+            bool port_found = false;
+            bool key_found = false;
 
             do {
                 while (std::getline(is, line)) {
                     std::cout << line << std::endl;
+
                     std::smatch m;
-                    if (!b && std::regex_match(line, m, port_ex)) {
+                    if (!port_found && std::regex_match(line, m, port_ex)) {
                         port_promise.set_value(std::stoi(m[1].str()));
-                        b = true;
+                        port_found = true;
+                    }
+
+                    if (create_key && !key_found && std::regex_match(line, m, key_ex)) {
+                        key_promise.set_value(m[1].str());
+                        key_found = true;
                     }
                 }
             } while (python.running());
 
-            if (!b) {
+            if (!port_found) {
                 port_promise.set_value(-1);
+            }
+            if (create_key && !key_found) {
+                key_promise.set_exception(std::make_exception_ptr(std::runtime_error("PyKMIP server terminated without creating the requested key")));
             }
         });
         // arbitrary timeout of 20s for the server to make some output. Very generous.
-        if (f.wait_for(20s) == std::future_status::timeout) {
+        if (port_future.wait_for(20s) == std::future_status::timeout) {
             throw std::runtime_error("Could not start pykmip");
         }
-        auto port = f.get();
+        auto port = port_future.get();
         if (port <= 0) {
             throw std::runtime_error("Invalid port");
         }
+
         // wait for port.
         for (;;) {
             try {
@@ -427,6 +450,16 @@ database_path={}/pykmip.db
         }
 
         info.host = fmt::format("127.0.0.1:{}", port);
+
+        if (create_key) {
+            if (key_future.wait_for(5s) == std::future_status::timeout) {
+                throw std::runtime_error("Timed out waiting for PyKMIP server to create key");
+            }
+            info.created_key_id = key_future.get();
+            BOOST_TEST_MESSAGE(fmt::format("Created KMIP key with id: {}", info.created_key_id));
+        }
+    } else if (create_key) {
+        throw std::runtime_error("Key creation is not supported when using external KMIP host.");
     }
 
     co_await f(info, tmp);
@@ -447,6 +480,34 @@ SEASTAR_TEST_CASE(test_kmip_provider, *check_run_test_decorator("ENABLE_KMIP_TES
         );
         co_await test_provider("'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
     });
+}
+
+SEASTAR_TEST_CASE(test_replicated_provider_with_kmip_system_key, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        // Encrypt a table with the Replicated Key Provider, using the KMIP key as system key.
+        auto sysdir = tmp.path() / "system_keys";
+        auto keyfile = tmp.path() / "secret_key";
+        auto yaml = fmt::format(R"(
+kmip_hosts:
+    kmip_test:
+        hosts: {0}
+        certificate: {1}
+        keyfile: {2}
+        truststore: {3}
+        priority_string: {4}
+system_key_directory: {5}
+)", info.host, info.cert, info.key, info.ca, info.prio, sysdir.string());
+        test_provider_args args{
+            .tmp = tmp,
+            .options = fmt::format("'key_provider': 'ReplicatedKeyProviderFactory', 'system_key_file': 'kmip://kmip_test/{}', 'secret_key_file': '{}','cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", info.created_key_id, keyfile.string()),
+            .extra_yaml = yaml,
+            .n_tables = 1,
+            .n_restarts = 1,
+            .explicit_provider = {},
+        };
+        co_await test_provider(args);
+        BOOST_REQUIRE(fs::exists(tmp.path()));
+    }, true);
 }
 
 #endif // HAVE_KMIP
