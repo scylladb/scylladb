@@ -139,3 +139,66 @@ async def test_batchlog_replay_aborted_on_shutdown(manager: ManagerClient) -> No
             if batchlog_row_count == 0:
                 return True
         await wait_for(batchlog_empty, time.time() + 60)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:
+    """ Test that when a batch is replayed from the batchlog, it includes CDC mutations.
+    1. Create a cluster with a single node.
+    2. Create a table with CDC enabled.
+    3. Write a batch and inject an error to fail it after it's written to the batchlog but before the mutation is applied.
+    4. Wait for the batch to be replayed.
+    5. Verify that the data is written to the base table.
+    6. Verify that CDC mutations are also applied and visible in the CDC log table.
+    """
+
+    cmdline = ['--logger-log-level', 'batchlog_manager=trace']
+    config = {'error_injections_at_startup': ['short_batchlog_manager_replay_interval'], 'write_request_timeout_in_ms': 2000}
+
+    servers = await manager.servers_add(1, config=config, cmdline=cmdline)
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        # Create table with CDC enabled
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key, c)) WITH cdc = {{'enabled': true}}")
+
+        # Enable error injection to make the batch fail after writing to batchlog
+        await manager.api.enable_injection(servers[0].ip_addr, "storage_proxy_fail_remove_from_batchlog", one_shot=False)
+
+        # Execute a batch that will fail due to injection but be written to batchlog
+        try:
+            await cql.run_async(
+                "BEGIN BATCH " +
+                f"INSERT INTO {ks}.tab(key, c, v) VALUES (10, 20, 30); " +
+                f"INSERT INTO {ks}.tab(key, c, v) VALUES (40, 50, 60); " +
+                "APPLY BATCH"
+            )
+        except Exception as e:
+            logger.info(f"Expected error executing batch: {e}")
+
+        await manager.api.disable_injection(servers[0].ip_addr, "storage_proxy_fail_remove_from_batchlog")
+
+        # Wait for data to appear in the base table
+        async def data_written():
+            result1 = await cql.run_async(f"SELECT * FROM {ks}.tab WHERE key = 10 AND c = 20")
+            result2 = await cql.run_async(f"SELECT * FROM {ks}.tab WHERE key = 40 AND c = 50")
+            if len(result1) > 0 and len(result2) > 0:
+                return True
+        await wait_for(data_written, time.time() + 60)
+
+        # Check that CDC log table exists and has the CDC mutations
+        cdc_table_name = f"{ks}.tab_scylla_cdc_log"
+
+        # Wait for CDC mutations to be visible
+        async def cdc_data_present():
+            result1 = await cql.run_async(f"SELECT * FROM {cdc_table_name} WHERE key = 10 ALLOW FILTERING")
+            result2 = await cql.run_async(f"SELECT * FROM {cdc_table_name} WHERE key = 40 ALLOW FILTERING")
+            if len(result1) > 0 and len(result2) > 0:
+                return True
+        await wait_for(cdc_data_present, time.time() + 60)
+
+        result1 = await cql.run_async(f"SELECT * FROM {cdc_table_name} WHERE key = 10 ALLOW FILTERING")
+        assert len(result1) == 1, f"Expected 1 CDC mutation for key 10, got {len(result1)}"
+
+        result2 = await cql.run_async(f"SELECT * FROM {cdc_table_name} WHERE key = 40 ALLOW FILTERING")
+        assert len(result2) == 1, f"Expected 1 CDC mutation for key 40, got {len(result2)}"
