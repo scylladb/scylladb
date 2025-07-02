@@ -2726,7 +2726,7 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
     //  Also serves as a protection for clearing the cache on the new range, although it shouldn't be a
     //  problem as fresh node won't have any data in new range and migration cleanup invalidates the
     //  range being moved away.
-    if (tablet_migrating_in) {
+    if (tablet_migrating_in || old_tablet_count != new_tablet_count) {
         refresh_mutation_source();
     }
 }

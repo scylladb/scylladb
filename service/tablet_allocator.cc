@@ -548,6 +548,9 @@ class load_balancer {
             // FIXME: this is not perfect and we may want to leave the mode too if we detect
             //  average size is decreasing significantly, before any split happened.
             bool left_growing_mode = !d.resize_decision.initial_decision();
+            if (utils::get_local_injector().is_enabled("tablet_bypass_growing_mode_check")) {
+                left_growing_mode = true;
+            }
             lblogger.debug("table_needs_merge: tablet_count={}, avg_tablet_size={}, left_growing_mode={} (seq number: {})",
                            d.tablet_count, d.avg_tablet_size, left_growing_mode, d.resize_decision.sequence_number);
             return left_growing_mode && d.tablet_count > 1 && d.avg_tablet_size < d.target_min_tablet_size();
