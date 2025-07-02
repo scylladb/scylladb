@@ -147,6 +147,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     group0_voter_handler _voter_handler;
 
+    topology_coordinator_cmd_rpc_tracker& _topology_cmd_rpc_tracker;
+
     const locator::token_metadata& get_token_metadata() const noexcept {
         return *_shared_tm.get();
     }
@@ -389,6 +391,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
         rtlogger.debug("send {} command with term {} and index {} to {}",
             cmd.cmd, _term, cmd_index, id);
+        _topology_cmd_rpc_tracker.active_dst.emplace(id);
+        auto _ = seastar::defer([this, id] { _topology_cmd_rpc_tracker.active_dst.erase(id); });
+
         auto result = _db.get_token_metadata().get_topology().is_me(to_host_id(id)) ?
                     co_await _raft_topology_cmd_handler(_term, cmd_index, cmd) :
                     co_await ser::storage_service_rpc_verbs::send_raft_topology_cmd(
@@ -403,12 +408,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         auto id = node.id;
         release_node(std::move(node));
         const auto cmd_index = ++_last_cmd_index;
+        _topology_cmd_rpc_tracker.current = cmd.cmd;
+        _topology_cmd_rpc_tracker.index = cmd_index;
         co_await exec_direct_command_helper(id, cmd_index, cmd);
         co_return retake_node(co_await start_operation(), id);
     };
 
     future<> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
         const auto cmd_index = ++_last_cmd_index;
+        _topology_cmd_rpc_tracker.current = cmd.cmd;
+        _topology_cmd_rpc_tracker.index = cmd_index;
         auto f = co_await coroutine::as_future(
                 seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index] (raft::server_id id) {
             return exec_direct_command_helper(id, cmd_index, cmd);
@@ -2993,7 +3002,8 @@ public:
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
-            gms::feature_service& feature_service)
+            gms::feature_service& feature_service,
+            topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _group0(group0), _topo_sm(topo_sm), _as(as)
@@ -3005,6 +3015,7 @@ public:
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
         , _voter_handler(group0, topo_sm._topology, gossiper, feature_service)
+        , _topology_cmd_rpc_tracker(topology_cmd_rpc_tracker)
         , _async_gate("topology_coordinator")
     {}
 
@@ -3619,7 +3630,8 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
-        gms::feature_service& feature_service) {
+        gms::feature_service& feature_service,
+        topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker) {
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
@@ -3627,7 +3639,8 @@ future<> run_topology_coordinator(
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             ring_delay,
-            feature_service};
+            feature_service,
+            topology_cmd_rpc_tracker};
 
     std::exception_ptr ex;
     lifecycle_notifier.register_subscriber(&coordinator);
