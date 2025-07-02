@@ -225,11 +225,12 @@ def testAlterKeyspaceWithNoOptionThrowsConfigurationException(cql, test_keyspace
 def testAlterKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, test_keyspace, this_dc):
     # Create a keyspace with expected DC name.
     with create_keyspace(cql, "replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as ks:
+        pattern = re.compile("Unrecognized strategy option {INVALID_DC} passed to .*NetworkTopologyStrategy|Unrecognized datacenter name 'INVALID_DC'")
         # try modifying the keyspace
-        assert_invalid_throw_message_re(cql, ks, "Unrecognized strategy option {INVALID_DC} passed to .*NetworkTopologyStrategy", ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', 'INVALID_DC' : 2 }")
+        assert_invalid_throw_message_re(cql, ks, pattern, ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', 'INVALID_DC' : 2 }")
         execute(cql, ks, "ALTER KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
         # Mix valid and invalid, should throw an exception
-        assert_invalid_throw_message_re(cql, ks, "Unrecognized strategy option {INVALID_DC} passed to .*NetworkTopologyStrategy", ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 , 'INVALID_DC': 1}")
+        assert_invalid_throw_message_re(cql, ks, pattern, ConfigurationException, "ALTER KEYSPACE %s WITH replication={ 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 , 'INVALID_DC': 1}")
 
 def testAlterKeyspaceWithMultipleInstancesOfSameDCThrowsSyntaxException(cql, test_keyspace, this_dc):
     # Create a keyspace
