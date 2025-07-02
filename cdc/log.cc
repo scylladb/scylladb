@@ -457,16 +457,20 @@ bool is_log_name(const std::string_view& table_name) {
     return table_name.ends_with(cdc_log_suffix);
 }
 
+bool is_vsc_log_name(const std::string_view& table_name) {
+    return table_name.ends_with(vsc_log_suffix);
+}
+
 bool is_cdc_metacolumn_name(const sstring& name) {
     return name.compare(0, cdc_meta_column_prefix.size(), cdc_meta_column_prefix) == 0;
 }
 
 bool is_log_for_some_table(const replica::database& db, const sstring& ks_name, const std::string_view& table_name) {
     auto base_schema = get_base_table(db, ks_name, table_name);
-    if (!base_schema) {
-        return false;
-    }
-    return base_schema->cdc_options().enabled();
+    auto vsc_base_schema = get_vsc_base_table(db, ks_name, table_name);
+    bool is_cdc = base_schema && base_schema->cdc_options().enabled();
+    bool is_vsc = vsc_base_schema && secondary_index::has_vector_index(*vsc_base_schema);
+    return is_cdc || is_vsc;
 }
 
 schema_ptr get_base_table(const replica::database& db, const schema& s) {
@@ -489,9 +493,25 @@ schema_ptr get_base_table(const replica::database& db, std::string_view ks_name,
     return db.find_schema(sstring(ks_name), table_base_name);
 }
 
+schema_ptr get_vsc_base_table(const replica::database& db, std::string_view ks_name, std::string_view table_name) {
+    if (!is_vsc_log_name(table_name)) {
+        return nullptr;
+    }
+    const auto table_base_name = vsc_base_name(table_name);
+    if (!db.has_schema(ks_name, table_base_name)) {
+        return nullptr;
+    }
+    return db.find_schema(sstring(ks_name), table_base_name);
+}
+
 seastar::sstring base_name(std::string_view log_name) {
     SCYLLA_ASSERT(is_log_name(log_name));
     return sstring(log_name.data(), log_name.size() - cdc_log_suffix.size());
+}
+
+seastar::sstring vsc_base_name(std::string_view log_name) {
+    SCYLLA_ASSERT(is_vsc_log_name(log_name));
+    return sstring(log_name.data(), log_name.size() - vsc_log_suffix.size());
 }
 
 sstring log_name(std::string_view table_name) {
