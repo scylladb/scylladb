@@ -111,7 +111,6 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
-#include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
@@ -1134,7 +1133,8 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _tablet_allocator.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
-                    _feature_service);
+                    _feature_service,
+                    _topology_cmd_rpc_tracker);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -4168,7 +4168,7 @@ future<> storage_service::removenode(locator::host_id host_id, locator::host_id_
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             ss.check_ability_to_perform_topology_operation("removenode");
             if (ss.raft_topology_change_enabled()) {
-                ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
+            ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
                 return;
             }
             node_ops_ctl ctl(ss, node_ops_cmd::removenode_prepare, host_id, gms::inet_address());
@@ -5825,6 +5825,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                         }
                     }
                 }
+
                 co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
                     const auto current_version = ss._shared_token_metadata.get()->get_version();
                     rtlogger.debug("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
