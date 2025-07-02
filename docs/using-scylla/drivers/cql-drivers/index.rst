@@ -55,7 +55,7 @@ The following table specifies which ScyllaDB drivers include a library for
    * - :doc:`C++ </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
      - |x| 
    * - `CPP-over-Rust Driver <https://github.com/scylladb/cpp-rust-driver>`_
-     - |v|
+     - |x|
    * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
      - |v| 
 
@@ -74,7 +74,7 @@ The following table specifies which ScyllaDB drivers support
      - Since Version
    * - :doc:`Python</using-scylla/drivers/cql-drivers/scylla-python-driver>`
      - |v| 
-     - 3.26.6
+     - 3.26.5
    * - :doc:`Java </using-scylla/drivers/cql-drivers/scylla-java-driver>`
      - |v| 
      - 4.18.0 (Java Driver 4.x)
