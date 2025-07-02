@@ -195,7 +195,7 @@ public:
                 // make sure the apparent log table really is a cdc log (not user table)
                 // we just check the partitioner - since user tables should _not_ be able
                 // set/use this.
-                if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                if (!is_log_schema(*log_schema)) {
                     // will throw
                     check_that_cdc_log_table_does_not_exist(db, old_schema, logname);
                 }
@@ -222,7 +222,7 @@ public:
         auto has_cdc_log = db.has_schema(schema.ks_name(), logname);
         if (has_cdc_log) {
             auto log_schema = db.find_schema(schema.ks_name(), logname);
-            if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+            if (!is_log_schema(*log_schema)) {
                 return;
             }
             auto& keyspace = db.find_keyspace(schema.ks_name());
@@ -421,6 +421,10 @@ static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix
 
 bool is_log_name(const std::string_view& table_name) {
     return table_name.ends_with(cdc_log_suffix);
+}
+
+bool is_log_schema(const schema& s) {
+    return s.get_partitioner().name() == cdc::cdc_partitioner::classname;
 }
 
 bool is_cdc_metacolumn_name(const sstring& name) {
