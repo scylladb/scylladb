@@ -48,6 +48,7 @@
 #include "gms/feature_service.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy.hh"
+#include "cdc/log.hh"
 #include "db/operation_type.hh"
 #include "db/view/view_update_generator.hh"
 #include "multishard_mutation_query.hh"
@@ -970,6 +971,18 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
 
     if (is_colocated_view) {
         return s.view_info()->base_id();
+    }
+
+    if (cdc::is_log_schema(s)) {
+        auto base_cf_name = cdc::base_name(s.cf_name());
+
+        for (auto new_cfm : new_cfms) {
+            if (new_cfm.second->ks_name() == s.ks_name() && new_cfm.second->cf_name() == base_cf_name) {
+                return new_cfm.second->id();
+            }
+        }
+
+        return find_schema(s.ks_name(), base_cf_name)->id();
     }
 
     return std::nullopt;
