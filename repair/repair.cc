@@ -1167,6 +1167,10 @@ future<> repair::shard_repair_task_impl::run() {
 // itself does very little (mainly tell other nodes and CPUs what to do).
 future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, sstring keyspace, std::unordered_map<sstring, sstring> options_map) {
     get_repair_module().check_in_shutdown();
+    if (is_disabled()) {
+        co_return coroutine::return_exception(std::runtime_error("Repair service is disabled. No repairs will be started until it's re-enabled"));
+    }
+
     auto& sharded_db = get_db();
     auto& db = sharded_db.local();
 
@@ -2229,6 +2233,10 @@ future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
 future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage) {
+    if (is_disabled()) {
+        co_return coroutine::return_exception(std::runtime_error("Repair service is disabled. No repairs will be started until it's re-enabled"));
+    }
+
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
     auto& db = get_db().local();
