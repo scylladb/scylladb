@@ -300,10 +300,6 @@ async def update_record(manager: ManagerClient,
     yield
 
 
-@deselect_for(
-    # TODO: remove this skip when #18068 will be resolved.
-    reason="LWT is not yet supported with tablets. See issue #18068"
-)
 async def execute_lwt_transaction(manager: ManagerClient,
                                   random_tables: RandomTables,
                                   error_injection: str) -> AsyncIterator[None]:
