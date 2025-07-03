@@ -146,7 +146,7 @@ cql_table_large_data_handler::cql_table_large_data_handler(gms::feature_service&
 
 template <typename... Args>
 future<> cql_table_large_data_handler::try_record(std::string_view large_table, const sstables::sstable& sst,  const sstables::key& partition_key, int64_t size,
-        std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const {
+        std::string_view size_desc, std::string_view desc, std::string_view extra_path, const std::vector<sstring> &extra_fields, Args&&... args) const {
     if (!_sys_ks) {
         return make_ready_future<>();
     }
@@ -165,7 +165,7 @@ future<> cql_table_large_data_handler::try_record(std::string_view large_table, 
     const auto sstable_name = large_data_handler::sst_filename(sst);
     std::string pk_str = key_to_str(partition_key.to_partition_key(s), s);
     auto timestamp = db_clock::now();
-    large_data_logger.warn("Writing large {} {}/{}: {} ({} bytes) to {}", desc, ks_name, cf_name, extra_path, size, sstable_name);
+    large_data_logger.warn("Writing large {} {}/{}: {} ({}) to {}", desc, ks_name, cf_name, extra_path, size_desc, sstable_name);
     return _sys_ks->execute_cql(req, ks_name, cf_name, sstable_name, size, pk_str, timestamp, args...)
             .discard_result()
             .handle_exception([ks_name, cf_name, large_table, sstable_name] (std::exception_ptr ep) {
@@ -182,12 +182,14 @@ future<> cql_table_large_data_handler::record_large_partitions(const sstables::s
 
 future<> cql_table_large_data_handler::internal_record_large_partitions(const sstables::sstable& sst, const sstables::key& key,
         uint64_t partition_size, uint64_t rows) const {
-    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {"rows"}, data_value((int64_t)rows));
+    const sstring size_desc = seastar::format("{} bytes/{} rows", partition_size, rows);
+    return try_record("partition", sst, key, int64_t(partition_size), size_desc, "partition", "", {"rows"}, data_value((int64_t)rows));
 }
 
 future<> cql_table_large_data_handler::internal_record_large_partitions_all_data(const sstables::sstable& sst, const sstables::key& key,
         uint64_t partition_size, uint64_t rows, uint64_t range_tombstones, uint64_t dead_rows) const {
-    return try_record("partition", sst, key, int64_t(partition_size), "partition", "", {"rows", "range_tombstones", "dead_rows"},
+    const sstring size_desc = seastar::format("{} bytes/{} rows", partition_size, rows);
+    return try_record("partition", sst, key, int64_t(partition_size), size_desc, "partition", "", {"rows", "range_tombstones", "dead_rows"},
                 data_value((int64_t)rows), data_value((int64_t)range_tombstones), data_value((int64_t)dead_rows));
 }
 
@@ -201,13 +203,14 @@ future<> cql_table_large_data_handler::internal_record_large_cells(const sstable
     auto column_name = cdef.name_as_text();
     std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
     static const std::vector<sstring> extra_fields{"clustering_key", "column_name"};
+    const sstring size_desc = seastar::format("{} bytes", cell_size);
     if (clustering_key) {
         const schema &s = *sst.get_schema();
         auto ck_str = key_to_str(*clustering_key, s);
-        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, column_name, extra_fields, ck_str, column_name);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), size_desc, cell_type, column_name, extra_fields, ck_str, column_name);
     } else {
         auto desc = seastar::format("static {}", cell_type);
-        return try_record("cell", sst, partition_key, int64_t(cell_size), desc, column_name, extra_fields, data_value::make_null(utf8_type), column_name);
+        return try_record("cell", sst, partition_key, int64_t(cell_size), size_desc, desc, column_name, extra_fields, data_value::make_null(utf8_type), column_name);
     }
 }
 
@@ -215,26 +218,28 @@ future<> cql_table_large_data_handler::internal_record_large_cells_and_collectio
         const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements) const {
     auto column_name = cdef.name_as_text();
     std::string_view cell_type = cdef.is_atomic() ? "cell" : "collection";
+    const sstring size_desc = seastar::format("{} bytes", cell_size);
     static const std::vector<sstring> extra_fields{"clustering_key", "column_name", "collection_elements"};
     if (clustering_key) {
         const schema &s = *sst.get_schema();
         auto ck_str = key_to_str(*clustering_key, s);
-        return try_record("cell", sst, partition_key, int64_t(cell_size), cell_type, column_name, extra_fields, ck_str, column_name, data_value((int64_t)collection_elements));
+        return try_record("cell", sst, partition_key, int64_t(cell_size), size_desc, cell_type, column_name, extra_fields, ck_str, column_name, data_value((int64_t)collection_elements));
     } else {
         auto desc = seastar::format("static {}", cell_type);
-        return try_record("cell", sst, partition_key, int64_t(cell_size), desc, column_name, extra_fields, data_value::make_null(utf8_type), column_name, data_value((int64_t)collection_elements));
+        return try_record("cell", sst, partition_key, int64_t(cell_size), size_desc, desc, column_name, extra_fields, data_value::make_null(utf8_type), column_name, data_value((int64_t)collection_elements));
     }
 }
 
 future<> cql_table_large_data_handler::record_large_rows(const sstables::sstable& sst, const sstables::key& partition_key,
         const clustering_key_prefix* clustering_key, uint64_t row_size) const {
     static const std::vector<sstring> extra_fields{"clustering_key"};
+    const sstring size_desc = seastar::format("{} bytes", row_size);
     if (clustering_key) {
         const schema &s = *sst.get_schema();
         std::string ck_str = key_to_str(*clustering_key, s);
-        return try_record("row", sst, partition_key, int64_t(row_size), "row", "", extra_fields, ck_str);
+        return try_record("row", sst, partition_key, int64_t(row_size), size_desc, "row", "", extra_fields, ck_str);
     } else {
-        return try_record("row", sst, partition_key, int64_t(row_size), "static row", "", extra_fields, data_value::make_null(utf8_type));
+        return try_record("row", sst, partition_key, int64_t(row_size), size_desc, "static row", "", extra_fields, data_value::make_null(utf8_type));
     }
 }
 
