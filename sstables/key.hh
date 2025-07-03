@@ -119,16 +119,6 @@ public:
     const bytes& get_bytes() const {
         return _bytes;
     }
-    friend key minimum_key();
-    friend key maximum_key();
-};
-
-inline key minimum_key() {
-    return key(key::kind::before_all_keys);
-};
-
-inline key maximum_key() {
-    return key(key::kind::after_all_keys);
 };
 
 class decorated_key_view {
