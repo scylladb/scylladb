@@ -34,7 +34,6 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
-#include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/to_string.hh"
 #include "data_dictionary/storage_options.hh"
@@ -104,6 +103,20 @@ namespace sstables {
 thread_local utils::updateable_value<bool> global_cache_index_pages(true);
 
 logging::logger sstlog("sstable");
+
+[[noreturn]] void on_parse_error(sstring message, std::optional<sstring> filename) {
+    auto make_exception = [&] {
+        if (message.empty()) {
+            message = "parse_assert() failed";
+        }
+        if (filename) {
+            return malformed_sstable_exception(message, *filename);
+        }
+        return malformed_sstable_exception(message);
+    };
+    auto ex = std::make_exception_ptr(make_exception());
+    on_internal_error(sstlog, std::move(ex));
+}
 
 template <typename T>
 const char* nullsafe_typename(T* x) noexcept {
@@ -896,7 +909,7 @@ void file_writer::close() {
     // to work, because file stream would step on unaligned IO and S3 upload
     // stream would send completion message to the server and would lose any
     // subsequent write.
-    SCYLLA_ASSERT(!_closed && "file_writer already closed");
+    parse_assert(!_closed, _filename, "file_writer already closed");
     std::exception_ptr ex;
     try {
         _out.flush().get();
@@ -1332,7 +1345,7 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
     co_await update_info_for_opened_data(cfg);
-    SCYLLA_ASSERT(!_shards.empty());
+    parse_assert(!_shards.empty(), get_filename());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
     if (sm) {
         // Sharding information uses a lot of memory and once we're doing with this computation we will no longer use it.
@@ -1369,7 +1382,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
 
     auto size = co_await _index_file.size();
     _index_file_size = size;
-    SCYLLA_ASSERT(!_cached_index_file);
+    parse_assert(!_cached_index_file, get_filename());
     _cached_index_file = seastar::make_shared<cached_file>(_index_file,
                                                             _manager.get_cache_tracker().get_index_cached_file_stats(),
                                                             _manager.get_cache_tracker().get_lru(),
@@ -1648,7 +1661,7 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
 }
 
 void prepare_summary(summary& s, uint64_t expected_partition_count, uint32_t min_index_interval) {
-    SCYLLA_ASSERT(expected_partition_count >= 1);
+    parse_assert(expected_partition_count >= 1);
 
     s.header.min_index_interval = min_index_interval;
     s.header.sampling_level = downsampling::BASE_SAMPLING_LEVEL;
@@ -1670,7 +1683,7 @@ future<> seal_summary(summary& s,
     s.header.size = s.entries.size();
     s.header.size_at_full_sampling = sstable::get_size_at_full_sampling(state.partition_count, s.header.min_index_interval);
 
-    SCYLLA_ASSERT(first_key); // assume non-empty sstable
+    parse_assert(bool(first_key), {}, "attempted to seal summary of empty sstable");
     s.first_key.value = first_key->get_bytes();
 
     if (last_key) {
@@ -2253,7 +2266,8 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::me:
         return v + "-" + g + "-" + f + "-" + component;
     }
-    SCYLLA_ASSERT(0 && "invalid version");
+    on_internal_error(sstlog, seastar::format("invalid version {} for sstable: table={}.{}, generation={}, format={}, component={}",
+            static_cast<std::underlying_type<version_types>::type>(version), ks, cf, g, f, component));
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
