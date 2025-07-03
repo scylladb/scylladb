@@ -752,7 +752,7 @@ public:
     // integrity-checked stream with no compression. The parameter is ignored
     // if integrity checking is disabled or the SSTable is compressed.
     using raw_stream = bool_class<class raw_stream_tag>;
-    input_stream<char> data_stream(uint64_t pos, size_t len,
+    future<input_stream<char>> data_stream(uint64_t pos, size_t len,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
             raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
             integrity_error_handler error_handler = throwing_integrity_error_handler);
@@ -1051,13 +1051,13 @@ public:
     friend class promoted_index;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
-    friend std::unique_ptr<DataConsumeRowsContext>
+    friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check);
     template <typename DataConsumeRowsContext>
-    friend std::unique_ptr<DataConsumeRowsContext>
+    friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, integrity_check);
     template <typename DataConsumeRowsContext>
-    friend std::unique_ptr<DataConsumeRowsContext>
+    friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, integrity_check);
     friend void lw_shared_ptr_deleter<sstables::sstable>::dispose(sstable* s);
     gc_clock::time_point get_gc_before_for_drop_estimation(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
@@ -1126,6 +1126,8 @@ public:
     // output device. Default impl will call wrap_file and generate a wrapper object.
     virtual future<data_sink> wrap_sink(const sstable&, component_type, data_sink);
 
+    virtual future<data_source>
+    wrap_source(const sstable&, component_type, sstables::data_source_creator_fn, uint64_t offset, uint64_t len);
     // optionally return a map of attributes for a given sstable,
     // suitable for "describe".
     // This would preferably be interesting info on what/why the extension did
