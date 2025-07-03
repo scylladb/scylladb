@@ -3218,7 +3218,7 @@ static sstables::shared_sstable write_and_compare_sstables(test_env& env, schema
     return sst;
 }
 
-static sstable_assertions validate_read(test_env& env, shared_sstable input_sst, std::vector<mutation> mutations) {
+static sstable_assertions validate_read(test_env& env, shared_sstable input_sst, utils::chunked_vector<mutation> mutations) {
     sstable_assertions sst(env, input_sst);
     sst.load();
 
@@ -3346,7 +3346,7 @@ static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& t
     }
 }
 
-static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, std::vector<mutation> muts,
+static void write_mut_and_validate_version(test_env& env, schema_ptr s, const sstring& table_name, utils::chunked_vector<mutation> muts,
         sstable_version_types version, validate_stats_metadata validate_flag) {
     lw_shared_ptr<replica::memtable> mt = make_memtable(s, muts);
     auto sst = write_and_compare_sstables(env, s, mt, table_name, version);
@@ -3356,7 +3356,7 @@ static void write_mut_and_validate_version(test_env& env, schema_ptr s, const ss
     }
 }
 
-static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& table_name, std::vector<mutation> muts,
+static void write_mut_and_validate(test_env& env, schema_ptr s, const sstring& table_name, utils::chunked_vector<mutation> muts,
         validate_stats_metadata validate_flag = validate_stats_metadata::no) {
     for (auto version : test_sstable_versions) {
         write_mut_and_validate_version(env, s, table_name, muts, version, validate_flag);
@@ -3653,7 +3653,7 @@ SEASTAR_TEST_CASE(test_write_multiple_partitions) {
     // INSERT INTO multiple_partitions (pk, rc1) VALUES (1, 10) USING TIMESTAMP 1525385507816568;
     // INSERT INTO multiple_partitions (pk, rc2) VALUES (2, 20) USING TIMESTAMP 1525385507816578;
     // INSERT INTO multiple_partitions (pk, rc3) VALUES (3, 30) USING TIMESTAMP 1525385507816588;
-    std::vector<mutation> muts;
+    utils::chunked_vector<mutation> muts;
     for (auto i : std::views::iota(1, 4)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
         muts.emplace_back(s, key);
@@ -3676,7 +3676,7 @@ static future<> test_write_many_partitions(sstring table_name, tombstone partiti
     builder.set_compressor_params(cp);
     schema_ptr s = builder.build(schema_builder::compact_storage::no);
 
-    std::vector<mutation> muts;
+    utils::chunked_vector<mutation> muts;
     for (auto i : std::views::iota(0, 65536)) {
         auto key = partition_key::from_deeply_exploded(*s, {i});
         muts.emplace_back(s, key);

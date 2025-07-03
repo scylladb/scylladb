@@ -1597,7 +1597,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     for (;;) {
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
-        std::vector<mutation> schema_mutations;
+        utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features());
         // Alternator Streams doesn't yet work when the table uses tablets (#16317)
         if (stream_specification && stream_specification->IsObject()) {
@@ -2464,7 +2464,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
-                return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this,&wcu_total] () mutable {
+                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this,&wcu_total] () mutable {
                     return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
                 });
             });
@@ -2472,7 +2472,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
         SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(std::vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &wcu_total] () mutable {
+        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &wcu_total] () mutable {
             return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
         });
     }
@@ -2844,7 +2844,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
     });
     if (!needs_lwt) {
         // Do a normal write, without LWT:
-        std::vector<mutation> mutations;
+        utils::chunked_vector<mutation> mutations;
         mutations.reserve(mutation_builders.size());
         api::timestamp_type now = api::new_timestamp();
         for (auto& b : mutation_builders) {

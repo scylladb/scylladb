@@ -411,7 +411,7 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
     return make_pair(cfm.build(), std::move(view_updates));
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 alter_table_statement::prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type ts) const {
   data_dictionary::database db = qp.db();
   auto [s, view_updates] = prepare_schema_update(db, options);

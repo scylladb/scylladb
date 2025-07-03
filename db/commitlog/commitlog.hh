@@ -225,7 +225,7 @@ public:
      * Resolves with timed_out_error when timeout is reached.
      * @param entry_writers a vector of writers responsible for writing respective entry
      */
-    future<std::vector<rp_handle>> add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
+    future<utils::chunked_vector<rp_handle>> add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout);
 
     /**
      * Modifies the per-CF dirty cursors of any commit log segments for the column family according to the position

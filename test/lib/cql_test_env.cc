@@ -295,7 +295,7 @@ public:
             });
     }
 
-    virtual future<std::vector<mutation>> get_modification_mutations(const sstring& text) override {
+    virtual future<utils::chunked_vector<mutation>> get_modification_mutations(const sstring& text) override {
         auto qs = make_query_state();
         auto cql_stmt = local_qp().get_statement(text, qs->get_client_state(), test_dialect())->statement;
         auto modif_stmt = dynamic_pointer_cast<cql3::statements::modification_statement>(std::move(cql_stmt));

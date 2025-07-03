@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimate) {
         utils::filter_ptr optimal_filter = utils::i_filter::get_filter(actual_partition_count, schema->bloom_filter_fp_chance(), utils::filter_format::m_format);
 
         // Generate mutations for the table and add the keys to the bloom filter
-        std::vector<mutation> mutations;
+        utils::chunked_vector<mutation> mutations;
         auto pks = ss.make_pkeys(actual_partition_count);
         mutations.reserve(actual_partition_count);
         for (auto pk : pks) {
@@ -293,7 +293,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         simple_schema ss;
         auto schema = ss.schema();
 
-        std::vector<mutation> mutations;
+        utils::chunked_vector<mutation> mutations;
         for (int i = 0; i < 10; i++) {
             auto mut = mutation(schema, ss.make_pkey(i));
             mut.partition().apply_insert(*schema, ss.make_ckey(1), ss.new_timestamp());

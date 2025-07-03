@@ -144,8 +144,8 @@ unfreeze_gently(const frozen_mutation& fm, schema_ptr schema) {
     co_return m;
 }
 
-future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation> muts) {
-    std::vector<mutation> result;
+future<utils::chunked_vector<mutation>> unfreeze_gently(const utils::chunked_vector<frozen_mutation>& muts) {
+    utils::chunked_vector<mutation> result;
     result.reserve(muts.size());
     for (auto& fm : muts) {
         result.push_back(co_await unfreeze_gently(fm, local_schema_registry().get(fm.schema_version())));

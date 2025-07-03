@@ -79,15 +79,15 @@ private:
     simple_schema _s;
     reader_concurrency_semaphore _sem;
     query::querier_cache _cache;
-    const std::vector<mutation> _mutations;
+    const utils::chunked_vector<mutation> _mutations;
     const mutation_source _mutation_source;
 
     static sstring make_value(size_t i) {
         return format("value{:010d}", i);
     }
 
-    static std::vector<mutation> make_mutations(simple_schema& s, const noncopyable_function<sstring(size_t)>& make_value) {
-        std::vector<mutation> mutations;
+    static utils::chunked_vector<mutation> make_mutations(simple_schema& s, const noncopyable_function<sstring(size_t)>& make_value) {
+        utils::chunked_vector<mutation> mutations;
         mutations.reserve(10);
 
         for (uint32_t i = 0; i != 10; ++i) {

@@ -108,7 +108,7 @@ public:
 
     const std::vector<single_statement>& get_statements();
 private:
-    future<std::vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
+    future<utils::chunked_vector<mutation>> get_mutations(query_processor& qp, const query_options& options, db::timeout_clock::time_point timeout,
             bool local, api::timestamp_type now, service::query_state& query_state) const;
 
 public:
@@ -116,7 +116,7 @@ public:
      * Checks batch size to ensure threshold is met. If not, a warning is logged.
      * @param cfs ColumnFamilies that will store the batch's mutations.
      */
-    static void verify_batch_size(query_processor& qp, const std::vector<mutation>& mutations);
+    static void verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations);
 
     virtual future<shared_ptr<cql_transport::messages::result_message>> execute(
             query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const override;
@@ -132,7 +132,7 @@ private:
 
     future<exceptions::coordinator_result<>> execute_without_conditions(
             query_processor& qp,
-            std::vector<mutation> mutations,
+            utils::chunked_vector<mutation> mutations,
             db::consistency_level cl,
             db::timeout_clock::time_point timeout,
             tracing::trace_state_ptr tr_state,

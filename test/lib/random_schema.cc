@@ -1163,7 +1163,7 @@ future<> random_schema::create_with_cql(cql_test_env& env) {
     });
 }
 
-future<std::vector<mutation>> generate_random_mutations(
+future<utils::chunked_vector<mutation>> generate_random_mutations(
         uint32_t seed,
         tests::random_schema& random_schema,
         timestamp_generator ts_gen,
@@ -1174,7 +1174,7 @@ future<std::vector<mutation>> generate_random_mutations(
     auto engine = std::mt19937(seed);
     const auto schema_has_clustering_columns = random_schema.schema()->clustering_key_size() > 0;
     const auto partition_count = partition_count_dist(engine);
-    std::vector<mutation> muts;
+    utils::chunked_vector<mutation> muts;
     muts.reserve(partition_count);
     for (size_t pk = 0; pk != partition_count; ++pk) {
         auto mut = random_schema.new_mutation(pk);
@@ -1214,11 +1214,13 @@ future<std::vector<mutation>> generate_random_mutations(
     auto range = boost::unique(muts, [s = random_schema.schema()] (const mutation& a, const mutation& b) {
             return a.decorated_key().equal(*s, b.decorated_key());
             });
-    muts.erase(range.end(), muts.end());
+    while (range.end() != muts.end()) {
+        muts.pop_back();
+    }
     co_return std::move(muts);
 }
 
-future<std::vector<mutation>> generate_random_mutations(
+future<utils::chunked_vector<mutation>> generate_random_mutations(
         tests::random_schema& random_schema,
         timestamp_generator ts_gen,
         expiry_generator exp_gen,
@@ -1229,7 +1231,7 @@ future<std::vector<mutation>> generate_random_mutations(
             clustering_row_count_dist, range_tombstone_count_dist);
 }
 
-future<std::vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
+future<utils::chunked_vector<mutation>> generate_random_mutations(tests::random_schema& random_schema, size_t partition_count) {
     return generate_random_mutations(
             random_schema,
             default_timestamp_generator(),
