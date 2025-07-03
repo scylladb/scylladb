@@ -10,6 +10,7 @@
 
 import argparse
 import copy
+import json
 import os
 import pathlib
 import platform
@@ -939,6 +940,7 @@ scylla_core = (['message/messaging_service.cc',
                 'timeout_config.cc',
                 'schema/schema_mutations.cc',
                 'transport/generic_server.cc',
+                'resources.cc',
                 'utils/alien_worker.cc',
                 'utils/array-search.cc',
                 'utils/base64.cc',
@@ -2562,6 +2564,8 @@ def write_build_file(f,
           pool = console
         rule merge_profdata
           command = llvm-profdata merge $in -output=$out
+        rule resources
+          command = scripts/resources.py --input-file $in --output-file $out
         ''').format(configure_args=configure_args,
                     outdir=outdir,
                     cxx=cxx_with_cache,
@@ -2684,6 +2688,7 @@ def write_build_file(f,
         ragels = {}
         antlr3_grammars = set()
         rust_headers = {}
+        resources = {}
 
         # We want LTO, but with the regular LTO, clang generates special LLVM IR files instead of
         # regular ELF objects after the compile phase, and these special LLVM bitcode can only be
@@ -2797,6 +2802,9 @@ def write_build_file(f,
                     idx = src.rindex('/src/')
                     hh = '$builddir/' + mode + '/gen/' + src[:idx] + '.hh'
                     rust_headers[hh] = src
+                elif src.endswith('.resources'):
+                    hh = f'$builddir/{mode}/gen/resources/{src}.hh'
+                    resources[hh] = src
                 else:
                     raise Exception('No rule for ' + src)
         f.write(
@@ -2852,6 +2860,7 @@ def write_build_file(f,
         # anything that touches utils/s3/aws_error.hh, so it must exist on
         # disk before any translation unit is compiled.
         gen_headers.append(aws_errors_gen_hh)
+        gen_headers += list(resources.keys())
         gen_headers_dep = ' '.join(gen_headers)
 
         for hh in rust_headers:
@@ -2919,6 +2928,16 @@ def write_build_file(f,
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc {profile_dep} || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep, profile_dep=profile_dep))
+        for hh, src in resources.items():
+            # The generated header embeds the files the manifest lists, so it
+            # has to be rebuilt when any of them changes and not only when the
+            # manifest itself does -- otherwise a build ships stale resources.
+            # resources.py resolves each 'file' relative to the manifest.
+            res_dir = os.path.dirname(src)
+            with open(src) as manifest:
+                resource_deps = ' '.join(os.path.join(res_dir, resource['file'])
+                                         for resource in json.load(manifest))
+            f.write(f'build {hh}: resources {src} | scripts/resources.py {resource_deps}\n')
 
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
