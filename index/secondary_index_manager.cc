@@ -16,6 +16,7 @@
 #include <unordered_map>
 
 #include "index/secondary_index_manager.hh"
+#include "index/secondary_index.hh"
 #include "index/vector_index.hh"
 
 #include "cql3/statements/index_target.hh"
@@ -352,10 +353,10 @@ std::optional<sstring> secondary_index_manager::custom_index_class(const schema&
 
     auto idx = _indices.find(index_name_from_table_name(s.cf_name()));
 
-    if (idx == _indices.end() || !(*idx).second.metadata().options().contains(cql3::statements::index_target::custom_index_option_name)) {
+    if (idx == _indices.end() || !(*idx).second.metadata().options().contains(db::index::secondary_index::custom_index_option_name)) {
         return std::nullopt;
     } else {
-        return (*idx).second.metadata().options().at(cql3::statements::index_target::custom_index_option_name);
+        return (*idx).second.metadata().options().at(db::index::secondary_index::custom_index_option_name);
     }
 }
 
