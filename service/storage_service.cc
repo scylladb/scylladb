@@ -861,7 +861,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
         auto s = _db.local().find_schema(db::system_keyspace::NAME, db::system_keyspace::CDC_GENERATIONS_V3);
 
         // Split big mutations into smaller ones, prepare frozen_muts_to_apply
-        std::vector<frozen_mutation> frozen_muts_to_apply;
+        utils::chunked_vector<frozen_mutation> frozen_muts_to_apply;
         {
             frozen_muts_to_apply.reserve(std::distance(it, snp.mutations.end()));
             const auto max_size = _db.local().schema_commitlog()->max_record_size() / 2;
@@ -871,7 +871,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
                 if (m.representation().size() <= max_size) {
                     frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
                 } else {
-                    std::vector<mutation> split_muts;
+                    utils::chunked_vector<mutation> split_muts;
                     co_await split_mutation(std::move(mut), split_muts, max_size);
                     for (auto& mut : split_muts) {
                         frozen_muts_to_apply.push_back(co_await freeze_gently(mut));
@@ -892,7 +892,7 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
 
     // Apply system.topology and system.topology_requests mutations atomically
     // to have a consistent state after restart
-    std::vector<mutation> muts;
+    utils::chunked_vector<mutation> muts;
     muts.reserve(std::distance(snp.mutations.begin(), it));
     std::transform(snp.mutations.begin(), it, std::back_inserter(muts), [this] (const canonical_mutation& m) {
         auto s = _db.local().find_schema(m.column_family_id());
@@ -1179,7 +1179,7 @@ std::unordered_set<raft::server_id> storage_service::ignored_nodes_from_join_par
     return ignored_nodes;
 }
 
-std::vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp) {
+utils::chunked_vector<canonical_mutation> storage_service::build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp) {
     topology_mutation_builder builder(write_timestamp);
     auto ignored_nodes = ignored_nodes_from_join_params(params);
 
@@ -4754,7 +4754,7 @@ future<> storage_service::do_cluster_cleanup() {
 
         rtlogger.info("cluster cleanup requested");
         topology_mutation_builder builder(guard.write_timestamp());
-        std::vector<canonical_mutation> muts;
+        utils::chunked_vector<canonical_mutation> muts;
         if (_feature_service.topology_global_request_queue) {
             request_id = guard.new_group0_state_id();
             builder.queue_global_topology_request_id(request_id);
@@ -5045,7 +5045,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
         // commands will be coalesced here, so do that until the test is fixed.
         if (!request_id) {
             topology_mutation_builder builder(guard.write_timestamp());
-            std::vector<canonical_mutation> muts;
+            utils::chunked_vector<canonical_mutation> muts;
             if (_feature_service.topology_global_request_queue) {
                 request_id = guard.new_group0_state_id();
                 topology_request_tracking_mutation_builder rtbuilder(request_id, _feature_service.topology_requests_type_column);
@@ -6523,7 +6523,7 @@ future<service::group0_guard> storage_service::get_guard_for_tablet_update() {
     co_return guard;
 }
 
-future<bool> storage_service::exec_tablet_update(service::group0_guard guard, std::vector<canonical_mutation> updates, sstring reason) {
+future<bool> storage_service::exec_tablet_update(service::group0_guard guard, utils::chunked_vector<canonical_mutation> updates, sstring reason) {
     rtlogger.info("{}", reason);
     rtlogger.trace("do update {} reason {}", updates, reason);
     updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
@@ -6584,7 +6584,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        std::vector<canonical_mutation> updates;
+        utils::chunked_vector<canonical_mutation> updates;
 
         if (all_tokens) {
             tokens.clear();
@@ -6664,7 +6664,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
-        std::vector<canonical_mutation> updates;
+        utils::chunked_vector<canonical_mutation> updates;
 
         co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
             auto& tinfo = tmap.get_tablet_info(tid);
@@ -6701,7 +6701,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
     }
 
     co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
-        std::vector<canonical_mutation> updates;
+        utils::chunked_vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
@@ -6772,7 +6772,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
     }
 
     co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
-        std::vector<canonical_mutation> updates;
+        utils::chunked_vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
@@ -6816,7 +6816,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
     }
 
     co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
-        std::vector<canonical_mutation> updates;
+        utils::chunked_vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
         auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
@@ -6928,7 +6928,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
     co_return std::move(load_stats);
 }
 
-future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
+future<> storage_service::transit_tablet(table_id table, dht::token token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map&, api::timestamp_type)> prepare_mutations) {
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
         bool topology_busy;
@@ -6998,7 +6998,7 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled) {
     while (true) {
         group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
-        std::vector<canonical_mutation> updates;
+        utils::chunked_vector<canonical_mutation> updates;
         updates.push_back(canonical_mutation(topology_mutation_builder(guard.write_timestamp())
             .set_tablet_balancing_enabled(enabled)
             .build()));
@@ -7329,8 +7329,8 @@ future<join_node_response_result> storage_service::join_node_response_handler(jo
     }
 }
 
-future<std::vector<canonical_mutation>> storage_service::get_system_mutations(schema_ptr schema) {
-    std::vector<canonical_mutation> result;
+future<utils::chunked_vector<canonical_mutation>> storage_service::get_system_mutations(schema_ptr schema) {
+    utils::chunked_vector<canonical_mutation> result;
     auto rs = co_await db::system_keyspace::query_mutations(_db, schema);
     result.reserve(rs->partitions().size());
     for (const auto& p : rs->partitions()) {
@@ -7339,7 +7339,7 @@ future<std::vector<canonical_mutation>> storage_service::get_system_mutations(sc
     co_return result;
 }
 
-future<std::vector<canonical_mutation>> storage_service::get_system_mutations(const sstring& ks_name, const sstring& cf_name) {
+future<utils::chunked_vector<canonical_mutation>> storage_service::get_system_mutations(const sstring& ks_name, const sstring& cf_name) {
     auto s = _db.local().find_schema(ks_name, cf_name);
     return get_system_mutations(s);
 }

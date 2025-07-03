@@ -143,7 +143,7 @@ SEASTAR_TEST_CASE(test_tombstones_are_ignored_in_version_calculation) {
                 mutation m(s, pkey);
                 auto ckey = clustering_key::from_exploded(*s, {utf8_type->decompose(table_schema->cf_name()), "v1"});
                 m.partition().apply_delete(*s, ckey, tombstone(api::min_timestamp, gc_clock::now()));
-                mm.announce(std::vector<mutation>({m}), mm.start_group0_operation().get(), "").get();
+                mm.announce(utils::chunked_vector<mutation>({m}), mm.start_group0_operation().get(), "").get();
             }
 
             auto new_table_version = e.db().local().find_schema(table_schema->id())->version();
@@ -461,7 +461,7 @@ SEASTAR_TEST_CASE(test_merging_does_not_alter_tables_which_didnt_change) {
                 return e.db().local().find_column_family("ks", "table1");
             };
 
-            std::vector<mutation> muts1;
+            utils::chunked_vector<mutation> muts1;
             {
                 auto group0_guard = mm.start_group0_operation().get();
                 muts1 = db::schema_tables::make_create_table_mutations(s0, group0_guard.write_timestamp());
@@ -509,7 +509,7 @@ SEASTAR_TEST_CASE(test_merging_creates_a_table_even_if_keyspace_was_recreated) {
                 return e.db().local().find_column_family("ks", "table1");
             };
 
-            std::vector<mutation> all_muts;
+            utils::chunked_vector<mutation> all_muts;
 
             {
                 auto group0_guard = mm.start_group0_operation().get();

@@ -50,7 +50,7 @@ future<> write_hashes(service::storage_proxy& proxy, redis::redis_options& optio
     m.set_clustered_cell(ckey, column, std::move(cell));
 
     auto write_consistency_level = options.get_write_consistency_level();
-    return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit, db::allow_per_partition_rate_limit::yes);
+    return proxy.mutate(utils::chunked_vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit, db::allow_per_partition_rate_limit::yes);
 }
 
 
@@ -68,7 +68,7 @@ future<> write_strings(service::storage_proxy& proxy, redis::redis_options& opti
     db::timeout_clock::time_point timeout = db::timeout_clock::now() + options.get_write_timeout();
     auto m = make_mutation(proxy, options, std::move(key), std::move(data), ttl);
     auto write_consistency_level = options.get_write_consistency_level();
-    return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit, db::allow_per_partition_rate_limit::yes);
+    return proxy.mutate(utils::chunked_vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit, db::allow_per_partition_rate_limit::yes);
 }
 
 
@@ -87,7 +87,7 @@ future<> delete_objects(service::storage_proxy& proxy, redis::redis_options& opt
     auto remove = [&proxy, timeout, write_consistency_level, permit, &options, keys = std::move(keys)] (const sstring& cf_name) {
         return parallel_for_each(keys.begin(), keys.end(), [&proxy, timeout, write_consistency_level, &options, permit, cf_name] (const bytes& key) {
             auto m = make_tombstone(proxy, options, cf_name, key);
-            return proxy.mutate(std::vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit, db::allow_per_partition_rate_limit::yes);
+            return proxy.mutate(utils::chunked_vector<mutation> {std::move(m)}, write_consistency_level, timeout, nullptr, permit, db::allow_per_partition_rate_limit::yes);
         });
     };  
     return parallel_for_each(tables.begin(), tables.end(), remove);
@@ -100,7 +100,7 @@ future<> delete_fields(service::storage_proxy& proxy, redis::redis_options& opti
     auto pkey = partition_key::from_single_value(*schema, key);
     auto ts = api::new_timestamp();
     auto clk = gc_clock::now();
-    std::vector<mutation> mutations;
+    utils::chunked_vector<mutation> mutations;
     for (auto& field : fields) {
         auto ckey = clustering_key::from_single_value(*schema, field);
         auto m = mutation(schema, pkey);

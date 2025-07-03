@@ -43,7 +43,7 @@ make_mutation_reader_from_mutations(
 mutation_reader make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
-    std::vector<mutation>,
+    utils::chunked_vector<mutation>,
     const dht::partition_range& pr,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
 
@@ -51,7 +51,7 @@ mutation_reader make_mutation_reader_from_mutations(
 inline mutation_reader make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
-    std::vector<mutation> ms,
+    utils::chunked_vector<mutation> ms,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no) {
     if (ms.size() == 1) {
         return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(ms.back()), fwd);
@@ -64,7 +64,7 @@ mutation_reader
 make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
-    std::vector<mutation> ms,
+    utils::chunked_vector<mutation> ms,
     const dht::partition_range& pr,
     const query::partition_slice& slice,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no);
@@ -74,7 +74,7 @@ inline mutation_reader
 make_mutation_reader_from_mutations(
     schema_ptr schema,
     reader_permit permit,
-    std::vector<mutation> ms,
+    utils::chunked_vector<mutation> ms,
     const query::partition_slice& slice,
     streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no) {
     if (ms.size() == 1) {

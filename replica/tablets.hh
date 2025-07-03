@@ -77,7 +77,7 @@ future<> save_tablet_metadata(replica::database&, const locator::tablet_metadata
 /// Extract a tablet metadata change hint from the tablet mutations.
 ///
 /// Mutations which don't mutate the tablet table are ignored.
-std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_hint(const std::vector<canonical_mutation>&);
+std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_hint(const utils::chunked_vector<canonical_mutation>&);
 
 /// Update the tablet metadata change hint, with the changes represented by the tablet mutation.
 ///
@@ -100,12 +100,12 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
 future<> update_tablet_metadata(replica::database& db, cql3::query_processor&, locator::tablet_metadata&, const locator::tablet_metadata_change_hint&);
 
 /// Reads tablet metadata from system.tablets in the form of mutations.
-future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
+future<utils::chunked_vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
 
 /// Reads tablet transition stage (if any)
 future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token);
 
 /// Validates changes to system.tablets represented by mutations
-void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const std::vector<canonical_mutation>& mutations);
+void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const utils::chunked_vector<canonical_mutation>& mutations);
 
 } // namespace replica

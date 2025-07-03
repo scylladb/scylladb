@@ -82,10 +82,10 @@ std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dic
     return std::make_unique<prepared_statement>(audit_info(), make_shared<create_aggregate_statement>(*this));
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_aggregate_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
+    utils::chunked_vector<mutation> m;
 
     auto aggregate = dynamic_pointer_cast<functions::user_aggregate>(co_await validate_while_executing(qp));
     if (aggregate) {

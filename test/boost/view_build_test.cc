@@ -696,7 +696,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         schema_ptr _schema;
         reader_concurrency_semaphore& _semaphore;
         const partition_size_map& _partition_rows;
-        std::vector<mutation>& _collected_muts;
+        utils::chunked_vector<mutation>& _collected_muts;
         std::unique_ptr<row_locker> _rl;
         std::unique_ptr<row_locker::stats> _rl_stats;
         clustering_key::less_compare _less_cmp;
@@ -765,7 +765,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         }
 
     public:
-        consumer_verifier(schema_ptr schema, reader_concurrency_semaphore& sem, const partition_size_map& partition_rows, std::vector<mutation>& collected_muts, bool& ok)
+        consumer_verifier(schema_ptr schema, reader_concurrency_semaphore& sem, const partition_size_map& partition_rows, utils::chunked_vector<mutation>& collected_muts, bool& ok)
             : _schema(std::move(schema))
             , _semaphore(sem)
             , _partition_rows(partition_rows)
@@ -811,7 +811,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
     for (auto partition_sizes_100kb : partition_size_sets) {
         testlog.debug("partition_sizes_100kb={}", partition_sizes_100kb);
         partition_size_map partition_rows{dht::ring_position_less_comparator(*schema)};
-        std::vector<mutation> muts;
+        utils::chunked_vector<mutation> muts;
         auto pk = 0;
         for (auto partition_size_100kb : partition_sizes_100kb) {
             auto mut_desc = tests::data_model::mutation_description(pkeys.at(pk++).key().explode(*schema));
@@ -843,7 +843,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
         auto& staging_reader_handle = std::get<1>(p);
         auto close_staging_reader = deferred_close(staging_reader);
 
-        std::vector<mutation> collected_muts;
+        utils::chunked_vector<mutation> collected_muts;
         bool ok = true;
 
         staging_reader.consume_in_thread(db::view::view_updating_consumer(schema, permit, as, staging_reader_handle,
@@ -883,7 +883,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
     // Collects the mutations produced by the tested view_updating_consumer into a vector.
     class consumer_verifier {
         schema_ptr _schema;
-        std::vector<mutation>& _collected_muts;
+        utils::chunked_vector<mutation>& _collected_muts;
         std::unique_ptr<row_locker> _rl;
         std::unique_ptr<row_locker::stats> _rl_stats;
         bool& _ok;
@@ -895,7 +895,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
         }
 
     public:
-        consumer_verifier(schema_ptr schema, std::vector<mutation>& collected_muts, bool& ok)
+        consumer_verifier(schema_ptr schema, utils::chunked_vector<mutation>& collected_muts, bool& ok)
             : _schema(std::move(schema))
             , _collected_muts(collected_muts)
             , _rl(std::make_unique<row_locker>(_schema))
@@ -944,7 +944,7 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering_with_random_mutati
 
     // Feed the random valid mutation fragment stream to the view_updating_consumer,
     // and collect its outputs.
-    std::vector<mutation> collected_muts;
+    utils::chunked_vector<mutation> collected_muts;
     bool ok = true;
     auto vuc = db::view::view_updating_consumer(schema, permit, as, staging_reader_handle,
                     consumer_verifier(schema, collected_muts, ok));

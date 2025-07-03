@@ -185,8 +185,8 @@ public:
     size_t memory_usage(const ::schema& s) const;
 };
 
-inline std::vector<mutation> make_mutation_vector(mutation&& m) {
-    std::vector<mutation> ret;
+inline utils::chunked_vector<mutation> make_mutation_vector(mutation&& m) {
+    utils::chunked_vector<mutation> ret;
     ret.emplace_back(std::move(m));
     return ret;
 }
@@ -452,8 +452,8 @@ void apply(mutation& dst, const mutation_opt& src) {
 // Returns a range into partitions containing mutations covered by the range.
 // partitions must be sorted according to decorated key.
 // range must not wrap around.
-std::ranges::subrange<std::vector<mutation>::const_iterator> slice(
-    const std::vector<mutation>& partitions,
+std::ranges::subrange<utils::chunked_vector<mutation>::const_iterator> slice(
+    const utils::chunked_vector<mutation>& partitions,
     const dht::partition_range&);
 
 // Reverses the mutation as if it was created with a schema with reverse
@@ -474,4 +474,4 @@ template <> struct fmt::formatter<mutation> : fmt::formatter<string_view> {
 // the actual size of the output mutation may be larger than max_size. It is recommended
 // to pass half of the required value as max_size; such a margin should ensure
 // that the condition is met.
-future<> split_mutation(mutation source, std::vector<mutation>& target, size_t max_size);
+future<> split_mutation(mutation source, utils::chunked_vector<mutation>& target, size_t max_size);

@@ -384,7 +384,7 @@ locator::repair_scheduler_config deserialize_repair_scheduler_config(cql3::untyp
 
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
     tablet_logger.trace("Saving tablet metadata: {}", tm);
-    std::vector<mutation> muts;
+    utils::chunked_vector<mutation> muts;
     muts.reserve(tm.all_tables_ungrouped().size());
     for (auto&& [base_id, tables] : tm.all_table_groups()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
@@ -487,7 +487,7 @@ static void do_validate_tablet_metadata_change(const locator::tablet_metadata& t
     }
 }
 
-std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_hint(const std::vector<canonical_mutation>& mutations) {
+std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_hint(const utils::chunked_vector<canonical_mutation>& mutations) {
     tablet_logger.trace("tablet_metadata_change_hint({})", mutations.size());
     auto s = db::system_keyspace::tablets();
 
@@ -508,7 +508,7 @@ std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_h
     return hint;
 }
 
-void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const std::vector<canonical_mutation>& mutations) {
+void validate_tablet_metadata_change(const locator::tablet_metadata& tm, const utils::chunked_vector<canonical_mutation>& mutations) {
     auto s = db::system_keyspace::tablets();
 
     for (const auto& cm : mutations) {
@@ -792,10 +792,10 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
     tablet_logger.trace("Updated tablet metadata: {}", tm);
 }
 
-future<std::vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
+future<utils::chunked_vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
     auto s = db::system_keyspace::tablets();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::TABLETS);
-    std::vector<canonical_mutation> result;
+    utils::chunked_vector<canonical_mutation> result;
     result.reserve(rs->partitions().size());
     for (auto& p: rs->partitions()) {
         result.emplace_back(co_await make_canonical_mutation_gently(co_await unfreeze_gently(p.mut(), s)));

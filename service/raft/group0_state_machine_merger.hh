@@ -57,7 +57,7 @@ public:
 
     // Returns mutations stored in the command.
     // It must not be called for broadcast table commands.
-    static std::vector<canonical_mutation>& get_command_mutations(group0_command& cmd);
+    static utils::chunked_vector<canonical_mutation>& get_command_mutations(group0_command& cmd);
 
     // Returns a command that contains all mutations from the current batch and
     // merged history mutation.

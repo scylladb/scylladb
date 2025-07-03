@@ -201,14 +201,14 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             const auto& cf = _qp.proxy().local_db().find_column_family(fm.column_family_id());
             return make_ready_future<canonical_mutation*>(written_at > cf.get_truncation_time() ? &fm : nullptr);
         },
-        std::vector<mutation>(),
-        [this] (std::vector<mutation> mutations, canonical_mutation* fm) {
+        utils::chunked_vector<mutation>(),
+        [this] (utils::chunked_vector<mutation> mutations, canonical_mutation* fm) {
             if (fm) {
                 schema_ptr s = _qp.db().find_schema(fm->column_family_id());
                 mutations.emplace_back(fm->to_mutation(s));
             }
             return mutations;
-        }).then([this, limiter, written_at, size, fms] (std::vector<mutation> mutations) {
+        }).then([this, limiter, written_at, size, fms] (utils::chunked_vector<mutation> mutations) {
             if (mutations.empty()) {
                 return make_ready_future<>();
             }

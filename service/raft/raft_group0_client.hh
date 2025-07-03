@@ -230,7 +230,7 @@ class group0_batch {
 public:
     using generator_func = std::function<mutations_generator(api::timestamp_type t)>;
 private:
-    std::vector<mutation> _muts;
+    utils::chunked_vector<mutation> _muts;
     std::vector<generator_func> _generators;
     std::vector<sstring> _descriptions;
     std::optional<::service::group0_guard> _guard;
@@ -259,13 +259,13 @@ public:
     utils::UUID new_group0_state_id() const;
 
     void add_mutation(mutation m, std::string_view description = "");
-    void add_mutations(std::vector<mutation> ms, std::string_view description = "");
+    void add_mutations(utils::chunked_vector<mutation> ms, std::string_view description = "");
     void add_generator(generator_func f, std::string_view description = "");
 
     // Commits the data, nop if there was no guard provided.
     future<> commit(::service::raft_group0_client& group0_client, seastar::abort_source& as, std::optional<::service::raft_timeout> timeout) &&;
     // For rare cases where collector is used but announce logic is replaced with a custom one.
-    future<std::pair<std::vector<mutation>, ::service::group0_guard>> extract() &&;
+    future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> extract() &&;
 
     // Checks if any mutations or generators were added. Note that when generator is
     // added it still can return no mutations.

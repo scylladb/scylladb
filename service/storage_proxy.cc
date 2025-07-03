@@ -342,7 +342,7 @@ public:
 
     future<> send_counter_mutation(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            std::vector<frozen_mutation> fms, db::consistency_level cl, fencing_token fence) {
+            utils::chunked_vector<frozen_mutation> fms, db::consistency_level cl, fencing_token fence) {
         tracing::trace(tr_state, "Enqueuing counter update to {}", addr);
         auto&& opt_exception = co_await ser::storage_proxy_rpc_verbs::send_counter_mutation(
             &_ms, std::move(addr), timeout,
@@ -509,7 +509,7 @@ private:
 
     future<replica::exception_variant> handle_counter_mutation(
             const rpc::client_info& cinfo, rpc::opt_time_point t,
-            std::vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info,
+            utils::chunked_vector<frozen_mutation> fms, db::consistency_level cl, std::optional<tracing::trace_info> trace_info,
             rpc::optional<service::fencing_token> fence_opt) {
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
          auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
@@ -533,7 +533,7 @@ private:
                 make_exception_ptr(std::move(*stale)));
         }
 
-        std::vector<frozen_mutation_and_schema> mutations;
+        utils::chunked_vector<frozen_mutation_and_schema> mutations;
         auto timeout = *t;
         co_await coroutine::parallel_for_each(std::move(fms), [&] (frozen_mutation& fm) {
             // Note: not a coroutine, since get_schema_for_write() rarely blocks.
@@ -1101,7 +1101,7 @@ private:
 
             global_request_id = guard.new_group0_state_id();
 
-            std::vector<canonical_mutation> updates;
+            utils::chunked_vector<canonical_mutation> updates;
             topology_mutation_builder builder(guard.write_timestamp());
             if (!_sp._features.topology_global_request_queue) {
                 builder.set_global_topology_request(global_topology_request::truncate_table)
@@ -2467,16 +2467,16 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
     if (_schema->cdc_options().enabled()) {
         auto update_mut = decision->update.unfreeze(_schema);
         const auto base_tbl_id = update_mut.column_family_id();
-        std::vector<mutation> update_mut_vec{std::move(update_mut)};
+        utils::chunked_vector<mutation> update_mut_vec{std::move(update_mut)};
 
         auto cdc = _proxy->get_cdc_service();
         if (cdc && cdc->needs_cdc_augmentation(update_mut_vec)) {
             auto cdc_shared = cdc->shared_from_this(); // keep CDC service alive
-            auto [mutations, tracker] = co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn);
+            auto [all_mutations, tracker] = co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn);
             // Pick only the CDC ("augmenting") mutations
-            std::erase_if(mutations, [base_tbl_id = std::move(base_tbl_id)] (const mutation& v) {
-                return v.schema()->id() == base_tbl_id;
-            });
+            auto mutations = all_mutations | std::views::filter([base_tbl_id] (const mutation& m) {
+                return m.schema()->id() != base_tbl_id;
+            }) | std::ranges::to<utils::chunked_vector<mutation>>();
             if (!mutations.empty()) {
                 f_cdc = _proxy->mutate_internal(std::move(mutations), _cl_for_learn, false, tr_state, _permit, _timeout, std::move(tracker))
                         .then(utils::result_into_future<result<>>);
@@ -3254,19 +3254,19 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
 }
 
 future<>
-storage_proxy::mutate_locally(std::vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
+storage_proxy::mutate_locally(utils::chunked_vector<mutation> mutations, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
     co_await coroutine::parallel_for_each(mutations, [&] (const mutation& m) mutable {
             return mutate_locally(m, tr_state, db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
     });
 }
 
 future<>
-storage_proxy::mutate_locally(std::vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+storage_proxy::mutate_locally(utils::chunked_vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
         return mutate_locally(std::move(mutation), tr_state, timeout, _write_smp_service_group, rate_limit_info);
 }
 
 future<>
-storage_proxy::mutate_locally(std::vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+storage_proxy::mutate_locally(utils::chunked_vector<frozen_mutation_and_schema> mutations, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
     co_await coroutine::parallel_for_each(mutations, [&] (const frozen_mutation_and_schema& x) {
         return mutate_locally(x.s, x.fm, tr_state, sync, timeout, rate_limit_info);
     });
@@ -3331,7 +3331,7 @@ fencing_token storage_proxy::get_fence(const locator::effective_replication_map&
 }
 
 future<>
-storage_proxy::mutate_counters_on_leader(std::vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
+storage_proxy::mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                          tracing::trace_state_ptr trace_state, service_permit permit) {
     get_stats().received_counter_updates += mutations.size();
     {
@@ -3686,7 +3686,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
 
 
     // Choose a leader for each mutation
-    std::unordered_map<locator::host_id, std::vector<frozen_mutation_and_schema>> leaders;
+    std::unordered_map<locator::host_id, utils::chunked_vector<frozen_mutation_and_schema>> leaders;
 
     // The interface doesn't preclude multiple keyspaces (and thus effective_replication_maps),
     // so we need a container for them. std::set<> will result in the fewest allocations if there is just one.
@@ -3723,7 +3723,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
                     | std::views::transform([] (auto& m) {
                 return std::move(m.fm);
             })
-                    | std::ranges::to<std::vector<frozen_mutation>>();
+                    | std::ranges::to<utils::chunked_vector<frozen_mutation>>();
 
             // Coordinator is preferred as the leader - if it's not selected we can assume
             // that the query was non-token-aware and bump relevant metric.
@@ -3827,14 +3827,14 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
  * @param consistency_level the consistency level for the operation
  * @param tr_state trace state handle
  */
-future<> storage_proxy::mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
+future<> storage_proxy::mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
     return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters)
             .then(utils::result_into_future<result<>>);
 }
 
-future<result<>> storage_proxy::mutate_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
+future<result<>> storage_proxy::mutate_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
             return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, std::move(tracker));
@@ -3843,7 +3843,7 @@ future<result<>> storage_proxy::mutate_result(std::vector<mutation> mutations, d
     return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, nullptr);
 }
 
-future<result<>> storage_proxy::do_mutate(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
+future<result<>> storage_proxy::do_mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
     auto mid = raw_counters ? mutations.begin() : std::ranges::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
     }).begin();
@@ -3899,7 +3899,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, bool c
 }
 
 future<result<>>
-storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consistency_level cl,
+storage_proxy::mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl,
     clock_type::time_point timeout,
     bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
     warn(unimplemented::cause::TRIGGERS);
@@ -3920,7 +3920,7 @@ storage_proxy::mutate_with_triggers(std::vector<mutation> mutations, db::consist
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate_atomically(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
+storage_proxy::mutate_atomically(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
     return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit))
             .then(utils::result_into_future<result<>>);
 }
@@ -3996,7 +3996,7 @@ static host_id_vector_replica_set endpoint_filter(
 }
 
 future<result<>>
-storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
+storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
     utils::latency_counter lc;
     lc.start();
 
@@ -4004,7 +4004,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         storage_proxy& _p;
         schema_ptr _schema;
         locator::effective_replication_map_ptr _ermp;
-        std::vector<mutation> _mutations;
+        utils::chunked_vector<mutation> _mutations;
         lw_shared_ptr<cdc::operation_result_tracker> _cdc_tracker;
         db::consistency_level _cl;
         clock_type::time_point _timeout;
@@ -4016,7 +4016,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         const host_id_vector_replica_set _batchlog_endpoints;
 
     public:
-        context(storage_proxy & p, std::vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
+        context(storage_proxy & p, utils::chunked_vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
                 : _p(p)
                 , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG))
                 , _ermp(_p.local_db().find_column_family(_schema->id()).get_effective_replication_map())
@@ -4102,7 +4102,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         }
     };
 
-    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (std::vector<mutation> mutations, lw_shared_ptr<cdc::operation_result_tracker> tracker) mutable {
+    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (utils::chunked_vector<mutation> mutations, lw_shared_ptr<cdc::operation_result_tracker> tracker) mutable {
       try {
           return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), std::move(tracker), cl, timeout, std::move(tr_state), std::move(permit)));
       } catch(...) {
@@ -4114,7 +4114,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), cl).then([mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup), cdc = _cdc->shared_from_this()](std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), cl).then([mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup), cdc = _cdc->shared_from_this()](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
             return std::move(mk_ctxt)(std::move(mutations), std::move(tracker)).then([] (lw_shared_ptr<context> ctxt) {
@@ -4128,16 +4128,16 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
     }).then_wrapped(std::move(cleanup));
 }
 
-mutation storage_proxy::get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
+mutation storage_proxy::get_batchlog_mutation_for(const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
     auto schema = local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
     return do_get_batchlog_mutation_for(std::move(schema), mutations, id, version, now);
 }
 
-mutation storage_proxy::do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
+mutation storage_proxy::do_get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
     auto key = partition_key::from_singular(*schema, id);
     auto timestamp = api::new_timestamp();
     auto data = [&mutations] {
-        std::vector<canonical_mutation> fm(mutations.begin(), mutations.end());
+        utils::chunked_vector<canonical_mutation> fm(mutations.begin(), mutations.end());
         bytes_ostream out;
         for (auto& m : fm) {
             ser::serialize(out, m);
