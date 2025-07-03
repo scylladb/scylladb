@@ -21,6 +21,47 @@ static inline void fail(sstring msg) {
     throw std::runtime_error(msg);
 }
 
+void columns_assertions::fail(const sstring& msg) {
+    ::fail(msg);
+}
+
+columns_assertions& columns_assertions::do_with_raw_column(const char* name, std::function<void(data_type, managed_bytes_view)> func) {
+    const auto& names = _metadata.get_names();
+
+    auto it = std::ranges::find_if(names, [name] (const auto& col) {
+        return col->name->text() == name;
+    });
+    if (it == names.end()) {
+        ::fail(seastar::format("Column {} not found in metadata", name));
+    }
+
+    const size_t index = std::distance(names.begin(), it);
+    const auto& value  = _columns.at(index);
+    if (!value) {
+        ::fail(seastar::format("Column {} is null", name));
+    }
+
+    func((*it)->type, *value);
+
+    return *this;
+}
+
+columns_assertions& columns_assertions::with_raw_column(const char* name, std::function<bool(managed_bytes_view)> predicate) {
+    return do_with_raw_column(name, [name, &predicate] (data_type, managed_bytes_view value) {
+        if (!predicate(value)) {
+            ::fail(seastar::format("Column {} failed predicate check: value = {}", name, value));
+        }
+    });
+}
+
+columns_assertions& columns_assertions::with_raw_column(const char* name, managed_bytes_view value) {
+    return do_with_raw_column(name, [name, &value] (data_type, managed_bytes_view cell_value) {
+        if (cell_value != value) {
+            ::fail(seastar::format("Expected column {} to have value {}, but got {}", name, value, cell_value));
+        }
+    });
+}
+
 rows_assertions::rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows)
     : _rows(rows)
 { }
@@ -163,6 +204,11 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
         fail(format("Expected different number of rows ({:d}), got {:d}", rows.size(), rs.size()));
     }
     return {*this};
+}
+
+columns_assertions rows_assertions::with_columns_of_row(size_t row_index) {
+    const auto& rs = _rows->rs().result_set();
+    return columns_assertions(rs.get_metadata(), rs.rows().at(row_index));
 }
 
 result_msg_assertions::result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg)

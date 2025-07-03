@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/large_data_handler.hh"
+#include "db/corrupt_data_handler.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
@@ -496,11 +497,12 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     }
 
     db::nop_large_data_handler large_data_handler;
+    db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
     gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
     cache_tracker tracker;
     sstables::directory_semaphore dir_sem(1);
     abort_source abort;
-    sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, dbcfg, feature_service, tracker,
+    sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker,
         memory::stats().total_memory(), dir_sem,
         [host_id = locator::host_id::create_random_id()] { return host_id; }, abort);
     auto close_sst_man = deferred_close(sst_man);
