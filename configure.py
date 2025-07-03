@@ -10,6 +10,7 @@
 
 import argparse
 import copy
+import json
 import os
 import pathlib
 import platform
@@ -960,6 +961,7 @@ scylla_core = (['message/messaging_service.cc',
                 'timeout_config.cc',
                 'schema/schema_mutations.cc',
                 'transport/generic_server.cc',
+                'resources.cc',
                 'utils/alien_worker.cc',
                 'utils/base64.cc',
                 'utils/crypt_sha512.cc',
@@ -2916,6 +2918,8 @@ def write_build_file(f,
           pool = console
         rule merge_profdata
           command = llvm-profdata merge $in -output=$out
+        rule resources
+          command = scripts/resources.py --input-file $in --output-file $out
         ''').format(configure_args=configure_args,
                     outdir=outdir,
                     cxx=args.cxx,
@@ -3036,6 +3040,7 @@ def write_build_file(f,
         ragels = {}
         antlr3_grammars = set()
         rust_headers = {}
+        resources = {}
 
         # We want LTO, but with the regular LTO, clang generates special LLVM IR files instead of
         # regular ELF objects after the compile phase, and these special LLVM bitcode can only be
@@ -3146,6 +3151,9 @@ def write_build_file(f,
                     idx = src.rindex('/src/')
                     hh = '$builddir/' + mode + '/gen/' + src[:idx] + '.hh'
                     rust_headers[hh] = src
+                elif src.endswith('.resources'):
+                    hh = f'$builddir/{mode}/gen/resources/{src}.hh'
+                    resources[hh] = src
                 else:
                     raise Exception('No rule for ' + src)
         f.write(
@@ -3197,6 +3205,7 @@ def write_build_file(f,
         gen_headers += list(ragels.keys())
         gen_headers += list(rust_headers.keys())
         gen_headers.append('$builddir/{}/gen/rust/cxx.h'.format(mode))
+        gen_headers += list(resources.keys())
         gen_headers_dep = ' '.join(gen_headers)
 
         for hh in rust_headers:
@@ -3251,6 +3260,16 @@ def write_build_file(f,
         for hh in headers:
             f.write('build $builddir/{mode}/{hh}.o: checkhh.{mode} {hh} | $builddir/{mode}/gen/empty.cc {profile_dep} || {gen_headers_dep}\n'.format(
                     mode=mode, hh=hh, gen_headers_dep=gen_headers_dep, profile_dep=profile_dep))
+        for hh, src in resources.items():
+            # The generated header embeds the files the manifest lists, so it
+            # has to be rebuilt when any of them changes and not only when the
+            # manifest itself does -- otherwise a build ships stale resources.
+            # resources.py resolves each 'file' relative to the manifest.
+            res_dir = os.path.dirname(src)
+            with open(src) as manifest:
+                resource_deps = ' '.join(os.path.join(res_dir, resource['file'])
+                                         for resource in json.load(manifest))
+            f.write(f'build {hh}: resources {src} | scripts/resources.py {resource_deps}\n')
 
         seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
         seastar_testing_dep = f'$builddir/{mode}/seastar/libseastar_testing.{seastar_lib_ext}'
@@ -3458,13 +3477,16 @@ def write_build_file(f,
             cmake_deps += cmake_input_files(f'{outdir}/{mode}/{submodule}')
     cmake_deps = sorted(set(ninja_escape_path(dep) for dep in cmake_deps))
     cmake_deps_list = ' '.join(cmake_deps)
+    # The resources rules list the files of each manifest, as read at configure
+    # time, so build.ninja has to be regenerated when a manifest changes.
+    resource_manifests_list = ' '.join(sorted({src for srcs in deps.values() for src in srcs if src.endswith('.resources')}))
 
     f.write(textwrap.dedent('''\
         rule configure
           command = ./configure.py --out={buildfile_final_name}.new --out-final-name={buildfile_final_name} $configure_args && mv {buildfile_final_name}.new {buildfile_final_name}
           generator = 1
           description = CONFIGURE $configure_args
-        build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {cmake_deps_list}
+        build {buildfile_final_name} {build_ninja_list}: configure | configure.py SCYLLA-VERSION-GEN $builddir/SCYLLA-PRODUCT-FILE $builddir/SCYLLA-VERSION-FILE $builddir/SCYLLA-RELEASE-FILE {cmake_deps_list} {resource_manifests_list}
         rule cscope
             command = find -name '*.[chS]' -o -name "*.cc" -o -name "*.hh" | cscope -bq -i-
             description = CSCOPE
@@ -3473,15 +3495,16 @@ def write_build_file(f,
             command = rm -rf build
             description = CLEAN
         build clean: clean
-        # A missing cmake input file is not an error: the submodule
-        # configuration changed, and re-running configure.py picks that up.
-        build {cmake_deps_list}: phony
+        # A missing cmake input file or resource manifest is not an error: the
+        # submodule configuration or the sources changed (e.g. an older commit
+        # was checked out), and re-running configure.py picks that up.
+        build {cmake_deps_list} {resource_manifests_list}: phony
         rule mode_list
             command = echo {modes_list}
             description = List configured modes
         build mode_list: mode_list
         default {modes_list}
-        ''').format(modes_list=' '.join(default_modes), build_ninja_list=" ".join(build_ninja_files), cmake_deps_list=cmake_deps_list, **globals()))
+        ''').format(modes_list=' '.join(default_modes), build_ninja_list=" ".join(build_ninja_files), cmake_deps_list=cmake_deps_list, resource_manifests_list=resource_manifests_list, **globals()))
     unit_test_list = set(test for test in build_artifacts if test in set(tests))
     f.write(textwrap.dedent('''\
         rule unit_test_list
