@@ -11,7 +11,7 @@
 /stable/cql/non-reserved-keywords.html: /stable/cql/appendices.html
 /stable/cql/reserved-keywords.html: /stable/cql/appendices.html
 
-# Remove reduntant pages
+# Remove redundant pages
 
 /stable/getting-started/tutorials: https://docs.scylladb.com/stable/get-started/develop-with-scylladb/tutorials-example-projects.html
 /stable/contribute: https://github.com/scylladb/scylladb/blob/master/CONTRIBUTING.md
