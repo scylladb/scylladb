@@ -352,7 +352,8 @@ schema_ptr system_keyspace::cdc_streams_state() {
         auto id = generate_legacy_id(NAME, CDC_STREAMS_STATE);
         return schema_builder(NAME, CDC_STREAMS_STATE, {id})
             .with_column("table_id", uuid_type, column_kind::partition_key)
-            .with_column("stream_id", bytes_type, column_kind::clustering_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
             .with_column("timestamp", timestamp_type, column_kind::static_column)
             .with_hash_version()
             .build();
@@ -367,7 +368,8 @@ schema_ptr system_keyspace::cdc_streams_history() {
             .with_column("table_id", uuid_type, column_kind::partition_key)
             .with_column("timestamp", timestamp_type, column_kind::clustering_key)
             .with_column("stream_kind", byte_type, column_kind::clustering_key)
-            .with_column("stream_id", bytes_type, column_kind::clustering_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
             .with_hash_version()
             .build();
     }();
@@ -379,7 +381,8 @@ schema_ptr system_keyspace::cdc_pending_streams() {
         auto id = generate_legacy_id(NAME, CDC_PENDING_STREAMS);
         return schema_builder(NAME, CDC_PENDING_STREAMS, {id})
             .with_column("table_id", uuid_type, column_kind::partition_key)
-            .with_column("stream_id", bytes_type, column_kind::clustering_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
             .with_hash_version()
             .build();
     }();

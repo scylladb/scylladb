@@ -358,8 +358,6 @@ future<> cdc::metadata::do_update_tablet_streams_map(
         const cdc::pending_streams& pending_data,
         const cdc::streams_history& history_data) {
 
-    auto stream_cmp = [] (const auto& a, const auto& b) { return a.token() < b.token(); };
-
     for (const auto& [table, base_table_state] : base_data) {
         co_await coroutine::maybe_yield();
 
@@ -370,7 +368,6 @@ future<> cdc::metadata::do_update_tablet_streams_map(
         };
 
         auto base_stream_set = base_table_state.streams;
-        std::ranges::sort(base_stream_set, stream_cmp);
 
         append_stream(base_table_state.ts, std::move(base_stream_set));
 
@@ -383,14 +380,8 @@ future<> cdc::metadata::do_update_tablet_streams_map(
 
                 const auto& prev_stream_set = std::crbegin(new_table_map.committed)->second.streams;
 
-                auto opened = diff.opened_streams;
-                std::ranges::sort(opened, stream_cmp);
-
-                auto closed = diff.closed_streams;
-                std::ranges::sort(closed, stream_cmp);
-
                 auto next_stream_set = co_await construct_next_stream_set(
-                        prev_stream_set, opened, closed);
+                        prev_stream_set, diff.opened_streams, diff.closed_streams);
 
                 append_stream(ts, std::move(next_stream_set));
             }
@@ -398,7 +389,6 @@ future<> cdc::metadata::do_update_tablet_streams_map(
 
         if (auto it = pending_data.find(table); it != pending_data.end()) {
             auto pending_stream = it->second;
-            std::ranges::sort(pending_stream, stream_cmp);
 
             // it is possible the pending stream is equal to the last stream according to the history table.
             // it happens when the pending stream is committed and not closed yet.
