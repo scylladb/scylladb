@@ -1178,8 +1178,8 @@ future<mutation> create_table_streams_mutation(table_id table, db_clock::time_po
 
     for (auto tid : map.tablet_ids()) {
         auto sid = cdc::stream_id(map.get_last_token(tid), 0);
-        auto ck = clustering_key::from_single_value(*s, sid.to_bytes());
-        m.partition().apply_insert(*s, ck, ts);
+        auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
         co_await coroutine::maybe_yield();
     }
 
@@ -1195,8 +1195,8 @@ future<mutation> create_table_streams_mutation(table_id table, db_clock::time_po
     m.set_static_cell("timestamp", stream_ts, ts);
 
     for (const auto& sid : stream_ids) {
-        auto ck = clustering_key::from_single_value(*s, sid.to_bytes());
-        m.partition().apply_insert(*s, ck, ts);
+        auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
         co_await coroutine::maybe_yield();
     }
 
@@ -1264,8 +1264,8 @@ future<mutation> get_insert_pending_stream_mutation(table_id table, const std::v
     ));
     for (const auto& sid : streams) {
         co_await coroutine::maybe_yield();
-        auto ck = clustering_key::from_single_value(*pending_schema, sid.to_bytes());
-        m.partition().apply_insert(*pending_schema, ck, ts);
+        auto ck = clustering_key::from_singular(*pending_schema, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
     }
     co_return std::move(m);
 }
@@ -1292,14 +1292,14 @@ future<mutation> get_open_and_close_streams_mutation(table_id table, const cdc_s
 
     for (const auto& sid : diff.closed_streams) {
         co_await coroutine::maybe_yield();
-        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, closed_kind, sid.to_bytes() });
-        m.partition().apply_insert(*history_schema, ck, ts);
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, closed_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
     }
 
     for (const auto& sid : diff.opened_streams) {
         co_await coroutine::maybe_yield();
-        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, opened_kind, sid.to_bytes() });
-        m.partition().apply_insert(*history_schema, ck, ts);
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, opened_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
     }
 
     co_return std::move(m);
@@ -1389,8 +1389,8 @@ future<std::vector<mutation>> get_cdc_stream_compaction_mutations(table_id table
 
         for (const auto& sid : base_stream_set) {
             co_await coroutine::maybe_yield();
-            auto ck = clustering_key::from_single_value(*s, sid.to_bytes());
-            m.partition().apply_insert(*s, ck, ts);
+            auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+            m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
         }
         muts.emplace_back(std::move(m));
     }
