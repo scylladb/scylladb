@@ -121,6 +121,29 @@ SELECT * FROM system.large_cells;
 SELECT * FROM system.large_cells WHERE keyspace_name = 'ks1' and table_name = 'standard1';
 ~~~
 
+## system.corrupt\_data
+
+Stores data found to be corrupt during internal operations. This data cannot be written to sstables because then it will be spread around by repair and compaction. It will also possibly cause failures in sstable parsing.
+At the same time, the data should be kept around so that it can be inspected and possibly restored by the database operator.
+This table is used to store such data. Data is saved at the mutation-fragment level.
+
+Schema:
+```cql
+CREATE TABLE system.corrupt_data (
+    keyspace_name text,              # keyspace name of source table
+    table_name text,                 # table name of source table
+    id timeuuid,                     # id of the corrupt mutation fragment, assigned by the database when the corrupt data entry is created
+    partition_key blob,              # partition key of partition in the source table, can be incomplete or null due to corruption
+    clustering_key text,             # clustering key of mutation-fragment in the source table, can be null for some mutation-fragment kinds, can be incomplete or null due to corruption
+    mutation_fragment_kind text,     # kind of the mutation fragment, one of 'partition start', 'partition end', 'static row', 'clustering row', 'range tombstone change'; only the latter two can have clustering_key set
+    frozen_mutation_fragment blob,   # the serialized mutation fragment itself
+    origin text,                     # the name of the process that found the corruption, e.g. 'sstable-writer'
+    sstable_name text,               # the name of the sstable that contains the corrupt data, if known; sstable is not kept around, it could be compacted or deleted
+    PRIMARY KEY ((keyspace_name, table_name), id)
+) WITH CLUSTERING ORDER BY (id ASC)
+    AND gc_grace_seconds = 0;
+```
+
 ## system.raft
 
 Holds information about Raft

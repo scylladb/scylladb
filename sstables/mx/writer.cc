@@ -19,6 +19,7 @@
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"
 #include "db/large_data_handler.hh"
+#include "db/corrupt_data_handler.hh"
 
 #include <functional>
 #include <boost/iterator/iterator_facade.hpp>
@@ -695,6 +696,8 @@ private:
     void maybe_record_large_cells(const sstables::sstable& sst, const sstables::key& partition_key,
             const clustering_key_prefix* clustering_key, const column_definition& cdef, uint64_t cell_size, uint64_t collection_elements);
 
+    void record_corrupt_row(clustering_row&& clustered_row);
+
     // Writes single atomic cell
     void write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell, const column_definition& cdef,
         const row_time_properties& properties, std::optional<bytes_view> cell_path = {});
@@ -1305,12 +1308,41 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key(), is_dead);
 }
 
+void writer::record_corrupt_row(clustering_row&& clustered_row) {
+    auto& handler = _sst.get_corrupt_data_handler();
+
+    const auto pk = _partition_key->to_partition_key(_schema);
+    const auto ck = clustered_row.key();
+
+    db::corrupt_data_handler::entry_id corrupt_row_id;
+    sstring result;
+    try {
+        corrupt_row_id = handler.record_corrupt_clustering_row(_schema, pk, std::move(clustered_row), "sstable-write", fmt::to_string(_sst.get_filename())).get();
+        result = format("written corrupt row to {} with id {}", handler.storage_name(), corrupt_row_id);
+    } catch (...) {
+        result = format("failed to write corrupt row to {}: {}", handler.storage_name(), std::current_exception());
+    }
+
+    slogger.error("found non-full clustering key {} in partition {} while writing sstable {} for non-compact table {}.{}; {}",
+            ck,
+            pk,
+            _sst.get_filename(),
+            _schema.ks_name(),
+            _schema.cf_name(),
+            result);
+}
+
 stop_iteration writer::consume(clustering_row&& cr) {
     if (_write_regular_as_static) {
         ensure_tombstone_is_written();
         write_static_row(cr.cells(), column_kind::regular_column);
         return stop_iteration::no;
     }
+    if (!_schema.is_compact_table() && !cr.key().is_full(_schema)) {
+        record_corrupt_row(std::move(cr));
+        return stop_iteration::no;
+    }
+
     ensure_tombstone_is_written();
     ensure_static_row_is_written_if_needed();
     write_clustered(cr);

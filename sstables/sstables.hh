@@ -58,6 +58,7 @@ class in_memory_config_type;
 
 namespace db {
 class large_data_handler;
+class corrupt_data_handler;
 }
 
 namespace sstables {
@@ -199,6 +200,7 @@ public:
             version_types v,
             format_types f,
             db::large_data_handler& large_data_handler,
+            db::corrupt_data_handler& corrupt_data_handler,
             sstables_manager& manager,
             gc_clock::time_point now,
             io_error_handler_gen error_handler_gen,
@@ -444,6 +446,10 @@ public:
         return _large_data_handler;
     }
 
+    db::corrupt_data_handler& get_corrupt_data_handler() {
+        return _corrupt_data_handler;
+    }
+
     void assert_large_data_handler_is_running();
 
     /**
@@ -590,6 +596,7 @@ private:
     io_error_handler _write_error_handler;
 
     db::large_data_handler& _large_data_handler;
+    db::corrupt_data_handler& _corrupt_data_handler;
     sstables_manager& _manager;
 
     sstables_stats _stats;

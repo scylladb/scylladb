@@ -28,6 +28,7 @@
 namespace db {
 
 class large_data_handler;
+class corrupt_data_handler;
 class config;
 
 }   // namespace db
@@ -86,6 +87,7 @@ private:
     storage_manager* _storage;
     size_t _available_memory;
     db::large_data_handler& _large_data_handler;
+    db::corrupt_data_handler& _corrupt_data_handler;
     const db::config& _db_config;
     gms::feature_service& _features;
     // _sstables_format is the format used for writing new sstables.
@@ -129,8 +131,19 @@ private:
     const abort_source& _abort;
 
 public:
-    explicit sstables_manager(sstring name, db::large_data_handler& large_data_handler, const db::config& dbcfg, gms::feature_service& feat, cache_tracker&, size_t available_memory, directory_semaphore& dir_sem,
-                              noncopyable_function<locator::host_id()>&& resolve_host_id, const abort_source& abort, scheduling_group maintenance_sg = current_scheduling_group(), storage_manager* shared = nullptr);
+    explicit sstables_manager(
+            sstring name,
+            db::large_data_handler& large_data_handler,
+            db::corrupt_data_handler& corrupt_data_handler,
+            const db::config& dbcfg,
+            gms::feature_service& feat,
+            cache_tracker&,
+            size_t available_memory,
+            directory_semaphore& dir_sem,
+            noncopyable_function<locator::host_id()>&& resolve_host_id,
+            const abort_source& abort,
+            scheduling_group maintenance_sg = current_scheduling_group(),
+            storage_manager* shared = nullptr);
     virtual ~sstables_manager();
 
     shared_sstable make_sstable(schema_ptr schema,
@@ -226,6 +239,9 @@ private:
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;
+    }
+    db::corrupt_data_handler& get_corrupt_data_handler() const {
+        return _corrupt_data_handler;
     }
     friend class sstable;
 
