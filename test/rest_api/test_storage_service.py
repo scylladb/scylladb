@@ -629,6 +629,25 @@ def test_storage_service_get_natural_endpoints(cql, rest_api, tablets_enabled, s
 
             assert resp.json() == [rest_api.host]
 
+@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+def test_storage_service_get_natural_endpoints_compound_key(cql, rest_api, tablets_enabled, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p1 int, p2 text, c int, PRIMARY KEY ((p1, p2), c)') as t0:
+            table = t0.split(".")[1]
+            resp = rest_api.send("GET", f"storage_service/natural_endpoints/{keyspace}", params={"cf": table, "key": "1:value"})
+            resp.raise_for_status()
+            assert resp.json() == [rest_api.host]
+
+# Verify that a single-column partition key containing ':' is not split. Reproduces #16596
+@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+def test_storage_service_get_natural_endpoints_text_key_with_colon(cql, rest_api, tablets_enabled, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p text PRIMARY KEY') as t0:
+            table = t0.split(".")[1]
+            resp = rest_api.send("GET", f"storage_service/natural_endpoints/{keyspace}", params={"cf": table, "key": "value:123"})
+            resp.raise_for_status()
+            assert resp.json() == [rest_api.host]
+
 def test_range_to_endpoint_map_tablets_enabled_keyspace_param_only(cql,  rest_api, skip_without_tablets):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 } AND TABLETS = { 'enabled': true }") as keyspace:
         with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
