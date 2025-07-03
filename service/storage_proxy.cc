@@ -4142,13 +4142,15 @@ mutation storage_proxy::do_get_batchlog_mutation_for(schema_ptr schema, const st
         for (auto& m : fm) {
             ser::serialize(out, m);
         }
-        return to_bytes(out.linearize());
+        return std::move(out).to_managed_bytes();
     }();
 
     mutation m(schema, key);
     m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
     m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("data"), data_value(std::move(data)), timestamp);
+    // Avoid going through data_value and therefore `bytes`, as it can be large (#24809).
+    auto cdef_data = schema->get_column_definition(to_bytes("data"));
+    m.set_cell(clustering_key_prefix::make_empty(), *cdef_data, atomic_cell::make_live(*cdef_data->type, timestamp, std::move(data)));
 
     return m;
 }
