@@ -353,8 +353,12 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair, s
         // then has other mechanisms to track the ongoing repair's progress,
         // or stop it.
         try {
-            int res = co_await repair_start(repair, am, validate_keyspace(ctx, req), options_map);
-            co_return json::json_return_type(res);
+            std::optional<int> res = co_await repair_start(repair, am, validate_keyspace(ctx, req), options_map);
+            if (!res.has_value()) {
+                throw base_exception("Cannot repair tablet keyspace. Use /storage_service/tablets/repair to repair tablet keyspaces.",
+                    http::reply::status_type::forbidden);
+            }
+            co_return json::json_return_type(res.value());
         } catch (const std::invalid_argument& e) {
             // if the option is not sane, repair_start() throws immediately, so
             // convert the exception to an HTTP error
