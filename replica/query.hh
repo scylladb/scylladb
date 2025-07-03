@@ -45,7 +45,8 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
         schema_ptr s,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        db::timeout_clock::time_point timeout);
+        db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled = true);
 
 /// Reads the specified range and slice of the given table, from the local replica.
 ///
